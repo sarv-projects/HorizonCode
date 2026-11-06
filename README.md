@@ -4,7 +4,26 @@
 
 HorizonCode is a terminal-first coding agent whose *reasoning* is separated from its *authority to act*: a fast TypeScript/Bun runtime runs the agent loop, context, tools and UI, while a supervised **Rust kernel** owns capability admission, policy, leases, sandbox confinement, effects and receipts. It is designed as the **superset of the state of the art** — deliberately merging the best capabilities of OpenCode, Claude Code, Codex, Grok Build, DeepSeek-Reasonix, oh-my-pi and ForgeCode — and then adding capabilities none of them have.
 
-> **Status:** this directory (`/data/home/forge/hzcode`) contains the **design**. Phase 0 is the specification set in [`docs/`](./docs/00-index.md). Nothing here is a claim of working code.
+> **Status (2026-11-06):** the design set (`docs/`) is complete and frozen; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (233 TypeScript tests + 17 Rust tests passing). Skills, subagents, Code Mode and preview servers are in active development. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md).
+
+## Run it now
+
+```bash
+cd /data/home/forge/hzcode
+./bin/hzcode                          # opens the chat bar (mock model, zero config)
+printf 'list files' | ./bin/hzcode    # headless: one message per stdin line
+```
+
+Real models: set `HZ_PROVIDER` + `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`), or write `~/.hzcode/config.json` with `provider`, `model` and `apiKey`. Everything is receipted: the Rust kernel hash-chains the event log and issues a receipt per admitted action (`<workspace>/.hzcode/kernel/`).
+
+What exists today (all verified end-to-end by the integrator, not just reported):
+- `kernel/` — Rust trust kernel `hz-kernel`: chained event log + receipts, guard (deny > allow > ask, leases, `policy.json`), NDJSON stdio protocol (8 methods); `cargo test` 14 integration + 3 unit green.
+- `app/src/core/` — runtime: kernel client (`trusted`) with byte-identical TS fallback (`untrusted`), SQLite sessions, Anthropic/OpenAI/mock providers, agent loop (stream → guard → approve → tool → receipt → events).
+- `app/src/tools/` — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` — guard- and approval-aware.
+- `app/src/tui/` + `app/src/main.ts` — chat-first UI: streaming chat bar, tool cards, y/n/a approvals, history, headless mode; `bin/hzcode` launcher.
+- `app/tests/` — 233 passing tests across core, tools, providers and TUI (incl. real PTY scenarios); run `cd app && /home/forge/.bun/bin/bun test`.
+
+Architecture note: [`app/src/contracts.ts`](./app/src/contracts.ts) is the frozen interface both implementations compile against — event and receipt hashes interop between Rust and TypeScript byte-for-byte.
 
 ---
 
@@ -14,7 +33,7 @@ HorizonCode is a terminal-first coding agent whose *reasoning* is separated from
 |---|---|
 | **Binary** | `hzcode` (aliases `hz`, `horizon`) |
 | **Product name** | HorizonCode |
-| **Primary surface** | Terminal TUI (fullscreen alt-screen, mouse-interactive, inline fallback) |
+| **Primary surface** | Terminal chat-first TUI (streaming inline chat bar; fullscreen alt-screen planned) |
 | **Secondary surfaces** | Headless/print · HTTP+SSE server · Web app · Desktop (Electron) · IDE bridge (ACP + VS Code/JetBrains) · MCP server · SDKs (TS, Python, Go, Rust) |
 | **Runtimes** | TypeScript on **Bun** (interaction, orchestration, cognition) + **Rust** (authority kernel, native capabilities) |
 | **Storage** | Event-sourced SQLite (durable log + projections) + JSONL transcripts + content-addressed blob/artifact store |
@@ -147,7 +166,7 @@ The model can *request* an action; only the kernel can *authorise* it. Every adm
 
 ## 6. Documentation set
 
-Start at [`docs/00-index.md`](./docs/00-index.md). The set covers vision, competitive synthesis, decisions, HLD, LLD, domain model, schemas, events, flows, APIs, contracts, runtime, tools, providers, context/memory, authority/safety, sessions/state, TUI, web/desktop/IDE, extensibility, self-improvement, observability, performance, packaging, the final feature catalog, roadmap and glossary — plus the **second learning synthesis** ([`docs/26-learning-synthesis-2.md`](./docs/26-learning-synthesis-2.md), the ten-repo deep-dive record) and the **implementation plan** ([`docs/27-implementation-plan.md`](./docs/27-implementation-plan.md), with the runtime-viability results). A post-writing audit of the set — traceability, consistency, parity and technical hole-hunt — is in [`AUDIT.md`](./AUDIT.md).
+Start at [`docs/00-index.md`](./docs/00-index.md). The set covers vision, competitive synthesis, decisions, HLD, LLD, domain model, schemas, events, flows, APIs, contracts, runtime, tools, providers, context/memory, authority/safety, sessions/state, TUI, web/desktop/IDE, extensibility, self-improvement, observability, performance, packaging, the final feature catalog, roadmap and glossary — plus the **second learning synthesis** ([`docs/26-learning-synthesis-2.md`](./docs/26-learning-synthesis-2.md), the ten-repo deep-dive record) and the **implementation plan** ([`docs/27-implementation-plan.md`](./docs/27-implementation-plan.md), with the runtime-viability results). A post-writing audit of the set — traceability, consistency, parity and technical hole-hunt — is in [`AUDIT.md`](./AUDIT.md). Implementation state: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md); live handoff and exact continuation steps: [`CURRENT_RUN.md`](./CURRENT_RUN.md).
 
 ---
 
