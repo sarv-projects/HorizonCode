@@ -25,7 +25,7 @@ Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
 | `forgecode` | 965 | 9.5 MB | **none** |
 | `SWE-agent` | 436 | 65 MB | `/tmp/deep-sweagent-aci-report.md` (37 KB) |
 
-**Evidence basis.** ~15 deep reports (~460 KB, path-cited) from the two earlier passes; two of them re-read verbatim in this audit because they are Part D's rule-text sources (`deep-codemode-report.md`, `deep-sweagent-aci-report.md`); six delta agents dispatched this audit (one per repo cluster, IDs in §6) to find what every earlier pass missed. Two coverage gaps were identified by the inventory itself and are the reason the delta pass exists: **`forgecode` and `horizoncode` have no dedicated report**, and `opencode`'s report series is truncated (part4 empty).
+**Evidence basis.** ~15 deep reports (~460 KB, path-cited) from the two earlier passes, **all now preserved in-repo under `docs/audit/pass2/`** (5,115 lines; includes the two known-truncated reports and the empty `opencode-report.part4.md`, kept as honest artifacts); two of them were re-read verbatim in this audit because they are Part D's rule-text sources (`docs/audit/pass2/deep-codemode-report.md`, `docs/audit/pass2/deep-sweagent-aci-report.md`); six delta agents were dispatched (one per repo cluster; IDs in §A.1) to find what every earlier pass missed. Two coverage gaps were identified by the inventory itself: **`forgecode` and `horizoncode` had no dedicated report**, and `opencode`'s report series was truncated (part4 empty) — both closed by §A.1.
 
 ---
 
@@ -38,7 +38,7 @@ Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
 | opencode-v2 | Covered | 41 KB report; merged into NF-051/058/059/060/061 and Part D §05/07/10/11/12/14. |
 | wshobson-agents | Covered | 105 KB report; P1–P10/A1–A10 merged into Part D §15 and the bundled-15 roster (docs 27). |
 | OpenHands | Covered | 26 KB report with an explicit scope caveat (client checkout); A1–A12 merged into Part D §07/08/10/12/14/15. |
-| claude-code, grok-build, DeepSeek-Reasonix, oh-my-pi, opencode | **Delta pass dispatched** | Original full-tour reports exist; this audit re-checks for missed feature-bearing files (opencode is the priority — its report series is truncated). Results: §A.1. |
+| claude-code, grok-build, DeepSeek-Reasonix, oh-my-pi, opencode | **Delta pass delivered** | Original full-tour reports exist; the delta re-checked for missed feature-bearing files (opencode the priority — its old series was truncated). Results: §A.1 clusters 3–5; no residual gap. |
 | forgecode | **NO REPORT — largest coverage gap** | Full first-pass dive dispatched this audit (965 files). Result: §A.1. |
 | horizoncode (ancestor) | **NO DEDICATED REPORT — second gap** | Full first-pass dive dispatched this audit (7,675 files; ancestor statuses throughout docs 03/25 are derived from its `HANDOFF.md`). Result: §A.1. |
 
@@ -156,7 +156,7 @@ The delta reports each closed with an optimisation list; the strongest new lever
 
 ## Part D — The sixteen queued insertions, in full
 
-Sources: `26-learning-synthesis-2.md` §5 (the queue), §2 (the distilled facts) and the verbatim reports where they carry draft rule text (`deep-codemode-report.md` §5.2 for CM rules; `deep-sweagent-aci-report.md` §6 for ACI rules). Rule IDs are final; owning documents adopt this text at their next revision (RC-13).
+Sources: `26-learning-synthesis-2.md` §5 (the queue), §2 (the distilled facts) and the verbatim reports where they carry draft rule text (`docs/audit/pass2/deep-codemode-report.md` §5.2 for CM rules; `docs/audit/pass2/deep-sweagent-aci-report.md` §6 for ACI rules). Rule IDs are final; owning documents adopt this text at their next revision (RC-13).
 
 ### D-05 → `05-domain-and-schemas.md`
 
@@ -333,9 +333,29 @@ Every fix below was applied in this audit; docs-only. "Checked clean" means the 
 
 ---
 
+## Part G — Re-audit (verification round)
+
+A second pass the same day, verifying the audit rather than re-reading the clones. Every row was produced by a command run in this round; docs-only, implementation untouched.
+
+| Check | Method | Result |
+|---|---|---|
+| Code claims | Full suites re-run | **285 TS pass / 0 fail** (1,413 expect calls, 27 files); **17 Rust pass** (3 unit + 14 integration) — matches docs 28/README exactly. |
+| Clone inventory | `find` recount of all twelve clones | **67,083 files** — identical to §0. |
+| Report durability | `wc -l` on the six in-repo delta reports | 348 / 846 / 377 / 500 / 524 / 810 = 3,405 lines — complete copies. |
+| Register integrity | NF-id extraction + duplicate check | 70 ids, NF-001…NF-070, **no duplicates or skips** (R5). |
+| Recount gate | Mechanical authority-impact count | **46 `none` + 3 `narrows` + 12 `grant-bearing` + 9 `kernel` = 70** — matches §6.3; the first count attempt missed four rows that bold their value (`**none**`) and the discrepancy was resolved against the file, not the table. |
+| docs/25 index | Row count in §4.2a | 20 rows (NF-051…NF-070), exactly as indexed. |
+| Stale-number sweep | Corpus-wide grep for superseded counts/ranges | One true staleness found and fixed: doc 24 §6.4 "117 rows and 62 features" → **70 features**. All other `NF-062`/62 hits are legitimate historical references (doc 13 R197, doc 26 ledger, doc 00's description of doc 26). |
+| Pass-2 durability | Copy of the fifteen earlier reports into `docs/audit/pass2/` | Preserved (5,115 lines); the two known-truncated originals and the empty part4 are kept exactly as found — the defects are part of why the delta passes exist. |
+
+**Residual findings: two — one fixed, one explained; none open.** The re-audit changes no §B.1 classification and no NF row.
+
+---
+
 ## Related documents
 
 - `28-implementation-status.md` — implementation levels (the single source of truth; RC-13)
 - `26-learning-synthesis-2.md` — the learning record whose §5 queue this audit carries in Part D
 - `27-implementation-plan.md` — the build plan for the NF range this audit verifies the sourcing of
+- `audit/` — the six delta reports of this audit and the fifteen pass-2 reports (historical class; the evidence this audit cites)
 - `AUDIT.md` — the first design-corpus audit (historical)

@@ -1049,7 +1049,7 @@ Two conventions apply to every entry:
 - **The references are covered by construction.** Every capability named in the task brief for each of the eight references has a Section A row. Where no HorizonCode home is exactly equal to a reference capability, the row is `Supersede` with the strengthening named, or `Reject` with a reason in Section D.
 - **Two rejects, both deliberate, both upstream features** — `/gboom` (D-5) and x402 payments (D-7). Everything else that is refused is a rejected *technique* rather than an upstream capability, and is listed in Section D for that reason.
 - **The strict-addition claim is Section B, not Section A.** Section A asserts no reference is better in any dimension it covers; Section B is the whole of the claim that HorizonCode is better in authority, durability, evidence, orchestration, memory and self-improvement.
-- **No row claims code (R7).** 117 rows and 62 features are `DESIGNED`; `gate:parity-ratchet` becomes a runtime-parity gate only once a first implementation exists, and until then it is a specification-quality gate over this document.
+- **No row claims code (R7).** 117 rows and 70 features are `DESIGNED`; `gate:parity-ratchet` becomes a runtime-parity gate only once a first implementation exists, and until then it is a specification-quality gate over this document.
 
 ---
 
