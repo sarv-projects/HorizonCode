@@ -35,10 +35,21 @@ import { canonicalJson } from "./canon";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
-/** Stream name "session:abc" -> file "session__abc.jsonl". */
+/**
+ * Stream name "session:abc" -> file "session__abc.jsonl".
+ *
+ * Byte-for-byte the Rust kernel's rule (eventlog.rs::sanitize): ':' -> "__",
+ * path separators and control characters -> '_', everything else kept. The
+ * fallback must write the same file names the kernel would, or a workspace
+ * toggling between trusted and untrusted would split its own event log.
+ */
 export function sanitizeStream(stream: string): string {
-  const name = String(stream ?? "").replace(/:/g, "__").replace(/[^A-Za-z0-9._-]/g, "_");
-  return name === "" || name === "." || name === ".." ? "stream" : name;
+  const trimmed = String(stream ?? "").trim();
+  const name = trimmed.replace(/:/g, "__").replace(/[/\\\p{Cc}]/gu, "_");
+  // The Rust kernel rejects empty or traversing names; the fallback is total
+  // (never throws) and substitutes a safe name instead.
+  if (name === "" || name === "." || name === ".." || name.includes("..")) return "stream";
+  return name;
 }
 
 /** Lease patterns are exact, path-prefixed, or a trailing `*` wildcard. */
@@ -333,7 +344,9 @@ export class LocalKernel {
     if (action === null || typeof action !== "object" || typeof action.kind !== "string") {
       return { decision: "deny", reason: "malformed guard action" };
     }
-    const effective: PolicyScope = scope ?? "outside";
+    // The kernel defaults a missing/empty scope to "*" (guard.rs: scope.filter(non-empty).unwrap_or("*")).
+    // A `*` scope matches only `*` rules, so this default is the stricter one.
+    const effective: PolicyScope = scope === undefined || (scope as string) === "" ? "*" : scope;
 
     // deny > allow > ask, then active leases grant allow unless a deny matched.
     const matching = this.policy.filter((rule) => ruleMatches(rule, action.kind, effective));
