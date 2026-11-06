@@ -267,6 +267,7 @@ When fixing tests: fixing a TEST to match contract-compliant behavior is fine; f
 | `app/tests/core/_probe.test.ts` | Scratch probe from the interop agent; keep only if it's a useful smoke test. |
 | `AUDIT.md` | Pre-code design audit notes; leave as-is (historical). |
 | Docs 26/27 | Learning + plan references — consult docs/27 for the V2+ roadmap before designing beyond V1. |
+| `repo-tour/` guard | Reference clones of studied projects live at **/data/home/forge/repo-tour — OUTSIDE this repo**. Once a 1.5 GB copy appeared inside the worktree (had to be moved back at 16:38); `.gitignore` now blocks `repo-tour/`. Never commit it, and be careful with broad `git add` when large unknown dirs are present. |
 
 ---
 
