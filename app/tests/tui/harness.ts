@@ -244,3 +244,36 @@ export function shellQuote(value: string): string {
 export function flatten(text: string): string {
   return text.replace(/\r/g, "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
 }
+
+/** How many times `needle` appears in `text`. */
+export function occurrences(text: string, needle: string | RegExp): number {
+  if (typeof needle === "string") {
+    let count = 0;
+    let at = text.indexOf(needle);
+    while (at >= 0) {
+      count += 1;
+      at = text.indexOf(needle, at + needle.length);
+    }
+    return count;
+  }
+  const flags = needle.flags.includes("g") ? needle.flags : `${needle.flags}g`;
+  return (text.match(new RegExp(needle.source, flags)) ?? []).length;
+}
+
+/**
+ * Wait until the child has printed `needle` (at least `count` times).
+ * Returns false on timeout so the caller's assertion carries the message.
+ */
+export async function waitFor(
+  proc: AppProcess,
+  needle: string | RegExp,
+  opts: { count?: number; timeoutMs?: number } = {},
+): Promise<boolean> {
+  const wanted = opts.count ?? 1;
+  const deadline = Date.now() + (opts.timeoutMs ?? 8_000);
+  for (;;) {
+    if (occurrences(flatten(proc.stdout()), needle) >= wanted) return true;
+    if (Date.now() > deadline) return false;
+    await sleep(40);
+  }
+}
