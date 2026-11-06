@@ -27,7 +27,7 @@ import {
 } from "../../src/core/skills";
 import { clampSteps, runNested } from "../../src/core/subagent";
 import { agentTool } from "../../src/tools/agent";
-import { getTool } from "../../src/tools";
+import { BASE_TOOL_NAMES, getTool } from "../../src/tools";
 
 /* ------------------------------- fixtures ------------------------------- */
 
@@ -162,7 +162,8 @@ describe("loop: skills and filter plumbing", () => {
       callbacks: { onEvent: () => undefined },
       sessionLeases: [],
       systemExtra: "## Available skills\n- demo — x",
-      toolFilter: (name) => name !== "agent",
+      // The subagent filter: exactly the seven base tools, nothing else.
+      toolFilter: (name) => (BASE_TOOL_NAMES as readonly string[]).includes(name),
       maxProviderCalls: 3,
     };
     try {

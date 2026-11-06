@@ -16,6 +16,7 @@ import type { ApprovalHandler, Lease, Provider, ToolResult } from "../contracts"
 import type { KernelClient } from "./kernel";
 import { getApprovalHandler, runTurn, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
+import { BASE_TOOL_NAMES } from "../tools";
 
 /** The child prompt is fixed: a subagent reports, it does not converse. */
 export const SUBAGENT_SYSTEM_PROMPT =
@@ -77,7 +78,8 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     sessionLeases: opts.sessionLeases,
     approve: opts.approve ?? getApprovalHandler(),
     systemOverride: SUBAGENT_SYSTEM_PROMPT,
-    toolFilter: (name) => name !== "agent",
+    // Base seven only: a subagent delegates to no one and drives no previews.
+    toolFilter: (name) => (BASE_TOOL_NAMES as readonly string[]).includes(name),
     maxProviderCalls: clampSteps(opts.maxSteps),
     // No `delegate`: a subagent can never spawn subagents.
   };
