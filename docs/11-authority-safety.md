@@ -1822,7 +1822,7 @@ Every guarantee in §2 maps to a test. All test paths below are `[planned]` — 
 
 ## 10. Status
 
-Every capability below is **DESIGNED**. Evidence for each is this document; no implementation exists. Levels are per `/data/home/forge/hzcode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`). Nothing here is a claim of working code.
+Every capability below is **`DESIGNED`** *as a specification claim* — with one implemented slice: the Guard decision path, in-memory leases, chained receipt/tamper-evident logs and `policy.json` overrides exist in v0.1 (`kernel/` Rust + byte-identical TS fallback; evidence and levels in `docs/28-implementation-status.md`). The sandbox matrix, Starlark policy engine, Trusted Host State and managed domain remain design. Levels are per `/data/home/forge/hzcode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`).
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|

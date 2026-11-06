@@ -2,7 +2,7 @@
 
 > **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC**. Workspace: `/data/home/forge/hzcode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
 >
-> **TL;DR — the V1 mission is complete.** Design corpus (docs 01–27) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 285 pass / 0 fail (27 files)** and **`cargo test` 14 integration + 3 unit**. Nothing is in flight.
+> **TL;DR — the V1 mission is complete.** Design corpus (docs 01–27) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 285 pass / 0 fail (27 files)** and **`cargo test` 14 integration + 3 unit**. Nothing is in flight. A final deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md` (RC-13 makes `docs/28` the single source of truth for implementation status).
 
 ---
 

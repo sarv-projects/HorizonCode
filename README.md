@@ -4,7 +4,7 @@
 
 HorizonCode is a terminal-first coding agent whose *reasoning* is separated from its *authority to act*: a fast TypeScript/Bun runtime runs the agent loop, context, tools and UI, while a supervised **Rust kernel** owns capability admission, policy, leases, sandbox confinement, effects and receipts. It is designed as the **superset of the state of the art** — deliberately merging the best capabilities of OpenCode, Claude Code, Codex, Grok Build, DeepSeek-Reasonix, oh-my-pi and ForgeCode — and then adding capabilities none of them have.
 
-> **Status (2026-11-06):** the design set (`docs/`) is complete and frozen; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (285 TypeScript tests + 17 Rust tests passing). Skills, subagents, Code Mode and preview servers are implemented, tested and green. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md).
+> **Status (2026-11-06):** the design set (`docs/`) is complete and frozen; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (285 TypeScript tests + 17 Rust tests passing). Skills, subagents, Code Mode and preview servers are implemented, tested and green. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) · final audit: [`docs/29-final-audit.md`](./docs/29-final-audit.md).
 
 ## Run it now
 

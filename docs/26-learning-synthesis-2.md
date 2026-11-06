@@ -167,6 +167,8 @@ Applied in this pass (spec set updated):
 
 Queued for the next doc pass (rule text fully drafted in this document and the reports; each is an insertion, not a redesign):
 
+> **Final audit (2026-11-06).** The stale blanket status claims this queue implied are reconciled across the set (status notes dated 2026-11-06 in docs `00`, `03`–`11`, `16`, `24`, `25`). The sixteen insertions below are carried **in full** in `29-final-audit.md` Part D — that part is their authoritative text until each owning document folds them in at its next revision (RC-13).
+
 | Doc | Queued change | Source of the drafted text |
 |---|---|---|
 | 05 | `ToolResultV1` dual output (`machineOutput`/`content`/`metadata`); `InstructionsStateV1` delta model; action↔observation pairing invariant (a result with no call and a call with no result are invalid, fail-closed) | §2.4, §2.2 |

@@ -1,6 +1,6 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
 
-> Status: **DESIGNED** (see §12). This document is design; no code is claimed. Every symbol named here — `[planned]` unless explicitly marked otherwise — is an artifact to be built in Phase 1+.
+> Status: **DESIGNED** (see §12) as a specification of the full ~60-tool catalog. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/hzcode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
 > Templates and names follow `/data/home/forge/hzcode/docs/_conventions.md`.
 
@@ -1444,7 +1444,7 @@ All tests below are **designed**; none is claimed to exist. Names are the intend
 
 ## 12. Status
 
-Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **Everything in this document is `DESIGNED`.** Nothing here is `CODE_PRESENT`, `WIRED`, `TESTED` or `VERIFIED`, because `/data/home/forge/hzcode` contains no implementation yet (see the status note in `/data/home/forge/hzcode/README.md`).
+Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document is `DESIGNED` as a specification claim.** **Implementation status (final audit, 2026-11-06):** the ten v0.1 tools (`read write edit grep glob shell todo agent code_mode preview`) are implemented and TESTED — evidence in `docs/28-implementation-status.md`, which is the single source of truth; the remaining ~50 catalog tools and every symbol in this document not backed by a file under `app/src/tools/` remain design.
 
 | Capability | Level | Evidence |
 |---|---|---|

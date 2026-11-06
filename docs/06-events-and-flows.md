@@ -979,7 +979,7 @@ A budget breach is instrumentation output, not a failure mode: a run does not ab
 
 ## 10. Status
 
-**Every row is `DESIGNED`.** The HorizonCode repository contains no implementation (`file:///data/home/forge/hzcode/README.md#L7`); the reference repositories cited in this document are *design inputs*, and their contents are not evidence about HorizonCode. Where a reference records an unfinished lane of its own, this document says so rather than inheriting a claim.
+**Every row is `DESIGNED`** *as a specification claim.* **Implementation status (final audit, 2026-11-06):** the built subset (`docs/28-implementation-status.md` — kernel event log/receipts/guard + session streams, which implement the *shape* of `session.start`/`message.*`/`tool.*`/`receipt.issued`/`approval.*`/`error` flows only) carries real levels there; everything else in this document is design. The HorizonCode repository's reference repositories cited in this document are *design inputs*, and their contents are not evidence about HorizonCode. Where a reference records an unfinished lane of its own, this document says so rather than inheriting a claim.
 
 | Artifact | Capability ID(s) | Level | Evidence |
 |---|---|---|---|

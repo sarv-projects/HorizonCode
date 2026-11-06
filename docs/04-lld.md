@@ -3,6 +3,8 @@
 > **Scope.** This document decides the *inside* of HorizonCode: the package and crate map, the kernel's internal modules, the TypeScript core's module layout, the exact signatures of the load-bearing functions, the concurrency model, the error taxonomy, and the invariant table. It implements the shape fixed by [`03-hld.md`](./03-hld.md) and must not contradict [`02-decisions.md`](./02-decisions.md).
 >
 > **Status.** `/data/home/forge/hzcode` contains documentation only. Nothing below is built; every capability is at **`DESIGNED`**, and every name that has no counterpart in an ancestor or reference repository is marked `[planned]`. Where a counterpart exists, a `source:` line names it so a reader can read real code instead of prose.
+>
+> **Implementation status (final audit, 2026-11-06).** The built subset (per `28-implementation-status.md`) is far smaller than this document's scope — v0.1 implements a minimal kernel (event log, receipts, guard, NDJSON protocol) and a Bun runtime under `app/`, not the package/crate layout below — so every module path in this document still names an artifact to be built. The statuses that *have* moved are recorded in `docs/28`.
 
 **Conventions used here** (mandatory): `hzcode`, `hzk`, `.hz/`, `~/.config/horizon/`, `hz://`, `@horizoncode/*`, `hz_*`, `HZ_ABI=1`, `HZ_PROTO=1`, the six plane names, the capability IDs and effect classes of `_conventions.md` §5, the canonical `hz.<entity>.<past-tense-verb>` event names of §6, and the `<Name>V<major>` schema convention of §7. Declared status values are `DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`.
 
