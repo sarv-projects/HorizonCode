@@ -9,7 +9,7 @@
 This document decides four things and nothing else.
 
 1. **The delivery order.** Phases `M0`–`M8`: `M0` Foundation · `M1` Loop · `M2` Authority · `M3` Surfaces · `M4` Intelligence · `M5` Scale · `M6` Ecosystem · `M7` Enterprise · `M8` Self-improvement. Each phase states its goal, its deliverables, its exit criteria (a checklist of CI gates that must be green), its risks, and what is explicitly **not** in it.
-2. **The registries.** The document-ownership map for documents `03`–`23`, the new-feature index (`NF-001` … `NF-062`, defined in `/data/home/forge/hzcode/docs/24-feature-catalog.md` Section B; `NF-051`–`NF-062` indexed in §4.2a) and the ADR index.
+2. **The registries.** The document-ownership map for documents `03`–`23`, the new-feature index (`NF-001` … `NF-070`, defined in `/data/home/forge/hzcode/docs/24-feature-catalog.md` Section B; `NF-051`–`NF-070` indexed in §4.2a) and the ADR index.
 3. **The vocabulary.** An alphabetical glossary: one meaning per term used across the spec set, each entry naming the document that owns the definition.
 4. **The evidence rule.** What each status level requires, so that no document — including this one — can claim a level it has not earned.
 
@@ -561,9 +561,9 @@ Every id below has a definition section in `/data/home/forge/hzcode/docs/24-feat
 | NF-049 | Run supervision, crash recovery and lane health | 12 | M2 (dead-lane rule) → M5 (supervision) |
 | NF-050 | Append-only vendor price table and metric definitions | 16 | M4 |
 
-**Counts.** 62 features defined (`NF-001` … `NF-062`); `NF-001`–`NF-050` indexed above, the second learning pass `NF-051`–`NF-062` in §4.2a. All are `DESIGNED` as specification claims; implemented v1 slices are recorded in `28-implementation-status.md` (currently: NF-051 code mode and NF-055 preview in reduced forms). The learning-loop set — `NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035` — declares authority impact `none` in every case (ADR-010; `24-feature-catalog.md` §6.3).
+**Counts.** 70 features defined (`NF-001` … `NF-070`); `NF-001`–`NF-050` indexed above; the second learning pass `NF-051`–`NF-062` and the final-audit additions `NF-063`–`NF-070` in §4.2a. All are `DESIGNED` as specification claims; implemented v1 slices are recorded in `28-implementation-status.md` (currently: NF-051 code mode and NF-055 preview in reduced forms). The learning-loop set — `NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035` — declares authority impact `none` in every case (ADR-010; `24-feature-catalog.md` §6.3).
 
-### 4.2a Feature index — `NF-051`…`NF-062` (second learning pass)
+### 4.2a Feature index — `NF-051`…`NF-070` (second learning pass and final audit)
 
 Definitions in `24-feature-catalog.md` Section B; adopted by RC-12; sequenced by `27-implementation-plan.md`. Where a v1 slice is built, the level lives in `28-implementation-status.md`.
 
@@ -581,6 +581,14 @@ Definitions in `24-feature-catalog.md` Section B; adopted by RC-12; sequenced by
 | NF-060 | Event-feed laws and stream framing — durable/transient, sync preamble | 07 |
 | NF-061 | Tool-result dual output and fail-closed retention | 05 |
 | NF-062 | Composer and review UX — queue edit/reorder, bulk review, attachments | 13 |
+| NF-063 | Workspace checkpoints and staged undo/redo (restore as a guarded effect) | 12 |
+| NF-064 | Pre-approval review (guardian), narrowing-only — reviewer may deny, never approve | 11 |
+| NF-065 | Shell command classification for policy — structural AST, fail-closed, arity dictionary | 11 |
+| NF-066 | Lifecycle hooks, stop guards and doom-loop detection | 08 |
+| NF-067 | Bounded autonomous goal loops (budget, stall classifier, completion audit) | 08 |
+| NF-068 | Side-question forks with cache sharing | 14 |
+| NF-069 | Tool-argument repair and self-healing edit ladders | 09 |
+| NF-070 | Tool-output secret redaction as a runtime invariant | 11 |
 
 ### 4.3 ADR index
 

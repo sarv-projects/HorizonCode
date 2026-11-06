@@ -46,14 +46,16 @@ Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
 
 | Cluster | Repos | Dispatched | Result |
 |---|---|---|---|
-| 1 | forgecode (first full report) | `conversation://e151f255-3835-4c60-959c-0d72ea2a1129` | reported into `/tmp/audit-forgecode-report.md`; summary folded in on delivery (open items: Part F) |
-| 2 | horizoncode (first full report) | `conversation://07df833c-fc35-403d-9f8a-8c0b166254cf` | reported into `/tmp/audit-horizoncode-report.md` (open items: Part F) |
-| 3 | opencode + opencode-v2 (delta) | `conversation://0fea8cc7-957c-46c7-969e-b593887f8195` | reported into `/tmp/audit-opencode-delta.md` |
-| 4 | claude-code + codex (delta) | `conversation://08cdd421-08d9-4c41-a056-2070fef910ee` | reported into `/tmp/audit-claude-codex-delta.md` |
-| 5 | grok-build + DeepSeek-Reasonix + oh-my-pi (delta) | `conversation://339dab52-496d-4cdd-b4b7-eff02e917276` | reported into `/tmp/audit-grok-ds-ompi-delta.md` |
-| 6 | OpenHands + SWE-agent + wshobson (delta) | `conversation://ecc76215-7218-47c1-ab9e-a48f315c94a7` | reported into `/tmp/audit-oh-swe-wsh-delta.md` |
+| 1 | forgecode (first full report) | `conversation://e151f255-3835-4c60-959c-0d72ea2a1129` | **Delivered** — `docs/audit/audit-forgecode-report.md` (348 lines; 191 dirs / 936 files walked, ~85 opened). **16 uniques**, 20 common-pattern rows, 15 docs-worthy names, 20 optimisation adoptions. Headline: `allow/deny/confirm` policy DSL over read/write/execute/fetch with `all/any/not`; three-stage patch fallback ladder (exact → fuzzy → text-patch) + post-write syntax validation; hook-enforced stop guards (doom-loop `[A,A,A]`/cyclic at threshold 3; pending-todo loop re-open); snapshot `undo`; agents-as-tools with resumable `session_id`; behavioural evals asserting on the outgoing provider request; deterministic non-LLM compaction preserving the last reasoning block; MCP trust gate keyed by config content hash; ZSH-first UX. |
+| 2 | horizoncode (first full report) | `conversation://07df833c-fc35-403d-9f8a-8c0b166254cf` | **Delivered** — `docs/audit/audit-horizoncode-report.md` (846 lines; all 7,675 files enumerated, ~45 read in full incl. `prompt.ts` 3,006 lines). **28 uniques.** As the ancestor whose HANDOFF seeded docs 01/03/24/25, almost all 28 are *already homes in our corpus* (Guard/receipts → NF-001; UNKNOWN terminal → RC-7; guarantee vectors → NF-016; HarnessProfile → NF-020 family; ContextLedger → NF-005 accounting; OwnerLog → ADR-004 log). Residuals folded into NF-063 (checkpoint restore) and NF-070 (output redaction). |
+| 3 | opencode + opencode-v2 (delta) | `conversation://0fea8cc7-957c-46c7-969e-b593887f8195` | **Delivered** — `docs/audit/audit-opencode-delta.md` (377 lines; 15,845 files / 1,612 dirs listed, ~120 opened; prior reports cited only 41 files total — the part4 gap is now closed). **27 missed features** (B1–B27), **25 uniques**, 35 docs-worthy, 21 optimisations. Highlights: TUI plugin host (11 slots, routes), shell permission scanner, generated shell-arity dictionary, bounded goal loops, cache-TTL session warming (`interval:auto` = 90 % of ttl), staged undo/redo, gitignore-aware snapshot pruning, tightening-only org policy. Three real v2 defects recorded (skill catalog cannot refresh on version bump; synthesized allow outranks a broader user deny; directory boundary is opt-in per tool). |
+| 4 | claude-code + codex (delta) | `conversation://08cdd421-08d9-4c41-a056-2070fef910ee` | **Delivered** — `docs/audit/audit-claude-codex-delta.md` (500 lines; full walks of 2,193 / 10,113 files). **26 missed** (C-1…C-8, X-1…X-18). Highlights: 27-event hook taxonomy × 4 handler types incl. HTTP hooks with allowlists, asyncRewake, agentic-verifier hooks; ~90-key managed-settings schema; fail-closed bash/powershell AST with node allowlist; `/btw` cache-sharing forks; codex guardian/auto-review (29 modules, SQLite evidence boards, 90 s budget); Starlark exec policy with load-time `match`/`not_match` self-tests; 220 feature flags. Two stale-manifest defects recorded (imported-but-undeclared sandbox-runtime; SDK re-exports missing from tree). |
+| 5 | grok-build + DeepSeek-Reasonix + oh-my-pi (delta) | `conversation://339dab52-496d-4cdd-b4b7-eff02e917276` | **Delivered** — `docs/audit/audit-grok-ds-ompi-delta.md` (524 lines). **131 file-cited deltas** (25 / 60 / 46). DeepSeek-Reasonix confirmed an agent harness, not a model repo: session inbox/steer, peer mail, projection-debt freshness, surface answers, workspace-lease write authority, golden system prompt + four-line metric contract, per-PR release notes. grok-build: XOR-encrypted prompt templates, 45 PTY scenarios, 3-layer `.sbpl` profiles, changelogs corpus. oh-my-pi: 279-file prompt corpus, 245-rule KDL compat cascade, local MLX inference (`tiny/`), `/ratchet` eval hillclimb, `ovnfs`, `thread` RPC subagents. |
+| 6 | OpenHands + SWE-agent + wshobson (delta) | `conversation://ecc76215-7218-47c1-ab9e-a48f315c94a7` | **Delivered** — `docs/audit/audit-oh-swe-wsh-delta.md` (810 lines; ~85 of 100 SWE `.py` read in full, all 202 wshobson agents extracted). **42 file-cited blocks** (22 / 8 / 12, ~150 findings). SWE-agent: in-band control tokens, autosubmit ladder, best-of-N with re-budgeting, variance-penalised scoring, 7-stage history pipeline, web-browser ACI, trajectory inspector. wshobson: ship-mate FSM with human gates, live team runtime + message protocol, published-weight scoring with drift snapshots. OpenHands: verify-openhands harness (feature map, evidence ledger, `xfail`/`xpass`), `request_secret` client tool, canvas attention contract. |
 
-*(Delivery note: the agents run in the background; each report file's "missed features" section is the delta. Any cluster whose report never arrives is listed as an open item in §6 rather than assumed clean — an absent report is not a clean bill.)*
+*(Delivery note: all six delivered on the first dispatch; their reports are preserved in `docs/audit/` — they were written to `/tmp` first, which is not durable. Each report carries its own coverage stats and explicit NOT-READ list; several large files (horizoncode `host_kernel.rs`, 48,214 lines) are interface-level, not line-verified, as their reports state.)*
+
+**Totals across the six delta passes: 270 missing/unique findings** (16 + 28 + 27 + 26 + 131 + 42), each file-cited in its report; §B.1 classifies them and lands the eight register appends (NF-063…NF-070).
 
 ---
 
@@ -70,7 +72,30 @@ Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
 | Kanban/queue composer UX (user brief), preview environments (OpenHands `runtime_services` + practice), governance loop (SWE-agent `review_on_submit_m`), recorders (rr/TTD practice) | unique | NF-055/062/053/054 (already in doc 24) |
 | Spec-corpus governance: authority table, statuses, generated references, "no checklists in specs" (v2 + wshobson) | common (design practice) | Part D §00 RC-13 + Part D §16 gates |
 
-**No uncaptured unique feature was found in the two verbatim re-reads** — every device in them already owns an NF row or a Part D rule. Whether that holds for the other ten repos is exactly what the six delta reports answer in §A.1; any genuine delta becomes a doc 24 Section B change at that point (the register is closed until then).
+**No uncaptured unique feature was found in the two verbatim re-reads** — every device in them already owns an NF row or a Part D rule. The six delta passes (§A.1) found 270 further items; §B.1 is their classification.
+
+### B.1 The delta results: merged, appended, queued
+
+**(a) Already merged — no action.** The largest block by count. The horizoncode ancestor's 28 uniques land almost entirely on existing homes (Guard → NF-001, UNKNOWN → RC-7, guarantee vectors → NF-016, profiles → NF-020, ledger → NF-005, OwnerLog → ADR-004) — expected, since docs 01/03/24/25 were derived from it. The reference repos' remaining findings are common patterns already reflected in Section A rows or Part D rules: resume-by-id subagents (NF-007/NF-019 rows), MCP trust, plan-mode-as-tools, conditional tool advertisement (R-tools family), auto-compaction, sandbox worktrees, provider transformer chains, conventional-commit generation, and the LSP/DAP lanes. Where two or more sources implement a device, it found an existing home, not a new one — the merge rule applied to ~180 rows.
+
+**(b) Appended — eight new register rows (the unique residual).** Each is genuinely user-noticeable, absent from the corpus, and sourced by ≥2 independent references where the sources were merged:
+
+| New row | Merged sources | What lands in doc 24 |
+|---|---|---|
+| **NF-063** Workspace checkpoints and staged undo/redo | forgecode snapshot `undo`; opencode staged undo/redo + gitignore-aware pruning; horizoncode guard-admitted checkpoint restore | "restore is a guarded effect, never direct writes" + two-phase staging + pruning rules |
+| **NF-064** Pre-approval review (guardian), narrowing-only | codex `approvals_reviewer`/`auto_review` + guardian evidence boards + managed human checkpoints; SWE-agent's submit-time review as the sibling | reviewer may deny, never approve (keeps D-8); trust boundary + anti-over-flag calibration in the prompt; 90 s budget with fallback |
+| **NF-065** Shell command classification for policy | claude-code fail-closed bash/powershell AST; opencode shell scanner + arity dictionary; codex Starlark execpolicy with load-time self-tests | structure-not-strings (ADR-015 applied to shell); un-analyzable ⇒ route to human; per-subcommand rules; rule files carry `match`/`not_match` self-tests |
+| **NF-066** Lifecycle hook taxonomy and stop guards | claude-code 27 events × 4 handler types (HTTP allowlists, asyncRewake, agentic-verifier); forgecode 6 events + End-hook loop re-open | hook events as declared effects (no ambient authority); doom-loop + pending-todo + stall guards as composable policies |
+| **NF-067** Bounded autonomous goal loops | codex goal (budget, no-progress, 3-turn blocked, completion audit); opencode bounded goal loops (50 rounds, 3 stalls, orphan→paused) | objective persists across compaction; caps; process identity respected |
+| **NF-068** Side-question forks with cache sharing | claude-code `/btw` + CacheSafeParams; codex `/side` | no tools, reuses captured cache material, cannot derail the main transcript |
+| **NF-069** Tool-argument repair and self-healing edit ladders | forgecode json_repair + 3-stage patch ladder + post-write validation; opencode 9-class tool-input repair; SWE-agent encoding-fallback ladder | unambiguous-only repairs, recorded; fuzzy edit with structured refusal; diagnostics fed back |
+| **NF-070** Tool-output secret redaction | horizoncode tool-batch pattern redaction; oh-my-pi secret placeholders; OpenHands `request_secret` channel | runtime invariant at the projection boundary; machine value unchanged (NF-061) |
+
+All eight are now written into `24-feature-catalog.md` §5 (NF-063…NF-070, status `DESIGNED`), counted in §6.3 (70 features), tested in §12.2 (tests 55–62), and indexed in `25-roadmap-and-glossary.md` §4.2a.
+
+**(c) Queued — Section-A-level rows, deliberately not dumped.** The ~270 findings contain dozens of reference *devices* (per-model prompt plugins, event-feed backpressure variants, judge/chart tooling, KDL compat cascades, PTY scenario suites, prompt-encryption, artifacts/voice/forms/mDNS/pairing surfaces, PTY hand-off, embedded web UI, changelog corpora, per-PR release notes, eval hillclimbs, answer isolation, golden-prompt tests, feature-flag lifecycles…). They are catalogued **with file citations in the six reports** and queued for the next catalog revision, because each wants either a Section A row (with disposition + recount) or an explicit non-goal — work that needs per-row review, not a bulk paste. Nothing is lost: the reports are in-repo.
+
+**(d) Recorded upstream defects (not ours).** opencode-v2 skill catalogs cannot refresh on version bump; a synthesized allow can outrank a broader user deny; the directory boundary is opt-in per tool. claude-code imports `@anthropic-ai/sandbox-runtime` absent from its manifest, and re-exports five SDK type modules that do not exist in its tree. DeepSeek-Reasonix's `ISOLATION_*` docs describe a package absent from the snapshot while the Studio frontend still ships its refusal strings, and its benchmark README says "six harnesses" over 15 suites. These are observations about the reference repos, recorded here so no later reader mistakes them for our properties.
 
 ---
 
@@ -106,6 +131,26 @@ Derived from the full corpus; every item cites its source device and the doc tha
 | C-12 | **View/log separation everywhere**: forgotten-sets, instruction epochs, sync preambles — a view is reconstructable from the log at any time; the log keeps everything. | Part D §10/§12; T3 |
 | C-13 | **Fail-closed retention**: oversized results retained or the execution fails — never lossy success. | NF-061; Part D §05 |
 | C-14 | **Tier parity measured, not asserted**: paired evals with a release-blocking ratchet (NF-056) + the honest framing of the ACI claim. | docs 10/16/25 |
+
+### C.4 Delta-pass additions (from the six reports' §5 lists)
+
+The delta reports each closed with an optimisation list; the strongest new levers not already in C.1–C.3:
+
+| # | Lever | Evidence | Target |
+|---|---|---|---|
+| C-15 | **Repair-then-retry tool arguments** — bounded JSON-repair + schema coercion before rejecting a turn, repairs recorded. | forgecode `forge_json_repair` (11 test suites); opencode 9-class repair | NF-069 |
+| C-16 | **Post-write validation feedback** — syntax/diagnostics of the postimage evaluated and fed back in the tool result. | forgecode validation service; SWE-agent lint gate | NF-069 |
+| C-17 | **Deterministic compaction + reasoning preservation** — fold tool history into structured summaries (no LLM pass), re-inject the last reasoning block for signature validity. | forgecode `compact.rs` | doc 10 (ladder additions) |
+| C-18 | **Cache-split system prompt with justification** — a named global cacheable prefix + dynamic suffix boundary, and a forced written reason for any section that breaks the cache (`DANGEROUS_uncachedSystemPromptSection`). | claude-code `prompts.ts`, `systemPromptSections.ts` | NF-005 / doc 10 |
+| C-19 | **Speculative permission classifier** — start classification during pre-tool hooks; consume later. | claude-code `bashClassifier.ts` | doc 11 (speed note) |
+| C-20 | **Session warming per provider cache TTL** — keep-alive ≤30 min, `interval:auto` = 90 % of `cache.ttl`. | opencode `warming.mdx` | doc 07/16 |
+| C-21 | **Elision before summarisation, at cache-stable boundaries** — drop stale windows/search/images with explicit counts (`(N lines omitted)`), moving the boundary only every `polling` steps. | SWE-agent 7-stage pipeline | doc 10 |
+| C-22 | **Memoize hot-path scans** — bash-AST parse memo per command; arity prefix memo; tool-registry resolution memo per (session, provider, model, agent, digest); skill-scan cache by mtime. | claude-code, opencode, horizoncode §5.1 | doc 08 perf notes |
+| C-23 | **Best-of-N with variance-penalised scoring** — reject out-of-range scores, tie-break on fewest API calls, choose only among submitted runs. | SWE-agent `reviewer.py` | doc 16 (eval protocol) |
+| C-24 | **Human labels before trusting a judge; disjoint categories; re-drive the baseline before calling a regression.** | oh-swe-wsh §5 accuracy list | doc 16 / NF-056 |
+| C-25 | **Golden-prompt tests + prompt token budgets in CI** — pin the assembled system prompt byte-for-byte per audience, commit measured budgets, fail on growth. | Reasonix golden `system_prompt.txt` + `schema_budget.json`; oh-my-pi `tool-prompt-usage.ts` | doc 16 gates |
+| C-26 | **Anti-over-flag calibration in reviewer prompts** — negative examples (“outside-workspace paths are not automatically high risk”; urgency never changes authorization). | codex guardian policy template | NF-064 |
+| C-27 | **Answer isolation for benchmarks** — refuse to run answer-bearing tasks without an OS read sandbox for the child. | Reasonix `answer_isolation.go` | doc 16 |
 
 ---
 
@@ -279,9 +324,12 @@ Every fix below was applied in this audit; docs-only. "Checked clean" means the 
 
 ## Part F — Open items
 
-1. **Six delta reports** (§A.1) — deliver asynchronously; each one's "missed features" section is folded into Part B (and, where a genuinely-uncaptured unique feature appears, into doc 24 Section B as the register's next change). Any cluster with no report stays listed here as an open gap — an absent report is not a clean bill.
-2. **`forgecode` and `horizoncode` full reports** (§A.1 clusters 1–2) are the audit's two first-pass gaps; until they land, those two repos carry *no dedicated coverage* beyond the ancestor citations in docs 01/03/24/25.
-3. **`opencode` report series** — part4 was empty; cluster 3 re-covers the original `opencode` tree.
+1. ~~Six delta reports~~ **RESOLVED** — all six delivered; reports preserved at `docs/audit/` (index: `docs/audit/README.md`); results in §A.1 / §B.1.
+2. ~~`forgecode` and `horizoncode` full reports~~ **RESOLVED** — both are the anchors of this pass (§A.1 clusters 1–2); every reference repo now has dedicated in-repo coverage.
+3. ~~`opencode` report series (part4 empty)~~ **RESOLVED** — cluster 3 re-covered both checkouts in full; the delta report supersedes the truncated series.
+4. **Section-A-level rows from the ~270 findings are queued, not dropped** — §B.1(c); each wants a disposition + recount in the next catalog revision. The file-cited queue is the six reports themselves.
+5. **Coverage caveats stand as written** — every report carries its own NOT-READ list (in particular, horizoncode `host_kernel.rs` at 48,214 lines is interface-level, not line-verified); no claim in this audit exceeds what a cited read supports.
+6. **Upstream defects are recorded, not ours to fix** — §B.1(d); they belong to the reference repos.
 
 ---
 
