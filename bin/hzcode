@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# HorizonCode launcher — the human types `hzcode` and lands in a chat.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
+exec "$BUN" run "$ROOT/app/src/main.ts" "$@"
