@@ -248,7 +248,9 @@ export class LocalKernel {
     const events = await this.readEnvelopes(stream);
     const start = Number.isFinite(fromSeq) && fromSeq > 1 ? Math.floor(fromSeq) : 1;
     const rest = events.filter((ev) => ev.seq >= start);
-    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) return rest.slice(0, Math.floor(limit));
+    // `limit: 0` means zero events (the Rust kernel checks its cap before pushing;
+    // a negative or absent limit is treated as "no limit", as number_param does).
+    if (typeof limit === "number" && Number.isFinite(limit) && limit >= 0) return rest.slice(0, Math.floor(limit));
     return rest;
   }
 
