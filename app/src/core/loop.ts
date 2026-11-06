@@ -15,6 +15,7 @@ import type {
   ApprovalHandler,
   ApprovalRequest,
   ChatMsg,
+  DelegateRunner,
   GuardAction,
   GuardDecision,
   Lease,
@@ -311,6 +312,16 @@ export interface LoopDeps {
   sessionLeases: Lease[];
   /** Instance-level approval handler; falls back to the process-wide one. */
   approve?: ApprovalHandler;
+  /** Extra system-prompt section for this run (skills). Appended after the base. */
+  systemExtra?: string;
+  /** Replaces the base system prompt entirely (the subagent's focused prompt). */
+  systemOverride?: string;
+  /** Restricts which tools this run may see and call (the subagent excludes itself). */
+  toolFilter?: (name: string) => boolean;
+  /** Provider-call ceiling for this run; defaults to MAX_PROVIDER_CALLS. */
+  maxProviderCalls?: number;
+  /** Nested delegation runner (the `agent` tool); absent in child runs. */
+  delegate?: DelegateRunner;
 }
 
 interface AssistantTurn {
@@ -342,11 +353,17 @@ async function beginUserTurn(deps: LoopDeps, prompt: string): Promise<void> {
 
 async function collectAssistant(deps: LoopDeps, history: ChatMsg[]): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
+  const basePrompt =
+    deps.systemOverride !== undefined && deps.systemOverride !== ""
+      ? deps.systemOverride
+      : systemPrompt(deps.workspace);
+  const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
+  const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   const request: ProviderRequest = {
     model: deps.model,
-    system: systemPrompt(deps.workspace),
+    system: basePrompt + extra,
     messages: history,
-    tools: toolSpecs(),
+    tools: specs,
     signal: deps.signal,
   };
   try {
@@ -391,7 +408,7 @@ async function executeTool(
     };
   }
   const tool = getTool(call.name);
-  if (!tool) {
+  if (!tool || (deps.toolFilter !== undefined && !deps.toolFilter(call.name))) {
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
   }
 
@@ -434,6 +451,7 @@ async function executeTool(
     guard: (a: GuardAction) => gate.check(a),
     approve: (req: ApprovalRequest) => gate.approve(req),
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
+    delegate: deps.delegate,
   };
 
   try {
@@ -512,14 +530,16 @@ export async function runTurn(deps: LoopDeps, userText: string): Promise<{ text:
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler());
     let calls = 0;
+    const maxCalls =
+      deps.maxProviderCalls !== undefined && deps.maxProviderCalls > 0 ? deps.maxProviderCalls : MAX_PROVIDER_CALLS;
 
     for (;;) {
       if (deps.signal.aborted) {
         aborted = true;
         break;
       }
-      if (calls >= MAX_PROVIDER_CALLS) {
-        emit(deps.callbacks, { type: "notice", message: `stopped after ${MAX_PROVIDER_CALLS} model turns in one request` });
+      if (calls >= maxCalls) {
+        emit(deps.callbacks, { type: "notice", message: `stopped after ${maxCalls} model turns in one request` });
         break;
       }
       calls += 1;

@@ -135,6 +135,13 @@ export interface ApprovalRequest {
 }
 export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
 
+/**
+ * A nested delegation run: the `agent` tool asks the runtime to execute `task`
+ * in its own child session and return the subagent's final report. The runtime
+ * supplies it on the tool context; a tool without one cannot delegate.
+ */
+export type DelegateRunner = (task: string, maxSteps?: number) => Promise<ToolResult>;
+
 export interface ToolContext {
   cwd: string;
   workspace: string;
@@ -143,6 +150,8 @@ export interface ToolContext {
   guard(action: GuardAction): Promise<GuardDecision>;
   approve(req: ApprovalRequest): Promise<boolean>;
   receipt(rec: ReceiptInput): Promise<Receipt>;
+  /** Present when the runtime supports delegation (the `agent` tool). */
+  delegate?: DelegateRunner;
 }
 
 export interface ToolResult {
