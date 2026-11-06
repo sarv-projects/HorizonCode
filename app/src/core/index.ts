@@ -38,6 +38,8 @@ import {
 } from "./loop";
 import { makeProvider } from "./providers";
 import { SessionStore, type SessionInfo } from "./session";
+import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
+import { runNested } from "./subagent";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -212,6 +214,18 @@ class HzRuntimeImpl implements HzRuntime {
     while (this.queued.length > 0) emit(cb, { type: "notice", message: this.queued.shift() ?? "" });
     this.pruneLeases();
     try {
+      // Skills: list what is available, and when the human opens a message with
+      // `/<skill>`, activate it by injecting the body for this turn only.
+      const skillSections: string[] = [];
+      const directory = skillsPromptSection(this.workspace);
+      if (directory !== "") skillSections.push(directory);
+      let userContent = text;
+      const activated = resolveSkillForMessage(this.workspace, text);
+      if (activated) {
+        skillSections.push(activeSkillSection(activated.skill));
+        userContent = activated.action !== "" ? activated.action : `Apply the ${activated.skill.name} skill.`;
+        emit(cb, { type: "notice", message: `skill active: ${activated.skill.name}` });
+      }
       return await runTurn(
         {
           workspace: this.workspace,
@@ -224,8 +238,22 @@ class HzRuntimeImpl implements HzRuntime {
           callbacks: cb,
           sessionLeases: this.leases,
           approve: this.instanceApproval ?? getApprovalHandler(),
+          systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
+          delegate: (task, maxSteps) =>
+            runNested({
+              workspace: this.workspace,
+              task,
+              maxSteps,
+              model: this.currentModel,
+              provider: this.provider,
+              kernel: this.kernel,
+              store: this.store,
+              signal: controller.signal,
+              sessionLeases: this.leases,
+              approve: this.instanceApproval ?? getApprovalHandler(),
+            }),
         },
-        text,
+        userContent,
       );
     } catch (err) {
       emit(cb, { type: "error", message: `runtime error: ${errorMessage(err)}` });
@@ -296,3 +324,6 @@ export { KernelClient, LocalKernel, resolveKernelBinary } from "./kernel";
 export { SessionStore, type SessionInfo } from "./session";
 export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider } from "./providers";
 export { systemPrompt, MAX_PROVIDER_CALLS, HISTORY_LIMIT } from "./loop";
+export { listSkills, getSkill, skillsPromptSection, resolveSkillForMessage, activeSkillSection } from "./skills";
+export { runNested, SUBAGENT_SYSTEM_PROMPT, clampSteps } from "./subagent";
+export type { Skill } from "./skills";
