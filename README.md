@@ -147,7 +147,7 @@ The model can *request* an action; only the kernel can *authorise* it. Every adm
 
 ## 6. Documentation set
 
-Start at [`docs/00-index.md`](./docs/00-index.md). The set covers vision, competitive synthesis, decisions, HLD, LLD, domain model, schemas, events, flows, APIs, contracts, runtime, tools, providers, context/memory, authority/safety, sessions/state, TUI, web/desktop/IDE, extensibility, self-improvement, observability, performance, packaging, the final feature catalog, roadmap and glossary. A post-writing audit of the set — traceability, consistency, parity and technical hole-hunt — is in [`AUDIT.md`](./AUDIT.md).
+Start at [`docs/00-index.md`](./docs/00-index.md). The set covers vision, competitive synthesis, decisions, HLD, LLD, domain model, schemas, events, flows, APIs, contracts, runtime, tools, providers, context/memory, authority/safety, sessions/state, TUI, web/desktop/IDE, extensibility, self-improvement, observability, performance, packaging, the final feature catalog, roadmap and glossary — plus the **second learning synthesis** ([`docs/26-learning-synthesis-2.md`](./docs/26-learning-synthesis-2.md), the ten-repo deep-dive record) and the **implementation plan** ([`docs/27-implementation-plan.md`](./docs/27-implementation-plan.md), with the runtime-viability results). A post-writing audit of the set — traceability, consistency, parity and technical hole-hunt — is in [`AUDIT.md`](./AUDIT.md).
 
 ---
 
