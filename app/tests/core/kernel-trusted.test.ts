@@ -223,6 +223,18 @@ describe.skipIf(!hasRustKernel)("KernelClient (trusted, Rust kernel)", () => {
   });
 
   test("guard.lease then guard.check allows the leased command", async () => {
+    // An expired caller-supplied lease grants nothing. Asserted BEFORE any lease is
+    // issued: once guard.lease ran, the kernel also holds the (unexpired) lease and
+    // still honours it - an expired copy cannot revoke it (that is by design, and
+    // matches the TS fallback, see kernel.ts active-lease merge).
+    const staleLease = {
+      leaseId: "expired-lease",
+      kind: "shell.exec" as const,
+      pattern: "echo *",
+      expiry: new Date(Date.now() - 1_000).toISOString(),
+    };
+    expect((await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [staleLease])).decision).toBe("ask");
+
     const lease = await client.makeLease("shell.exec", "echo *", 60_000);
     expect(lease.leaseId).toMatch(/[0-9a-f-]{36}/);
     expect(lease.kind).toBe("shell.exec");
@@ -244,8 +256,8 @@ describe.skipIf(!hasRustKernel)("KernelClient (trusted, Rust kernel)", () => {
     // A lease for another kind grants nothing.
     expect((await client.checkGuard({ kind: "net.fetch", target: "https://example.invalid" }, "*", [lease])).decision).toBe("ask");
 
-    const expired = { ...lease, leaseId: "expired-lease", expiry: new Date(Date.now() - 1_000).toISOString() };
-    expect((await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [expired])).decision).toBe("ask");
+    // (Expired-lease behaviour is asserted at the top of this test, where no
+    // lease is held yet.)
   });
 
   test("a policy.json in the state dir replaces the default policy", async () => {
