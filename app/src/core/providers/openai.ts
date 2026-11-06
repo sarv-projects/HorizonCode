@@ -197,7 +197,15 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
     const call = partials.get(index);
     if (!call || call.name === "") continue;
     emitted = true;
-    yield { type: "tool_call", id: call.id !== "" ? call.id : `call_${index + 1}`, name: call.name, arguments: call.args };
+    // `arguments` is a JSON string per the contract; a call that streamed no
+    // fragments at all (a no-argument tool) must still be parseable, the same
+    // way toOpenAiMessages already rewrites an empty replay to "{}".
+    yield {
+      type: "tool_call",
+      id: call.id !== "" ? call.id : `call_${index + 1}`,
+      name: call.name,
+      arguments: call.args.trim() === "" ? "{}" : call.args,
+    };
   }
 
   let stopReason = mapFinishReason(finish);
