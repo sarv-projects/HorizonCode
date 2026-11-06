@@ -264,7 +264,7 @@ When fixing tests: fixing a TEST to match contract-compliant behavior is fine; f
 | Mock provider quirks | Emits exactly ONE `glob` tool call for messages matching /list files|what.*here|ls/ — it does NOT call other tools; use scratch scripts for other tools. |
 | Guard defaults | fs.read/fs.write **inside workspace = allow** (no approval prompt), outside = ask; shell.exec/net.fetch/spawn = ask. Approvals in headless mode = auto-deny with a notice. |
 | `.hzcode/` dirs | Per-workspace runtime state; gitignored; safe to delete to reset. Never commit. |
-| `app/tests/core/_probe.test.ts` | Scratch probe from the interop agent; keep only if it's a useful smoke test. |
+| `app/tests/core/_probe.test.ts` | **Deleted** (broken scratch probe, import of a nonexistent export); do not recreate. |
 | `AUDIT.md` | Pre-code design audit notes; leave as-is (historical). |
 | Docs 26/27 | Learning + plan references — consult docs/27 for the V2+ roadmap before designing beyond V1. |
 | `repo-tour/` guard | Reference clones of studied projects live at **/data/home/forge/repo-tour — OUTSIDE this repo**. Once a 1.5 GB copy appeared inside the worktree (had to be moved back at 16:38); `.gitignore` now blocks `repo-tour/`. Never commit it, and be careful with broad `git add` when large unknown dirs are present. |
