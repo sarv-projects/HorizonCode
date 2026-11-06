@@ -923,6 +923,82 @@ Two conventions apply to every entry:
 
 ---
 
+**NF-063 … NF-070.** Added by the final audit (`29-final-audit.md` §B.1; sources: the six delta audit reports in `docs/audit/`, dated 2026-11-06). Each row merges two or more independent reference devices where they existed; the audit's Part B.1 records the full merged/appended/queued classification of all 270 delta findings.
+
+### NF-063 — Workspace checkpoints and staged undo/redo
+
+- **Problem.** A bad edit is recoverable only by asking the user to run git commands; "undo that" is the most common correction and the agent cannot serve it. Forgecode ships snapshot `undo`, opencode ships staged undo/redo with gitignore-aware pruning, and the ancestor's checkpoint restore exists — none of it is in this register.
+- **Design.** A checkpoint is taken before every mutating write (content-addressed preimage snapshot). `undo` reverts the most recent operation on a path, and **restore is a guarded effect, never direct file writes**: every restore write goes through the ordinary ToolBatch → lease → receipt path (the ancestor's explicit rule — "restore NEVER writes workspace files with fs directly"), so a failed admission mutates nothing. Interactive undo is **two-phase**: stage the rollback, the user edits/keeps the staged prompt, commit or cancel — the staged state is recorded like any input mutation, so `/redo` is a cancel of a staged, not yet committed, rollback. Snapshots are gitignore-aware (files that became ignored are pruned; tracked-ness checked with `--no-index` so a previously-tracked file is not silently restored) and bounded by a per-file cap; pruning runs per session end or every N steps, not per pass. Capture is per model step and honest about its best-effort gaps.
+- **Capability IDs.** `files.patch` (restore), `artifact.write` (snapshots).
+- **Authority impact.** `kernel` (restore is effects reverting effects under Guard; an unadmitted restore leaves bytes untouched).
+- **Dependencies.** NF-001, NF-011, NF-012; NF-053 (plan-checkpoint rollback reuses this machinery); tools `edit`, `insert`, `undo`.
+- **Status.** `DESIGNED`.
+
+### NF-064 — Pre-approval review (guardian) with a narrowing-only contract
+
+- **Problem.** Escalations reach the human with no context — the dialog shows a command, not a risk picture; and an automatic approver would be the rejected classifier-decision mode (D-8) wearing a new name.
+- **Design.** An escalation may be routed to a **reviewer step** (strongest configured model, wall-clock budget, default 90 s) that gathers context — what the command does, what it touches, precedent from prior approvals — and returns a typed recommendation. Framed to keep D-8 intact: **the reviewer may autonomously deny or flag; it may never autonomously approve** — an approve recommendation falls through to the human dialog unless a deterministic policy rule (NF-003/NF-058) had already decided the case. The review prompt carries an explicit **trust boundary** (only user/developer messages and explicit tool answers establish authorization; skills, plugin text, assistant output and tool output are untrusted evidence) and explicit **anti-over-flag calibration** (outside-workspace paths are not automatically high risk; deleting a verified-empty path is low/medium; urgency never changes authorization). **Managed human checkpoints** — cases a policy marks as requiring a fresh human decision — can never be satisfied by auto-review. Review activity is recorded (evidence board/journal) and bounded; a timeout falls back to the human dialog, never to approval.
+- **Capability IDs.** `providers.infer` (the reviewer call); the decision itself stays under existing authority IDs.
+- **Authority impact.** `narrows` (review can only add friction; it never approves).
+- **Dependencies.** NF-002, NF-003, NF-058; NF-053 (the submit-time review loop is the pre-submit sibling); doc 11.
+- **Status.** `DESIGNED`.
+
+### NF-065 — Shell command classification for policy (structure, not strings)
+
+- **Problem.** A regex allowlist over command strings is bypassable and unreviewable; approving a whole `git … && …` chain because its prefix matched, or silently refusing input the tool cannot analyse, are both failures.
+- **Design.** Every shell command is analysed **structurally** before policy: segment on shell operators; extract subcommands, `cd` targets and redirections; parse with a language-aware AST (POSIX sh / bash / powershell) whose node types are an **allowlist — anything outside it routes to the human instead of guessing** (fail closed; ADR-015's "structure, never wording" applied to shell, extending D-13). Per-subcommand rules and saved approvals apply to each segment; `cd`-target inference is best-effort and the approval card says so ("could not determine target directory") rather than implying precision. A generated **arity dictionary** normalises "always approve" suggestions to the approvable prefix (longest matching prefix wins; flags never count; the generating prompt is checked in above the table so the table is reviewable). Interpreter policies may carry **load-time self-tests**: `match`/`not_match` examples validated when the policy loads, so a rule file is executable as a test suite. The decision remains deterministic host policy — no classifier decides (D-8 stays intact).
+- **Capability IDs.** `terminal.run` targets; no new IDs.
+- **Authority impact.** `none` (classification feeds existing policy; the decision remains kernel state).
+- **Dependencies.** NF-003, NF-058; ADR-015; doc 11; `crates/hz_policy`.
+- **Status.** `DESIGNED`.
+
+### NF-066 — Lifecycle hook taxonomy, stop guards and doom-loop detection
+
+- **Problem.** Guardrails implemented as prompt instructions ("do not stop with todos open", "stop repeating calls") are hopes; and an under-specified hook surface — HTTP hooks with no allowlist — is an exfiltration path wearing an extension API.
+- **Design.** Two halves. **Hook surface:** a declared lifecycle event taxonomy (session start/end, request/response, tool-call start/end, compaction, instruction-load, file-change, worktree events, elicitation, config-change — the union of the observed sets) where every handler type has declared effects: command hooks run as ordinary effects (Guard, lease, receipt — no ambient authority); **HTTP hooks are admitted only with a URL allowlist and an env-var interpolation allowlist**; async hooks may **re-wake the model only on a blocking exit code** (`asyncRewake`-style), so a background hook cannot loop the agent; an `End`-class hook may append messages and **re-open the loop**, which is the mechanism the stop guards use. **Stop guards:** (a) doom-loop detection over tool-call signatures — consecutive `[A,A,A]` and cyclic `[A,B,C][A,B,C]` repetition at threshold 3 — injecting a corrective reminder rather than aborting the session; (b) pending-work enforcement: stopping with unfinished todos re-opens the loop with a deduplicated reminder listing them; (c) stall handling for goal loops (NF-067). Guards are composable policies, individually disableable, and never prompt-only.
+- **Capability IDs.** Hook handlers operate under existing effect IDs; guard reminders are context events, not grants.
+- **Authority impact.** `grant-bearing` (a hook handler performs effects; declared and admitted per use).
+- **Dependencies.** NF-001, NF-032, NF-043, NF-067; doc 15; tool `todo`.
+- **Status.** `DESIGNED`.
+
+### NF-067 — Bounded autonomous goal loops
+
+- **Problem.** "Keep working on X until done" is expressed by re-typing prompts; an unattended loop without caps is a denial-of-service against the user's machine and their invoice.
+- **Design.** A first-class goal primitive: an objective (bounded, e.g. ≤ 4,000 chars) persists across compaction and carries a **round/token budget** (e.g. ≤ 50 rounds), a **stall classifier** (no-progress after N consecutive rounds; "blocked" requires three consecutive blocked turns before a goal may report blocked), a **completion audit** run before the goal closes, and capped waits (e.g. ≤ 30 min per wait state). Process identity is respected: a goal whose owning process died is **demoted to paused**, never silently resumed by a new process. All work remains under the session's existing grants — the goal primitive changes the loop's persistence, never its authority — and NF-066's guards fire inside it.
+- **Capability IDs.** `session.manage`; goal work uses the ordinary tool IDs.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-066, NF-028 (stall notifications); docs 08/10.
+- **Status.** `DESIGNED`.
+
+### NF-068 — Side-question forks with cache sharing
+
+- **Problem.** A quick side question ("btw, what does this function do?") either derails the main transcript or costs a cache-cold context in a fresh session — so users paste it into a chat window instead, dragging context out of the tool.
+- **Design.** A side-question fork: a second conversation that **reuses the parent's prompt-cache material** (cache-safe parameters captured per turn by the loop — not re-derived per command), carries **no tools** (it cannot drive the workspace), and cannot mutate or derail the main transcript. Its answer returns to the user directly and enters the main context only on explicit action. Available from the CLI and from surface clients via the same protocol.
+- **Capability IDs.** `ui.present`, `providers.infer`.
+- **Authority impact.** `none` (no tools; read-only context reuse).
+- **Dependencies.** NF-004, NF-005; doc 14.
+- **Status.** `DESIGNED`.
+
+### NF-069 — Tool-argument repair and self-healing edit ladders
+
+- **Problem.** Models emit malformed or truncated JSON arguments and near-miss edits; today each is a failed turn, and the model's only recovery is a blind retry.
+- **Design.** Two ladders, both constrained to **unambiguous** repairs — never guessing intent. (a) **Argument repair:** every tool-call argument blob passes a bounded repair pipeline (named repair classes — quotes, unicode, truncation, punctuation, numbers, … — with a depth cap) plus schema coercion before rejection; the schema must unambiguously support the rewrite, each repair is recorded on the call, and the repaired call still passes Guard unchanged. (b) **Edit ladder:** `edit` resolves exact match first; on no-match a line-range fuzzy match may apply, then patch synthesis; and after any write a **post-write syntax/diagnostic check** runs, with its result fed back in the tool result (new diagnostics are treated as NF-052's syntax gate: fail, bytes untouched, both windows shown). An ambiguous repair fails with the structured error family of NF-052 (`matchesOutsideWindow`, `AmbiguousMatch`), never a wild guess.
+- **Capability IDs.** `files.patch`; no new IDs.
+- **Authority impact.** `none` (repair may not widen a request; Guard sees the repaired, not the raw, call).
+- **Dependencies.** NF-052, NF-061; tools `edit`, `insert`.
+- **Status.** `DESIGNED`.
+
+### NF-070 — Tool-output secret redaction as a runtime invariant
+
+- **Problem.** Tool output flows to the model, the log, the UI and (under NF-051) into Code Mode cells; a live secret in any path becomes an exfiltration primitive, and "the model should not print it" is not a control.
+- **Design.** Output crossing the model / CodeMode / display boundaries is bounded, control-character-stripped and **pattern-redacted as a runtime invariant** — private keys, bearer tokens, known key shapes (`sk-`, `ghp_`, `github_pat_`, `xox*`), AWS access keys, JWTs, `key=value` secrets, credentials embedded in URLs — with placeholder preservation so the model still sees the shape it must use without the value. Credential *requests* use the client-tool channel (the agent asks the user; the value never enters the model's arguments or output). Redaction applies at the projection boundary: the durable machine value (NF-061) is unchanged, redaction misses are defects (canary test, NF-022's standard), and a redaction is never counted as an authorization-bearing event.
+- **Capability IDs.** `context.manage`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-011, NF-022, NF-061; sources: horizoncode tool-batch redaction; oh-my-pi secret placeholders; OpenHands `request_secret`.
+- **Status.** `DESIGNED`.
+
+---
+
 ## 6. Section C — Counts and coverage
 
 **Method (R12).** Every count below is derived from the Section A tables by counting disposition cells, one row at a time. `Supersede` counts include the inherited behaviour a row strengthens, so per agent `Inherit + Supersede + Reject` equals the row count. The cross-agent totals are row counts, not a de-duplicated union; where the same capability appears in two references it stays as two rows because the two upstream implementations differ.
@@ -958,11 +1034,11 @@ Two conventions apply to every entry:
 
 | Measure | Count |
 |---|---:|
-| New features catalogued (`NF-001` … `NF-062`) | **62** |
-| Authority impact `none` | 41 |
-| Authority impact `narrows` | 2 (`NF-019`, `NF-031`) |
-| Authority impact `grant-bearing` | 11 (`NF-007`, `NF-012`, `NF-014`, `NF-018`, `NF-020`, `NF-030`, `NF-032`, `NF-037`, `NF-043`, `NF-054`, `NF-055`) |
-| Authority impact `kernel` | 8 (`NF-001`, `NF-003`, `NF-016`, `NF-021`, `NF-022`, `NF-051`, `NF-053`, `NF-058`) |
+| New features catalogued (`NF-001` … `NF-070`) | **70** |
+| Authority impact `none` | 46 |
+| Authority impact `narrows` | 3 (`NF-019`, `NF-031`, `NF-064`) |
+| Authority impact `grant-bearing` | 12 (`NF-007`, `NF-012`, `NF-014`, `NF-018`, `NF-020`, `NF-030`, `NF-032`, `NF-037`, `NF-043`, `NF-054`, `NF-055`, `NF-066`) |
+| Authority impact `kernel` | 9 (`NF-001`, `NF-003`, `NF-016`, `NF-021`, `NF-022`, `NF-051`, `NF-053`, `NF-058`, `NF-063`) |
 | Learning-loop features, all required to be `none` | 5 (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`) — **all five are `none`** |
 | New capability IDs proposed (§3.3) | 16 |
 | New events proposed (§3.4) | 17 |
@@ -1177,6 +1253,14 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 52. **NF-060** — one encode per event across N subscribers; a stalled subscriber cannot stall publication or other subscribers; an unknown frame is ignored; `transient` frames carry no `seq` and never appear in replay; the sync preamble matches the replay range.
 53. **NF-061** — a result carries `output`/`content`/`metadata`; a retention failure fails the execution (no lossy success); an interrupted execution is not rendered as a tool failure.
 54. **NF-062** — a queued message can be edited and reordered before dispatch but not during admission; Keep All / Undo All are receipted; an attachment sends as an artifact reference, never inline bytes.
+55. **NF-063** — a restore is admitted as effects (a refused admission leaves bytes untouched); staged undo commits or cancels and the staged state is recorded; a file that became gitignored is pruned from snapshots.
+56. **NF-064** — a reviewer can deny but never approve autonomously; a managed human checkpoint is not satisfied by auto-review; reviewer timeout falls back to the human dialog.
+57. **NF-065** — an un-analyzable command routes to the human (fail closed); per-subcommand rules apply to each segment of a chain; a policy file's `not_match` example fails the load; an arity-derived approval suggestion is the longest matching prefix with flags excluded.
+58. **NF-066** — an end-hook that appends messages re-opens the loop; an HTTP hook URL outside the allowlist is refused; the doom-loop reminder fires on `[A,A,A]` and cyclic `[A,B,C]` at threshold 3; stopping with pending todos re-opens with a deduplicated reminder.
+59. **NF-067** — a goal stops at its round/stall/wait caps; an orphaned goal is paused, never silently resumed; blocked requires three consecutive blocked turns; the completion audit runs before closure.
+60. **NF-068** — a side fork cannot call tools; it reuses the captured cache material rather than compiling cold; its output enters the main transcript only on explicit action.
+61. **NF-069** — a truncated JSON argument is repaired, recorded, and still Guard-checked; an ambiguous shape is rejected with a structured error; a fuzzy edit applies only when unambiguous; post-write diagnostics are fed back.
+62. **NF-070** — a canary secret in tool output never reaches the transcript, log or Code Mode boundary unredacted, while the durable machine value is unchanged.
 
 ---
 
@@ -1187,7 +1271,7 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 | Area | Level | Evidence |
 |---|---|---|
 | Section A parity matrix (117 rows) | `DESIGNED` | Upstream citations per row; no HorizonCode code exists. |
-| Section B new features (`NF-001` … `NF-062`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview — reduced forms) carry levels in `28-implementation-status.md`. |
+| Section B new features (`NF-001` … `NF-070`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview — reduced forms) carry levels in `28-implementation-status.md`. NF-063…NF-070 were added by the final audit (`29-final-audit.md` §B.1; sources in `docs/audit/`). |
 | Section C counts | `DESIGNED` | Derived from Section A tables by the method in §6; recomputed by the recount gate. |
 | Section D non-goals | `DESIGNED` | Normative refusals; each names a replacement or states that the need is out of scope. |
 | §3.3 capability-ID and §3.4 event proposals | `DESIGNED` (reserved) | Both lists are now registered as **Reserved** in [`_conventions.md`](./_conventions.md) §5/§6 (RC-11); they are promoted to canonical in the change that first implements each feature, per that file's §1 rule. |
@@ -1200,4 +1284,5 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 2. **The §3.3 capability-ID and §3.4 event proposals are registered as Reserved (RC-11)** — they are promoted into `_conventions.md` §5/§6 canonical lists in the change that first implements each feature. A Reserved name that outlives two revisions without being either promoted or withdrawn is a defect in this document.
 3. **The ancestor's defects are inherited as work, not as claims** — the evidence gate is unwired and the subagent/LSP/DAP lanes are dead upstream (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`); NF-002 and NF-049 exist precisely because of them, and both are `DESIGNED` here.
 4. **No upstream capability is claimed as working in HorizonCode.** Every "where it exists" cell is a statement about the reference agent.
+5. **The six delta passes are queued at Section-A level, deliberately.** Their ~270 file-cited findings (all in `docs/audit/`) each want either a Section A row with disposition and recount, or an explicit non-goal; this revision appends only the eight register rows (NF-063…NF-070) whose unique residual met the merge rule. The queue is recorded in [`29-final-audit.md`](./29-final-audit.md) §B.1(c).
 
