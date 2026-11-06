@@ -7,7 +7,18 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { MOCK_GREETING, MOCK_LOOKING } from "../../src/core/providers/mock";
-import { appSpec, createWorkspacePool, headlessSpec, killAllProcesses, runApp, runHeadless } from "./harness";
+import {
+  APP_DIR,
+  BUN_BIN,
+  appSpec,
+  createWorkspacePool,
+  headlessSpec,
+  killAllProcesses,
+  runApp,
+  runHeadless,
+  shellQuote,
+  spawnProcess,
+} from "./harness";
 
 const pool = createWorkspacePool();
 
@@ -95,11 +106,55 @@ describe("headless mode (stdin is a pipe)", () => {
 
   test("answers a message typed on the command line before reading stdin", async () => {
     const ws = pool.make();
-    const run = await runApp({ ...headlessSpec(ws, ["hello"]), timeoutMs: 20_000 }, "");
+    const run = await runApp(headlessSpec(ws, ["hello"]), "");
 
     expect(run.code).toBe(0);
     expect(run.stdout).toContain(`${PROMPT} hello`);
     expect(run.stdout).toContain(MOCK_GREETING);
+  });
+
+  test("a provider without a key explains itself instead of hanging", async () => {
+    const ws = pool.make();
+    // --mock would force the offline provider: ask for anthropic with no keys at all.
+    const run = await runApp(
+      {
+        ...appSpec(["--workspace", ws, "hello"]),
+        env: { NO_COLOR: "1", HZ_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", HZ_API_KEY: "" },
+      },
+      "",
+    );
+
+    expect(run.timedOut).toBe(false);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain(`${PROMPT} hello`);
+    expect(run.stdout).toContain("No API key for anthropic");
+    expect(run.stdout).toContain("--mock");
+    // nothing was invented to look like an answer
+    expect(run.stdout).not.toContain(MOCK_GREETING);
+  });
+
+  test("a consumer that closes the pipe early is not treated as a failure", async () => {
+    const ws = pool.make();
+    // `hzcode | head -c 3`: the reader leaves after a few bytes, so stdout EPIPEs.
+    const proc = spawnProcess({
+      file: "sh",
+      args: ["-c", `${shellQuote(BUN_BIN)} run src/main.ts --workspace ${shellQuote(ws)} --mock | head -c 3`],
+      cwd: APP_DIR,
+      env: { NO_COLOR: "1" },
+    });
+    proc.write("hello\nhello again\n");
+    try {
+      proc.child.stdin?.end();
+    } catch {
+      /* the pipe is already gone */
+    }
+
+    const run = await proc.done;
+
+    expect(run.timedOut).toBe(false);
+    expect(run.code).toBe(0);
+    // no "EPIPE" stack trace: a closed pipe is a normal way for a script to stop reading
+    expect(run.stderr).toBe("");
   });
 
   test("exits 0 with no output when stdin is already at EOF", async () => {
