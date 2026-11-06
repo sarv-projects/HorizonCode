@@ -12,7 +12,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type {
@@ -93,6 +93,24 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Size+mtime of a log file, used to notice writes made by another process
+ * (two windows, one workspace) so a cached tail can never be trusted blindly.
+ */
+function fileStamp(file: string): string | undefined {
+  try {
+    const stat = statSync(file);
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An explicitly configured kernel binary, trimmed; empty means "not set". */
+function kernelBinOverride(env: Record<string, string | undefined>): string {
+  return typeof env.HZ_KERNEL_BIN === "string" ? env.HZ_KERNEL_BIN.trim() : "";
+}
+
 /* ------------------------------ LocalKernel ------------------------------ */
 
 /**
@@ -103,7 +121,7 @@ function errorMessage(err: unknown): string {
 export class LocalKernel {
   readonly stateDir: string;
   private readonly locks = new Map<string, Promise<unknown>>();
-  private readonly tails = new Map<string, { seq: number; hash: string }>();
+  private readonly tails = new Map<string, { seq: number; hash: string; stamp: string | undefined }>();
   private readonly leases = new Map<string, Lease>();
   private policy: PolicyRule[];
 
@@ -177,14 +195,26 @@ export class LocalKernel {
     return out;
   }
 
-  private async tailOf(key: string, read: () => Promise<Array<{ seq: number; hash: string }>>): Promise<{ seq: number; hash: string } | undefined> {
+  /**
+   * (seq, hash) of a log's last record, cached only while the file on disk is the
+   * one this instance wrote last. A second process sharing the state dir (two
+   * windows on one workspace, or a kernel that was restarted) must never let the
+   * fallback reuse a stale tail and write a colliding seq.
+   */
+  private async tailOf(
+    key: string,
+    file: string,
+    read: () => Promise<Array<{ seq: number; hash: string }>>,
+  ): Promise<{ seq: number; hash: string } | undefined> {
+    const stamp = fileStamp(file);
     const cached = this.tails.get(key);
-    if (cached) return cached;
+    if (cached !== undefined && cached.stamp === stamp) return { seq: cached.seq, hash: cached.hash };
+    if (cached !== undefined) this.tails.delete(key);
     const items = await read();
     const last = items.length > 0 ? items[items.length - 1] : undefined;
     if (!last) return undefined;
     const tail = { seq: last.seq, hash: last.hash };
-    this.tails.set(key, tail);
+    this.tails.set(key, { ...tail, stamp: fileStamp(file) });
     return tail;
   }
 
@@ -196,7 +226,7 @@ export class LocalKernel {
     return this.withLock(`events:${stream}`, async () => {
       const file = this.streamPath(stream);
       await mkdir(this.eventsDir(), { recursive: true });
-      const tail = await this.tailOf(`events:${stream}`, () => this.readEnvelopes(stream));
+      const tail = await this.tailOf(`events:${stream}`, file, () => this.readEnvelopes(stream));
       const base: Omit<EventEnvelope, "hash"> = {
         id: seed?.id || newId(),
         seq: (tail?.seq ?? 0) + 1,
@@ -209,7 +239,7 @@ export class LocalKernel {
       };
       const envelope: EventEnvelope = { ...base, hash: hashEnvelope(base) };
       await appendFile(file, canonicalJson(envelope) + "\n", "utf8");
-      this.tails.set(`events:${stream}`, { seq: envelope.seq, hash: envelope.hash });
+      this.tails.set(`events:${stream}`, { seq: envelope.seq, hash: envelope.hash, stamp: fileStamp(file) });
       return envelope;
     });
   }
@@ -252,7 +282,7 @@ export class LocalKernel {
     return this.withLock("receipts", async () => {
       const file = this.receiptsPath();
       await mkdir(this.stateDir, { recursive: true });
-      const tail = await this.tailOf("receipts", () => this.readReceipts());
+      const tail = await this.tailOf("receipts", file, () => this.readReceipts());
       const base: Omit<Receipt, "hash"> = {
         id: newId(),
         seq: (tail?.seq ?? 0) + 1,
@@ -266,7 +296,7 @@ export class LocalKernel {
       };
       const receipt: Receipt = { ...base, hash: hashReceipt(base) };
       await appendFile(file, canonicalJson(receipt) + "\n", "utf8");
-      this.tails.set("receipts", { seq: receipt.seq, hash: receipt.hash });
+      this.tails.set("receipts", { seq: receipt.seq, hash: receipt.hash, stamp: fileStamp(file) });
       return receipt;
     });
   }
@@ -354,16 +384,22 @@ export interface KernelClientOptions {
 }
 
 /**
- * Where the kernel binary lives: HZ_KERNEL_BIN first, then the release and
- * debug builds of this repository's kernel crate.
+ * Where the kernel binary lives: HZ_KERNEL_BIN when it is set, then the release
+ * and debug builds of this repository's kernel crate.
+ *
+ * An explicit HZ_KERNEL_BIN is authoritative: a path that does not exist means
+ * "no kernel", not "run some other binary instead". Silently starting a
+ * different build than the one an operator pointed at would hide a
+ * misconfiguration inside the trust boundary.
  */
 export function resolveKernelBinary(env: Record<string, string | undefined> = process.env): string | undefined {
+  const override = kernelBinOverride(env);
+  if (override !== "") return existsSync(override) ? override : undefined;
   const repoRoot = path.resolve(import.meta.dir, "../../..");
   const candidates = [
-    env.HZ_KERNEL_BIN,
     path.join(repoRoot, "kernel", "target", "release", "hz-kernel"),
     path.join(repoRoot, "kernel", "target", "debug", "hz-kernel"),
-  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim() !== "");
+  ];
   return candidates.find((candidate) => existsSync(candidate));
 }
 
@@ -439,7 +475,13 @@ export class KernelClient {
   private async startBinary(): Promise<KernelMode> {
     const binary = resolveKernelBinary();
     if (!binary) {
-      this.setMode("untrusted", "kernel binary not found — using the local fallback");
+      const requested = kernelBinOverride(process.env);
+      this.setMode(
+        "untrusted",
+        requested !== ""
+          ? `HZ_KERNEL_BIN ${requested} is not a file — using the local fallback`
+          : "kernel binary not found — using the local fallback",
+      );
       return this.modeValue;
     }
     try {
