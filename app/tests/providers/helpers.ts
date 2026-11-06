@@ -201,7 +201,6 @@ export interface Run {
   readonly done: Promise<void>;
   elapsedMs: number;
   thrown: unknown;
-  readonly timedOut: boolean;
 }
 
 /**
@@ -216,7 +215,6 @@ export function run(provider: Provider, req: ProviderRequest): Run {
     done: Promise.resolve(),
     elapsedMs: 0,
     thrown: null,
-    timedOut: false,
   };
   state.done = (async () => {
     try {

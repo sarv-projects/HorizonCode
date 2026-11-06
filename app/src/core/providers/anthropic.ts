@@ -91,6 +91,22 @@ function mapStopReason(reason: unknown): "end" | "tool_use" | "max_tokens" {
   return "end";
 }
 
+/**
+ * The JSON a tool block carries. Anthropic announces the block with
+ * `input:{}` and streams the object as `input_json_delta`s; a tool with no
+ * arguments sends no deltas at all, and a server may put the whole object in
+ * the start block. The contract says `arguments` is a JSON string, so a block
+ * that streamed nothing falls back to what it declared, never to "".
+ */
+function toolArguments(raw: string, declared: unknown): string {
+  if (raw.trim() !== "") return raw;
+  if (declared !== null && typeof declared === "object" && Object.keys(declared).length > 0) {
+    const encoded = JSON.stringify(declared);
+    if (typeof encoded === "string" && encoded !== "") return encoded;
+  }
+  return "{}";
+}
+
 interface UsageShape {
   inputTokens?: number;
   outputTokens?: number;
@@ -148,7 +164,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
   let stopReason: "end" | "tool_use" | "max_tokens" | "abort" = "end";
   let emittedTool = false;
   const usage: UsageShape = {};
-  const meta = new Map<number, { id: string; name: string }>();
+  const meta = new Map<number, { id: string; name: string; input?: unknown }>();
   const args = new Map<number, string>();
 
   const flush = function* (): Generator<ProviderEvent, void, unknown> {
@@ -157,7 +173,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
       const info = meta.get(index);
       if (!info) continue;
       emittedTool = true;
-      yield { type: "tool_call", id: info.id, name: info.name, arguments: args.get(index) ?? "" };
+      yield { type: "tool_call", id: info.id, name: info.name, arguments: toolArguments(args.get(index) ?? "", info.input) };
     }
     meta.clear();
     args.clear();
@@ -188,7 +204,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
           const block = event.content_block;
           const index = typeof event.index === "number" ? event.index : 0;
           if (block && block.type === "tool_use") {
-            meta.set(index, { id: String(block.id ?? ""), name: String(block.name ?? "") });
+            meta.set(index, { id: String(block.id ?? ""), name: String(block.name ?? ""), input: block.input });
             args.set(index, "");
           }
           break;
@@ -208,7 +224,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
           const info = meta.get(index);
           if (info) {
             meta.delete(index);
-            const raw = args.get(index) ?? "";
+            const raw = toolArguments(args.get(index) ?? "", info.input);
             args.delete(index);
             emittedTool = true;
             const call: ToolCall = { id: info.id, name: info.name, arguments: raw };
