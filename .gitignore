@@ -1,0 +1,17 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+.idea/
+.vscode/
+
+# Build outputs (once implementation begins)
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+
+# Local runtime state — a workspace's own log/state is never committed
+.hz/state/
