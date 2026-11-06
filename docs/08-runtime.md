@@ -1,6 +1,6 @@
 # 08 — Runtime: Controller, agent loop, fleets, budgets, learning
 
-**Document status:** DESIGNED (see §11). This document describes the orchestration plane of HorizonCode. Nothing in `/data/home/forge/hzcode` is a claim of working code; every module path below is marked `[planned]` because no implementation exists in this tree.
+**Document status:** DESIGNED (see §11), *as a specification of the full orchestration plane*. **Implementation status (final audit, 2026-11-06):** a v0.1 slice of the loop exists — `app/src/core/loop.ts` (stream → guard → approve → tool → receipt → events), sessions over SQLite, and per-session event streams — with evidence in `docs/28-implementation-status.md`; the planner/executor, teams, scheduler and budgets described below remain design, and every module path below marks an artifact to be built (paths under `app/` that exist are the exception and are named in `docs/28`).
 
 ---
 

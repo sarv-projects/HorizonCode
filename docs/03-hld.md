@@ -585,6 +585,8 @@ A harness in `@horizoncode/testing` measures PB-1…PB-15 on pinned hardware pro
 
 ## 11. Status
 
+> **Implementation status (final audit, 2026-11-06).** The paragraph below was written when this set was design-only. It is superseded where the implementation exists: the built subset (trust kernel, runtime core, base tools, chat TUI, skills, subagents, code mode, preview) carries evidence-backed levels in `docs/28-implementation-status.md`, which is the single source of truth for implementation status. Read the sentence "Nothing in this repository is built" as historical.
+
 Nothing in this repository is built. `/data/home/forge/hzcode` contains `README.md` and `docs/` only; therefore every capability below is **`DESIGNED`**, and the *Evidence* column says so. The *Ancestor* column records what the ancestor repository (`sarv-projects/horizoncode`, `source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) measured for the corresponding capability, so the reader can see which parts are inherited work in progress and which are new and unproven. Those ancestor statuses are **not** this project's status.
 
 | Capability | Level here | Evidence | Ancestor (measured) |

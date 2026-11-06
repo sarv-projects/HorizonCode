@@ -1,6 +1,6 @@
 # HorizonCode — Specification Index
 
-> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** Phase 0 — the design
+> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set frozen · **V1 implemented, tested and green** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
 
 This directory is the authoritative specification for HorizonCode, a coding agent designed as the strict superset of the state of the art, with an execution constitution: model reasoning is separated from the authority to mutate.
 
@@ -31,7 +31,9 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 25 | [`25-roadmap-and-glossary.md`](./25-roadmap-and-glossary.md) | M0–M8 roadmap (Foundation → Self-improvement) with exit criteria + the full glossary |
 | 26 | [`26-learning-synthesis-2.md`](./26-learning-synthesis-2.md) | Second deep-dive learning record: ten-repo distillation, adoption ledger (NF-051…NF-062), doc-update ledger |
 | 27 | [`27-implementation-plan.md`](./27-implementation-plan.md) | The build plan: bootstrap, workstreams, runtime viability, subagent build-out, gates, open ADRs |
-| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-12)** |
+| 28 | [`28-implementation-status.md`](./28-implementation-status.md) | **Implemented-vs-designed map with evidence commands — the single source of truth for implementation status** |
+| 29 | [`29-final-audit.md`](./29-final-audit.md) | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
+| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-13)** |
 
 ---
 
@@ -51,7 +53,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 
 `DESIGNED` → `CODE_PRESENT` → `WIRED` → `TESTED` → `VERIFIED` → `RELEASED`
 
-Every capability in every document carries a level. **Nothing in this set is above `DESIGNED`.** A document that claims otherwise without evidence is a bug in the document.
+Every capability in every document carries a level. **Implementation status (final audit, 2026-11-06):** the blanket `DESIGNED` ceiling applied while this set was design-only; it is superseded. The implemented subset (trust kernel, runtime core, base tools, chat TUI, skills, subagents, code mode, preview) carries real, evidence-backed levels in `docs/28-implementation-status.md` — that file is the **single source of truth** for implementation status, and it is the only place a level above `DESIGNED` may be claimed. Every capability **not** listed there remains `DESIGNED`.
 
 ---
 

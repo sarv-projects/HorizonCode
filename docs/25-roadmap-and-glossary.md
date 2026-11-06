@@ -1,6 +1,6 @@
 # 25 — Roadmap and Glossary
 
-> **Status of every phase in this document: `DESIGNED`.** No phase, feature or gate described here is implemented. This document is a plan of record for a specification set; it contains no `CODE_PRESENT` and above (see §9).
+> **Status of every phase in this document: `DESIGNED` as a plan.** **Implementation status (final audit, 2026-11-06):** code now exists for slices of M0/M1/M2 territory (kernel, runtime loop, tools, chat TUI, skills/subagents, code mode, preview) without the phase protocols below having been run — levels and evidence live in `28-implementation-status.md`, the single source of truth; phase *exit criteria* in §3 are unmet and unchanged.
 
 ---
 
@@ -9,7 +9,7 @@
 This document decides four things and nothing else.
 
 1. **The delivery order.** Phases `M0`–`M8`: `M0` Foundation · `M1` Loop · `M2` Authority · `M3` Surfaces · `M4` Intelligence · `M5` Scale · `M6` Ecosystem · `M7` Enterprise · `M8` Self-improvement. Each phase states its goal, its deliverables, its exit criteria (a checklist of CI gates that must be green), its risks, and what is explicitly **not** in it.
-2. **The registries.** The document-ownership map for documents `03`–`23`, the new-feature index (`NF-001` … `NF-050`, all defined in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5) and the ADR index.
+2. **The registries.** The document-ownership map for documents `03`–`23`, the new-feature index (`NF-001` … `NF-062`, defined in `/data/home/forge/hzcode/docs/24-feature-catalog.md` Section B; `NF-051`–`NF-062` indexed in §4.2a) and the ADR index.
 3. **The vocabulary.** An alphabetical glossary: one meaning per term used across the spec set, each entry naming the document that owns the definition.
 4. **The evidence rule.** What each status level requires, so that no document — including this one — can claim a level it has not earned.
 
@@ -561,7 +561,26 @@ Every id below has a definition section in `/data/home/forge/hzcode/docs/24-feat
 | NF-049 | Run supervision, crash recovery and lane health | 12 | M2 (dead-lane rule) → M5 (supervision) |
 | NF-050 | Append-only vendor price table and metric definitions | 16 | M4 |
 
-**Counts.** 50 features indexed (`NF-001` … `NF-050`); all `DESIGNED`. The learning-loop set — `NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035` — declares authority impact `none` in every case (ADR-010; `24-feature-catalog.md` §6.3).
+**Counts.** 62 features defined (`NF-001` … `NF-062`); `NF-001`–`NF-050` indexed above, the second learning pass `NF-051`–`NF-062` in §4.2a. All are `DESIGNED` as specification claims; implemented v1 slices are recorded in `28-implementation-status.md` (currently: NF-051 code mode and NF-055 preview in reduced forms). The learning-loop set — `NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035` — declares authority impact `none` in every case (ADR-010; `24-feature-catalog.md` §6.3).
+
+### 4.2a Feature index — `NF-051`…`NF-062` (second learning pass)
+
+Definitions in `24-feature-catalog.md` Section B; adopted by RC-12; sequenced by `27-implementation-plan.md`. Where a v1 slice is built, the level lives in `28-implementation-status.md`.
+
+| Id | Name | Owning doc |
+|---|---|---|
+| NF-051 | Code Mode v2 — confined program over the tool tree (CM-1…CM-14) | 09 |
+| NF-052 | ACI reading modes — windowed read, summary grep, lint gate, env taming | 09 |
+| NF-053 | Pre-submit governance loop + governed plan FSM | 06 |
+| NF-054 | Execution recorder and time-travel debug | 09 |
+| NF-055 | Preview environments — ephemeral, sandboxed, bound URL injected | 14 |
+| NF-056 | Tier-parity program — paired evals, strict-REPL variants, parity ratchet | 10 |
+| NF-057 | Local inference acceleration — speculative decoding, KV reuse, micro-models | 07 |
+| NF-058 | Policy statements — safety-inverted precedence, allow-never-grants, enforcement protection | 11 |
+| NF-059 | Instruction epochs and content-addressed instruction blobs | 10 |
+| NF-060 | Event-feed laws and stream framing — durable/transient, sync preamble | 07 |
+| NF-061 | Tool-result dual output and fail-closed retention | 05 |
+| NF-062 | Composer and review UX — queue edit/reorder, bulk review, attachments | 13 |
 
 ### 4.3 ADR index
 
@@ -867,7 +886,7 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 
 ## 9. Status
 
-**Every phase in this document: `DESIGNED`. No exception. No phase has been entered, and no deliverable, gate or artifact named here exists.**
+**Every phase in this document: `DESIGNED` as a plan; no phase has formally exited.** **Implementation status (final audit, 2026-11-06):** code now exists for slices of M0/M1/M2 territory (kernel, runtime loop, tools, chat TUI, skills/subagents, code mode, preview — see `28-implementation-status.md`) built *outside* the phase protocol of §6.1: no gate in §3 has been run and no evidence bundle exists, so every phase deliverable, gate and artifact named here remains unmet until its checklist is executed.
 
 | Item | Level | Evidence |
 |---|---|---|
@@ -880,7 +899,7 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 | Test plan / acceptance harness | `DESIGNED` | §6 |
 | Metric definitions | `DESIGNED` | §7 |
 | Open questions register | `DESIGNED` | §8 |
-| Every capability in every sibling document | `DESIGNED` | `/data/home/forge/hzcode/docs/00-index.md`: nothing in the set is above `DESIGNED` |
+| Every capability in every sibling document | `DESIGNED` (the implemented subset carries real levels in `28-implementation-status.md`) | `/data/home/forge/hzcode/docs/28-implementation-status.md` |
 
 A claim above `DESIGNED` in this document, without a named artifact, is a defect and `gate:doc-status` must fail on it.
 
@@ -890,7 +909,7 @@ A claim above `DESIGNED` in this document, without a named artifact, is a defect
 
 | Document | Relationship |
 |---|---|
-| `/data/home/forge/hzcode/docs/00-index.md` | Reading order and the status ladder; its phase description is stale (§8 OQ-R1) |
+| `/data/home/forge/hzcode/docs/00-index.md` | Reading order and the status ladder; phase-description staleness resolved (OQ-R1 closed — the index now says `M0`–`M8`) |
 | `/data/home/forge/hzcode/docs/_conventions.md` | Names, packages, crates, capability IDs, events, schemas, status levels, writing rules; §11 rulings are binding here |
 | `/data/home/forge/hzcode/docs/01-vision-and-superset.md` | Why the product exists; the superset claim the parity ratchet measures |
 | `/data/home/forge/hzcode/docs/02-decisions.md` | The 16 ADRs indexed in §4.3 |
@@ -902,6 +921,8 @@ A claim above `DESIGNED` in this document, without a named artifact, is a defect
 | `/data/home/forge/hzcode/docs/08-runtime.md` | Agent loop, subagents, teams, budgets — the M5 core |
 | `/data/home/forge/hzcode/docs/14-surfaces.md` | Every surface and the canonical exit-code table (RC-5) — the M3 core |
 | `/data/home/forge/hzcode/docs/16-operations.md` | Install, release integrity, observability, enterprise — the M7 core |
+| `/data/home/forge/hzcode/docs/28-implementation-status.md` | Implementation levels and evidence for everything built today — the single source of truth for status |
+| `/data/home/forge/hzcode/docs/29-final-audit.md` | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
 
 **Derivation.** `source: /data/home/forge/hzcode/docs/_conventions.md` (names, status ladder, RC-1…RC-8); `source: /data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: /data/home/forge/hzcode/docs/02-decisions.md` §1 (ADR table); `source: /data/home/forge/hzcode/docs/00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
 

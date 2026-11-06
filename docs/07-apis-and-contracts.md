@@ -1365,7 +1365,7 @@ One carrier is used everywhere: the kernel ABI's `TypedErrorV1` shape, exposed a
 
 ## 8. Performance budgets
 
-Protocol-level targets. All are **targets**, not measurements; none has been measured because no implementation exists yet.
+Protocol-level targets. All are **targets**, not measurements. A subset of the runtime now exists (`docs/28-implementation-status.md`: the NDJSON kernel protocol with 8 methods, the HTTP-free provider adapters, the tool contract); the HTTP/SSE/ACP/MCP/SDK surfaces in this document are still design, and none of these numbers has been measured. Measurement is a recorded work item in `docs/28` §4.
 
 | Operation | Budget | Notes |
 |---|---|---|

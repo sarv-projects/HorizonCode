@@ -1840,7 +1840,7 @@ Additional model-level rules that carry security weight:
 | Prompt prefix hashing (canonical 200 KiB) | ≤ 3 ms p95 | BLAKE3 |
 | Rules not met | MUST be reported as `UNKNOWN`, not as a pass | P6 |
 
-Numbers above are **targets**, not measurements: they are the values the implementation must be held to, and none has been measured because no implementation of HorizonCode exists yet.
+Numbers above are **targets**, not measurements: they are the values the implementation must be held to. A subset of the system now exists (`docs/28-implementation-status.md`); none of these targets has been measured against it yet, and the measurement plus its metric definition (doc 25 §7) is the work item recorded there.
 
 ---
 

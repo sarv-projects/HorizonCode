@@ -1,0 +1,293 @@
+# 29 — Final Audit: twelve-repo completeness, optimization analysis, and the docs-staleness reconciliation
+
+> **What this document is.** The audit of record (RC-13) for the twelve reference clones under `/data/home/forge/repo-tour/`, plus the final pass over the spec set itself: every doc checked for stale claims, the sixteen insertions queued by `26-learning-synthesis-2.md` §5 carried **in full** in Part D, and a cross-analysis of where to optimise further (speed, capabilities, accuracy).
+>
+> **Status rules.** Parts A–C record facts read from the clones and analysis derived from them — no implementation claim is made here; implementation levels live in `28-implementation-status.md` (RC-13). Part D is the authoritative text of the queued insertions until each owning document folds them in. Part E lists the staleness fixes applied in this audit. Nothing in this audit touched implementation code.
+
+---
+
+## 0. Method and inventory
+
+Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
+
+| Repo | Files | Size | Earlier report(s) |
+|---|---|---|---|
+| `opencode` | 11,377 | 323 MB | `/tmp/opencode-report.part1-3.md` (46 KB; **part4 empty — undercovered**) |
+| `DeepSeek-Reasonix` | 10,918 | 123 MB | `/tmp/DeepSeek-Reasonix-report.md` (38 KB) |
+| `oh-my-pi` | 10,321 | 297 MB | `/tmp/oh-my-pi-report.md` (36 KB) |
+| `codex` | 10,113 | 127 MB | `/tmp/codex-report.md` (39 KB), `/tmp/deep-codemode-report.md` (33 KB) |
+| `horizoncode` (ancestor) | 7,675 | 254 MB | **none dedicated** — its `HANDOFF.md` is cited as the ancestor source in docs 01/03/24/25 |
+| `grok-build` | 4,516 | 101 MB | `/tmp/grok-build-report.md` (66 KB), `/tmp/grok-report.md` (5.7 KB, partial) |
+| `opencode-v2` | 4,509 | 82 MB | `/tmp/deep-opencode-v2-report.md` (41 KB) |
+| `OpenHands` | 2,860 | 41 MB | `/tmp/deep-openhands-report.md` (26 KB) |
+| `claude-code` | 2,193 | 46 MB | `/tmp/claude-code-report.md` (102 KB) |
+| `wshobson-agents` | 1,200 | 15 MB | `/tmp/deep-wshobson-report.md` (105 KB) |
+| `forgecode` | 965 | 9.5 MB | **none** |
+| `SWE-agent` | 436 | 65 MB | `/tmp/deep-sweagent-aci-report.md` (37 KB) |
+
+**Evidence basis.** ~15 deep reports (~460 KB, path-cited) from the two earlier passes; two of them re-read verbatim in this audit because they are Part D's rule-text sources (`deep-codemode-report.md`, `deep-sweagent-aci-report.md`); six delta agents dispatched this audit (one per repo cluster, IDs in §6) to find what every earlier pass missed. Two coverage gaps were identified by the inventory itself and are the reason the delta pass exists: **`forgecode` and `horizoncode` have no dedicated report**, and `opencode`'s report series is truncated (part4 empty).
+
+---
+
+## Part A — Coverage verdicts
+
+| Repo | Verdict | Basis |
+|---|---|---|
+| SWE-agent | **COMPLETE (this audit)** | Report re-read in full; every device in it maps to NF-052 or a Part D rule; the "90 %" claim was evaluated against the code and is *conditional* (no such claim exists in the repo — the numbers are caps: 100 lines, overlap 2, 100-file/100-line aborts, 16,000 chars/response, 100,000 chars/observation). |
+| codex (code-mode family) | **COMPLETE (this audit)** | `deep-codemode-report.md` re-read in full; CM-1…CM-14 in Part D §09 are its verbatim rules; the codex heap-cap reset gap is captured as CM-14's test. |
+| opencode-v2 | Covered | 41 KB report; merged into NF-051/058/059/060/061 and Part D §05/07/10/11/12/14. |
+| wshobson-agents | Covered | 105 KB report; P1–P10/A1–A10 merged into Part D §15 and the bundled-15 roster (docs 27). |
+| OpenHands | Covered | 26 KB report with an explicit scope caveat (client checkout); A1–A12 merged into Part D §07/08/10/12/14/15. |
+| claude-code, grok-build, DeepSeek-Reasonix, oh-my-pi, opencode | **Delta pass dispatched** | Original full-tour reports exist; this audit re-checks for missed feature-bearing files (opencode is the priority — its report series is truncated). Results: §A.1. |
+| forgecode | **NO REPORT — largest coverage gap** | Full first-pass dive dispatched this audit (965 files). Result: §A.1. |
+| horizoncode (ancestor) | **NO DEDICATED REPORT — second gap** | Full first-pass dive dispatched this audit (7,675 files; ancestor statuses throughout docs 03/25 are derived from its `HANDOFF.md`). Result: §A.1. |
+
+### A.1 Delta-pass results (this audit's six coverage agents)
+
+| Cluster | Repos | Dispatched | Result |
+|---|---|---|---|
+| 1 | forgecode (first full report) | `conversation://e151f255-3835-4c60-959c-0d72ea2a1129` | reported into `/tmp/audit-forgecode-report.md`; summary folded in on delivery (open items: Part F) |
+| 2 | horizoncode (first full report) | `conversation://07df833c-fc35-403d-9f8a-8c0b166254cf` | reported into `/tmp/audit-horizoncode-report.md` (open items: Part F) |
+| 3 | opencode + opencode-v2 (delta) | `conversation://0fea8cc7-957c-46c7-969e-b593887f8195` | reported into `/tmp/audit-opencode-delta.md` |
+| 4 | claude-code + codex (delta) | `conversation://08cdd421-08d9-4c41-a056-2070fef910ee` | reported into `/tmp/audit-claude-codex-delta.md` |
+| 5 | grok-build + DeepSeek-Reasonix + oh-my-pi (delta) | `conversation://339dab52-496d-4cdd-b4b7-eff02e917276` | reported into `/tmp/audit-grok-ds-ompi-delta.md` |
+| 6 | OpenHands + SWE-agent + wshobson (delta) | `conversation://ecc76215-7218-47c1-ab9e-a48f315c94a7` | reported into `/tmp/audit-oh-swe-wsh-delta.md` |
+
+*(Delivery note: the agents run in the background; each report file's "missed features" section is the delta. Any cluster whose report never arrives is listed as an open item in §6 rather than assumed clean — an absent report is not a clean bill.)*
+
+---
+
+## Part B — Merged-common vs unique ledger (this audit)
+
+**Merge rule (unchanged since the first pass):** a capability that ≥2 independent sources implement is *common* → it belongs in an existing NF row or a Part D rule, never a new NF. A capability only one source has, that a user of HorizonCode would notice missing, is *unique* → it appends to the NF registry (doc 24 Section B) via a normal catalog change.
+
+**Findings of this audit's verbatim re-reads (the two reports that produced Part D):**
+
+| Source device | Classification | Disposition |
+|---|---|---|
+| Code-mode subset scan, per-call hooks, dual-output results, cell lifecycle, lease amplification ceiling (opencode + codex) | common (two implementations) | NF-051 + CM-1…CM-14 (Part D §09) |
+| ACI window/goto/cursor, summary search, lint-revert edit, narrated empties, recovery hints, env-tamed shell (SWE-agent) | unique-but-general | NF-052 + R-read-window-1…4, R-edit-window-1/2, R-edit-lint-1, R-grep-summary-1, R-tools-56/57 (Part D §09) |
+| Kanban/queue composer UX (user brief), preview environments (OpenHands `runtime_services` + practice), governance loop (SWE-agent `review_on_submit_m`), recorders (rr/TTD practice) | unique | NF-055/062/053/054 (already in doc 24) |
+| Spec-corpus governance: authority table, statuses, generated references, "no checklists in specs" (v2 + wshobson) | common (design practice) | Part D §00 RC-13 + Part D §16 gates |
+
+**No uncaptured unique feature was found in the two verbatim re-reads** — every device in them already owns an NF row or a Part D rule. Whether that holds for the other ten repos is exactly what the six delta reports answer in §A.1; any genuine delta becomes a doc 24 Section B change at that point (the register is closed until then).
+
+---
+
+## Part C — Optimization analysis (speed · capabilities · accuracy)
+
+Derived from the full corpus; every item cites its source device and the doc that should record it. These are **analysis recommendations**, not status claims.
+
+### C.1 Speed & cost
+
+| # | Lever | Evidence | Where it lands |
+|---|---|---|---|
+| C-1 | **Cache-prefix discipline is the single largest cost lever.** Byte-stable prefix + tail-appending compaction + `toolChoice:"none"` final step keeps provider prompt caching intact across turns; the two cache-breaking devices found in the wild (`last_n_observations` elision, mid-session tool-definition mutation) are explicitly prohibited. | v2 `tools.md`; SWE-agent's own docstring admits its elision breaks caching | Part D §10; NF-061 |
+| C-2 | **Encode-once event feed** replaces per-connection encoding (553.9 ms → 12.4 ms at 50 subscribers, measured in v2's benchmark) with per-connection dropping queues (capacity 4,096). Our resumable backpressure policy stays (T9). | v2 `event-stream-architecture.md` | Part D §07; NF-060 |
+| C-3 | **Code-mode cells yield instead of kill** (`exec/wait/terminate`, 10 s default yield + 1 s grace): hot program state survives turns; a 100-step run stops re-paying parse/plan cost. | codex `service.rs` | Part D §09 CM-13; NF-051 |
+| C-4 | **ACI windowing bounds per-result bytes** (≤ ~4 KB/window turn) and summary search bounds per-search bytes (~3 KB for a 100-file search vs ~120 KB of matches) — bought with turns, which are cheaper than dumps at long horizons. | SWE-agent arithmetic (report §7) | Part D §09; NF-052 |
+| C-5 | **Speculative decoding + KV reuse** for local engines turns a local model from a latency toy into a usable routing target. | NF-057 practice | docs 07/16 |
+| C-6 | **Subagent fleet economics**: base-seven tool subset, own context capsule, digest-addressed handoffs (`adopt_ref`) — delegation without context inflation. | wshobson A8; our NF-007 | docs 08/15 |
+
+### C.2 Capabilities
+
+| # | Lever | Note |
+|---|---|---|
+| C-7 | The NF-051…062 range is the capability increment of this cycle; NF-055 (preview) and NF-051 (code mode) already have reduced v1 slices (`28-implementation-status.md`). |
+| C-8 | **Profile contracts** (P1–P10) make subagents capability-first: allowlist-as-role, tier-by-blast-radius, typed output with escalation ladder, declared refusals, partition fan-out, one-writer-per-file, relay profiles. Bundled 15 roster in docs 27. | Part D §15 |
+| C-9 | **Policy statements** (NF-058) add user-authority precedence without widening: safety-inverted order, allow-never-grants, enforcement protection. | Part D §11 |
+| C-10 | **Preview + ACI + recorder + governance** close the "vibe loop", long-file archaeology, post-mortem debugging, and pre-submit review — the four capabilities users notice missing in competitors. | Part D §09/§14; NF-052/053/054/055 |
+
+### C.3 Accuracy & honesty
+
+| # | Lever | Note |
+|---|---|---|
+| C-11 | **Structural pairing + narration**: action↔observation made unrepresentable when unpaired; empty outputs narrated; truncation always names the recovery move. Silence and dangling results are the two most common model-confusing states. | Part D §05/§09 |
+| C-12 | **View/log separation everywhere**: forgotten-sets, instruction epochs, sync preambles — a view is reconstructable from the log at any time; the log keeps everything. | Part D §10/§12; T3 |
+| C-13 | **Fail-closed retention**: oversized results retained or the execution fails — never lossy success. | NF-061; Part D §05 |
+| C-14 | **Tier parity measured, not asserted**: paired evals with a release-blocking ratchet (NF-056) + the honest framing of the ACI claim. | docs 10/16/25 |
+
+---
+
+## Part D — The sixteen queued insertions, in full
+
+Sources: `26-learning-synthesis-2.md` §5 (the queue), §2 (the distilled facts) and the verbatim reports where they carry draft rule text (`deep-codemode-report.md` §5.2 for CM rules; `deep-sweagent-aci-report.md` §6 for ACI rules). Rule IDs are final; owning documents adopt this text at their next revision (RC-13).
+
+### D-05 → `05-domain-and-schemas.md`
+
+**1. `ToolResultV1` dual output** (NF-061). Every tool result carries three independently-typed projections of one execution: `machineOutput` (schema-validated, ephemeral, visible to code mode), `content` (durable, model-facing; MUST be non-empty when `machineOutput` is absent), and `metadata` (compact UI JSON, bounded independently — never an unbounded side-channel). **Retention is fail-closed:** a payload too large for managed storage makes the call **fail operationally**; it is never published as a lossy success. Domain output does not change according to model-output bounding policy (bounding happens at the projection, not the record).
+
+**2. `InstructionsStateV1` — value deltas.** Instruction sources are stored as content-addressed blobs; sessions observe `hz.session.instructions.updated {delta, text?}` where "removed" is absence, never a tombstone; an **instruction epoch spans completed compactions**; a fork adopts the parent's newest instruction values as its baseline. Clients display *changed keys*, not privileged prose.
+
+**3. Action↔observation pairing invariant.** A tool observation with no corresponding call, and a call with no observation, are **invalid states** and fail closed: every `hz.part` observation MUST reference its `step.tool.requested` call id; a drained-but-unpaired call is failed at drain start, never replayed, never silently dropped.
+
+### D-06 → `06-events-and-flows.md`
+
+**1. Precedence:** profile-ceiling ∧ task-override — a task-level override entry point may narrow or re-target *within* the profile ceiling, is honoured only at the declared entry points, and is recorded in the admission event; an override that would exceed the ceiling is refused, not clamped silently.
+
+**2. NF-053 flows:** the governed plan FSM (Plan → Propose → Await verification → enforce linting; violation ⇒ roll back and re-plan) as a named flow, with the pre-submit review gate (re-run repro, remove repro artifacts, restore test files, then re-submit) and its deliberately-audited force path.
+
+### D-07 → `07-apis-and-contracts.md`
+
+**1. Stream framing (NF-060):** one session stream carries three frame classes — `sync` (declares `from_seq`/`through_seq` **before** replay), `durable {seq, …}` (seq = log index; persisted), `transient` (no seq; never persisted; liveness only). Unknown frame types MUST be ignored (the envelope is allowed to grow).
+
+**2. Strict pagination:** a paginated read MUST surface "unsupported" as unsupported — never degrade to an empty page; a partial history must never be mistakable for exhaustion.
+
+**3. Feed laws (NF-060):** encode-once, per-connection dropping queues (capacity 4,096), overflow terminates only that connection (`SubscriberOverflow`), encoding failure fails connected queues but keeps the feed available for later connections; **transport errors are not session errors**.
+
+### D-08 → `08-runtime.md`
+
+**1. Step-allowance accounting:** promoting new input resets the agent's step allowance; a steer batch resets it **once**; queued next-turn prompts reset it at turn start.
+
+**2. Control-item delivery boundaries:** compaction and move are inbox items; a later steer **MUST NOT** cross an undelivered control item (ordering is by `enqueued_seq`, never wall clock).
+
+**3. `runtime_services` URL injection (NF-055):** the backend's actual bound URLs are forwarded into new sessions as a system-context suffix "so agents use correct URLs instead of guessing ports"; the injection is recorded on the session, and the URL is data, never authority.
+
+**4. Recorder as a runtime service (NF-054):** failed verification runs may request a recorded trace; the trace is an artifact (digest-referenced), passed to the model; capture availability is a lane-health fact.
+
+**5. Override-precedence enforcement point:** the single place task overrides are applied is named, and it is the only place (boundary test).
+
+### D-09 → `09-tools.md`
+
+**1. ACI reading-mode rules (NF-052) — verbatim:**
+
+- **R-read-window-1.** `read` MUST accept `cursor: 'open' | 'next' | 'prev'` in addition to `path`/`startLine`/`endLine`. When `cursor` is present, the window is `readWindowLines` (default 100) long and the step is `readWindowLines - readOverlapLines` (default overlap 2), positioned within the file's bounds. The result MUST include `view: {path, firstLine, lastLine, totalLines, moreAbove, moreBelow}` and MUST render the top/bottom cut as `(N more lines above)` / `(N more lines below)` when non-zero.
+- **R-read-window-2.** `read` MUST accept `gotoLine: number`, positioning the window so the line sits `floor(readWindowLines / 6)` lines below the window's first line; `gotoLine` on a symbol name MUST be resolved by the symbol index and reported as `resolvedVia: 'symbol'`.
+- **R-read-window-3.** The session MUST retain the last window per path as session state (`view.cursor`), refreshed from observed `read`/`edit`/`insert` effects and never from model-authored text. `cursor: 'open'` re-renders that stored window; a stale cursor (path removed) MUST fail with `NotFound`, not silently re-open at line 1.
+- **R-read-window-4.** A windowed `read` of a file longer than `readWindowLines` is the default when `path` is given without a range. A full-file read requires `full: true`, is capped by R-tools-42, and MUST report `truncated` with an artifact pointer.
+- **R-edit-window-1.** When the session holds a window for the edited path, `edit` MUST resolve `oldString` **within that window**; a unique match elsewhere MUST NOT be applied and the call MUST fail with `detail.matchesOutsideWindow: [line…]` plus a `recoveryHint: "read the file at those lines first"`.
+- **R-edit-window-2.** When `oldString` occurs more than once inside the window and `replaceAll=false`, `edit` MUST fail with `AmbiguousMatch` naming every match line in `detail.matches[]`.
+- **R-edit-lint-1.** When a syntax check is available for the file's language, `edit`/`insert` MUST evaluate the postimage before writing. If the postimage introduces diagnostics absent from the preimage, the call MUST fail with `category: 'syntax-break'`, MUST leave the file byte-identical, and MUST return both the would-be postimage window and the current window in `detail`.
+- **R-grep-summary-1.** `grep` MUST support `mode: 'summary'` returning `files: [{path, matchCount}]` and no match text. Above `grepSummaryMaxFiles` (default 100) it MUST return `truncated{reason: 'count'}` and a `recoveryHint` telling the model to narrow the pattern or scope, and MUST return no file list.
+- **R-tools-56 (rendering).** Every model-facing result that reports an empty payload MUST render an explicit sentence (e.g. "the command succeeded and produced no output") instead of an empty block; every `truncated` result MUST carry a `recoveryHint` naming at least one cheaper follow-up call (`read` range, `grep -n`, `outline`, redirect-to-file).
+- **R-tools-57 (state line).** The model-facing step tail MUST project an environment-derived state line (`openFile`, window range, `cwd`), produced by a state command and refreshed from observed effects. It MUST NOT be part of the byte-stable prefix, MUST NOT be model-authorable, and MUST NOT be counted as evidence for `verify`.
+
+**2. Phase-2 `aci.*` group** (admitted only under a preset so the default tool prefix does not grow): `aci.open` (files.read, parallel-safe), `aci.goto` (line or symbol), `aci.scroll` (direction, pages), `aci.find` (summary|matches), `aci.insert` (files.patch, kernel lease). Cursor movement is session state (`lease: session`), never a kernel lease and never a tool argument. Prompt fragment + tests as drafted in the report §6 (cursor math, cursor persistence, outside-window refusal, lint-revert, summary cap at 101 files, recovery hints, narrated empty, state-not-model-authorable).
+
+**3. Env-taming defaults:** the shell environment MUST default `PAGER=cat`, `MANPAGER=cat`, `GIT_PAGER=cat`, `LESS=-R`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off`, and the interactive-command blocklist (`vim`, `less`, `tail -f`, bare `python`, …) applies unless explicitly overridden.
+
+**4. Code-mode invariants (NF-051) — CM-1…CM-14, verbatim from the decision report:**
+
+| # | Rule |
+|---|---|
+| CM-1 | The callable surface inside the snippet is exactly the declared subset ∩ `visibleTools(session)` ∩ the step's registry snapshot; nothing else resolves. |
+| CM-2 | Subset enforcement is **static and total**: dynamic access (`tools[name]`), aliasing `tools`, and computed property calls are rejected by the scanner. |
+| CM-3 | Every nested call re-enters the ordinary pipeline: resolve → Guard → durable prepare → its own one-use lease → execute → settle → receipt. The snippet never sees a lease, receipt id, or host object. |
+| CM-4 | The outer `ask` shows the declared subset only, and covers exactly "run a confined program with this subset". Loops cannot widen it. |
+| CM-5 | Amplification is bounded before the first inner call: `maxToolCalls` (default finite), per-inner-call budget, per-step lease ceiling, and the outer timeout. |
+| CM-6 | Timing out or terminating the cell **never** reports a dispatched mutation as failed-safe: every inner call ends in a terminal state, `UNKNOWN` when the transport died after dispatch, and the step reconciles. |
+| CM-7 | The result's audit table carries, per call: `toolId`, `toolCallId`, `leaseId`, `receiptId?`, terminal state, `ms`. Read-only calls emit no effect-claiming receipt. |
+| CM-8 | Confinement is declared as a guarantee vector with typed residuals, and the operation fails closed when the host cannot meet the caller's minimum (`SandboxUnavailable`). |
+| CM-9 | The snippet's engine has no ambient I/O: no filesystem, network, process, `WebAssembly`, shared memory, dynamic codegen of host bindings; imports resolve only to declared globals. |
+| CM-10 | Discovery inside the snippet is a pipeline call (`search(...)` lowers to `tool_search`), admitted, counted, paginated, respecting `admitTools`/visibility. |
+| CM-11 | Snippet state (`store`/`load`) is JSON-only, session-scoped, snapshotted per exec, and never authority. |
+| CM-12 | Snippet output is untrusted data: bounded, truncated with an in-band marker, never re-parsed as tool ids/receipt ids/decisions, never a completion claim. |
+| CM-13 | Default posture is one-shot with a bounded wall clock **plus** an explicit cell mode (`exec|wait|terminate`, `cellId`), session-scoped and receipted; no cell survives session termination. |
+| CM-14 | Resource caps (heap/wall/call-count/output) are settable per session and actually enforced (no "plumbed but reset to none" gap). |
+
+**5. Dual-output result rendering** (NF-061): the model sees `content`; the UI sees `metadata`; code mode sees `machineOutput` (ephemeral). Retention failure ⇒ operational failure (§D-05).
+
+**6. Cancellation taxonomy:** "effect interruption is the cancellation mechanism" — tools MUST NOT translate interruption or defects into model-visible failures; broad catch-around-execute is invalid because it consumes interruption and defects. Terminal vocabulary is RC-7's single enum.
+
+**7. Reserved tool name `execute` and name normalization:** `execute` is reserved (code-mode call surface); tool names normalize unsupported characters to `_` at declaration load.
+
+### D-10 → `10-cognition.md`
+
+**1. Instruction epochs (NF-059):** content-addressed instruction blobs; `hz.session.instructions.updated {delta, text?}` value deltas; an epoch spans completed compactions; forks adopt newest values as baseline (§D-05.2).
+
+**2. Compaction ladder:** `keep_first` (preserve opening framing), `minimum_progress` (anti-thrash: a compaction that does not reduce the projected context below the trigger is not repeated automatically), and the **bounded hard-reset ladder** (`hard_context_reset_max_retries` × `hard_context_reset_context_scaling`), each rung with a named recovery move; the second overflow after one rebuild is terminal.
+
+**3. `toolChoice: "none"` final step:** the final call of a step retains the tool definitions with `toolChoice:"none"` instead of stripping them, so the cached prefix survives.
+
+**4. Tail-append compaction:** summaries append at the tail; the byte-stable prefix is never rewritten by compaction.
+
+### D-11 → `11-authority-safety.md`
+
+**Policy statements (NF-058)** — `{effect: allow|deny, action, resource}` with wildcards:
+
+1. **Safety-inverted precedence:** ordinary settings read forward; **policy documents read reversed** so user-global beats repository; organization-managed statements append last — "an organization deny cannot be lifted by a repository or user allow".
+2. **Allow-never-grants:** an allow statement never overrides a session/agent denial and never grants a saved approval; a deny overrides "Allow always".
+3. **Keep-last-snapshot:** a failed config/credential refresh keeps the last good policy snapshot (dropping it would open, not close, enforcement).
+4. **Enforcement protection:** plugins cannot add/remove/override policy; a plugin `remove` ignores policy/enforcement modules regardless of selector.
+5. **Decider-named denials:** "Blocked by ⟨scope⟩'s policy"; policy-denied skills are absent from every load path; denied MCP servers never open a connection.
+6. Unknown actions are skipped preserving order; malformed supported statements remain errors.
+
+### D-12 → `12-sessions-state.md`
+
+1. **Provisional→durable retirement:** streaming slots live in a separate collection from durable events so a provisional id can never dedupe the real message away; `item_started` carries the id the durable event will have.
+2. **Forgotten-set view reconstruction:** condensation removes events from the *view* (`forgotten_event_ids`), never from the log; any view is reconstructable from the log at any time.
+3. **Sync preamble:** a log subscription declares `from_seq/through_seq` **before** replay; the watermark is emitted as one sync marker; live-only deltas are intentionally absent from replay.
+4. **Runtime-identity cache keys:** projection caches key on runtime identity, not path alone.
+5. **Placement/fencing (first-class):** id-bound values outlive an execution site; service acquisition is lazy; movement must not pin events to the old place — "local execution remains process-owned until clustering introduces an explicit placement and fencing protocol" (explicit deferral recorded as good practice).
+
+### D-14 → `14-surfaces.md`
+
+1. **Compaction UX metrics:** before/after/saved tokens, manual compaction CTA, busy-guard disabling — with the baseline captured **before** the request (the condense POST can only return after the server emitted its event).
+2. **Bulk review (NF-062):** Keep All / Undo All over per-hunk review, both receipted (`files.patch` under the review lease).
+3. **Preview surface (NF-055):** the bound preview URL is displayed per session; opening/refreshing is a surface action, never authority.
+
+### D-15 → `15-extensibility.md`
+
+**Profile contract additions (wshobson P1–P10):** every profile declares `resultSchema` (typed output; `kind=verify` MUST be three-valued + typed findings), `requiresInputs[]`, `refusesWhen[]` (evaluated before budget reservation; structured `precondition_unmet`), `partitionBy` (sibling nodes with one profile MUST carry distinct partition keys), `ownsPaths` (kernel refuses cross-session writes to an owned path), and a prompt skeleton (Mission / Invariants / Protocol / Inputs / Output contract / Never). Capability presets compose downward only: `observe ⊂ execute ⊂ mutate`, plus `coordinate`/`verify`/`publish`; `kind=relay` is a single-tool profile; tier policy maps kind → model tier (verify/plan → strongest; act → mid; research → cheapest unless `requiresReasoning`). Canonical id + revision + digest per profile, with `@provenance`. **Bundling decision: 15 profiles, one per capability class** — plugins may add profiles only by narrowing; "python-expert" is a skill over `worker`, not a 20th agent.
+
+### D-16 → `16-operations.md`
+
+1. **Prompt-vs-grant lint:** a profile whose prompt mentions an effect absent from its ceiling fails the build.
+2. **Generated-reference drift:** model-facing references (tool catalogs, command docs) are **generated** from the declarations; CI gates drift.
+3. **Mutation-tested gates:** gate definitions are themselves tested (a gate that cannot fail is a bug).
+4. **`.hz`-cannot-supply-authority test:** workspace-supplied configuration can never encode an authority grant (narrowing only, mechanically asserted).
+
+### D-00 → `00-index.md` and `_conventions.md`
+
+**Document classes + authority-by-concern:** each document declares its class — **contract** (schemas, protocol — normative), **decision record** (ADRs, rulings — binding on design), or **historical** (learning records, plans, audits — no normative force) — and the authority-by-concern table names which document owns which kind of truth: names/status (conventions), wire/durable shapes (05/07 + generated protocol), authority semantics (11), runtime semantics (08/12), implementation levels (28, RC-13), audit record (29). Rejected options are kept with their trade-offs. Applied in this audit as RC-13 plus the status-note reconciliation (Part E).
+
+### D-24A → `24-feature-catalog.md` Section A — parity rows for the three new sources
+
+| New source | Parity row (one line each) |
+|---|---|
+| SWE-agent (ACI) | **Inherit+Supersede** — bounded read windows with orientation, summary search with a narrowing abort, window-scoped edit with repair hints, lint-gated edit that reverts, append-only insert, narrated empties, recovery hints, environment-derived state line (NF-052; doc 09). |
+| OpenHands (Agent Canvas) | **Inherit** — durable/transient frame classes + sync preamble + strict pagination + evented condensation views (NF-060, NF-059; docs 07/10/12/14). |
+| wshobson/agents | **Supersede** — the subagent corpus's engineered minority distilled into profile contracts and a bundled-15 roster; the 202-agent sprawl is *rejected* as the failure mode (docs 15/27). |
+
+---
+
+## Part E — Docs staleness ledger (applied in this audit)
+
+Every fix below was applied in this audit; docs-only. "Checked clean" means the search pass found no falsified claim.
+
+| Doc | Stale item found | Fix applied |
+|---|---|---|
+| `00-index.md` | Status line "Phase 0 — the design"; "Nothing in this set is above DESIGNED"; missing docs 28/29 rows | Status line now says V1 implemented; ceiling paragraph replaced by the RC-13 pointer to docs 28; rows for 28/29 added; "RC-1…RC-13" |
+| `03-hld.md` | "Nothing in this repository is built" blanket claim | Dated status note; sentence marked historical |
+| `04-lld.md` | "Nothing below is built" status block | Dated status note (built subset is far smaller than this doc's scope; statuses that moved are in docs 28) |
+| `05-domain` | "no implementation of HorizonCode exists yet" (perf targets) | Rephrased: targets unmeasured against the now-existing subset; measurement work item recorded |
+| `06-events` | "repository contains no implementation" | Dated status note naming the implemented flow shapes |
+| `07-apis` | "no implementation exists yet" (budgets) | Dated status note (NDJSON protocol + adapters exist; HTTP/SSE/ACP/MCP still design) |
+| `08-runtime` | "no implementation exists in this tree" | Dated status note (v0.1 loop slice named; rest remains design) |
+| `09-tools` | Status line + "Nothing here is CODE_PRESENT…" | Dated status notes (ten v0.1 tools tested; rest design); dangling README reference removed |
+| `10-cognition` | "Every capability below is DESIGNED — no implementation" | Dated status note (provider layer implemented/tested; compiler/memory/compaction remain design) |
+| `11-authority` | "no implementation exists" | Dated status note (guard/leases/receipts have a v0.1 slice; sandbox/Starlark/THS remain design) |
+| `16-operations` | "`hzcode` and `hzk` do not exist yet" + a quote from a README section that no longer exists | Dated status note (bin/hzcode + hz-kernel exist; v0.1 kernel is not the designed `hzk` asset) |
+| `24-feature-catalog` | "No row may be upgraded…" without the pointer; Section-13 status table saying "no implementation" | Dated status notes; Section B row now names the v1 slices (NF-051/NF-055) carried in docs 28 |
+| `25-roadmap` | "No phase has been entered"; index NF range "…NF-050"; the §10 note calling 00-index stale (itself stale — OQ-R1 closed); §9 row citing the old ceiling | Dated status note; **§4.2a added** (NF-051…062 index); counts corrected to 62; OQ-R1 marked closed; §9 row points at docs 28; related-docs rows for 28/29 added |
+| `26-learning-synthesis-2` | §5 queue with no status | Dated note: staleness reconciled; the sixteen insertions are carried in **Part D of this document** (authoritative until folded in) |
+| `_conventions` | No rule for the post-implementation status split | **RC-13 added** (single owner for implementation status; Part D role; this file as audit of record) |
+| `README`, `CURRENT_RUN` | No pointer to the audit | Pointers added |
+| `01`, `02`, `12`, `13`, `14`, `15`, `27`, `28` | none found | Checked clean (status-claim search + targeted reads); docs 12–15 are Part D adopters, not stale |
+
+---
+
+## Part F — Open items
+
+1. **Six delta reports** (§A.1) — deliver asynchronously; each one's "missed features" section is folded into Part B (and, where a genuinely-uncaptured unique feature appears, into doc 24 Section B as the register's next change). Any cluster with no report stays listed here as an open gap — an absent report is not a clean bill.
+2. **`forgecode` and `horizoncode` full reports** (§A.1 clusters 1–2) are the audit's two first-pass gaps; until they land, those two repos carry *no dedicated coverage* beyond the ancestor citations in docs 01/03/24/25.
+3. **`opencode` report series** — part4 was empty; cluster 3 re-covers the original `opencode` tree.
+
+---
+
+## Related documents
+
+- `28-implementation-status.md` — implementation levels (the single source of truth; RC-13)
+- `26-learning-synthesis-2.md` — the learning record whose §5 queue this audit carries in Part D
+- `27-implementation-plan.md` — the build plan for the NF range this audit verifies the sourcing of
+- `AUDIT.md` — the first design-corpus audit (historical)

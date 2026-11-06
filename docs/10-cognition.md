@@ -720,7 +720,7 @@ Harness requirements: a fake clock for every backoff and timeout test, recorded 
 
 ## 10. Status
 
-`_conventions.md` §8 forbids claiming a level above the evidence. **Every capability below is `DESIGNED`** — spec only, no implementation. No row is `CODE_PRESENT`; the ancestor artifacts cited in §1.1 are design input from other repositories under `/data/home/forge/repo-tour/`, not evidence about this product. `UNKNOWN` marks a question this document does not settle.
+`_conventions.md` §8 forbids claiming a level above the evidence. **Every capability below is `DESIGNED`** *as a specification claim*, with one implemented slice: the provider layer — mock, Anthropic and OpenAI adapters with the shared SSE parser — exists and is TESTED (`app/src/core/providers/`, 72 tests; evidence in `docs/28-implementation-status.md`). The context compiler, cache guard, memory tiers, retrieval and compaction below remain spec-only. The ancestor artifacts cited in §1.1 are design input from other repositories under `/data/home/forge/repo-tour/`, not evidence about this product. `UNKNOWN` marks a question this document does not settle.
 
 | Capability | Level | Evidence |
 |---|---|---|
