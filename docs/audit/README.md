@@ -26,3 +26,25 @@ Six delta audits over all twelve reference clones under `/data/home/forge/repo-t
 - Reports were written against the clones as of 2026-11-06; the clones are reference material and drift independently of this repo.
 - Each report's NOT-READ list is part of its honesty record — notably horizoncode's `kernel/src/host_kernel.rs` (48,214 lines) was read at interface level (module and test names), not line-by-line, and the report says so.
 - Upstream defects recorded in the reports (e.g. opencode-v2's skill-version refresh gap, claude-code's missing sandbox-runtime dependency) belong to the reference repos; they are observations, not claims about HorizonCode.
+
+## Pass-2 reports (`pass2/`)
+
+The fifteen reports from the earlier deep-dive passes, preserved 2026-11-06 for durability (they lived only in `/tmp`). They are the sources for docs 26/27 and for `29-final-audit.md` Part D.
+
+| File | Repo | Note |
+|---|---|---|
+| `deep-codemode-report.md` | opencode + codex code-mode family | Source of CM-1…CM-14 (Part D §09) |
+| `deep-sweagent-aci-report.md` | SWE-agent | Source of the ACI rules R-read-window-1…4 etc. (Part D §09) |
+| `deep-wshobson-report.md` | wshobson-agents | 202-agent inventory + P1–P10 |
+| `claude-code-report.md` | claude-code | 650 lines |
+| `codex-report.md` | codex | 450 lines |
+| `deep-opencode-v2-report.md` | opencode-v2 | 235 lines |
+| `deep-openhands-report.md` | OpenHands | 173 lines |
+| `DeepSeek-Reasonix-report.md` | DeepSeek-Reasonix | **truncated original** — ends mid-sentence; superseded by the delta report |
+| `grok-build-report.md` | grok-build | 608 lines (the thorough one) |
+| `grok-report.md` | grok-build | **truncated original** — ends mid-table; superseded |
+| `oh-my-pi-report.md` | oh-my-pi | 413 lines |
+| `opencode-report.part1.md` … `part3.md` | opencode | 556 lines combined |
+| `opencode-report.part4.md` | opencode | **empty (2 bytes)** — the historical gap that triggered the opencode delta pass |
+
+Truncations and the empty part are preserved exactly as found: they are the defects the final audit's delta passes exist to compensate for, and the honesty record is the point.
