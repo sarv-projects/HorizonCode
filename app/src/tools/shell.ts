@@ -6,6 +6,8 @@ import { resolvePath, truncate } from "./helpers";
 const MAX_OUTPUT = 30_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
+/** How long to keep draining output pipes after the direct child has exited. */
+const DRAIN_GRACE_MS = 500;
 /** Environment names that must never reach a child process. */
 const SECRET_ENV = /(key|token|secret|password)$/i;
 
@@ -15,6 +17,18 @@ function fail(error: string): ToolResult {
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Wait for `p`, giving up after `ms`; returns true when `p` settled in time. */
+function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    const done = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    p.then(done, done);
+  });
 }
 
 function numberOr(value: unknown, fallback: number): number {
@@ -73,6 +87,8 @@ export const shellTool: Tool = {
           stdout: "pipe",
           stderr: "pipe",
           stdin: "ignore",
+          // Own process group: `kill` below then reaches the whole tree, not just bash.
+          detached: true,
         });
       } catch (e) {
         return fail(`failed to start command: ${msg(e)}`);
@@ -85,7 +101,7 @@ export const shellTool: Tool = {
 
       const kill = (): void => {
         try {
-          process.kill(-proc.pid, "SIGKILL"); // the child's process group, when it has one
+          process.kill(-proc.pid, "SIGKILL"); // the child's process group (see `detached`)
         } catch {
           /* not a group leader */
         }
@@ -106,8 +122,10 @@ export const shellTool: Tool = {
       };
       ctx.signal.addEventListener("abort", onAbort, { once: true });
 
+      const readers: Array<{ cancel(reason?: unknown): Promise<void> }> = [];
       const pump = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
         const reader = stream.getReader();
+        readers.push(reader);
         try {
           for (;;) {
             const { done, value } = await reader.read();
@@ -120,8 +138,24 @@ export const shellTool: Tool = {
         }
       };
 
+      const pumps = Promise.all([pump(proc.stdout), pump(proc.stderr)]).then(
+        () => {},
+        () => {},
+      );
       try {
-        await Promise.all([pump(proc.stdout), pump(proc.stderr), proc.exited]);
+        await proc.exited;
+        // The pipes normally close as the child exits. A process that outlived it — a
+        // background job, or a descendant that escaped the group kill — can keep them
+        // open, so the drain wait is bounded and the readers are then dropped.
+        if (!(await settlesWithin(pumps, DRAIN_GRACE_MS))) {
+          for (const reader of readers) {
+            try {
+              await reader.cancel();
+            } catch {
+              /* already closed */
+            }
+          }
+        }
       } finally {
         clearTimeout(timer);
         ctx.signal.removeEventListener("abort", onAbort);

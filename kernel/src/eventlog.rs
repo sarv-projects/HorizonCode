@@ -182,12 +182,13 @@ impl EventLog {
             if seq < from_seq {
                 continue;
             }
-            out.push(event);
+            // Check the cap before pushing so `limit: 0` really means zero events.
             if let Some(limit) = limit {
                 if out.len() >= limit {
                     break;
                 }
             }
+            out.push(event);
         }
         Ok(out)
     }
