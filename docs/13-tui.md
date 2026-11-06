@@ -383,6 +383,16 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 | R195 | Exit codes are canonical (`docs/14-surfaces.md` §3.2): `0` success; `1` error; `2` usage, configuration or environment error (bad flags, invalid keybindings/theme, terminal too small, unusable workspace); `3` fail-closed — an outcome that cannot be proven or guaranteed (kernel absent or mismatched, an `ask` with no answerer, an unreconciled `UNKNOWN`); `4` policy denial (`Guard` returned `DENY` and the run stopped); `5` budget exhaustion; `130` SIGINT; `143` SIGTERM. |
 | R196 | The parity ratchet (doc `14-surfaces.md` §2.10) MUST treat "renders in the TUI" and "is emitted in `--output jsonl`" as one capability with two projections: adding a UI-only state fails the build. |
 
+### 2.18 Composer queue, rich input, and completion surfaces
+
+| # | Rule |
+|---|---|
+| R197 | The queue panel MUST allow editing and reordering of queued prompts before dispatch (NF-062): reorder via move-up/move-down or drag, delete with confirmation. A queue edit MUST be recorded as an input mutation (doc 08 admission rules); reordering changes scheduling order only and MUST NOT bypass the Safe Step Boundary — steering semantics are unchanged. |
+| R198 | An item under admission MUST be visually locked (`dispatching`) and MUST NOT be editable or reorderable while its admission is in flight; if the user edits during admission, the edit applies to the next admission attempt, never to the in-flight one. Each queued item MUST show when it will be delivered (next safe step boundary, next turn start, or after the running turn). |
+| R199 | Fenced code blocks in transcript and composer preview MUST render with a language header: an explicit info string wins; absent one, the TUI MAY apply content heuristics (shebang, keywords, filename hints) and MUST render the detected language as a hint (`lang:rust?`) distinct from the declared form. Detection is display-only: it MUST NOT alter content, affect tool inputs, or claim authority. RTL/LTR bidi rules (R133) apply inside code blocks unchanged. |
+| R200 | Composer attachments: pasted images and files MUST become chips showing kind, byte size, sha256, and a preview thumbnail rendered per the R110 protocol order; untrusted media follows R112 (out-of-process decode). Sending MUST reference the stored `hz://artifact/<sha256>` URI — binary content MUST NOT be inlined into the message text, and an attachment's ingestion MUST be visible in the debug HUD counter. |
+| R201 | A completed run MUST leave a one-line completion summary pinned at the end of its turn (files touched, receipts settled, spend, and any `UNKNOWN` pending reconciliation), jumpable via `G` and by the turn header. The summary MUST be derived from receipts and the ledger, never from model prose; an `UNKNOWN` item in the summary MUST link to the reconciliation flow (R169–R170) and block a green "complete" state. |
+
 ---
 
 ## 3. Interfaces

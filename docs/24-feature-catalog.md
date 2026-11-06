@@ -91,12 +91,14 @@ Not registered by this change (see §1). Each MUST be added to §5 of `_conventi
 | `browser.control` | `external-effect` | `browse` / `computer` tools |
 | `learn.run` | `read-only` | NF-010, NF-033, NF-034, NF-035 — authority impact `none` |
 | `learn.propose` | `workspace-write` | NF-010 proposals — authority impact `none` |
+| `debug.record` | `process` | NF-054 execution recorder |
+| `preview.serve` | `process` | NF-055 preview environments |
 
 ### 3.4 Event additions — registered as Reserved names (RC-11)
 
 The following are **Reserved names** in [`_conventions.md`](./_conventions.md) §6: usable only with `[planned]`, promoted to canonical in the change that first implements their feature.
 
-`hz.workflow.started` · `hz.workflow.completed` · `hz.notify.raised` · `hz.collab.presence.changed` · `hz.budget.exceeded` · `hz.sandbox.guarantee.assessed` · `hz.sandbox.residual.reported` · `hz.egress.denied` · `hz.index.updated` · `hz.bridge.attached` · `hz.learn.proposal.reviewed` · `hz.tool.discovered` · `hz.trust.record.appended`.
+`hz.workflow.started` · `hz.workflow.completed` · `hz.notify.raised` · `hz.collab.presence.changed` · `hz.budget.exceeded` · `hz.sandbox.guarantee.assessed` · `hz.sandbox.residual.reported` · `hz.egress.denied` · `hz.index.updated` · `hz.bridge.attached` · `hz.learn.proposal.reviewed` · `hz.tool.discovered` · `hz.trust.record.appended` · `hz.session.instructions.updated` · `hz.preview.started` · `hz.preview.stopped` · `hz.debug.recording.captured`.
 
 **Withdrawn:** the earlier drafts' `hz.receipt.unknown` / `hz.receipt.reconciled` are not names; the canonical events for those facts are `hz.effect.unknown` / `hz.effect.reconciled` (RC-11).
 
@@ -809,6 +811,118 @@ Two conventions apply to every entry:
 
 ---
 
+**NF-051 … NF-062.** Added by the second learning pass (`docs/26-learning-synthesis-2.md` §4; ratified by RC-12).
+
+### NF-051 — Code Mode v2: confined programming over the tool tree with per-nested-call authority
+
+- **Problem.** One tool call per round-trip cannot express search-and-filter work; but a scripting surface that can mint leases, launder data into authority, or hide calls from the static subset would be a privilege grant wearing a sandbox.
+- **Design.** Deepen the existing `code_mode` contract per `docs/26` §2.5: canonical `tools.<path>` projection (dots as namespace separators, one canonical spelling, namespace descriptions joining discovery); **static and total subset enforcement** via an AST scanner (dynamic access, aliasing, and passing `tools` are rejected before any effect); discovery inside the snippet lowers to the ordinary `tool_search` pipeline (admitted, counted, paginated — never a private registry read); per-call `tool.before`/`tool.after` hooks are the authority seam (a failing before denies); every nested call re-enters the ordinary pipeline and produces its own lease and receipt, reported in the audit table as `{toolId, toolCallId, leaseId, receiptId?, terminalState, ms}`; snippet state (`store`/`load`) is JSON-only, session-scoped, snapshot-per-exec, never authority; cells are first-class (`cellId?`, `action: exec|wait|terminate`, yield-by-default) and **termination never counts as settlement** (in-flight calls settle or become `UNKNOWN` for reconciliation). Confinement is declared as a guarantee vector with typed residuals, never as an engine brand: either an allowlisted-subset interpreter (no ambient I/O by construction) or an engine with JIT/codegen disabled, ambient globals deleted, and a heap cap that is actually enforced; the operation fails closed (`SandboxUnavailable`) when the caller's minimum cannot be met. Preview of the rules: CM-1…CM-14 (`docs/26` §2.5).
+- **Capability IDs.** `codemode.execute`; inner calls use their own capability IDs.
+- **Authority impact.** `kernel` (lease-amplification ceiling decided before the cell starts; the approval is bound to the declared subset and snippet hash, single-use).
+- **Dependencies.** NF-001, NF-016, NF-015 (native engine path); tools `code_mode`, `tool_search`; `gate:receipt-coverage`, `gate:no-unknown-retry`; `crates/hz_kernel` (`codemode_protocol.rs`).
+- **Status.** `DESIGNED`.
+
+### NF-052 — ACI reading modes: windowed read, summary search, window-scoped edit, lint gate
+
+- **Problem.** Unbounded dumps spend tokens with no orientation: the model does not know how much of a file it has not seen, a failed edit gets a blind retry, and a search returns 500 matches when the model needed the five files that matter.
+- **Design.** Phase 1 (no new authority): windowed `read` (default 100-line window, 2-line overlap, `gotoLine` placing the target ~1/6 down, `cursor: open|next|prev` over a session cursor refreshed only from observed effects, `view{firstLine, lastLine, totalLines, moreAbove, moreBelow}` rendered as `(N more lines above/below)`); `grep mode:'summary'` returning per-file counts and refusing above 100 files with a narrowing hint (no list); window-scoped `edit` where a unique match elsewhere fails with `matchesOutsideWindow` + a repair hint; a postimage syntax gate that, when a syntax check exists, **reverts** any edit introducing new diagnostics (category `syntax-break`, bytes untouched, both windows shown); append-only `insert`; narrated empty results; every truncated result carries a `recoveryHint` naming a cheaper follow-up call; and an environment-derived state line (`openFile`, window, `cwd`) that is never model-authorable and never evidence for `verify`. Phase 2 (behind a preset): an `aci.open/goto/scroll/find/insert` tool group, sharing the Phase-1 rendering contract. Shell defaults are tamed (`PAGER`/`MANPAGER`/`GIT_PAGER=cat`, `LESS=-R`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off`).
+- **Capability IDs.** `files.read`, `files.patch` (no new IDs in Phase 1).
+- **Authority impact.** `none` (Phase 1); Phase 2 group is subject to `gate:tool-declaration`.
+- **Dependencies.** NF-005, NF-061; tools `read`, `grep`, `edit`, `insert`; `@horizoncode/tools`.
+- **Status.** `DESIGNED`.
+
+### NF-053 — Pre-submit governance loop and AGENTS.md workflow FSM
+
+- **Problem.** "Done" is a claim, not a state: agents submit with the repro script still in the tree, tests edited to pass, and no verification run — or they skip a mandated test phase entirely, and nothing stops them.
+- **Design.** Two halves. **Pre-submit review gate:** completion may require a configurable, ordered review loop before the final answer — re-run the reproduction, remove repro artifacts, restore test files (`git checkout --` the protected paths), then resubmit; bypass exists only as an explicit, audited force path. **Governed workflow:** an AGENTS.md `## Workflow` block (or `.hz/workflow`) declares a state machine (Plan → Propose changes → Await verification → Enforce linting) that the runtime compiles into the plan FSM; a transition that skips a required phase or breaches a declared constraint is refused, the workspace state is rolled back to the last committed plan checkpoint (itself effects with receipts), and the model must re-plan. Governance structures authority; it never adds any — the FSM can only demand *more* verification, never fewer grants.
+- **Capability IDs.** `verify.run`, `test.run`, `lint.run`, `files.patch` (restore), `vcs.write` (none — restore uses `files.patch`/`git checkout` under policy).
+- **Authority impact.** `kernel` (rollback = revert effects with receipts; the force path is audited).
+- **Dependencies.** NF-001, NF-002, NF-012; `update-checkpoint`/`rewind` machinery (doc 12); tools `verify`, `complete_step`.
+- **Status.** `DESIGNED`.
+
+### NF-054 — Execution recorder and time-travel debug
+
+- **Problem.** When a run fails inside the sandbox, the model gets a print statement and guesses; root-cause debugging from static logs is the single most expensive failure loop in long-horizon work.
+- **Design.** On a failed verification run (or on explicit ask), capture a **recorded execution trace** of the failing command — rr on Linux first (deterministic record/replay), WinDbg TTD/ETW on Windows, and on platforms where no recorder exists a typed residual naming the unavailability (never a silent downgrade). The trace is an artifact (`hz://artifact/<sha256>`, bounded, retention-policy-aware); the model re-runs *backwards and forwards* over it through DAP operations (`debug.*`: breakpoints, stepping, reverse-continue where supported, stack/scopes/variables) instead of adding print statements. The recorder is a runtime service under the sandbox rules (process tree, resource caps, no network by default), started and stopped via capability-gated calls.
+- **Capability IDs.** `debug.record` `[planned]`, `debug.session`, `artifact.write`.
+- **Authority impact.** `grant-bearing` (recording spawns and instruments a process; always through Guard, lease and receipt).
+- **Dependencies.** NF-016, NF-042; tool `debug`; `crates/hz_kernel`; `hz.debug.recording.captured` `[planned]`.
+- **Status.** `DESIGNED`.
+
+### NF-055 — Preview environments with bound-URL injection
+
+- **Problem.** UI work needs to *see* the app, not imagine it; and agents guess dev-server ports because nothing tells them the real bound URL.
+- **Design.** An ephemeral, sandboxed preview runtime: `preview.serve` starts the workspace's app under the sandbox guarantee vector, the runtime injects the **actual bound URL(s)** into session context (`runtime_services` pattern — the model is never allowed to guess a port), and edits re-render the preview for a tight change→look→fix loop. Preview instances are per-session, capped in count and lifetime, torn down with the session (teardown completeness checked like any runtime service), and every start/stop is an event (`hz.preview.started`/`hz.preview.stopped` `[planned]`). Egress policy applies unchanged; a preview that needs network access declares it like any other effect. Explicitly a UI-work feature, not the default loop.
+- **Capability IDs.** `preview.serve` `[planned]`, `terminal.run`, `net.fetch` (as declared).
+- **Authority impact.** `grant-bearing` (spawns a listener; Guard, lease, receipt).
+- **Dependencies.** NF-016, NF-026 (lane health), NF-036; `hz.preview.*` `[planned]`; doc 14 surfaces.
+- **Status.** `DESIGNED`.
+
+### NF-056 — Tier-parity program: cheap models with frontier contracts
+
+- **Problem.** The same task on a cheap model produces hedged, under-verified output; nobody can tell whether a harness change narrowed or widened the gap, because there are no paired measurements.
+- **Design.** A standing program, not a feature flag: (a) a **seed task suite** run in paired mode (cheap model vs the strongest configured) per task class — multi-file refactor, bug-fix-with-tests, architecture sketch, long-horizon plan; (b) **strict-REPL tool variants** for weak models (`bash_only`-style: lower observation caps, head/tail split templates, one command per turn, tighter schemas); (c) **anti-hedging output rules** (verdict schemas and evidence refs from NF-002, not prose confidence); (d) a **parity ratchet** in CI: a per-class regression blocks the release, and improvements ratchet like Section A dispositions. Results are recorded with model revision, harness revision, and task digest. The router (NF-004) uses the parity tables to dispatch a task class to the cheapest model that meets the bar.
+- **Capability IDs.** `providers.infer`, `models.list`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-002, NF-004, NF-044; `gate:parity-ratchet` (extended to eval classes); doc 25 M-ladder.
+- **Status.** `DESIGNED`.
+
+### NF-057 — Local inference acceleration and micro-model orchestration
+
+- **Problem.** Local/edge models matter for cost and privacy, but naive local serving is slow and its prompt cache is thrown away on every retry; and small mechanical steps (parse, classify, extract) are needlessly sent to the flagship model.
+- **Design.** Two parts. **Acceleration:** documented, tested recipes for provider-side speculative decoding (llama.cpp/vLLM) and prompt-cache/KV reuse across retries and compaction boundaries; the provider policy engine treats local endpoints like any provider (policy applies regardless of how a provider becomes known). **Micro-orchestration:** within Code Mode (NF-051), a `models.run()`-style primitive lets a snippet call a local micro-model for mechanical work (regex extraction, classification, parsing) while the master model architects; every micro-model call is an ordinary inference effect with a receipt and counts against budgets. Both parts are declared capabilities, never ambient: no snippet or plugin reaches a model without policy.
+- **Capability IDs.** `providers.infer`; micro-calls receipted under `providers.infer`/`codemode.execute`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-051, NF-058, NF-050 (rate revisions for local models); doc 07 provider contracts.
+- **Status.** `DESIGNED`.
+
+### NF-058 — Policy statements: allow-never-grants, safety-inverted precedence
+
+- **Problem.** A repository can ship config that silently *widens* what runs; "allow" entries get confused with grants; and an enforcement mechanism that a workspace (or plugin) can switch off is not enforcement.
+- **Design.** An OpenCode-V2-derived statement layer over the doc-11 authority model: statements `{effect: allow|deny, action, resource}` with wildcards, evaluated **last-match-wins**. Precedence is **safety-inverted**: ordinary settings read forward (workspace overrides user), but policy documents read **reversed** (user-global beats repository), with managed-org statements appended last — an organization deny cannot be lifted by a repository or user allow. **An allow never grants:** it only cancels an earlier, broader deny; a deny overrides `ask` and saved "Allow always" approvals. Denials name their decider ("Blocked by configuration policy" / "Blocked by <organization>'s policy"). Fetch failure keeps the last snapshot (dropping it would fail closed for providers but **open** for policy). **Enforcement protection:** plugins may not add, remove, or override policy, and enforcement modules (policy engine, managed-policy fetch) are immune to config removal selectors in every scope; unknown actions are skipped preserving order while malformed supported statements remain errors.
+- **Capability IDs.** `enterprise.policy.read` `[planned]`; all effect classes as targets.
+- **Authority impact.** `kernel` (extends doc 11's merge lattice; the lattice property *narrowing-only* is preserved).
+- **Dependencies.** NF-003, NF-031; ADR-007; `crates/hz_policy`; doc 15 §7.7 (`.hz` supplies content, never authority).
+- **Status.** `DESIGNED`.
+
+### NF-059 — Instruction epochs and content-addressed instruction blobs
+
+- **Problem.** Instruction files (AGENTS.md hierarchy, skills, rules) change mid-session; rewriting prompts into the transcript makes the log huge, leaks privileged prose to clients, and breaks prefix stability.
+- **Design.** Instruction sources are stored as **content-addressed blobs**; the session observes value-delta events (`hz.session.instructions.updated` `[planned]`: `{delta: {key → digest|"removed"}, text?}`) rather than prose copies. An **instruction epoch** spans completed compactions (compaction moves the epoch start; the previous epoch's held values are re-evaluated and re-issued as deltas if changed). A fork adopts the parent's newest instruction values as its baseline and thereafter observes its own deltas. Display surfaces render *changed keys*, never privileged text. An instruction change is a context event, never a grant: it cannot widen a capability ceiling, posture or policy (ADR-010 boundary).
+- **Capability IDs.** `context.manage`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-005, NF-008 (memory/context tiers); doc 10 AGENTS.md hierarchy; `@horizoncode/context`.
+- **Status.** `DESIGNED`.
+
+### NF-060 — Event-feed laws and stream framing
+
+- **Problem.** Naive per-client event serialization collapses under many clients; a slow client can stall the publisher; and clients cannot distinguish a replay gap from an empty history.
+- **Design.** **Feed laws:** one global subscription encodes each event **once**; the shared immutable frame is offered non-blockingly to per-connection bounded queues (capacity 4,096); a slow or stalled connection MUST NOT stall publication or any other subscriber (the isolation invariant). HorizonCode keeps its own **resumable** overflow policy from doc 07 C11 (`page_end` / `resnapshot_required`) rather than terminating the connection — the absorbed parts are the encode-once architecture and the isolation invariant. An encoding failure logs, fails connected queues with `EncodingError`, skips the malformed event, and **keeps the feed available for later connections**. **Framing:** one stream carries two durability classes — `durable` frames (carry the log `seq`) and `transient` frames (never persisted, no seq); replay is preceded by a **sync preamble** declaring the range (`from_seq`/`through_seq`) so a consumer can prove contiguity and request the missing range; pagination is strict (unsupported ≠ empty — a partial history is never mistaken for exhaustion); transport errors are never session errors (no socket drop becomes an `hz.error.raised`); unknown frame types are ignored by contract so the envelope can grow.
+- **Capability IDs.** `session.manage`, `ui.present`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-006, NF-037; doc 07 §4.4 stream framing; `@horizoncode/server`, `@horizoncode/protocol`.
+- **Status.** `DESIGNED`.
+
+### NF-061 — Tool-result dual output with fail-closed retention
+
+- **Problem.** One payload cannot serve three consumers: the model needs bounded durable text, Code Mode and local consumers need the schema-validated machine value, and the UI needs compact metadata — and a "lossy success" (preview substituted when retention failed) is a silently corrupted record.
+- **Design.** Every tool result carries three fields: `output` (machine value, schema-validated, **ephemeral** — visible to Code Mode and local consumers, not durable history), `content` (durable, model-facing, bounded), `metadata` (compact UI JSON, independently validated, never an unbounded side-channel). A tool without machine output must provide non-empty model content. Bounding is head+tail with a middle omission marker; oversized payloads are retained in managed storage and replaced by a bounded preview — and **if complete retention fails, the execution fails operationally rather than publishing lossy success**. Domain storage is encapsulated: what is stored never changes according to model-output bounding or retention policy. Cancellation discipline rides the same contract: interruption and defects are never translated into model-visible tool failures (broad catch around execute is invalid); the terminal-state enum (RC-7) already carries `cancelled`/`interrupted`.
+- **Capability IDs.** `context.manage`, `artifact.write`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-001, NF-005; doc 05 `ToolResultV1` (queued update), doc 09 rendering rules.
+- **Status.** `DESIGNED`.
+
+### NF-062 — Composer and review UX: queue editing, bulk review, rich input
+
+- **Problem.** The queue is read-only (you can add, not fix); review is per-hunk only (no whole-run action); fenced code arrives unlabeled; and pasted attachments lack previews — friction that pushes users back to editing prompts outside the tool.
+- **Design.** **Queue:** queued messages are editable and reorderable before dispatch (edits are ordinary input mutations; ordering changes are scheduling changes, recorded), with steering semantics unchanged (no message bypasses the Safe Step Boundary). **Review:** per-hunk Keep/Undo stays, plus **Keep All / Undo All** for the whole run — both remain explicit user-authority effects (`files.patch` under the review lease) and both are receipted. **Rich input:** fenced code blocks render with language detection and highlighting (RTL/LTR supported); pasted images/files become attachment chips with previews, stored as artifacts with digests, and only sendable under `session.manage`-gated ingestion — binary content never enters the text transcript, only its artifact reference. Composer content is data, never authority.
+- **Capability IDs.** `ui.present`, `session.manage`.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-006, NF-011 (`hz://` artifacts), NF-039; docs 13/14.
+- **Status.** `DESIGNED`.
+
+---
+
 ## 6. Section C — Counts and coverage
 
 **Method (R12).** Every count below is derived from the Section A tables by counting disposition cells, one row at a time. `Supersede` counts include the inherited behaviour a row strengthens, so per agent `Inherit + Supersede + Reject` equals the row count. The cross-agent totals are row counts, not a de-duplicated union; where the same capability appears in two references it stays as two rows because the two upstream implementations differ.
@@ -844,14 +958,14 @@ Two conventions apply to every entry:
 
 | Measure | Count |
 |---|---:|
-| New features catalogued (`NF-001` … `NF-050`) | **50** |
-| Authority impact `none` | 34 |
+| New features catalogued (`NF-001` … `NF-062`) | **62** |
+| Authority impact `none` | 41 |
 | Authority impact `narrows` | 2 (`NF-019`, `NF-031`) |
-| Authority impact `grant-bearing` | 9 (`NF-007`, `NF-012`, `NF-014`, `NF-018`, `NF-020`, `NF-030`, `NF-032`, `NF-037`, `NF-043`) |
-| Authority impact `kernel` | 5 (`NF-001`, `NF-003`, `NF-016`, `NF-021`, `NF-022`) |
+| Authority impact `grant-bearing` | 11 (`NF-007`, `NF-012`, `NF-014`, `NF-018`, `NF-020`, `NF-030`, `NF-032`, `NF-037`, `NF-043`, `NF-054`, `NF-055`) |
+| Authority impact `kernel` | 8 (`NF-001`, `NF-003`, `NF-016`, `NF-021`, `NF-022`, `NF-051`, `NF-053`, `NF-058`) |
 | Learning-loop features, all required to be `none` | 5 (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`) — **all five are `none`** |
-| New capability IDs proposed (§3.3) | 14 |
-| New events proposed (§3.4) | 15 |
+| New capability IDs proposed (§3.3) | 16 |
+| New events proposed (§3.4) | 17 |
 | CI gate rows named (§3.5) | 18 rows, 19 distinct gates |
 
 ### 6.4 Coverage statement
@@ -859,7 +973,7 @@ Two conventions apply to every entry:
 - **The references are covered by construction.** Every capability named in the task brief for each of the eight references has a Section A row. Where no HorizonCode home is exactly equal to a reference capability, the row is `Supersede` with the strengthening named, or `Reject` with a reason in Section D.
 - **Two rejects, both deliberate, both upstream features** — `/gboom` (D-5) and x402 payments (D-7). Everything else that is refused is a rejected *technique* rather than an upstream capability, and is listed in Section D for that reason.
 - **The strict-addition claim is Section B, not Section A.** Section A asserts no reference is better in any dimension it covers; Section B is the whole of the claim that HorizonCode is better in authority, durability, evidence, orchestration, memory and self-improvement.
-- **No row claims code (R7).** 117 rows and 50 features are `DESIGNED`; `gate:parity-ratchet` becomes a runtime-parity gate only once a first implementation exists, and until then it is a specification-quality gate over this document.
+- **No row claims code (R7).** 117 rows and 62 features are `DESIGNED`; `gate:parity-ratchet` becomes a runtime-parity gate only once a first implementation exists, and until then it is a specification-quality gate over this document.
 
 ---
 
@@ -1051,6 +1165,18 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 40. **NF-045** — the approved-plan window closes on policy revision change; only approved tools auto-approve inside it.
 41. **NF-049** — a disabled lane reports refusal with a reason; after `kill -9` mid-attempt, recovery produces resume-or-`UNKNOWN`, never a green result.
 42. **NF-050** — a price change appends a revision; a historical usage record still reconciles against its own revision.
+43. **NF-051** — a snippet referencing a tool outside the declared subset fails by static scan before any host call (zero dispatches); a nested mutating call produces its own lease and receipt; killing a cell mid-call yields `UNKNOWN` + reconciliation, never a failed-safe report.
+44. **NF-052** — window math holds (goto/scroll positions, clamps at both ends, overlap preserved); a unique match outside the window refuses with `matchesOutsideWindow`; a postimage that introduces a new diagnostic reverts the bytes; a 101-file summary grep returns `truncated{reason:'count'}` and no list.
+45. **NF-053** — a workflow FSM cannot skip a required verification phase; a breach rolls back to the last plan checkpoint with receipts; the force path is recorded and visible.
+46. **NF-054** — a failed verification run with a recorder available produces a trace artifact; a platform without a recorder returns a typed residual (never a silent pass); `debug.*` replay reads the trace, not a live process.
+47. **NF-055** — preview URLs are injected by the runtime (a guessed port is never needed); teardown removes the listener and its processes; undeclared network egress is refused.
+48. **NF-056** — the parity ratchet fails the release on a per-class regression; routing dispatches a task class to the cheapest model meeting the bar; a strict-REPL variant round-trips a seed task.
+49. **NF-057** — micro-model calls from a snippet are receipted under `providers.infer` and counted in budgets; a local endpoint is subject to policy like any provider.
+50. **NF-058** — policy documents read reversed (user beats repository); an allow never lifts an agent denial nor a saved approval; no config scope or plugin can remove the enforcement module; a failed fetch keeps the last snapshot.
+51. **NF-059** — instructions arrive as deltas with digests; `"removed"` clears a key; a compaction moves the epoch without re-emitting unchanged values; a fork adopts the parent's newest values as baseline.
+52. **NF-060** — one encode per event across N subscribers; a stalled subscriber cannot stall publication or other subscribers; an unknown frame is ignored; `transient` frames carry no `seq` and never appear in replay; the sync preamble matches the replay range.
+53. **NF-061** — a result carries `output`/`content`/`metadata`; a retention failure fails the execution (no lossy success); an interrupted execution is not rendered as a tool failure.
+54. **NF-062** — a queued message can be edited and reordered before dispatch but not during admission; Keep All / Undo All are receipted; an attachment sends as an artifact reference, never inline bytes.
 
 ---
 
@@ -1061,7 +1187,7 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 | Area | Level | Evidence |
 |---|---|---|
 | Section A parity matrix (117 rows) | `DESIGNED` | Upstream citations per row; no HorizonCode code exists. |
-| Section B new features (`NF-001` … `NF-050`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; no implementation. |
+| Section B new features (`NF-001` … `NF-062`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; no implementation. |
 | Section C counts | `DESIGNED` | Derived from Section A tables by the method in §6; recomputed by the recount gate. |
 | Section D non-goals | `DESIGNED` | Normative refusals; each names a replacement or states that the need is out of scope. |
 | §3.3 capability-ID and §3.4 event proposals | `DESIGNED` (reserved) | Both lists are now registered as **Reserved** in [`_conventions.md`](./_conventions.md) §5/§6 (RC-11); they are promoted to canonical in the change that first implements each feature, per that file's §1 rule. |

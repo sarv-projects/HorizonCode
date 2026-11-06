@@ -29,7 +29,9 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 16 | [`16-operations.md`](./16-operations.md) | Install & release integrity, CI gates, observability, diagnostics, security ops, runbooks |
 | 24 | [`24-feature-catalog.md`](./24-feature-catalog.md) | Parity matrix vs all eight references + every new feature (NF-xxx) |
 | 25 | [`25-roadmap-and-glossary.md`](./25-roadmap-and-glossary.md) | M0–M8 roadmap (Foundation → Self-improvement) with exit criteria + the full glossary |
-| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-8)** |
+| 26 | [`26-learning-synthesis-2.md`](./26-learning-synthesis-2.md) | Second deep-dive learning record: ten-repo distillation, adoption ledger (NF-051…NF-062), doc-update ledger |
+| 27 | [`27-implementation-plan.md`](./27-implementation-plan.md) | The build plan: bootstrap, workstreams, runtime viability, subagent build-out, gates, open ADRs |
+| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-12)** |
 
 ---
 
