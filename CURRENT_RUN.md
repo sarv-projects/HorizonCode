@@ -99,6 +99,20 @@ hzcode/
 
 Remote `main` is in sync with `755af57` at this snapshot. **Anything newer than that either came from sub-agents finishing after the snapshot, or is you.**
 
+### Status log — after the 16:10 snapshot (newest last, integrator-verified)
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 16:15 | **Providers agent finished**: 72-test SSE suite + two fixes (no-input `tool_call` now yields `arguments: "{}"`, not `""`) | commit `060eef3`; suite re-run by integrator |
+| 16:36 | **TUI agent finished**: 48-test headless + PTY suite (PTY available: `/usr/bin/script` 2.41.5); no src changes needed; knowledge note at `knowledge://projects/hzcode-tui-testing.md` | commit `b11cb76`; mutation-checked by author |
+| 16:38 | **Repo hygiene**: a 1.5 GB `repo-tour/` had been moved inside the worktree; moved back to `/data/home/forge/repo-tour`; `.gitignore` guard added | commit `821e8e0`; §9 |
+| 16:49 | **Core suite made green**: expired-lease assertion relocated to before lease issuance; broken `_probe.test.ts` deleted | commit `569c48a` |
+| 16:50 | **FULL SUITE GREEN: `bun test` 233 pass / 0 fail (21 files); `cargo test` 14 integration + 3 unit green** | integrator ran both |
+| 16:52 | **Interop agent resumed** to finish its remaining four files: `fallback`, `interop` (both directions), `config`, `session` test files | session `conversation://1a7da929-d4dd-4223-869c-2314484d501c` |
+| *open* | Still in flight at last check: tools (no report yet), skills+subagents and code mode+preview (**no files yet**), junk stray (ignore). Kernel test agent never sent a report but its suite is complete + green (integrator-verified). | — |
+
+**Semantics note (do not regress):** an issued lease is honoured by BOTH implementations — the kernel (`guard.rs` chains held leases after the expiry-filtered caller leases) and the TS fallback (`kernel.ts:344` merges caller ∪ held). An expired *copy* passed by a caller cannot revoke it; expiry only happens by time. The `kernel-trusted` guard.lease test now asserts the expired-lease case before any issuance, on purpose.
+
 ---
 
 ## 5. Verified working state (evidence + exact commands to re-check)
