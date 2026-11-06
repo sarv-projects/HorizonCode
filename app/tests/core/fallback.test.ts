@@ -124,6 +124,8 @@ test("log.read, log.verify and the receipts behave like the trusted kernel", asy
   expect((await client.readEvents(STREAM)).map((event) => event.seq)).toEqual([1, 2, 3]);
   expect((await client.readEvents(STREAM, 2)).map((event) => event.seq)).toEqual([2, 3]);
   expect((await client.readEvents(STREAM, 2, 1)).map((event) => event.seq)).toEqual([2]);
+  // `limit: 0` means zero events, exactly as in the Rust kernel's log.read.
+  expect(await client.readEvents(STREAM, 1, 0)).toEqual([]);
   expect(await client.readEvents(STREAM, 99)).toEqual([]);
   expect(await client.verifyEventChain(STREAM)).toEqual({ ok: true, count: 3 });
 
