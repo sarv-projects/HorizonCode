@@ -1,8 +1,8 @@
 # HorizonCode — Current Run State
 
-> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC** (product state) · **2026-11-07** (design corpus: RC-15 adoption wave, `docs/30`). Workspace: `/data/home/forge/hzcode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
+> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC** (product state) · **2026-11-07** (design corpus: RC-15 adoption wave, `docs/30`). Workspace: `/data/home/forge/HorizonCode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
 >
-> **TL;DR — the V1 product mission is complete; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 297 pass / 0 fail (28 files)** and **`cargo test` 17 integration + 3 unit**. Nothing is in flight in the product. A deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md`; the 2026-11-07 adoption wave (RC-15, [`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into docs 03/08/09/24 but not yet into code — see `docs/28` §4. RC-13 makes `docs/28` the single source of truth for implementation status.
+> **TL;DR — the V1 product mission is complete; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 297 pass / 0 fail (28 files)** and **`cargo test` 17 integration + 3 unit**. Nothing is in flight in the product. A deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md`; the 2026-11-07 adoption wave (RC-15, [`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into the owner documents it names (docs 05–12, 14–16, 24) plus `_conventions.md` RC-15, but not yet into code — adoption recorded in `docs/24` §13, queue in `docs/30` §4. RC-13 makes `docs/28` the single source of truth for implementation status.
 
 ---
 
@@ -48,7 +48,7 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 | **Subagents** (`agent` tool, child session, no recursion) | **VERIFIED** | same suite: nested run through the real kernel, receipts + child stream verify |
 | **Code Mode** (Bun JS subprocess, tool bridge) | **VERIFIED** | `bun test tests/core/codemode-preview.test.ts` (14 pass: deny/ask, receipts, log-forgery regression, timeout, abort) |
 | **Preview servers** (start/stop/status) | **VERIFIED** | same suite: live URL capture, process-group kill (pid gone) |
-| Everything else in docs 00–30 (the tool catalog in `docs/09-tools.md` §4 — authoritative — memory tiers, compaction, sandbox matrix, surfaces, governance, self-improvement, the RC-15 adoption wave) | **DESIGNED ONLY** | sequenced in docs/27 (V0–V7); adoption tracked in `docs/28` §4 |
+| Everything else in docs 00–30 (the tool catalog in `docs/09-tools.md` §4 — authoritative — memory tiers, compaction, sandbox matrix, surfaces, governance, self-improvement, the RC-15 adoption wave) | **DESIGNED ONLY** | sequenced in docs/27 (V0–V7); adoption recorded in `docs/24` §13; queue in `docs/30` §4 |
 
 ---
 
@@ -72,7 +72,7 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 ## 4. Verify it yourself (copy-paste)
 
 ```bash
-cd /data/home/forge/hzcode
+cd /data/home/forge/HorizonCode
 
 # TypeScript suite (297 tests / 28 files)
 cd app && /home/forge/.bun/bin/bun test && cd ..

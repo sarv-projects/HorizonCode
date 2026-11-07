@@ -138,7 +138,7 @@ Gates are named once here and used by `25-roadmap-and-glossary.md`. Each is a ra
 | RC-2 — plugin load/unload and MCP connect/discovery are **not** events | A.5's plugin-API row and NF-043/NF-032 rely on `plugins.invoke` plus `hz.step.tool.*`/`hz.error.raised` (class `plugin`, `mcp`); they must not invent registry events. |
 | RC-3 — log snapshots, retention markers and worktree/schedule journals are storage/kernel metadata | NF-017 and NF-026 record them as `OwnerLog` records referenced by digest; `hzcode worktree list --journal` exposes them for audit. |
 | RC-4 — cancelled-attempt usage is `hz.usage.recorded` with `attribution.stepId` | NF-025's accounting must use it; no separate credit event. |
-| RC-5 — canonical exit codes are owned by `docs/14-surfaces.md` §2.2 (S16) | §12's NF-036 exit-code test **references** that table; it does not restate it. |
+| RC-5 — canonical exit codes are owned by `docs/14-surfaces.md` §3.2 (S16) | §12's NF-036 exit-code test **references** that table; it does not restate it. |
 | RC-6 — a policy `deny` never emits `hz.permission.asked` | §8.2's failure-mode table and NF-003/NF-014 emit `hz.effect.decision.made` for a deny; `asked` exists only where an answer could change the outcome. |
 | RC-7 — one terminal-state enum for effects | NF-001 and NF-036 use it verbatim; `UNKNOWN` is a terminal state, never a synonym for failure. |
 | RC-8 — cache-guard prefix pins live at `packages/context/test/golden/prefix/<family>.sha256` | NF-005 and NF-034 name that location and the `--update-golden` review path. |
@@ -1046,7 +1046,7 @@ Two conventions apply to every entry:
 ### NF-074 — Context-cost contracts — usage-anchored output budget, spill defaults, shell-output minimisation
 
 - **Problem.** Output volume is the dominant token cost of a coding agent, and a fixed output cap produces hard provider 400s on large-output models.
-- **Design.** Each request fits the output cap to the remaining window: prompt size is estimated from the provider's newest reported usage anchor plus a local count of the appended tail, with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed. Tool output is capped by lines (default 3000) and bytes (default 50 KiB) with spill-to-artifact; a shell-output minimiser compresses verbose command output before it reaches the model (default on); dedicated-tool interception rewrites `cat`/`grep`-class shell invocations to native tools with a user-visible notice; long commands auto-background instead of blocking a turn.
+- **Design.** Each request fits the output cap to the remaining window: prompt size is estimated from the provider's newest reported usage anchor plus a local count of the appended tail, with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed. Tool output is capped to the model-facing budget owned by `docs/09-tools.md` §10 R-tools-42 (≤ 16 KiB and ≤ 4,000 tokens per result; human pane ≤ 1 MiB; untruncated stream ≤ 64 MiB) with spill-to-artifact beyond it; a shell-output minimiser compresses verbose command output before it reaches the model (default on); dedicated-tool interception rewrites `cat`/`grep`-class shell invocations to native tools with a user-visible notice; long commands auto-background instead of blocking a turn.
 - **Capability IDs.** `context.manage`; interception, minimisation and backgrounding run under the ordinary `terminal.run` admission.
 - **Authority impact.** `none`.
 - **Dependencies.** NF-052, NF-061; R-tools-57; source: oh-my-pi (`output-budget.ts`, `streaming-output.ts`, `exec/settings.ts`); `30-steal-list.md` §2 B-5/B-6/B-7/C-7.
@@ -1229,22 +1229,22 @@ Every entry states what is refused, why, and what covers the user need instead. 
 
 ## 11. Performance budgets
 
-Numbers are stated so they can be tested; a budget without a number is a preference. These apply once code exists (M0–M2 of `25-roadmap-and-glossary.md`); today they are design commitments.
+Numbers are stated so they can be tested; a budget without a number is a preference. These apply once code exists (M0–M2 of `25-roadmap-and-glossary.md`); today they are design commitments. **ID space:** `FB-1`…`FB-12` (feature budgets) are this document's; `PB-1`…`PB-15` belong to `docs/03-hld.md` §9 and MUST NOT be reused here (`03-hld.md` §9 owns that space; this table previously collided with it).
 
 | # | Budget | Value | Rationale |
 |---|---|---|---|
-| PB-1 | Guard decision (authorize → lease issue), local | p99 ≤ 2 ms | It is on the hot path of every tool call; a slow gate gets bypassed by pressure. |
-| PB-2 | Receipt settlement and durability | ≤ 5 ms p99, one fsync-equivalent | Receipts must be cheap or they will be skipped. |
-| PB-3 | Kernel startup (probe, pin check, policy compile) | ≤ 250 ms | Longer makes read-only fallback look attractive. |
-| PB-4 | Sandbox probe | ≤ 100 ms | Runs before work; must not dominate short commands. |
-| PB-5 | Context compile — prefix (cached) | ≤ 5 ms p99 | The prefix is the thing we claim is stable; it must also be cheap. |
-| PB-6 | Cache-prefix stability | 0 bytes of drift per `(provider, model, config)` | Zero is the budget (ADR-009). |
-| PB-7 | Step overhead outside the provider call | ≤ 15 ms p99 | The model's latency must dominate, not the harness. |
-| PB-8 | TUI frame time, fullscreen | ≤ 16 ms p95 at 120×40 with an active stream | Below one frame at 60 Hz keeps typing responsive during streaming. |
-| PB-9 | Inline-mode emission | No full-screen redraws; linear output only | It is the screen-reader and pipe path. |
-| PB-10 | Catalog gates in CI | `gate:parity-ratchet` + `gate:doc-status` + recount ≤ 30 s | A gate that slows the loop gets disabled. |
-| PB-11 | Index query (lexical) p95 | ≤ 50 ms on a 100k-file repo | Retrieval is on the turn path. |
-| PB-12 | Session log append | ≤ 3 ms p99 | Every fact is an event; the log must not be the bottleneck. |
+| FB-1 | Guard decision (authorize → lease issue), local | p99 ≤ 2 ms | It is on the hot path of every tool call; a slow gate gets bypassed by pressure. |
+| FB-2 | Receipt settlement and durability | ≤ 5 ms p99, one fsync-equivalent | Receipts must be cheap or they will be skipped. |
+| FB-3 | Kernel startup (probe, pin check, policy compile) | ≤ 250 ms | Longer makes read-only fallback look attractive. |
+| FB-4 | Sandbox probe | ≤ 100 ms | Runs before work; must not dominate short commands. |
+| FB-5 | Context compile — prefix (cached) | ≤ 5 ms p99 | The prefix is the thing we claim is stable; it must also be cheap. |
+| FB-6 | Cache-prefix stability | 0 bytes of drift per `(provider, model, config)` | Zero is the budget (ADR-009). |
+| FB-7 | Step overhead outside the provider call | ≤ 15 ms p99 | The model's latency must dominate, not the harness. |
+| FB-8 | TUI frame time, fullscreen | ≤ 16 ms p95 at 120×40 with an active stream | Below one frame at 60 Hz keeps typing responsive during streaming. |
+| FB-9 | Inline-mode emission | No full-screen redraws; linear output only | It is the screen-reader and pipe path. |
+| FB-10 | Catalog gates in CI | `gate:parity-ratchet` + `gate:doc-status` + recount ≤ 30 s | A gate that slows the loop gets disabled. |
+| FB-11 | Index query (lexical) p95 | ≤ 50 ms on a 100k-file repo | Retrieval is on the turn path. |
+| FB-12 | Session log append | ≤ 3 ms p99 | Every fact is an event; the log must not be the bottleneck. |
 
 ---
 

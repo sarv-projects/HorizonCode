@@ -234,7 +234,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 | M3-D4 | ACP in both directions: HorizonCode as an ACP agent *and* as a driver of external agents; IDE bridge with JWT channel, permission proxying and trusted-device rules (NF-037) | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
 | M3-D5 | MCP server mode (expose the agent) alongside MCP client mode (ADR-006) | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/15-extensibility.md` |
 | M3-D6 | Generated SDKs: TS client plus Python/Go/Rust thin clients from one source | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M3-D7 | Canonical exit-code table enforced across surfaces (RC-5; owned by `/data/home/forge/hzcode/docs/14-surfaces.md` §2.2 (S16)) | `/data/home/forge/hzcode/docs/14-surfaces.md` |
+| M3-D7 | Canonical exit-code table enforced across surfaces (RC-5; owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2 (S16)) | `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
 | M3-D8 | Bridge replay: session-lifecycle state cached client-side and replayed after a reconnect, bounded to lifecycle frames | `/data/home/forge/hzcode/docs/14-surfaces.md`; NF-037 |
 
 **Exit criteria — gate checklist.** All of these must be green:

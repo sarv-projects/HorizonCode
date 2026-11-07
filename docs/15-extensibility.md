@@ -414,7 +414,7 @@ Absent by design: `time`, `rand`, filesystem, network, process, environment. A w
 
 Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, definition digest, owner-binding digest, permission-ceiling digest) so an accepted task can pin exactly what it ran under (`source: /data/home/forge/repo-tour/horizoncode/kernel/src/agent_profile.rs`).
 
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15) — the duplicate `AgentProfileV1` field set that stood here is merged into `05-domain-and-schemas.md` §4.9, which owns every `*V1` schema (`_conventions.md` §7).
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15) — the duplicate `AgentProfileV1` field set that stood here is merged into `05-domain-and-schemas.md` §4.9, which owns every `*V1` schema (`_conventions.md` §7); §4.9 carries `resultSchema`, `requiresInputs[]`, `refusesWhen[]`, `partitionBy` and `ownsPaths` as of the 2026-11-07 hardening pass.
 >
 > Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
 
