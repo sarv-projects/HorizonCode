@@ -1878,16 +1878,16 @@ Every capability below is **`DESIGNED`** *as a specification claim* — with one
 |---|---|---|---|
 | Capability registry + effect classes | DESIGNED | §4.1, §7.2; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/managed_control.rs` | `crates/hz_kernel/src/registry.rs` + `registry` test file |
 | Origin typing (4 kinds) | DESIGNED | §7.2.3; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` | `origin_typing.rs` + boundary test |
-| `GuardDecisionV1` + reason codes | TESTED + VERIFIED | §4.2, §5.1, §7.3; `kernel/tests/integration.rs` (guard matrix, `policy.json` overrides); `docs/28` §1 | widen the matrix to the §9.1 property tests |
+| Guard decision path (shipped shape): policy rules, `policy.json` hot reload, leases, R1 precedence deny > lease > ask > allow | TESTED + VERIFIED | §7.3; `kernel/tests/integration.rs` (guard matrix, `policy.json` overrides, lease expiry, ask-beats-allow); `docs/28` §1 (ruling 23) | the `GuardDecisionV1` struct (§4.2) and the §5.1 reason-code registry are **DESIGNED** — the shipped runtime uses a smaller shape and carries no reason codes |
 | Intent digest | DESIGNED | §7.3.2 | `intent_digest.rs` property tests |
 | Postures as kernel data | DESIGNED | §4.3, §7.4; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` (`DirectSessionPermissionModeProjectionV1`) | `posture.rs` including the `danger-full-access` refusal |
 | Wildcard rule DSL | DESIGNED | §7.5.1 | `hz_policy` compile + canonical digest tests |
 | Starlark prefix engine | DESIGNED | §7.5.3; `source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/README.md` | `starlark.rs`, `unwrap.rs` |
 | Config merge lattice | DESIGNED | §7.6; ADR-008 in `/data/home/forge/HorizonCode/docs/02-decisions.md` | `merge.rs` property tests |
 | Trust-on-first-use | DESIGNED | §7.7 | `trust.rs` adversarial tests |
-| One-use leases | TESTED + VERIFIED | §7.8; `kernel/tests/integration.rs` (lease expiry and consumption), `docs/28` §1; shape inherited from `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs` (`ExecutionLease::consume`) | `lease.rs` adversarial suite (L2, L5) |
+| Leases (mint, consult, expiry, R1 precedence) | TESTED + VERIFIED | §7.8; `kernel/tests/integration.rs` (`guard_leases_match_exactly_or_by_prefix_and_expire`, lease-beats-ask); `docs/28` §1 | **one-use durable consumption (L4) is DESIGNED, not shipped** — the shipped lease has no consumed state and the guard accepts caller-supplied leases (external-review triage 2026-11-07, finding 4); needs kernel-issued tokens + durable CAS |
 | Effect host (five phases) | DESIGNED | §6.2, §7.9 | `effect_host.rs` incl. crash tests |
-| Receipts + chain | TESTED + VERIFIED | §4.6, §7.9; `kernel/tests/integration.rs` (receipt chain, tamper detection), `docs/28` §1 | `receipt_shape.rs`, `chain.rs` |
+| Receipts + chain | TESTED + VERIFIED | §4.6, §7.9; `kernel/tests/integration.rs` (receipt chain, tamper detection), `docs/28` §1 | `receipt_shape.rs`, `chain.rs`; **independent effect observation (postimage) is DESIGNED** — shipped receipts record caller-supplied digests written after execution (external-review triage 2026-11-07, finding 3) |
 | `UNKNOWN` + reconciliation | DESIGNED | §6.3; ADR-012 | `reconcile.rs` |
 | Evidence gate | DESIGNED | §6.4, §7.10. Inherited caveat: the reference implementation records the gate as designed but **not wired** in its direct-session lane (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) | `evidence_gate.rs` + `hzcode verify` end-to-end |
 | Trusted Host State | DESIGNED | §7.11 | `ths.rs` |
