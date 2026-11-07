@@ -14,7 +14,7 @@
 
 import type { ApprovalHandler, Lease, Provider, ToolResult } from "../contracts";
 import type { KernelClient } from "./kernel";
-import { getApprovalHandler, runTurn, type LoopDeps } from "./loop";
+import { getApprovalHandler, runTurn, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
 
@@ -53,6 +53,8 @@ export interface NestedRunOptions {
   sessionLeases: Lease[];
   /** The parent's instance approval handler; the process one when absent. */
   approve?: ApprovalHandler;
+  /** NF-073: the parent run's ledger — the child gets its own step slice but shares the ceiling. */
+  ledger?: BudgetLedger;
 }
 
 /**
@@ -81,9 +83,11 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // Base seven only: a subagent delegates to no one and drives no previews.
     toolFilter: (name) => (BASE_TOOL_NAMES as readonly string[]).includes(name),
     maxProviderCalls: clampSteps(opts.maxSteps),
+    // NF-073: the child's step slice sits under the parent's shared ceiling.
+    ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: clampSteps(opts.maxSteps) }) : undefined,
     // No `delegate`: a subagent can never spawn subagents.
   };
-  const { text, aborted } = await runTurn(deps, task);
+  const { text, aborted, exit } = await runTurn(deps, task);
   try {
     // runTurn titles by first message; the subagent title is the better label.
     opts.store.touchSession(session.id, title);
@@ -96,6 +100,13 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
       ok: false,
       output: trimmed.slice(0, SUBAGENT_OUTPUT_CAP),
       error: "subagent run aborted",
+    };
+  }
+  if (exit.terminal === "budget_exhausted" || exit.terminal === "timeout") {
+    return {
+      ok: false,
+      output: trimmed.slice(0, SUBAGENT_OUTPUT_CAP),
+      error: `subagent run stopped: budget exhausted (${exit.detail ?? "unknown"})`,
     };
   }
   if (trimmed === "") {

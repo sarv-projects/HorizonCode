@@ -17,6 +17,9 @@
  * (i.e. id, seq, ts, stream, type, actor, payload, prevHash).
  * Receipt hash input = canonical JSON of ALL receipt fields EXCEPT `hash`.
  *
+ * NF-073 budget rails: `RunBudget` / `RunExit` are the v0.1 shape of the loop
+ * safety rails (docs/24 §B NF-073; docs/28 §3 ruling 15).
+ *
  * Kernel state layout (under --state-dir, default <workspace>/.hzcode/kernel):
  *   events/<stream-sanitized>.jsonl   append-only chained event streams
  *   receipts.jsonl                    append-only chained receipts
@@ -244,6 +247,8 @@ export interface RuntimeOptions {
   model?: string;
   continueSession?: boolean;
   mock?: boolean;
+  /** NF-073 run budget overrides (0 or absent per dimension = unlimited). */
+  budget?: RunBudget;
 }
 
 export interface Runtime {
@@ -251,9 +256,50 @@ export interface Runtime {
   readonly model: string;
   readonly providerName: string;
   readonly kernelMode: KernelMode;
-  send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean }>;
+  send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit?: RunExit }>;
   abort(): void;
   close(): Promise<void>;
+}
+
+/* --------------------------- Budgets (NF-073) --------------------------- */
+
+/**
+ * Run budget for one run tree (NF-073). Every dimension is checked before a
+ * provider dispatch; `0` (or absent) means unlimited — the one convention
+ * budgets share everywhere (docs/05 `BudgetV1`: `0` = unlimited-but-audited).
+ */
+export interface RunBudget {
+  /** Provider calls this run tree may make. */
+  maxSteps?: number;
+  /** Total tokens (input + output) charged across turns; failed turns included. */
+  maxTokens?: number;
+  /** Wall clock for the whole run tree; never reset, never lifted. */
+  maxWallMs?: number;
+}
+
+/** The RC-7 terminal vocabulary (docs/_conventions.md RC-7), lowercase. */
+export type TerminalState =
+  | "succeeded"
+  | "failed"
+  | "denied"
+  | "cancelled"
+  | "unknown"
+  | "budget_exhausted"
+  | "timeout"
+  | "interrupted";
+
+/** Why a run stopped; `detail` is machine-readable, never prose. */
+export interface RunExit {
+  terminal: TerminalState;
+  detail?:
+    | "turn_end"
+    | "aborted"
+    | "provider_error"
+    | "internal_error"
+    | "steps"
+    | "tokens"
+    | "wall_clock"
+    | "format_errors";
 }
 
 /* --------------------------- Kernel protocol --------------------------- */
