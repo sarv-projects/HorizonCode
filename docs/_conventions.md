@@ -94,6 +94,8 @@ Effect classes: `read-only` · `workspace-write` · `network` · `process` · `c
 
 **Reserved capability IDs (not yet canonical).** Coined by DESIGNED features in `docs/24-feature-catalog.md` §3.3; they MUST NOT be used by any implementation and are promoted into the list above in the change that first implements them (RC-11): `index.query`, `receipt.read`, `sandbox.probe`, `tool.discover`, `workflow.run`, `notify.emit`, `collab.manage`, `enterprise.policy.read`, `plugin.install`, `voice.io`, `media.render`, `browser.control`, `learn.run`, `learn.propose`, `debug.record`, `preview.serve`.
 
+**INTERNAL capability IDs (non-canonical).** Runtime-internal diagnostics and authority plumbing from `docs/11-authority-safety.md` §4.1, carried here so the registry-parity gates have one input set: they MUST NOT cross any surface under their own IDs (never model-visible, never emitted as a tool, method or event name), and an internal ID MUST NOT satisfy a registry-parity check that looks for a canonical ID; each is promoted into the canonical list above in the change that first implements the surface that needs it (the RC-11 mechanism), and an internal ID that outlives two revisions without promotion or withdrawal is a defect: `language.start`, `language.stop`, `builtin.verifier`, `editor.launch`, `secrets.use`, `secrets.put`, `secrets.rotate`, `secrets.revoke`, `agents.message`, `automations.*`.
+
 ## 6. Event names
 
 Format: `hz.<entity>.<past-tense-verb>`. Canonical names:

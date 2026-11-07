@@ -73,7 +73,7 @@ The machine-readable unit of Section A. One record per table row.
 
 ### 3.3 Proposed capability-ID additions [planned] — for `_conventions.md` §5
 
-Registered as Reserved in `_conventions.md` §5 (RC-11); each is promoted to canonical in the change that first implements its feature.
+Registered as Reserved in `_conventions.md` §5 (RC-11); each is promoted to canonical in the change that first implements its feature. Runtime-internal IDs from `docs/11-authority-safety.md` §4.1 are carried in that section's separate INTERNAL (non-canonical) block, not here.
 
 | Proposed ID | Effect class | Used by |
 |---|---|---|
@@ -1344,7 +1344,7 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 | Area | Level | Evidence |
 |---|---|---|
 | Section A parity matrix (117 rows + 6 addendum rows, A.9) | `DESIGNED` | Upstream citations per row; no HorizonCode code implements a Section A row (built slices are owned by `28-implementation-status.md`). |
-| Section B new features (`NF-001` … `NF-075`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview, NF-072 per-tool concurrency classes + parallel batches, NF-073 loop safety rails, NF-052/069 edit-application ladder, NF-074 context-cost contracts, `repo_map` B-1 — reduced forms) carry levels in `28-implementation-status.md`. NF-063…NF-070 were added by the final audit (`29-final-audit.md` §B.1; sources in `docs/audit/`); NF-071…NF-075 by the adoption wave (`30-steal-list.md`; RC-15). |
+| Section B new features (`NF-001` … `NF-075`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview, NF-072 per-tool concurrency classes + parallel batches, NF-073 loop safety rails, NF-052/069 edit-application ladder, NF-074 context-cost contracts, `repo_map` B-1 — reduced forms — plus canonical-number validation (docs/05 D40) and the internal capability-ID register (pass-5 C.2)) carry levels in `28-implementation-status.md`. NF-063…NF-070 were added by the final audit (`29-final-audit.md` §B.1; sources in `docs/audit/`); NF-071…NF-075 by the adoption wave (`30-steal-list.md`; RC-15). |
 | Section C counts | `DESIGNED` | Derived from Section A tables by the method in §6; recomputed by the recount gate. |
 | Section D non-goals | `DESIGNED` | Normative refusals; each names a replacement or states that the need is out of scope. |
 | §3.3 capability-ID and §3.4 event proposals | `DESIGNED` (reserved) | Both lists are now registered as **Reserved** in [`_conventions.md`](./_conventions.md) §5/§6 (RC-11); they are promoted to canonical in the change that first implements each feature, per that file's §1 rule. |
