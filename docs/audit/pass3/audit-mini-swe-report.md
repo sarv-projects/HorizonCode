@@ -4,7 +4,7 @@
 - **Version audited**: `minisweagent.__version__ = "2.4.6"` (`src/minisweagent/__init__.py:11`)
 - **Audit mode**: read-only. No file in the repo was modified, created or deleted.
 - **Report written incrementally to**: `/tmp/audit-mini-swe-report.md`
-- **Instruction honoured**: `/data/home/forge/hzcode` was never opened, listed or searched.
+- **Instruction honoured**: `/data/home/forge/HorizonCode` was never opened, listed or searched.
 
 ---
 
@@ -1004,4 +1004,4 @@ These look like omissions but are load-bearing decisions, documented in-repo:
 
 ---
 
-*End of report. 0 files in `/data/home/forge/repo-tour/mini-swe-agent` were modified; `/data/home/forge/hzcode` was not touched.*
+*End of report. 0 files in `/data/home/forge/repo-tour/mini-swe-agent` were modified; `/data/home/forge/HorizonCode` was not touched.*

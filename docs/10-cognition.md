@@ -7,7 +7,7 @@
 
 | Field | Value |
 |---|---|
-| Document | `/data/home/forge/hzcode/docs/10-cognition.md` |
+| Document | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
 | Owner plane | Cognition (`_conventions.md` §2.3) |
 | Packages | `@horizoncode/provider`, `@horizoncode/context` (which holds the prompt library — `packages/context/prompts/` [planned]), `@horizoncode/tools` |
 | Crates | `hz_index`, `hz_ast` (through `hz_native`), `hz_kernel` (secret use, receipts) |
@@ -140,7 +140,7 @@ R66) — not a terminal state.
 | R50 | The **price table is append-only** (`PriceRateV1`): a rate is superseded, never edited; lookup is `(provider_id, model_id, at_timestamp)`. A missing rate yields `cost = unknown` and is never recorded as `0`. | `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `/data/home/forge/repo-tour/DeepSeek-Reasonix/internal/contract/pricing/rates.go`) |
 | R51 | Cache pricing is explicit: `cache_read_per_mtok` and `cache_write_per_mtok` are separate rates. When the provider reports no cache counters, input is priced at the full input rate and the record sets `cache_measured = false` — conservative, never optimistic. | `cache-pricing.test.ts` |
 | R52 | Currency: the ledger stores the vendor's declared currency plus the id of the FX snapshot used for display. Reconciliation MAY convert for display; accounting MUST NOT convert. A display conversion never mutates a stored amount. | `currency-ledger.test.ts` |
-| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` — `dream` is the background-consolidation run defined in `/data/home/forge/hzcode/docs/08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
+| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` — `dream` is the background-consolidation run defined in `/data/home/forge/HorizonCode/docs/08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
 | R54 | Every provider call is preceded by a budget check against the enclosing run's token and cost budgets. A call that cannot fit is refused before any network effect, and the refusal is a receipted `denied` effect (RC-7), not a silent failure. | `budget-preflight.test.ts` |
 
 ### 2.F The context compiler in depth
@@ -258,7 +258,7 @@ Retrieval is local-first: the default configuration needs no network, and every 
 
 ### 2.I Compaction
 
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** — triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `/data/home/forge/hzcode/docs/12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** — triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `/data/home/forge/HorizonCode/docs/12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
 
 The event log is never compacted. Compaction rewrites the *requested context* only.
 
@@ -296,7 +296,7 @@ The event log is never compacted. Compaction rewrites the *requested context* on
 - **Keep-alive during idle:** pause time is cache-expiry time — the harness pings the provider prefix cache before expiry so the next turn is a hit, not a full cache write.
 - **Append-only sync:** any in-place rewrite of the message log truncates to the longest byte-stable prefix (`syncMessages` semantics); append-only mode is gated **per provider from data** (`appendOnlyContext: auto`), never from a user preference — a provider that rewrites history between turns would be hurt by it.
 - **Output-budget fit (NF-074):** estimate prompt size from the provider's newest reported usage anchor plus a local count of the appended tail; fit the output cap to the remaining window with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed.
-- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here — `/data/home/forge/hzcode/docs/09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
+- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here — `/data/home/forge/HorizonCode/docs/09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
 
 ### 2.J Prompting
 
@@ -317,7 +317,7 @@ The event log is never compacted. Compaction rewrites the *requested context* on
 
 ## 3. Interfaces
 
-Every name below is **`[planned]`** unless it is a schema. `[planned]` marks a name or path this document *reserves*: nothing in this section is implemented, and §10 claims no level above `DESIGNED`. Signatures are TypeScript shapes from `@horizoncode/protocol` (generated, `_conventions.md` §7) unless a crate is named. Field lists belong to `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`; this document states only what the cognition plane requires of them.
+Every name below is **`[planned]`** unless it is a schema. `[planned]` marks a name or path this document *reserves*: nothing in this section is implemented, and §10 claims no level above `DESIGNED`. Signatures are TypeScript shapes from `@horizoncode/protocol` (generated, `_conventions.md` §7) unless a crate is named. Field lists belong to `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; this document states only what the cognition plane requires of them.
 
 ### 3.1 Provider interface — `@horizoncode/provider` [planned]
 
@@ -388,7 +388,7 @@ assertPrefixClean(prefix: PrefixV1): void        // R64 enforcement
 | `digestPrefix` | `sha256(canonical(P0 ‖ P1 ‖ P2))`, recorded per step together with `compiler_version` and the model-descriptor digest. | R57 |
 | `assertPrefixClean` | Throws on any forbidden prefix content and on any match of the volatile pattern set; the step does not start. | R60, R64 |
 
-`ContextPlanV1` is declared by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`; the cognition plane requires it to carry at least `prefix_digest`, `compiler_version`, `declared` (including `stop_sequences`), `arm`, `degradations[]` and the single checkpoint reference.
+`ContextPlanV1` is declared by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; the cognition plane requires it to carry at least `prefix_digest`, `compiler_version`, `declared` (including `stop_sequences`), `arm`, `degradations[]` and the single checkpoint reference.
 
 ### 3.5 Memory API [planned]
 
@@ -421,7 +421,7 @@ rerank(candidates: RankedCandidateV1[], query: RetrievalQueryV1): Promise<Ranked
 ```
 
 - Four sources only (BM25 lexical, local embeddings, AST symbol/reference index, repo map); every result carries `generation_id`, `index_age_ms` and `stale`. (R95, R99)
-- Index calls go to `hz_index` over the versioned protocol through `/data/home/forge/hzcode/packages/context/src/index-client.ts` [planned]; a query never observes a partially built generation, and a path from any result is re-resolved by the kernel before a mutation. (R97, R98, R100)
+- Index calls go to `hz_index` over the versioned protocol through `/data/home/forge/HorizonCode/packages/context/src/index-client.ts` [planned]; a query never observes a partially built generation, and a path from any result is re-resolved by the kernel before a mutation. (R97, R98, R100)
 - `retrieveSymbols` is structural (AST), never substring matching; a reference's confidence class (`exact` / `heuristic`) is part of the result. (R102)
 - `retrieve` is refused without a budget rather than defaulted; the repo map is admitted at most once per session epoch. (R103, R104)
 
@@ -437,7 +437,7 @@ assertPrefixUnchanged(before: PrefixDigestV1, after: PrefixDigestV1): void
 | Function | Contract | Rule |
 |---|---|---|
 | `planCompaction` | Selects strategies by deterministic host policy, builds the **host digest** from events and receipts, and enforces the verbatim-tail floor (at least the last 2 user turns and at least 12 % of the context window, whichever is larger). A plan that would violate the floor is refused and reported. | R108, R109, R110 |
-| `applyCompaction` | Runs as its own step with its own prefix variant, budget label and receipts; it folds into the existing checkpoint chain instead of adding a second narrative block. Snapcompact lives at `/data/home/forge/hzcode/packages/context/src/compaction/snapcompact.ts` [planned] and is eligible only under R111. | R111, R113, R115 |
+| `applyCompaction` | Runs as its own step with its own prefix variant, budget label and receipts; it folds into the existing checkpoint chain instead of adding a second narrative block. Snapcompact lives at `/data/home/forge/HorizonCode/packages/context/src/compaction/snapcompact.ts` [planned] and is eligible only under R111. | R111, R113, R115 |
 | `assertPrefixUnchanged` | Throws if compaction moved the prefix; the cache-guard test asserts the same property in CI. Only T4's content and the checkpoint may change. | R114 |
 
 ### 3.8 Token and cost accounting API [planned]
@@ -479,7 +479,7 @@ Two names used by §2 are now **ratified** (see `_conventions.md` §11 RC-10) an
 
 | Schema | R/W | Declared by | What the cognition plane requires of it | Rule |
 |---|---|---|---|---|
-| `ContextPlanV1` | W | `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` | `prefix_digest`, `compiler_version`, `declared` (with `stop_sequences`), `arm`, `degradations[]`, one checkpoint reference, block-order evidence | R32, R57, R69, R113, R127 |
+| `ContextPlanV1` | W | `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` | `prefix_digest`, `compiler_version`, `declared` (with `stop_sequences`), `arm`, `degradations[]`, one checkpoint reference, block-order evidence | R32, R57, R69, R113, R127 |
 | `DeclaredConfigV1` | R/W | 05 | the closed P2 field set; no free-form fields; its digest is the cache-epoch key | R56, R57 |
 | `PrefixV1` / `PrefixDigestV1` | W | 05 | byte-stable P0–P2; both are components of the memo key | R61, R62 |
 | `CacheIntentV1` | W | 05 | `prefix_digest`, `provider_id`, `account_affinity_required: true`, provider cache controls; the runtime honours it or fails closed | R63 |
@@ -496,7 +496,7 @@ Two names used by §2 are now **ratified** (see `_conventions.md` §11 RC-10) an
 | `CompactionPlanV1` / `CompactionRecordV1` | W | 05 | strategy set and its inputs, tokens before/after, wall time, cost, cache-invalidation estimate | R108, R116 |
 | `AgentProfileV1` | R | agents plane | the active profile id is a P2 field; a profile cannot reorder blocks or widen authority | R55, R56, R125 |
 
-`ProviderConfigV1` and `ModelRefV1` are declared in `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`. This document references them and never restates their field lists; where a `V1` suffix differs between the two documents, the generated schema in `packages/protocol` (`_conventions.md` §7) is the single source.
+`ProviderConfigV1` and `ModelRefV1` are declared in `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`. This document references them and never restates their field lists; where a `V1` suffix differs between the two documents, the generated schema in `packages/protocol` (`_conventions.md` §7) is the single source.
 
 ### 4.2 Memory persistence
 
@@ -506,7 +506,7 @@ Two names used by §2 are now **ratified** (see `_conventions.md` §11 RC-10) an
 | Vector sidecar | `<user state>/horizon/memory/<workspace_digest>.vec` [planned] | record_id ↔ vector id map plus the encoder id and dimension; a vector set is readable only together with a matching record digest chain | R95 |
 | Export | `hzcode memory export --format jsonl` output | records plus provenance plus the digest chain; import verifies digests and refuses a foreign `scope.workspace_digest` without `--retarget` | R91 |
 
-DDL and column names are owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`. The cognition plane imposes three storage obligations regardless of DDL: `provenance` is non-null (a record without it is rejected at write), a tombstone digest is consulted before any write that could relearn a fact, and retention is applied by a pass that emits `hz.memory.expired` rather than deleting rows silently.
+DDL and column names are owned by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`. The cognition plane imposes three storage obligations regardless of DDL: `provenance` is non-null (a record without it is rejected at write), a tombstone digest is consulted before any write that could relearn a fact, and retention is applied by a pass that emits `hz.memory.expired` rather than deleting rows silently.
 
 ### 4.3 Index files and their location
 
@@ -527,18 +527,18 @@ The index is owned by `hz_index` (Rust) and driven over the versioned `status` /
 
 | Fixture | Path | Guards | Rule |
 |---|---|---|---|
-| Prefix pins | `/data/home/forge/hzcode/packages/context/test/golden/prefix/<family>.sha256` [planned] | byte-identical prefix per `(provider, prompt_family)`; a change requires an explicit `--update-golden` commit with a written rationale | R65f, RC-8 |
-| Recorded sessions | `/data/home/forge/hzcode/packages/context/test/fixtures/sessions/` [planned] | replay in a fresh process reproduces the identical prefix digest | R65b, R65g |
-| Codec fixtures | `/data/home/forge/hzcode/packages/provider/test/fixtures/<protocol>/` [planned] | streaming-first codecs; family parity | R12, R13 |
-| Tool-schema goldens | `/data/home/forge/hzcode/packages/provider/test/golden/tools/<family>/` [planned] | per-family transforms never add or widen a parameter | R28 |
-| Ranking weights | `/data/home/forge/hzcode/packages/context/src/ranking.weights.json` plus its digest [planned] | a weight change requires an eval run before merge | R101 |
+| Prefix pins | `/data/home/forge/HorizonCode/packages/context/test/golden/prefix/<family>.sha256` [planned] | byte-identical prefix per `(provider, prompt_family)`; a change requires an explicit `--update-golden` commit with a written rationale | R65f, RC-8 |
+| Recorded sessions | `/data/home/forge/HorizonCode/packages/context/test/fixtures/sessions/` [planned] | replay in a fresh process reproduces the identical prefix digest | R65b, R65g |
+| Codec fixtures | `/data/home/forge/HorizonCode/packages/provider/test/fixtures/<protocol>/` [planned] | streaming-first codecs; family parity | R12, R13 |
+| Tool-schema goldens | `/data/home/forge/HorizonCode/packages/provider/test/golden/tools/<family>/` [planned] | per-family transforms never add or widen a parameter | R28 |
+| Ranking weights | `/data/home/forge/HorizonCode/packages/context/src/ranking.weights.json` plus its digest [planned] | a weight change requires an eval run before merge | R101 |
 
 ### 4.5 The `models.dev` snapshot and its refresh policy
 
 | Item | Value | Rule |
 |---|---|---|
 | Ingest output | `catalog.json` plus a snapshot blob carrying a content digest; the runtime reads the snapshot and never the network | R4 |
-| Path | `/data/home/forge/hzcode/packages/provider/src/catalog/` [planned] | §1.1 |
+| Path | `/data/home/forge/HorizonCode/packages/provider/src/catalog/` [planned] | §1.1 |
 | Per-request evidence | the snapshot digest is recorded on every `hz.step.llm.requested`, so a run's model facts are reproducible | R4 |
 | Refresh command | `hzcode models refresh` — explicit, never during a live session | R5 |
 | Generation policy | a refresh writes a new generation and keeps the previous one readable while any archived session tree references it | R5 |
@@ -576,7 +576,7 @@ Cross-cutting: timeouts are connect 10 s, time-to-first-token 120 s, inter-token
 | R38 | Overflow is never answered by truncating the request. |
 | R41, R42 | A substitution is always an event; once a fallback serves a step the session continues on it for the turn unless `fallback.return = true`. |
 | RC-4 | Usage from a cancelled attempt is recorded under the cancelled step's `attribution.stepId`. |
-| RC-5 | Exit codes are owned by `/data/home/forge/hzcode/docs/14-surfaces.md` §2.2 and are referenced, never restated, here. |
+| RC-5 | Exit codes are owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 and are referenced, never restated, here. |
 
 ### 5.2 Fail-closed points
 
@@ -671,7 +671,7 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 3. **Diagnose.** The failure names the offending block (`P0` / `P1` / `P2`), the byte range, the volatile pattern class, and the two digests that differ; the diagnosis is derived from a diff of the canonical serializations, never from a summary of them. (R57, R61)
 4. **Localise.** Three realistic causes, separated by the negative control: a fragment or tool description changed; a family transform or tool-schema transform changed; or a volatile value was introduced into P0–P2. (R28, R60)
 5. **Remediate.** A prompt, fragment or description change requires the full governance path: bump `compiler_version`, update the golden fixture in the same commit, include the eval delta (task success, tool-call validity, cache ratio) and obtain human-owner review. A change missing any of the four fails gate `prompt-governance`. (R120, R126)
-6. **Golden update.** Updating `/data/home/forge/hzcode/packages/context/test/golden/prefix/<family>.sha256` requires an explicit `--update-golden` commit containing a **written rationale**, under gate `cacheguard`; that path is the pin's only owner. (R65f, RC-8)
+6. **Golden update.** Updating `/data/home/forge/HorizonCode/packages/context/test/golden/prefix/<family>.sha256` requires an explicit `--update-golden` commit containing a **written rationale**, under gate `cacheguard`; that path is the pin's only owner. (R65f, RC-8)
 7. **Ablation instead of a fix.** If the change is an experiment, it exists only as an explicit A/B ablation under `ablation.arm`, is recorded per step in `ContextPlanV1.arm`, and carries its own cache cost. Self-improvement may *propose* a variant; it cannot merge, enable or default one. (R127)
 8. **Verify.** Remediation is complete only when every leg of the gate passes and a replay reproduces the new digest; the fix is reported with the digest, the `compiler_version` bump and the eval delta. (R65, R70)
 
@@ -679,7 +679,7 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 
 ## 7. Security and authority
 
-Authority is decided by the kernel (`/data/home/forge/hzcode/docs/11-authority-safety.md`), never by this plane. The cognition plane consumes capabilities and MUST NOT widen them.
+Authority is decided by the kernel (`/data/home/forge/HorizonCode/docs/11-authority-safety.md`), never by this plane. The cognition plane consumes capabilities and MUST NOT widen them.
 
 | Capability | Used for | Narrowing required here | Rule |
 |---|---|---|---|
@@ -785,15 +785,15 @@ Harness requirements: a fake clock for every backoff and timeout test, recorded 
 
 ## 11. Related documents
 
-- `/data/home/forge/hzcode/docs/02-decisions.md` — the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
-- `/data/home/forge/hzcode/docs/03-hld.md` — the system map this plane sits in: planes, processes, package and crate layout.
-- `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` — the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
-- `/data/home/forge/hzcode/docs/06-events-and-flows.md` — the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
-- `/data/home/forge/hzcode/docs/08-runtime.md` — the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
-- `/data/home/forge/hzcode/docs/09-tools.md` — tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
-- `/data/home/forge/hzcode/docs/11-authority-safety.md` — the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
-- `/data/home/forge/hzcode/docs/12-sessions-state.md` — the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
-- `/data/home/forge/hzcode/docs/14-surfaces.md` §2.2 — the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
-- `/data/home/forge/hzcode/docs/_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
+- `/data/home/forge/HorizonCode/docs/02-decisions.md` — the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
+- `/data/home/forge/HorizonCode/docs/03-hld.md` — the system map this plane sits in: planes, processes, package and crate layout.
+- `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` — the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
+- `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` — the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
+- `/data/home/forge/HorizonCode/docs/08-runtime.md` — the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
+- `/data/home/forge/HorizonCode/docs/09-tools.md` — tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
+- `/data/home/forge/HorizonCode/docs/11-authority-safety.md` — the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
+- `/data/home/forge/HorizonCode/docs/12-sessions-state.md` — the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
+- `/data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 — the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
+- `/data/home/forge/HorizonCode/docs/_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
 
 > Header reconciliation (applied): §1's dependency list previously used draft doc numbers. The references above now point at the files that exist — `03-hld.md`, `05-domain-and-schemas.md`, `08-runtime.md`, `09-tools.md`, `11-authority-safety.md`, `12-sessions-state.md` — and the draft-number mapping is closed.

@@ -1,8 +1,8 @@
 # 16 — Operations: install, release, gates, diagnostics, updates
 
-> **Status of this document:** `DESIGNED` as a specification of the operations plane. **Implementation status (final audit, 2026-11-06):** a `hzcode` binary exists (`/data/home/forge/hzcode/bin/hzcode`, chat-first, headless-capable) and so does the v0.1 kernel — as a Rust binary named `hz-kernel` at `kernel/target/release/hz-kernel`, *not* the designed `hzk` asset; levels and evidence in `28-implementation-status.md`. Install/release integrity, signing, the gate runner, `hzcode doctor`, backup/restore and the enterprise plane below remain specification targets, marked `[planned]` unless defined by `/data/home/forge/hzcode/docs/_conventions.md`. The README status note this paragraph used to cite was rewritten in the final audit (the README now leads with the implemented state).
+> **Status of this document:** `DESIGNED` as a specification of the operations plane. **Implementation status (final audit, 2026-11-06):** a `hzcode` binary exists (`/data/home/forge/HorizonCode/bin/hzcode`, chat-first, headless-capable) and so does the v0.1 kernel — as a Rust binary named `hz-kernel` at `kernel/target/release/hz-kernel`, *not* the designed `hzk` asset; levels and evidence in `28-implementation-status.md`. Install/release integrity, signing, the gate runner, `hzcode doctor`, backup/restore and the enterprise plane below remain specification targets, marked `[planned]` unless defined by `/data/home/forge/HorizonCode/docs/_conventions.md`. The README status note this paragraph used to cite was rewritten in the final audit (the README now leads with the implemented state).
 >
-> This document decides *how the thing is built, shipped, watched, diagnosed, updated and defended*. It does not restate authority semantics: those live in `/data/home/forge/hzcode/docs/14-surfaces.md` (exit-code table, §3.2; S16 points at it) and in `11-authority-safety.md`. Where this document needs a name that `_conventions.md` does not define, it says so and requires the addition (R-ops-74).
+> This document decides *how the thing is built, shipped, watched, diagnosed, updated and defended*. It does not restate authority semantics: those live in `/data/home/forge/HorizonCode/docs/14-surfaces.md` (exit-code table, §3.2; S16 points at it) and in `11-authority-safety.md`. Where this document needs a name that `_conventions.md` does not define, it says so and requires the addition (R-ops-74).
 
 **Owner:** operations (release engineering, CI/CD, observability, diagnostics, security response, cost accounting, docs governance).
 **Plane:** cross-plane. Operations is the only authority allowed to build, sign, distribute and diagnose binaries on an operator's machine.
@@ -74,7 +74,7 @@ Rules are numbered `R-ops-<n>` and are individually testable. Runbooks (§2.12) 
 
 ### 2.4 CI/CD gate catalog
 
-The gate table in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 is the registry; this subsection adds the operations-owned gates and the rules that govern all of them. Names introduced here MUST be registered in §3.5 in the same change (`_conventions.md` §1: a document that needs a new name adds it to the canonical set), and `25-roadmap-and-glossary.md` owns the glossary entries.
+The gate table in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 is the registry; this subsection adds the operations-owned gates and the rules that govern all of them. Names introduced here MUST be registered in §3.5 in the same change (`_conventions.md` §1: a document that needs a new name adds it to the canonical set), and `25-roadmap-and-glossary.md` owns the glossary entries.
 
 | # | Rule | Test |
 |---|---|---|
@@ -89,7 +89,7 @@ The gate table in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 is 
 
 #### 2.4.1 The gate catalog
 
-Roughly two dozen gates exist. The table below is the operational view: what fails the build, which lane, and whether it is waivable. Gates marked `catalog` are defined in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5; gates marked `ops` are introduced by this document.
+Roughly two dozen gates exist. The table below is the operational view: what fails the build, which lane, and whether it is waivable. Gates marked `catalog` are defined in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5; gates marked `ops` are introduced by this document.
 
 | Gate | Source | Fails the build when | Lane | Waivable |
 |---|---|---|---|---|
@@ -126,7 +126,7 @@ Roughly two dozen gates exist. The table below is the operational view: what fai
 
 "Waivable: no-by-practice" means the gate is technically insertable into the waiver file, but any waiver that touches authority semantics MUST be treated as an ADR change by the reviewer; the rationale for not doing that is recorded in the waiver's `reason`.
 
-The remaining ops gates introduced by this document — none of which appears in the table above — are registered in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 in the same change (R-ops-26):
+The remaining ops gates introduced by this document — none of which appears in the table above — are registered in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 in the same change (R-ops-26):
 
 | Gate | Fails when |
 |---|---|
@@ -252,7 +252,7 @@ Path: `.hz/traces/<session-id>.jsonl` in the workspace, or the state root `~/.lo
 
 | # | Rule | Test |
 |---|---|---|
-| **R-ops-73** | Authority order inside `docs/`: `/data/home/forge/hzcode/docs/_conventions.md` > `/data/home/forge/hzcode/docs/02-decisions.md` (ADRs) > the topic-owner document for a topic > `/data/home/forge/hzcode/docs/24-feature-catalog.md` (catalogue; it references, it does not rule) > `/data/home/forge/hzcode/docs/25-roadmap-and-glossary.md` (terms and sequencing). When two documents disagree, the higher one wins and the lower one MUST be corrected in the same change. | `gate:doc-status` `[planned]` extension: a cross-reference conflict list is produced for review. |
+| **R-ops-73** | Authority order inside `docs/`: `/data/home/forge/HorizonCode/docs/_conventions.md` > `/data/home/forge/HorizonCode/docs/02-decisions.md` (ADRs) > the topic-owner document for a topic > `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` (catalogue; it references, it does not rule) > `/data/home/forge/HorizonCode/docs/25-roadmap-and-glossary.md` (terms and sequencing). When two documents disagree, the higher one wins and the lower one MUST be corrected in the same change. | `gate:doc-status` `[planned]` extension: a cross-reference conflict list is produced for review. |
 | **R-ops-74** | `_conventions.md` wins on **names**. A document that needs a name not defined there MUST add it there in the same change (as this document does for the state root `~/.local/state/horizon/`). Names introduced by a lower-authority document without a `_conventions.md` entry are a gate failure. | `gate:doc-names` `[planned]`: extracts backticked identifiers from `docs/*.md` and checks the ones that look like names (paths, commands, gates, packages, crates) against `_conventions.md` plus the registered gate catalog. |
 | **R-ops-75** | Status law (`_conventions.md` §8): a document MUST NOT claim a status level above its evidence, must state the level it does claim, and MUST render an unknown as `UNKNOWN`, never as implied success. Every status table row carries an evidence column; "evidence" is a file, a test, a run id or the literal `UNKNOWN`. | `gate:doc-status`; this document's §10 is itself checked. |
 | **R-ops-76** | Every document in `docs/` uses the template in `_conventions.md` §9, in order. A section may be omitted only with a stated reason. Sections the template does not cover (like the runbooks below) MUST be placed inside an existing template section rather than appended as a new top-level one. Reference sections that refine an existing template section MAY be appended after the template's last section as a numbered sequence; each MUST name the template section it refines. This document's §12–§16 are such a sequence (§12 refines §7, §13–§14 refine the observability rules, §15 refines §8, §16 refines the versioning and release rules). | `gate:doc-template` `[planned]`. |
@@ -260,7 +260,7 @@ Path: `.hz/traces/<session-id>.jsonl` in the workspace, or the state root `~/.lo
 
 ### 2.12 Runbooks
 
-A runbook is not law; it is the prescribed first response. Each names its exit code (RC-5, owned by `/data/home/forge/hzcode/docs/14-surfaces.md` §3.2; S16 points at it) and the artifact it produces for later diagnosis. Runbooks are consumed by `hzcode doctor` fix hints, so each MUST be referenced from the check it serves.
+A runbook is not law; it is the prescribed first response. Each names its exit code (RC-5, owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2; S16 points at it) and the artifact it produces for later diagnosis. Runbooks are consumed by `hzcode doctor` fix hints, so each MUST be referenced from the check it serves.
 
 **RN-1 — Kernel missing or digest mismatch.**
 - *Symptoms:* `kernel_asset_missing` or `kernel_digest_mismatch`; every effect attempt refuses; exit `3`. `hzcode version` still works (R-ops-9).
@@ -279,12 +279,12 @@ A runbook is not law; it is the prescribed first response. Each names its exit c
 
 **RN-4 — Disk full.**
 - *Symptoms:* writes fail (`ENOSPC`); event append or blob write refuses; exit `1`; `doctor` `disk.space` fails.
-- *Diagnosis:* `hzcode doctor` reports free space at the state root and the workspace; `hzcode du` `[planned]` (inherited ergonomic command, see `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.3) attributes usage per session, trace file, artifact and snapshot.
+- *Diagnosis:* `hzcode doctor` reports free space at the state root and the workspace; `hzcode du` `[planned]` (inherited ergonomic command, see `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.3) attributes usage per session, trace file, artifact and snapshot.
 - *Action:* reclaim in this order — (1) traces older than retention (default 14 days, §4); (2) expired worktrees via the worktree pool; (3) superseded session snapshots, keeping the newest per session; (4) compact the database. Never delete the event log under pressure: the log is the record of what happened. If the log itself must be relocated, use the storage-root setting and follow RN-5's guidance when the new root is not local. Record the action in the session log as a retention marker, not as a new event type (RC-3).
 
 **RN-5 — NFS or another network filesystem detected.**
 - *Symptoms:* `doctor` `fs.type` warns; SQLite write latency spikes; occasional `SQLITE_IOERR`, `disk I/O error` or lost-lock messages; `hzcode session reindex` `[planned]` finds gaps.
-- *Diagnosis:* the check reports the filesystem type and mount options for the workspace and the state root. A network filesystem (NFS, SMB, SSHFS, some FUSE layers) is a **supported but degraded** state-root mode, owned by `12-sessions-state.md` §4.10: journal mode is selected from the mount class, each host gets its own database file, the host guard refuses a second writer (`MULTI_HOST_DETECTED`), and `mmap` is disabled (`/data/home/forge/hzcode/docs/24-feature-catalog.md` A.2 records the reference implementation's own NFS migration work).
+- *Diagnosis:* the check reports the filesystem type and mount options for the workspace and the state root. A network filesystem (NFS, SMB, SSHFS, some FUSE layers) is a **supported but degraded** state-root mode, owned by `12-sessions-state.md` §4.10: journal mode is selected from the mount class, each host gets its own database file, the host guard refuses a second writer (`MULTI_HOST_DETECTED`), and `mmap` is disabled (`/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.2 records the reference implementation's own NFS migration work).
 - *Action:* prefer moving the state root to a local disk (storage-root setting). If it must stay on a network filesystem, that is the degraded mode of `12-sessions-state.md` §4.10 — `hzcode doctor` warns with the mount evidence and `hzcode doctor --strict` refuses until the state root is local. There is no `--allow-network-fs` flag: the supported/degraded distinction is a property of the mount, not a runtime escape hatch. If the *workspace* lives on a network filesystem that is allowed — the workspace is files, not state — but the state root MUST NOT follow it.
 
 **RN-6 — Provider outage and fallback.**
@@ -327,20 +327,20 @@ Operations owns the commands, files and settings below. Anything not listed here
 
 | Path | Kind | Owner | Purpose |
 |---|---|---|---|
-| `/data/home/forge/hzcode/ops/budgets.toml` | registry | ops | Every numeric budget in the project (R-ops-48, §8). |
-| `/data/home/forge/hzcode/ops/kernel-pin.toml` | pin | ops | The `hzk` digest(s) this revision of the CLI expects (R-ops-4). |
-| `/data/home/forge/hzcode/ops/kernel-compat.toml` | matrix | ops | CLI↔kernel compatibility set (R-ops-11, R-ops-12). |
-| `/data/home/forge/hzcode/ops/release.lock` | lockfile | ops | Toolchain + dependency pin set for reproducible builds (R-ops-15, R-ops-22). |
-| `/data/home/forge/hzcode/ops/release-manifest.json` | artifact | ops | `ReleaseManifestV1`, the single release authority (R-ops-21). |
-| `/data/home/forge/hzcode/ops/gates/<gate>.toml` | gate config | ops | Timeouts, lane, fixture paths, non-waivable flag (R-ops-26…R-ops-32). |
-| `/data/home/forge/hzcode/ops/gates/waivers/<gate>.toml` | waiver | ops | The only exception mechanism (R-ops-31). |
-| `/data/home/forge/hzcode/ops/install.sh` | installer | ops | Verified standalone install (R-ops-3). |
-| `/data/home/forge/hzcode/ops/homebrew/hzcode.rb` | formula | ops | Homebrew channel (R-ops-5). |
-| `/data/home/forge/hzcode/ops/docker/Dockerfile` | image | ops | Docker channel (R-ops-7). |
-| `/data/home/forge/hzcode/flake.nix` | build | ops | `.#hzcode` output (R-ops-6). |
-| `/data/home/forge/hzcode/ops/bench/suites.toml`, `/data/home/forge/hzcode/ops/bench/baseline/` | benchmark | ops | Suites and ratcheted baselines (R-ops-49, R-ops-52). |
-| `/data/home/forge/hzcode/packages/provider/src/prices.json` | data | provider, ops-signed-off | Append-only price table (R-ops-68). |
-| `/data/home/forge/hzcode/ops/pricecheck.ts` | tool | ops | Price-table and gap verification (R-ops-69). |
+| `/data/home/forge/HorizonCode/ops/budgets.toml` | registry | ops | Every numeric budget in the project (R-ops-48, §8). |
+| `/data/home/forge/HorizonCode/ops/kernel-pin.toml` | pin | ops | The `hzk` digest(s) this revision of the CLI expects (R-ops-4). |
+| `/data/home/forge/HorizonCode/ops/kernel-compat.toml` | matrix | ops | CLI↔kernel compatibility set (R-ops-11, R-ops-12). |
+| `/data/home/forge/HorizonCode/ops/release.lock` | lockfile | ops | Toolchain + dependency pin set for reproducible builds (R-ops-15, R-ops-22). |
+| `/data/home/forge/HorizonCode/ops/release-manifest.json` | artifact | ops | `ReleaseManifestV1`, the single release authority (R-ops-21). |
+| `/data/home/forge/HorizonCode/ops/gates/<gate>.toml` | gate config | ops | Timeouts, lane, fixture paths, non-waivable flag (R-ops-26…R-ops-32). |
+| `/data/home/forge/HorizonCode/ops/gates/waivers/<gate>.toml` | waiver | ops | The only exception mechanism (R-ops-31). |
+| `/data/home/forge/HorizonCode/ops/install.sh` | installer | ops | Verified standalone install (R-ops-3). |
+| `/data/home/forge/HorizonCode/ops/homebrew/hzcode.rb` | formula | ops | Homebrew channel (R-ops-5). |
+| `/data/home/forge/HorizonCode/ops/docker/Dockerfile` | image | ops | Docker channel (R-ops-7). |
+| `/data/home/forge/HorizonCode/flake.nix` | build | ops | `.#hzcode` output (R-ops-6). |
+| `/data/home/forge/HorizonCode/ops/bench/suites.toml`, `/data/home/forge/HorizonCode/ops/bench/baseline/` | benchmark | ops | Suites and ratcheted baselines (R-ops-49, R-ops-52). |
+| `/data/home/forge/HorizonCode/packages/provider/src/prices.json` | data | provider, ops-signed-off | Append-only price table (R-ops-68). |
+| `/data/home/forge/HorizonCode/ops/pricecheck.ts` | tool | ops | Price-table and gap verification (R-ops-69). |
 | `~/.config/horizon/budgets.toml` | user config | user | User-level budget ceilings (R-ops-71). |
 | `.hz/budgets.toml` | workspace config | user | Workspace budget ceilings; narrowing only (R-ops-71). |
 | `~/.config/horizon/install-journal.jsonl` | journal | ops | Install/update/rollback history, append-only. |
@@ -351,7 +351,7 @@ Environment settings owned here: `HZ_LOG` (R-ops-46), `HZ_OTEL_EXPORT` (R-ops-34
 
 ### 3.3 What operations does *not* own
 
-Kernel semantics, capability IDs, guard decisions, receipts and the ABI live in `11-authority-safety.md` and `_conventions.md`. Exit codes are owned by `/data/home/forge/hzcode/docs/14-surfaces.md` §3.2 (the canonical table; S16 points at it) and are only referenced here. Event names are owned by `_conventions.md` §6; operations MUST NOT introduce a session event, and its own bookkeeping (install journal, retention markers, bench results) MUST stay outside the session event log (RC-2, RC-3).
+Kernel semantics, capability IDs, guard decisions, receipts and the ABI live in `11-authority-safety.md` and `_conventions.md`. Exit codes are owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2 (the canonical table; S16 points at it) and are only referenced here. Event names are owned by `_conventions.md` §6; operations MUST NOT introduce a session event, and its own bookkeeping (install journal, retention markers, bench results) MUST stay outside the session event log (RC-2, RC-3).
 
 ---
 
@@ -379,7 +379,7 @@ Kernel semantics, capability IDs, guard decisions, receipts and the ABI live in 
 
 ## 5. Errors & failure modes
 
-Exit codes are the canonical table from `/data/home/forge/hzcode/docs/14-surfaces.md` §3.2 (S16 points at it; RC-5): `0` success · `1` error · `2` usage/config/environment · `3` unprovable/fail-closed · `4` policy denial · `5` budget · `130`/`143` signals. Operations MUST NOT invent codes; it MUST use one of these and a named reason code below.
+Exit codes are the canonical table from `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2 (S16 points at it; RC-5): `0` success · `1` error · `2` usage/config/environment · `3` unprovable/fail-closed · `4` policy denial · `5` budget · `130`/`143` signals. Operations MUST NOT invent codes; it MUST use one of these and a named reason code below.
 
 | Reason code | Exit | Trigger | Behaviour | Fail-closed? |
 |---|---|---|---|---|
@@ -516,7 +516,7 @@ The threat model itself belongs to `11-authority-safety.md` §1.2 (R-ops-59); th
 
 ## 8. Performance budgets
 
-Every number below is a *citation* of a key in `/data/home/forge/hzcode/ops/budgets.toml` `[planned]` (R-ops-48). Because that file does not exist yet, this table is the design intent; when the file lands, the table's numbers MUST be generated from it, and any divergence is a `gate:lane-budget` failure. All figures are `[planned]` targets, not measurements — none has been observed.
+Every number below is a *citation* of a key in `/data/home/forge/HorizonCode/ops/budgets.toml` `[planned]` (R-ops-48). Because that file does not exist yet, this table is the design intent; when the file lands, the table's numbers MUST be generated from it, and any divergence is a `gate:lane-budget` failure. All figures are `[planned]` targets, not measurements — none has been observed.
 
 ### 8.1 CI wall-clock targets
 
@@ -599,7 +599,7 @@ Suites (R-ops-49) cover: CLI cold start, TUI startup to first frame, step stream
 | F5 waiver | Covered by `waiver.test.ts` (F5 is the human half of the same mechanism) `[planned]`. | `[planned]` |
 | F6 perf | A synthetic regression injected into a suite must be caught with the correct metric, baseline and run ids `[planned]`. | `[planned]` |
 
-No test in this section has been written or run: there is no CI, no `ops/` tree and no gate runner yet. The `hzcode` binary and the v0.1 kernel **do** exist (`/data/home/forge/hzcode/bin/hzcode`, `kernel/target/release/hz-kernel`), and the headless/print paths this document ships run today — levels and evidence are in `28-implementation-status.md`.
+No test in this section has been written or run: there is no CI, no `ops/` tree and no gate runner yet. The `hzcode` binary and the v0.1 kernel **do** exist (`/data/home/forge/HorizonCode/bin/hzcode`, `kernel/target/release/hz-kernel`), and the headless/print paths this document ships run today — levels and evidence are in `28-implementation-status.md`.
 
 ---
 
@@ -609,24 +609,24 @@ Every capability described by this document is `DESIGNED`, **except where `28-im
 
 | Capability | Level | Evidence |
 |---|---|---|
-| Distribution channels (npm/bun, `install.sh`, Homebrew, cargo, nix, Docker, debug sidecars) | `DESIGNED` | §2.1, §3; channel inventory from `/data/home/forge/hzcode/README.md` §3.8 ("Distribution — single static binary; npm/brew/apt/scoop/nix/docker; auto-update with digest pinning; signed releases with debug sidecars") |
-| Kernel asset co-delivery, digest pinning and signature | `DESIGNED` | R-ops-4, R-ops-18, R-ops-21, R-ops-58; `gate:kernel-pin` in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
-| Versioning policy, release trains, channels, rollback | `DESIGNED` | §2.2; `HZ_PROTO`/`HZ_ABI` naming from `/data/home/forge/hzcode/docs/_conventions.md` §1 |
+| Distribution channels (npm/bun, `install.sh`, Homebrew, cargo, nix, Docker, debug sidecars) | `DESIGNED` | §2.1, §3; channel inventory from `/data/home/forge/HorizonCode/README.md` §3.8 ("Distribution — single static binary; npm/brew/apt/scoop/nix/docker; auto-update with digest pinning; signed releases with debug sidecars") |
+| Kernel asset co-delivery, digest pinning and signature | `DESIGNED` | R-ops-4, R-ops-18, R-ops-21, R-ops-58; `gate:kernel-pin` in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
+| Versioning policy, release trains, channels, rollback | `DESIGNED` | §2.2; `HZ_PROTO`/`HZ_ABI` naming from `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
 | Release integrity (signing, SBOM, provenance, reproducibility) | `DESIGNED` | §2.3; reproducibility is deliberately left as a declared flag (R-ops-15) rather than an assumed property |
-| Gate catalog, lanes, timeouts, waiver process | `DESIGNED` | §2.4, §8.2; catalog gates from `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
+| Gate catalog, lanes, timeouts, waiver process | `DESIGNED` | §2.4, §8.2; catalog gates from `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
 | Observability (OTel, redaction, local trace, opt-in telemetry) | `DESIGNED` | §2.5; README §3.8 ("OpenTelemetry traces/metrics/logs, GenAI semantic conventions, local dashboard") |
-| Diagnostics (`doctor`, support bundle, crash handling, log levels) | `DESIGNED` | §2.6; README §3.8 ("opt-in crash reports"); `doctor` as an inherited ergonomic command in `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.3 |
-| Performance engineering (budgets registry, harness, thresholds, presets) | `DESIGNED` | §2.7, §8; metric-discipline requirement NF-041/NF-050 in `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.4 |
+| Diagnostics (`doctor`, support bundle, crash handling, log levels) | `DESIGNED` | §2.6; README §3.8 ("opt-in crash reports"); `doctor` as an inherited ergonomic command in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.3 |
+| Performance engineering (budgets registry, harness, thresholds, presets) | `DESIGNED` | §2.7, §8; metric-discipline requirement NF-041/NF-050 in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.4 |
 | Security operations (disclosure, dependency policy, secret scanning, threat-model maintenance) | `DESIGNED` | §2.8; supply-chain pinning referenced in README §3.8 |
 | Update mechanism (self-update, swap, rollback, offline/staged) | `DESIGNED` | §2.9; README §3.8 ("auto-update with digest pinning") |
-| Cost and budget operations (`prices.json`, `pricecheck`, budgets, opt-in dashboard) | `DESIGNED` | §2.10; append-only price table + `pricecheck` in `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.4; budgets in README §3.1 |
-| Docs governance (authority order, names, status law, template) | `DESIGNED` | §2.11; `/data/home/forge/hzcode/docs/_conventions.md` §1, §8, §9, §10 |
+| Cost and budget operations (`prices.json`, `pricecheck`, budgets, opt-in dashboard) | `DESIGNED` | §2.10; append-only price table + `pricecheck` in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.4; budgets in README §3.1 |
+| Docs governance (authority order, names, status law, template) | `DESIGNED` | §2.11; `/data/home/forge/HorizonCode/docs/_conventions.md` §1, §8, §9, §10 |
 | Runbooks RN-1…RN-8 | `DESIGNED` | §2.12 |
 | Every gate named `[planned]` in this document | `DESIGNED` | §2.4.1; all are `[planned]` because no CI exists |
-| Implementation of any command in §3.1 | `DESIGNED`; commands `[planned]` | `hzcode version`, `hzcode run` and the headless paths run today (`bin/hzcode`; `28-implementation-status.md` §1 records chat TUI + headless as VERIFIED with 48 TUI tests). Every operations command above them — `doctor`, `support-bundle`, `update`, `bench`, the gate runner — is `[planned]`: no `ops/` tree and no CI configuration exist in `/data/home/forge/hzcode` |
+| Implementation of any command in §3.1 | `DESIGNED`; commands `[planned]` | `hzcode version`, `hzcode run` and the headless paths run today (`bin/hzcode`; `28-implementation-status.md` §1 records chat TUI + headless as VERIFIED with 48 TUI tests). Every operations command above them — `doctor`, `support-bundle`, `update`, `bench`, the gate runner — is `[planned]`: no `ops/` tree and no CI configuration exist in `/data/home/forge/HorizonCode` |
 | Reproducibility of any artifact | `UNKNOWN` | Not attempted; R-ops-15 requires the claim to be explicit either way, and until then `reproducible: false` would be the only honest value |
 | Enterprise controls — managed policy, SSO/OIDC, audit export, quota/rate-limit, BYO gateway, air-gap, proxy interplay | `DESIGNED` | §12; README §3.8 ("Enterprise — managed policy, MDM, SSO, audit export, quota/rate-limit policy, bring-your-own-cloud") and §3.6 (server surfaces) |
-| Profiling (CPU, heap, cgroup v2 sampling, leak procedure) | `DESIGNED` | §13; the cgroup v2 / resource-sampler approach is recorded in `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.8 |
+| Profiling (CPU, heap, cgroup v2 sampling, leak procedure) | `DESIGNED` | §13; the cgroup v2 / resource-sampler approach is recorded in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.8 |
 | OTel metrics catalog, span attributes, sampling, local dashboard | `DESIGNED` | §14; extends R-ops-36 and R-ops-39 |
 | Product performance budgets and their enforcing suites | `DESIGNED` | §15; every number is a target, none measured |
 | Deprecation, migration notes, LTS and the compatibility matrix | `DESIGNED` | §16 |
@@ -640,18 +640,18 @@ Every capability described by this document is `DESIGNED`, **except where `28-im
 
 | Document | Relationship |
 |---|---|
-| `/data/home/forge/hzcode/docs/_conventions.md` | Names (`hzcode`, `hzk`, `hz://`, `HZ_PROTO`/`HZ_ABI`, capability IDs, events), status levels, document template. Wins on every name conflict (R-ops-74). |
-| `/data/home/forge/hzcode/docs/02-decisions.md` | ADRs this document implements operationally: ADR-002 (fail closed on ABI mismatch), ADR-009 (cache guard), ADR-012 (receipt coverage), ADR-014 (provenance), ADR-015 (tool declarations). |
-| `/data/home/forge/hzcode/docs/14-surfaces.md` | Owner of the exit-code table §3.2 (S16 points at it; RC-5) and of the surface list this document ships. |
-| `/data/home/forge/hzcode/docs/24-feature-catalog.md` | Owner of the gate table §3.5 and of the capability-parity rows that several gates here reference. New gate names MUST be registered there (R-ops-26). |
-| `/data/home/forge/hzcode/docs/25-roadmap-and-glossary.md` | Owns glossary entries for the names this document introduces and the sequencing of the gates it marks `[planned]`. |
-| `/data/home/forge/hzcode/docs/06-events-and-flows.md` | Owns the event vocabulary and the ratified rulings RC-1…RC-4 that restrict what operations may record. |
-| `/data/home/forge/hzcode/docs/10-cognition.md` | Owns the cache-guard pin rule (R65) referenced by RN-3 and RC-8. |
-| `/data/home/forge/hzcode/docs/01-vision-and-superset.md` | Source of the superset claim this document does not extend: operations ships capabilities, it does not invent them. |
-| `/data/home/forge/hzcode/README.md` | Product-level claims this document makes operable (install, distribution, observability, security, self-improvement boundary). |
-| `/data/home/forge/hzcode/docs/11-authority-safety.md` | Owns the kernel semantics, the capability registry semantics, the threat model (§1.2), receipt/reconciliation and THS (§4.7) that §2.5.1 and RN-2 reference. |
-| `/data/home/forge/hzcode/docs/12-sessions-state.md` | Owns the session store, the state-root layout and the network-filesystem mode (§4.10) that RN-4, RN-5 and RN-7 reference. |
-| `/data/home/forge/hzcode/docs/11-authority-safety.md` §2.11 and §7.13 | Own the network/egress policy decisions that §12.5–§12.7 defer to (R-ops-93, R-ops-99, R-ops-101). Operations supplies the transport facts — proxy, gateway, air-gap — and never the decision. |
+| `/data/home/forge/HorizonCode/docs/_conventions.md` | Names (`hzcode`, `hzk`, `hz://`, `HZ_PROTO`/`HZ_ABI`, capability IDs, events), status levels, document template. Wins on every name conflict (R-ops-74). |
+| `/data/home/forge/HorizonCode/docs/02-decisions.md` | ADRs this document implements operationally: ADR-002 (fail closed on ABI mismatch), ADR-009 (cache guard), ADR-012 (receipt coverage), ADR-014 (provenance), ADR-015 (tool declarations). |
+| `/data/home/forge/HorizonCode/docs/14-surfaces.md` | Owner of the exit-code table §3.2 (S16 points at it; RC-5) and of the surface list this document ships. |
+| `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` | Owner of the gate table §3.5 and of the capability-parity rows that several gates here reference. New gate names MUST be registered there (R-ops-26). |
+| `/data/home/forge/HorizonCode/docs/25-roadmap-and-glossary.md` | Owns glossary entries for the names this document introduces and the sequencing of the gates it marks `[planned]`. |
+| `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` | Owns the event vocabulary and the ratified rulings RC-1…RC-4 that restrict what operations may record. |
+| `/data/home/forge/HorizonCode/docs/10-cognition.md` | Owns the cache-guard pin rule (R65) referenced by RN-3 and RC-8. |
+| `/data/home/forge/HorizonCode/docs/01-vision-and-superset.md` | Source of the superset claim this document does not extend: operations ships capabilities, it does not invent them. |
+| `/data/home/forge/HorizonCode/README.md` | Product-level claims this document makes operable (install, distribution, observability, security, self-improvement boundary). |
+| `/data/home/forge/HorizonCode/docs/11-authority-safety.md` | Owns the kernel semantics, the capability registry semantics, the threat model (§1.2), receipt/reconciliation and THS (§4.7) that §2.5.1 and RN-2 reference. |
+| `/data/home/forge/HorizonCode/docs/12-sessions-state.md` | Owns the session store, the state-root layout and the network-filesystem mode (§4.10) that RN-4, RN-5 and RN-7 reference. |
+| `/data/home/forge/HorizonCode/docs/11-authority-safety.md` §2.11 and §7.13 | Own the network/egress policy decisions that §12.5–§12.7 defer to (R-ops-93, R-ops-99, R-ops-101). Operations supplies the transport facts — proxy, gateway, air-gap — and never the decision. |
 | `§12`–`§16` of this document | Reference sections appended after the template's last section (R-ops-76): enterprise features, profiling, OTel detail, product budgets, release engineering. |
 
 ---
@@ -730,7 +730,7 @@ Profiling exists for engineers diagnosing their own runs and for the perf lane o
 | **R-ops-102** | Profiling is **off in default builds and default invocations**. The profilers are compiled behind a build feature (`hz_native` cargo feature `profiling`, TS `@horizoncode/observe` flag) and enabled per run by an explicit flag (`--cpu-profile=<file>`, `--heap-profile=<file>`) or `HZ_PROFILE`. `hzcode version --json` MUST report `profiling: on|off` for the build so a profile can never be mistaken for representative of a stock run. | `gate:clean-build` asserts a stock release build has `profiling: off` `[planned]`; `packages/testing/src/ops/profiling-off.test.ts` `[planned]`. |
 | **R-ops-103** | A profiled run MUST produce the same authority outcomes as an unprofiled one: same decisions, same receipts, same terminal states. Profiling MUST NOT be a path to skip a decision, shorten a lease, hide an `UNKNOWN`, or disable redaction; the profiler writes its own artifacts and never replaces the trace. | `packages/testing/src/ops/profile-parity.test.ts` `[planned]` records the same fixture run with and without profiling and diffs decision/receipt output. |
 | **R-ops-104** | The heap profiler captures a snapshot on `SIGUSR2` or after `--heap-profile-after=<n>` observed steps, with a configurable sampling interval. Snapshots are written to the state root `profiles/` — never into a workspace, never into a git tree. **A heap snapshot is classified as containing prompt text and file contents**: it MUST be opt-in, MUST print a confirmation naming the output file, MUST NOT be attached to a support bundle automatically, and MUST be deleted after 7 days by default. | `packages/testing/src/ops/heap-snapshot-policy.test.ts` `[planned]`; `gate:log-redaction`-adjacent check that no snapshot path appears in a default bundle manifest. |
-| **R-ops-105** | Resource sampling follows the reference kernel's approach (`/data/home/forge/repo-tour/horizoncode/kernel/src/resource_sampler.rs`, `.../cgroup_v2.rs`, recorded in `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.8): periodic samples of `memory.current`, `memory.peak`, `cpu.stat`, `io.stat` and `pids.current` per session and per worker, default interval 1 s (250 ms under a profiling preset). Samples are storage/kernel metadata (RC-3) and MUST NOT be written as session events; enforcement uses cgroup v2 limits where available, and where a dimension is unavailable the sampler reports a typed residual rather than a zero — an unmeasured value is never rendered as `0`. | `packages/testing/src/ops/resource-sampler.test.ts` `[planned]`; second test asserting no `hz.*` event is emitted by sampling. |
+| **R-ops-105** | Resource sampling follows the reference kernel's approach (`/data/home/forge/repo-tour/horizoncode/kernel/src/resource_sampler.rs`, `.../cgroup_v2.rs`, recorded in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.8): periodic samples of `memory.current`, `memory.peak`, `cpu.stat`, `io.stat` and `pids.current` per session and per worker, default interval 1 s (250 ms under a profiling preset). Samples are storage/kernel metadata (RC-3) and MUST NOT be written as session events; enforcement uses cgroup v2 limits where available, and where a dimension is unavailable the sampler reports a typed residual rather than a zero — an unmeasured value is never rendered as `0`. | `packages/testing/src/ops/resource-sampler.test.ts` `[planned]`; second test asserting no `hz.*` event is emitted by sampling. |
 | **R-ops-106** | The CPU profiling workflow is fixed: capture a window (default 30 s, configurable) with the Rust side profiled by the built-in sampler (eBPF/`perf` are opt-in and only when the platform backend allows), the TS side profiled by the Bun/V8 profiler; artifacts land in the state root `profiles/`; flamegraphs are rendered offline by tooling that reads those artifacts and is not part of a release build. A capture MUST NOT run concurrently with a session that holds an execution claim on another workspace without naming the target workspace explicitly. | `packages/testing/src/ops/cpu-profile.test.ts` `[planned]`. |
 | **R-ops-107** | Memory-leak hunting is a written procedure with thresholds: idle → warm → steady state RSS captured at checkpoints; a suspected leak is RSS growth > 10 % across 200 steps with no proportional context growth, or `memory.current` monotonic growth under a bounded workload. Diagnosis takes three heap snapshots (before, mid, after) and diffs retention paths; kernel-side growth is attributed with the sampler of R-ops-105; containment before root-cause is an explicit worker recycle ceiling, and a recycled worker's in-flight effects MUST settle or terminate as `UNKNOWN` — recycling is never allowed to manufacture a success. | `packages/testing/src/ops/leak-procedure.test.ts` `[planned]` runs the documented steps against a deliberately leaking fixture and asserts the leak is detected within the stated thresholds. |
 
@@ -805,7 +805,7 @@ No span attribute carries prompt text, tool arguments, file paths or file conten
 
 ## 15. Performance budgets table
 
-§8 fixes CI lane budgets and gate timeouts. This section fixes the **product budgets**: what a user should be able to feel, with the anchor each number is measured at and the suite that enforces it. Every row is a design target that will cite a key in `/data/home/forge/hzcode/ops/budgets.toml` `[planned]`; every figure is a target, none has been measured, and until that file exists and a row cites its key no figure here may be quoted to a user as a guarantee (R-ops-48).
+§8 fixes CI lane budgets and gate timeouts. This section fixes the **product budgets**: what a user should be able to feel, with the anchor each number is measured at and the suite that enforces it. Every row is a design target that will cite a key in `/data/home/forge/HorizonCode/ops/budgets.toml` `[planned]`; every figure is a target, none has been measured, and until that file exists and a row cites its key no figure here may be quoted to a user as a guarantee (R-ops-48).
 
 | # | Rule | Test |
 |---|---|---|

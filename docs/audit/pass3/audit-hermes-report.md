@@ -858,6 +858,6 @@ providers                3     native                   5
 
 - Nothing in the repository was written to, moved, or executed in a mutating way; all commands were
   read-only (`ls`, `find`, `du`, `wc`, `git log`, `git rev-list`).
-- `/data/home/forge/hzcode` was not accessed at any point.
+- `/data/home/forge/HorizonCode` was not accessed at any point.
 - `git log --oneline -10` and `git rev-list --count HEAD` were run; both confirm a single-commit
   shallow clone, which is recorded above as a limitation of the evidence base.

@@ -1,8 +1,8 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
 
-> Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/hzcode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
+> Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/HorizonCode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
-> Templates and names follow `/data/home/forge/hzcode/docs/_conventions.md`.
+> Templates and names follow `/data/home/forge/HorizonCode/docs/_conventions.md`.
 
 ---
 
@@ -19,17 +19,17 @@ It decides:
 5. The **execution pipeline** — `validate → permission decision → authorize → lease → execute → observe → settle → receipt` — and which stage fails closed for which input.
 6. The **output rendering contract**: what the model sees, what the human sees, and how truncation and pagination are bounded.
 7. **Error semantics per tool class** (read-only / mutating / network / process).
-8. **The full catalog** of the 94 tools in §4 (91 entries), each with capability ID, effect class, read-only class, permission class and notable failure modes — the same set `/data/home/forge/hzcode/README.md` §3.2 names, held equal by the coverage test in §11.2.
+8. **The full catalog** of the 94 tools in §4 (91 entries), each with capability ID, effect class, read-only class, permission class and notable failure modes — the same set `/data/home/forge/HorizonCode/README.md` §3.2 names, held equal by the coverage test in §11.2.
 9. The tools we **deliberately do not ship**, and why.
 
-It does **not** decide: kernel internals (`/data/home/forge/hzcode/docs/11-authority-safety.md`), schema bodies (`/data/home/forge/hzcode/docs/05-domain-and-schemas.md`), the event vocabulary (`/data/home/forge/hzcode/docs/06-events-and-flows.md`), the context compiler and prefix discipline (`/data/home/forge/hzcode/docs/10-cognition.md`), or the session/state machine (`/data/home/forge/hzcode/docs/12-sessions-state.md`). Where this document names a schema or an event, it consumes it; the owning document defines it.
+It does **not** decide: kernel internals (`/data/home/forge/HorizonCode/docs/11-authority-safety.md`), schema bodies (`/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`), the event vocabulary (`/data/home/forge/HorizonCode/docs/06-events-and-flows.md`), the context compiler and prefix discipline (`/data/home/forge/HorizonCode/docs/10-cognition.md`), or the session/state machine (`/data/home/forge/HorizonCode/docs/12-sessions-state.md`). Where this document names a schema or an event, it consumes it; the owning document defines it.
 
 **Reader contract.** A rule in §2 is individually testable; the catalog in §4 is the enumerated surface the rules apply to; §12 states the evidence level of every claim here.
 
 **Sources.**
 
-- source: `horizoncode` `/data/home/forge/hzcode/README.md` §3.2 (tool list), §3.4 (authority), §3.7 (extensibility)
-- source: `horizoncode` `/data/home/forge/hzcode/docs/_conventions.md` §5 (capability IDs, effect classes), §7 (schema naming), §8 (status levels)
+- source: `horizoncode` `/data/home/forge/HorizonCode/README.md` §3.2 (tool list), §3.4 (authority), §3.7 (extensibility)
+- source: `horizoncode` `/data/home/forge/HorizonCode/docs/_conventions.md` §5 (capability IDs, effect classes), §7 (schema naming), §8 (status levels)
 - source: `forgecode` `/data/home/forge/repo-tour/forgecode` (compile-time tool specs, typed tool specs)
 - source: `opencode` `/data/home/forge/repo-tour/opencode` (tool registry + per-tool typed definitions)
 - source: `claude-code` `/data/home/forge/repo-tour/claude-code` (tool catalog breadth, subagent fleet, skills)
@@ -48,11 +48,11 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-1.** Every tool MUST be described by exactly one `ToolDeclarationV1` record. The declaration — not prose, not a prompt, not a registry-side annotation — is the only source of the tool's name, schema, class and authority. A tool with no declaration MUST NOT be callable.
 
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15). The `ToolDeclarationV1` **schema** — its field list, its types and every closed enum (`readOnlyClass`, `concurrencyClass`, `idempotency`, `effectClass`) — is owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.7. This section states only the behaviour the tool pipeline depends on; it MUST NOT define, restate, rename or extend a field.
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). The `ToolDeclarationV1` **schema** — its field list, its types and every closed enum (`readOnlyClass`, `concurrencyClass`, `idempotency`, `effectClass`) — is owned by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.7. This section states only the behaviour the tool pipeline depends on; it MUST NOT define, restate, rename or extend a field.
 
-**R-tools-2.** A declaration MUST carry **every** field of `ToolDeclarationV1` as fixed in `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.7 — that section is the single source of truth for the field list, the types and each closed enum, and this document cites it rather than copying it. A declaration missing any field fails the completeness gate (R-tools-12) at build time and MUST NOT be registered at runtime.
+**R-tools-2.** A declaration MUST carry **every** field of `ToolDeclarationV1` as fixed in `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.7 — that section is the single source of truth for the field list, the types and each closed enum, and this document cites it rather than copying it. A declaration missing any field fails the completeness gate (R-tools-12) at build time and MUST NOT be registered at runtime.
 
-**What this section adds, and the capability decision.** The pipeline depends on these parts of the declaration, each with its own rule below: `effectClass` as an upper bound (R-tools-3), exactly one `capabilityId` (R-tools-4), the permission defaults and their resource scope (R-tools-5), `idempotency` (R-tools-6), the timeout (R-tools-7), the two renderings (R-tools-8), telemetry (R-tools-9) and the prompt fragment (R-tools-10). There is **no `auxCapabilityIds` field and no second capability list**: a declaration names exactly **one** `capabilityId` — the capability of the effect the call is leased under (H-30 in `/data/home/forge/hzcode/docs/03-hld.md`, D22 in `05-domain-and-schemas.md`) — because a union or an inferred second grant would defeat the single-capability authorisation rule the safety model rests on. An auxiliary **read** a tool performs is declared as **read-scope** on that same capability (R-tools-5), never as a parallel grant; an extra **write** arm (e.g. `apply_patch`'s add/delete arms) takes its own one-use lease under the session's own capability for it (R-tools-32), and is refused when the session does not hold that capability.
+**What this section adds, and the capability decision.** The pipeline depends on these parts of the declaration, each with its own rule below: `effectClass` as an upper bound (R-tools-3), exactly one `capabilityId` (R-tools-4), the permission defaults and their resource scope (R-tools-5), `idempotency` (R-tools-6), the timeout (R-tools-7), the two renderings (R-tools-8), telemetry (R-tools-9) and the prompt fragment (R-tools-10). There is **no `auxCapabilityIds` field and no second capability list**: a declaration names exactly **one** `capabilityId` — the capability of the effect the call is leased under (H-30 in `/data/home/forge/HorizonCode/docs/03-hld.md`, D22 in `05-domain-and-schemas.md`) — because a union or an inferred second grant would defeat the single-capability authorisation rule the safety model rests on. An auxiliary **read** a tool performs is declared as **read-scope** on that same capability (R-tools-5), never as a parallel grant; an extra **write** arm (e.g. `apply_patch`'s add/delete arms) takes its own one-use lease under the session's own capability for it (R-tools-32), and is refused when the session does not hold that capability.
 
 **R-tools-3.** `effectClass` MUST be the *upper bound*: if any input can cause an effect, the declaration MUST declare that effect class, even when the common path is lighter. A declaration MUST NOT under-declare to obtain a weaker permission decision; the completeness gate cross-checks `effectClass` against `capabilityId` using the capability→effect floor table in `packages/tools/capability-effects.ts` `[planned]`.
 
@@ -68,7 +68,7 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-9.** `telemetry` MUST declare: span name `hz.tool.<name>`, `attributes[]` from a closed set (`tool.id`, `tool.namespace`, `capability.id`, `effect.class`, `tool.outcome`, `tool.bytes.in`, `tool.bytes.out`, `tool.truncated`, `tool.duration.ms`, `tool.retry.count`), and a `redactionProfile` naming a `RedactionV1` profile. Free-form prompt/argument text MUST NOT be a span attribute.
 
-**R-tools-10.** The declaration's prompt fragment MUST be non-empty, ≤ 512 bytes, and describe *what the tool does and when to use it* — never how to obtain authority. Fragments are emitted into the provider tool schema block in a deterministic order (namespace then name) and are part of the byte-stable prefix governed by the cache guard in `/data/home/forge/hzcode/docs/10-cognition.md`.
+**R-tools-10.** The declaration's prompt fragment MUST be non-empty, ≤ 512 bytes, and describe *what the tool does and when to use it* — never how to obtain authority. Fragments are emitted into the provider tool schema block in a deterministic order (namespace then name) and are part of the byte-stable prefix governed by the cache guard in `/data/home/forge/HorizonCode/docs/10-cognition.md`.
 
 ### 2.2 Generation from one source of truth, and the build-time gate
 
@@ -127,7 +127,7 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-29.** `validate` MUST run before any effect, including before a permission prompt is shown (a human MUST NOT be asked to approve a call that cannot be parsed). Validation failure is terminal for the call and emits no lease request.
 
-**R-tools-30.** The **permission decision** is produced by `Guard.authorize()` for every tool whose declaration requires a lease, and by the in-process mirror for tools that only touch session state (`leaseClass: session` or `none`). Precedence is `deny > ask > allow`; an `ask` that is never answered expires with the step and settles as `denied` with reason code `denied_by_grant_expired` (`GuardDecisionV1.reasonCode`; failure case F9 in `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`), which is a denial for settlement purposes.
+**R-tools-30.** The **permission decision** is produced by `Guard.authorize()` for every tool whose declaration requires a lease, and by the in-process mirror for tools that only touch session state (`leaseClass: session` or `none`). Precedence is `deny > ask > allow`; an `ask` that is never answered expires with the step and settles as `denied` with reason code `denied_by_grant_expired` (`GuardDecisionV1.reasonCode`; failure case F9 in `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`), which is a denial for settlement purposes.
 
 **R-tools-31.** An `ask` decision emits `hz.permission.asked` and suspends the step. Answers are accepted only from an origin of kind `UserAction`; `SessionBatch` (model-origin) answers are rejected by the kernel and recorded as an attempt.
 
@@ -137,11 +137,11 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-34.** **Observe** streams deltas as parts (`hz.part.updated`) under the caps of §3.7. Observation MUST NOT buffer without bound, and MUST NOT be the mechanism by which a tool reports success — that is `settle`.
 
-**R-tools-35.** **Retry** is legal only for `read-only` tools and for `at_least_once` tools whose key is unchanged, and only when `RetryClassV1` says so. `at_most_once`/`non_idempotent` tools that already reached `execute` MUST NOT be retried automatically; the run MUST go through reconciliation (`/data/home/forge/hzcode/docs/11-authority-safety.md`).
+**R-tools-35.** **Retry** is legal only for `read-only` tools and for `at_least_once` tools whose key is unchanged, and only when `RetryClassV1` says so. `at_most_once`/`non_idempotent` tools that already reached `execute` MUST NOT be retried automatically; the run MUST go through reconciliation (`/data/home/forge/HorizonCode/docs/11-authority-safety.md`).
 
 **R-tools-36.** **Settle** requires agreement between the harness result and host evidence for every mutating call. If the process died, was killed, hit the timeout, or the backend lost the transport after the effect may have been dispatched, the outcome MUST be recorded `UNKNOWN` (`hz.effect.unknown`) and reconciled — never assumed, never silently retried, never reported as success.
 
-**R-tools-37.** **Receipt.** Every `mutating`, `process`, `network`, `remote`, `credential` or `external-effect` call MUST settle into an `EffectReceiptV1` carrying the preimage/postimage where the resource has bytes, the `resourceScope` actually touched, the `capabilityId`, the `EffectOriginV1` (`SessionBatch`, `UserAction`, `ManagedRun`, `ManagedRoot`), and the lease id. Read-only calls MUST NOT emit an effect receipt — a pure read is un-receipted, except where a read crosses the workspace boundary, which is receipted as an effect (`/data/home/forge/hzcode/docs/07-apis-and-contracts.md` §10 item 8) — and session-state tools emit session facts, never receipts (§7.2, last row). A step that contains a mutation without a receipt MUST be reported as unfinished by `hzcode session verify`.
+**R-tools-37.** **Receipt.** Every `mutating`, `process`, `network`, `remote`, `credential` or `external-effect` call MUST settle into an `EffectReceiptV1` carrying the preimage/postimage where the resource has bytes, the `resourceScope` actually touched, the `capabilityId`, the `EffectOriginV1` (`SessionBatch`, `UserAction`, `ManagedRun`, `ManagedRoot`), and the lease id. Read-only calls MUST NOT emit an effect receipt — a pure read is un-receipted, except where a read crosses the workspace boundary, which is receipted as an effect (`/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` §10 item 8) — and session-state tools emit session facts, never receipts (§7.2, last row). A step that contains a mutation without a receipt MUST be reported as unfinished by `hzcode session verify`.
 
 **R-tools-38.** **Origin typing.** A model-originated call is `EffectOriginKindV1: SessionBatch` and MUST NOT be able to present itself as `UserAction`, `ManagedRun` or `ManagedRoot`. Approving a prompt converts the *decision*, not the origin: the receipt records which human decision authorized which model request.
 
@@ -253,8 +253,8 @@ Everything a caller can touch is listed here. All symbols are `[planned]` (desig
 
 | Symbol | Kind | Responsibility |
 |---|---|---|
-| `ToolDeclarationV1` | schema | The declaration (§2.1, owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`) |
-| `ToolPermissionV1` | schema | Permission rule or decision — resource scope, decision, one-use grant (owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.7) |
+| `ToolDeclarationV1` | schema | The declaration (§2.1, owned by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`) |
+| `ToolPermissionV1` | schema | Permission rule or decision — resource scope, decision, one-use grant (owned by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.7) |
 | `ToolCallV1` | schema | `{ toolCallId, toolId, args, origin, stepId, leaseId? }` — the only legal way to invoke |
 | `ToolResultV1` | schema | `{ toolCallId, status, data?, rendered, truncated?, error?, usage, artifactRefs[], receiptId? }` |
 | `ToolRegistrySnapshotV1` | schema | `{ snapshotSha256, entries[], omitted[{id, reason}] }`, recorded per step |
@@ -326,7 +326,7 @@ Registry invariants enforced at registration, not at call time: unique `id`; no 
 
 ### 3.5 Events owned or consumed
 
-Owned (payloads defined in `/data/home/forge/hzcode/docs/06-events-and-flows.md`): `hz.step.tool.requested`, `hz.step.tool.completed`.
+Owned (payloads defined in `/data/home/forge/HorizonCode/docs/06-events-and-flows.md`): `hz.step.tool.requested`, `hz.step.tool.completed`.
 
 Consumed: `hz.effect.decision.made`, `hz.effect.lease.issued`, `hz.effect.settled`, `hz.effect.unknown`, `hz.effect.reconciled`, `hz.permission.asked`, `hz.permission.answered`, `hz.part.created`, `hz.part.updated`, `hz.error.raised`, `hz.usage.recorded`.
 
@@ -352,7 +352,7 @@ Two cross-document vocabulary rules attach to this shape. **Terminal state** is 
 
 ## 4. Tool catalog
 
-Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated below. Each entry states: purpose · key inputs (with types) · key outputs · capability id · effect class · read-only class · permission class · notable failure modes.
+Every tool listed in `/data/home/forge/HorizonCode/README.md` §3.2 is enumerated below. Each entry states: purpose · key inputs (with types) · key outputs · capability id · effect class · read-only class · permission class · notable failure modes.
 
 **Legend.** *eff* = declared (maximum) effect class. *RO* = read-only class in this catalog's shorthand (`yes` = `pure_read`, `cond` = `read_with_side_effects`, `no` = `mutating`; the enum itself is fixed by `05-domain-and-schemas.md` §4.7). *perm* = posture floor (`allow` = no prompt under the default `ask` posture; `ask` = prompt unless the user pre-approved; `deny` = not callable until explicitly enabled by the user). *lease* = `kernel` (one-use `hz` lease), `session` (session-state write claim, no kernel lease), `none`. *aux* = a capability the call **leases separately and one-use** in addition to the declared one (R-tools-32) — a call-time fact, never a second field on the declaration (§2.1).
 
@@ -781,7 +781,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 
 ### 4.6 Agent & orchestration
 
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns the semantics** of subagent fan-out and dependency execution, and the two forms are disjoint: **`fleet` is a fan-out of identical workers** from one prompt template (per-item variables, a concurrency ceiling, results joined by index, **no** dependency edges), while **`parallel_tasks` is a DAG of distinct task specs** (`dependsOn` edges, `failFast`, `adoptRef`). `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`, `06-events-and-flows.md` and `08-runtime.md` consume this definition; none of them may invert it. Both tools are one primitive (`tools.boundary.child_construction`); only the scheduler differs. Subagent depth and concurrency **ceilings** are not set here — `08-runtime.md` R-runtime-67/68 owns them and §10.3 cites them.
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns the semantics** of subagent fan-out and dependency execution, and the two forms are disjoint: **`fleet` is a fan-out of identical workers** from one prompt template (per-item variables, a concurrency ceiling, results joined by index, **no** dependency edges), while **`parallel_tasks` is a DAG of distinct task specs** (`dependsOn` edges, `failFast`, `adoptRef`). `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`, `06-events-and-flows.md` and `08-runtime.md` consume this definition; none of them may invert it. Both tools are one primitive (`tools.boundary.child_construction`); only the scheduler differs. Subagent depth and concurrency **ceilings** are not set here — `08-runtime.md` R-runtime-67/68 owns them and §10.3 cites them.
 
 #### `task` — `builtin.task`
 - **Purpose.** Spawn one subagent with a prompt, an agent profile, a **capability grant** and a context capsule; return its final report plus the receipt ids it produced.
@@ -844,7 +844,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 - **Input.** `reason: string`, `nextSteps?: string[]`, `resumeHint?: {condition: 'agent'|'job'|'time', id?: string, afterMs?: number}`.
 - **Output.** `yielded: true`, `sessionState: 'idle'|'waiting'`, `resumeHint`, `pendingWork: Array<{kind, id, state}>`.
 - **capability** `session.manage` · **eff** `read-only` · **RO** yes · **perm** `allow` · **lease** session
-- **Fails.** `PendingClaimHeld` (a yield with an open execution claim is refused until the claim is released, per the write-ahead claim rules of `/data/home/forge/hzcode/docs/12-sessions-state.md`); a yield with no resume hint leaves the session `idle`, not silently “still running”.
+- **Fails.** `PendingClaimHeld` (a yield with an open execution claim is refused until the claim is released, per the write-ahead claim rules of `/data/home/forge/HorizonCode/docs/12-sessions-state.md`); a yield with no resume hint leaves the session `idle`, not silently “still running”.
 
 #### `plan_enter` — `builtin.plan_enter`
 - **Purpose.** Switch the session into plan mode: read-only execution, plan artifacts instead of edits, no mutating tool may be called.
@@ -1110,7 +1110,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 | `review` | `providers.infer` (+`vcs.read`) | `network` | yes | y |
 | `budget_report` | `session.manage` | `read-only` | yes | — |
 
-**Coverage check.** **92 rows** in the table above for **91 catalog entries** and **94 tool names**: the `artifact_*` family is one entry (§4.7) covering four tools and occupying two rows here, because its read half is `read-only` and its write half is `workspace-write`. Against `/data/home/forge/hzcode/README.md` §3.2 the sets are identical (91 entries, 94 names). This equality is a test, not a promise (§11.2).
+**Coverage check.** **92 rows** in the table above for **91 catalog entries** and **94 tool names**: the `artifact_*` family is one entry (§4.7) covering four tools and occupying two rows here, because its read half is `read-only` and its write half is `workspace-write`. Against `/data/home/forge/HorizonCode/README.md` §3.2 the sets are identical (91 entries, 94 names). This equality is a test, not a promise (§11.2).
 
 ---
 
@@ -1143,7 +1143,7 @@ The absences below are decisions, not gaps. Each one names the rule that keeps i
 
 ## 6. Data
 
-Schemas are defined in `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`; this section records **which schema each tool family reads and writes**. No schema is defined here.
+Schemas are defined in `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; this section records **which schema each tool family reads and writes**. No schema is defined here.
 
 | Tool family | Reads | Writes / emits |
 |---|---|---|
@@ -1375,7 +1375,7 @@ Redaction is applied **before** rendering, logging and receipting (`RedactionV1`
 
 ## 10. Performance budgets
 
-These are **targets**, not measurements. Nothing has been benchmarked — this repository is design only (`/data/home/forge/hzcode/README.md` status note). They exist so that the design has testable numbers.
+These are **targets**, not measurements. Nothing has been benchmarked — this repository is design only (`/data/home/forge/HorizonCode/README.md` status note). They exist so that the design has testable numbers.
 
 ### 10.1 Dispatch and pipeline overhead
 
@@ -1509,7 +1509,7 @@ All tests below are **designed**; none is claimed to exist. Names are the intend
 
 ## 12. Status
 
-Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document is `DESIGNED` as a specification claim.** **Implementation status (final audit, 2026-11-06):** the ten v0.1 tools (`read write edit grep glob shell todo agent code_mode preview`) are implemented and TESTED — evidence in `docs/28-implementation-status.md`, which is the single source of truth; the remaining tools of the 94-name catalog in §4 and every symbol in this document not backed by a file under `app/src/tools/` remain design.
+Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This document is `DESIGNED` as a specification claim.** **Implementation status (final audit, 2026-11-06):** the ten v0.1 tools (`read write edit grep glob shell todo agent code_mode preview`) are implemented and TESTED — evidence in `docs/28-implementation-status.md`, which is the single source of truth; the remaining tools of the 94-name catalog in §4 and every symbol in this document not backed by a file under `app/src/tools/` remain design.
 
 | Capability | Level | Evidence |
 |---|---|---|
@@ -1533,7 +1533,7 @@ Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document i
 **Known unknowns (stated, not implied).**
 
 - Every performance number in §10 is a target. **UNKNOWN**: they have not been measured.
-- The exact split of work between `@horizoncode/tools` (TS) and the native crates (`hz_shell`, `hz_edit`, `hz_vcs`, …) is described by intent here; the concrete call boundary is decided in `/data/home/forge/hzcode/docs/04-lld.md`.
+- The exact split of work between `@horizoncode/tools` (TS) and the native crates (`hz_shell`, `hz_edit`, `hz_vcs`, …) is described by intent here; the concrete call boundary is decided in `/data/home/forge/HorizonCode/docs/04-lld.md`.
 - MCP `readOnlyHint` coverage across real servers is **UNKNOWN**; the design's answer is the conservative default of §2.3 (R-tools-19).
 - Whether any single tool can be strictly `parallel_safe` in the presence of simultaneous human edits is **UNKNOWN**; the pipeline's per-scope ordering (R-tools-39) plus preimage hashes is the current answer, and it is a hypothesis to be tested.
 - Skill/plugin contributed tools are designed to enter through the same pipeline; no upstream repo was surveyed deeply enough to claim the pattern is field-proven — see the sources in §1 for what was actually read.

@@ -5,7 +5,7 @@
 - Subject A: `/data/home/forge/repo-tour/opencode` — branch `dev`, 11,377 files / 1,116 dirs (11,336 files, 1,084 dirs excluding `.git`).
 - Subject B: `/data/home/forge/repo-tour/opencode-v2` — branch `v2branch` (`7a6ce05`, "2.0 exploration"), 4,509 files / 534 dirs, no `.git` contents (linked worktree).
 - Prior reading: `/tmp/deep-opencode-v2-report.md` (235 lines), `/tmp/opencode-report.part1.md` (174), `part2.md` (197), `part3.md` (187, ends mid-sentence at §5.15), `part4.md` (**2 bytes, empty**).
-- Method: static reading only. Nothing in either repo was modified; `/data/home/forge/hzcode` was not touched. Citation convention: every file mention carries its own full `file://` URL.
+- Method: static reading only. Nothing in either repo was modified; `/data/home/forge/HorizonCode` was not touched. Citation convention: every file mention carries its own full `file://` URL.
 
 > **Working note (provenance of this task).** The opencode tour report stops mid-sentence in part 3 and part 4 was never written, so the entire second half of that repo was never described: TUI, web app, Electron desktop, HTTP server, protocol, generated client, public plugin API, config **schema package**, CLI command surface beyond the handler table, the `@opencode/ai` client, the docs corpora, and all downstream services. This audit fills that hole and the equivalent holes in the v2 branch (whose report intentionally read only `specs/`, `v2/`, `sync/`, `control-plane/`, and `session/projectors.ts`).
 

@@ -266,7 +266,7 @@ export interface ClaimStateV1 {
 
 A `--portable` mode moves all runtime state under the workspace directory (useful for containers and CI); it does not change any of the durability rules, only the paths.
 
-**Naming.** The logical database is called `hz.db` in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` (for example `hz.db::receipts_index`, `hz.db::memory_vectors`). This document owns the concrete layout, and `<workspace>/.hz/state/hzcode.db` is the `hz.db` of a workspace. Where `05` names a table that does not appear in §4.2, `05` owns the schema and this document owns where its bytes live.
+**Naming.** The logical database is called `hz.db` in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` (for example `hz.db::receipts_index`, `hz.db::memory_vectors`). This document owns the concrete layout, and `<workspace>/.hz/state/hzcode.db` is the `hz.db` of a workspace. Where `05` names a table that does not appear in §4.2, `05` owns the schema and this document owns where its bytes live.
 
 ### 4.2 Core tables
 

@@ -621,7 +621,7 @@ The good parts: stages are **strictly ordered**, each has an explicit **input li
 
 ## 4. Ten design patterns to adopt into HorizonCode
 
-Each pattern is stated as: **the observed pattern** → **the HorizonCode binding** (into `AgentProfileV1` in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §`AgentProfileV1` and the fleet in `file:///data/home/forge/hzcode/docs/08-runtime.md` §2.11).
+Each pattern is stated as: **the observed pattern** → **the HorizonCode binding** (into `AgentProfileV1` in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §`AgentProfileV1` and the fleet in `file:///data/home/forge/HorizonCode/docs/08-runtime.md` §2.11).
 
 ---
 
@@ -1105,7 +1105,7 @@ Explicitly **do not** replicate the repo's 202-agent sprawl. Concretely:
 
 ### 6.6 Schema deltas this study implies
 
-Consolidated list of field additions to `AgentProfileV1` (`file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md`) and their sources:
+Consolidated list of field additions to `AgentProfileV1` (`file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`) and their sources:
 
 | Delta | Pattern | Rationale |
 |---|---|---|

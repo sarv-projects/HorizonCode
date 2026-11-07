@@ -2,7 +2,7 @@
 
 Reference clone: `/data/home/forge/repo-tour/horizoncode`
 Audit date: 2026-11-06
-Mode: **report-only** — nothing in the repo was modified; `/data/home/forge/hzcode` was not touched.
+Mode: **report-only** — nothing in the repo was modified; `/data/home/forge/HorizonCode` was not touched.
 
 > All paths below are relative to the repo root `/data/home/forge/repo-tour/horizoncode` unless stated otherwise.
 
@@ -843,4 +843,4 @@ These directories were only enumerated/spot-sampled, not read file-by-file. They
 
 **NOT read at all:** `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `NOTICE` (present at root, not read); the 627 `.mdx` files under `packages/web`; `packages/console`, `packages/desktop`, `packages/stats`, `packages/storybook` app sources; `arch_V1/01`–`arch_V1/45` numbered bodies beyond what is quoted above; `HANDOFF.md` beyond the digest and sampled entries; the 33 `kernel/tests/*.rs` bodies; `docs/architecture-archive/**` bodies.
 
-**Nothing was modified.** No file under `/data/home/forge/repo-tour/horizoncode` was written to; `/data/home/forge/hzcode` was never accessed.
+**Nothing was modified.** No file under `/data/home/forge/repo-tour/horizoncode` was written to; `/data/home/forge/HorizonCode` was never accessed.

@@ -520,5 +520,5 @@ oh-my-pi: full `find` statistics; `docs/**` (81 top-level + 34 tools + 12 toolco
 
 ---
 
-_End of delta audit. Read-only: no file under `/data/home/forge/repo-tour/` was modified; `/data/home/forge/hzcode` was not touched._
+_End of delta audit. Read-only: no file under `/data/home/forge/repo-tour/` was modified; `/data/home/forge/HorizonCode` was not touched._
 

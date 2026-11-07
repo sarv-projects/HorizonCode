@@ -14,7 +14,7 @@ This document decides seven things:
 2. **Who may write one** — the single-writer rule, per aggregate, with lease and epoch fencing.
 3. **How one becomes true** — the append transaction that commits an event together with its projections.
 4. **How the log survives time** — versioning, upcasting, `min_reader_version`, retention, snapshots and rebuild.
-5. **What every canonical event means** — payload fields, emitter, consumers, durability, client visibility (all 44 names from `file:///data/home/forge/hzcode/docs/_conventions.md` §6).
+5. **What every canonical event means** — payload fields, emitter, consumers, durability, client visibility (all 44 names from `file:///data/home/forge/HorizonCode/docs/_conventions.md` §6).
 6. **How the product behaves end to end** — 24 flows, each with failure branches.
 7. **What is claimed** — per capability, a status level that may not exceed its evidence.
 
@@ -32,7 +32,7 @@ Rules are numbered `E-*` (event system) and `F-*` (flows). Each is a MUST unless
 |---|---|
 | E-1 | Every durable fact is exactly one log record with the envelope defined in §3.1. State that is not in the log is a projection and is disposable. |
 | E-2 | `event.id` is an `evt_<ulid>`: globally unique, monotonic at its creation site, and never reused — including across import, fork, replay and re-index. |
-| E-3 | `event.type` is one of the canonical names in `file:///data/home/forge/hzcode/docs/_conventions.md` §6. A component that needs a new name MUST add it to that file in the same change; this document lists the gaps it found in §4.6 instead of inventing names. |
+| E-3 | `event.type` is one of the canonical names in `file:///data/home/forge/HorizonCode/docs/_conventions.md` §6. A component that needs a new name MUST add it to that file in the same change; this document lists the gaps it found in §4.6 instead of inventing names. |
 | E-4 | `event.payload` validates against the schema registered for `(type, typeVersion)`. An unvalidated payload MUST NOT be appended. |
 | E-5 | Durability is a property of the type, not of the call site: a `durable`-typed event MUST reach the log before its effect is observable to a caller; an `ephemeral`-typed event MUST NOT be written to the log even if a caller asks. |
 | E-6 | `causationId` names the immediate cause (another event id, or an effect id for effects). `correlationId` names the run, and is inherited by every child session, subagent and background job, so one trajectory can be assembled from the log. A record with a `causationId` that is absent from the log and absent from the imported archive is `LOG_DANGLING_CAUSE` (warn; refuse in `--strict`). |
@@ -56,7 +56,7 @@ Rules are numbered `E-*` (event system) and `F-*` (flows). Each is a MUST unless
 |---|---|
 | E-15 | Exactly one writer exists per aggregate at a time: the process that holds that aggregate's lease for the current owner epoch. For sessions the writer is the Controller's session actor; for kernel-owned state it is the `hzk` owner thread holding the owner lock. |
 | E-16 | The session log is append-only. `UPDATE` and `DELETE` on log tables are forbidden and are enforced by database triggers in addition to the boundary test. |
-| E-17 | Front-ends (TUI, print, server, web, desktop, IDE bridge, MCP server, SDKs) and plugins MUST NOT write the log. They send commands to the owner and observe events. This is what makes eight surfaces one agent rather than eight (ADR-005, `file:///data/home/forge/hzcode/docs/02-decisions.md#L130-L140`). |
+| E-17 | Front-ends (TUI, print, server, web, desktop, IDE bridge, MCP server, SDKs) and plugins MUST NOT write the log. They send commands to the owner and observe events. This is what makes eight surfaces one agent rather than eight (ADR-005, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L130-L140`). |
 | E-18 | A second process that wants to write acquires the lease from `session_claim` and, on failure, MUST downgrade to a read-only observer with an explicit diagnostic (`SESSION_LEASE_HELD`). There is no “last writer wins”. |
 | E-19 | Every write carries the owner epoch. The append transaction compares the epoch against `session_claim.owner_epoch` and rejects a stale writer (`SESSION_EPOCH_STALE`) — fencing, not advisory locking. |
 | E-20 | Emitter authority is fixed per event type (§4.2, “emitted by”). An event emitted by a component other than its declared writer fails the boundary test (`packages/testing`, `EVENT_EMITTER_DRIFT`). |
@@ -121,7 +121,7 @@ Every projection has a `ProjectorSpec { name, owner, consumes[], tables[], appli
 | # | Rule |
 |---|---|
 | F-1 | Every flow in §6 is replayable: given the log of a run, `hzcode session replay` reproduces the same projections, the same Guard decisions and the same effect terminals. A flow that cannot be replayed is a design defect, not a UI gap. |
-| F-2 | Every effect reaches exactly one terminal: `SUCCEEDED`, `FAILED`, `DENIED`, or `UNKNOWN` (ADR-012, `file:///data/home/forge/hzcode/docs/02-decisions.md#L203-L210`). An effect with no terminal at restart becomes `UNKNOWN` by recovery, never by assumption. |
+| F-2 | Every effect reaches exactly one terminal: `SUCCEEDED`, `FAILED`, `DENIED`, or `UNKNOWN` (ADR-012, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L203-L210`). An effect with no terminal at restart becomes `UNKNOWN` by recovery, never by assumption. |
 | F-3 | `UNKNOWN` is never automatically retried. Flow 8 and flow 13 are the only flows that may clear it, and both do so by *observation*, recorded as `hz.effect.reconciled`. |
 | F-4 | Approval is an authorization boundary: no flow may proceed past an `ask` decision without a recorded `hz.permission.answered` from a `UserAction` origin. Timeouts resolve to deny. |
 | F-5 | Every flow that can lose a human (unattended, scheduled, CI, subagent) MUST be explicit about what happens to `ask`: the answer is deny unless a bounded `DirectSessionGrant` pre-authorised that exact intent digest. |
@@ -167,7 +167,7 @@ export interface DurableEventV1<TPayload = unknown> {
 }
 ```
 
-`AuthorityPinsV1` is `{ originKind: 'SessionBatch'|'UserAction'|'ManagedRun'|'ManagedRoot'; intentDigest: string; policyRevision: string; postureDigest: string; grantId?: string }`. `originKind` is fixed by the canonical operation, never supplied by a request body (`file:///data/home/forge/hzcode/docs/01-vision-and-superset.md#L54-L56`).
+`AuthorityPinsV1` is `{ originKind: 'SessionBatch'|'UserAction'|'ManagedRun'|'ManagedRoot'; intentDigest: string; policyRevision: string; postureDigest: string; grantId?: string }`. `originKind` is fixed by the canonical operation, never supplied by a request body (`file:///data/home/forge/HorizonCode/docs/01-vision-and-superset.md#L54-L56`).
 
 `chain.digest` is `sha256(canonicalJson(envelopeWithoutChain) || prevDigest)`. It gives the log tamper evidence that is independent of the kernel's OwnerLog hash chain, which covers kernel-side records.
 
@@ -245,7 +245,7 @@ Triggers `event_no_update` and `event_no_delete` raise on any attempted mutation
 
 ### 4.2 The canonical event catalogue
 
-All 44 names from `file:///data/home/forge/hzcode/docs/_conventions.md` §6 (41 at first writing, plus `hz.session.moved` ratified as RC-1, plus `hz.memory.expired` and `hz.provider.account.rotated` ratified as RC-10). Nothing is omitted and nothing is added.
+All 44 names from `file:///data/home/forge/HorizonCode/docs/_conventions.md` §6 (41 at first writing, plus `hz.session.moved` ratified as RC-1, plus `hz.memory.expired` and `hz.provider.account.rotated` ratified as RC-10). Nothing is omitted and nothing is added.
 
 Legend — **Durability**: `D` durable in the session log, `E` ephemeral (broadcast only, never written). **Client visibility**: `S` on the session stream for any scoped client, `A` audit scope (full log read), `I` internal (not projected to clients; consumed by projectors/telemetry only), `L` loud (must be surfaced prominently and must not be scrolled away).
 
@@ -307,10 +307,10 @@ The catalogue is a set of meanings; several of them carry an explicit strength. 
 | `hz.effect.settled` | Carries an observation produced by the host (hash, exit code, byte count, stat), not by the model. This is the only shape of evidence the verifier accepts as independent. |
 | `hz.effect.unknown` | Terminal for the attempt and sticky: it is not cleared by time, restart or retry. Only `hz.effect.reconciled` may follow it, and only with new evidence. |
 | `hz.permission.answered` | The only admissible proof of human authority. It is rejected at append if `originKind != UserAction`, regardless of what any request body claims. |
-| `hz.learn.proposal.created` | `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would widen authority is refused at creation (ADR-010, `file:///data/home/forge/hzcode/docs/02-decisions.md#L183-L189`). |
+| `hz.learn.proposal.created` | `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would widen authority is refused at creation (ADR-010, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L183-L189`). |
 | `hz.session.rewound` | Declares that projections moved. It does not delete history and it does not make the workspace match the log unless `scope` includes `workspace` and a restore receipt exists. |
 
-**Terminal vocabulary, reconciled with the authority documents.** `EffectReceiptV1.terminal` is exactly one of `SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`, assigned once per effect and monotone (`file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` D18). The log represents that same set with a split: `SUCCEEDED`, `FAILED` and `DENIED` arrive as `hz.effect.settled.terminal` (`denied` is a terminal of the effect, not only of the decision), while `UNKNOWN` arrives as its own event, `hz.effect.unknown`, because it is sticky and requires reconciliation rather than being a value that happened to settle. The mapping is one-to-one and lossless; a reader that needs the receipt's spelling maps `hz.effect.unknown` to `UNKNOWN`. Step and tool statuses use the lowercase set from §4.2 (`succeeded`, `failed`, `denied`, `cancelled`, `unknown`) because they describe a step's outcome, not a receipt terminal — the two vocabularies are deliberately distinct and MUST NOT be used interchangeably in code.
+**Terminal vocabulary, reconciled with the authority documents.** `EffectReceiptV1.terminal` is exactly one of `SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`, assigned once per effect and monotone (`file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` D18). The log represents that same set with a split: `SUCCEEDED`, `FAILED` and `DENIED` arrive as `hz.effect.settled.terminal` (`denied` is a terminal of the effect, not only of the decision), while `UNKNOWN` arrives as its own event, `hz.effect.unknown`, because it is sticky and requires reconciliation rather than being a value that happened to settle. The mapping is one-to-one and lossless; a reader that needs the receipt's spelling maps `hz.effect.unknown` to `UNKNOWN`. Step and tool statuses use the lowercase set from §4.2 (`succeeded`, `failed`, `denied`, `cancelled`, `unknown`) because they describe a step's outcome, not a receipt terminal — the two vocabularies are deliberately distinct and MUST NOT be used interchangeably in code.
 
 ### 4.4 Inbox kinds and the records they become
 
@@ -369,7 +369,7 @@ These were real gaps found while writing this document. The owner of `_conventio
 | `PROJECTION_TABLE_OWNERSHIP` | Two projectors declare the same table | Build failure; at open, refuse to start projections | yes |
 | `LOG_PINS_MISSING` | An effect-class record lacks `policyRevision`/`postureDigest` | Refuse; effects may not be recorded without pins | yes |
 | `LOG_DANGLING_CAUSE` | `causationId` resolves to nothing local | Warn by default; refuse in `--strict` and in `session verify` | no (default) |
-| `LOG_READ_ONLY_MODE` | Kernel absent, older than `HZ_ABI`, or log opened by a newer binary | Whole session is read-only with a named diagnostic (ADR-003, `file:///data/home/forge/hzcode/docs/02-decisions.md#L103-L106`) | yes |
+| `LOG_READ_ONLY_MODE` | Kernel absent, older than `HZ_ABI`, or log opened by a newer binary | Whole session is read-only with a named diagnostic (ADR-003, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L103-L106`) | yes |
 | `LOG_BLOB_MISSING` | An event references a blob absent from the store | Render the record with an explicit missing-payload marker; refuse `session verify` success | yes |
 | `INGEST_REJECTED` | Import/restore of an archive with a broken digest chain or an unsupported version | Nothing is applied; the target aggregate is untouched | yes |
 
@@ -387,7 +387,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 **Actors.** FE, CTL, CTX, PROV, KRN.
 
-1. `hzcode` resolves the workspace root and the config lattice: user config at `$XDG_CONFIG_HOME/horizon/config.jsonc`, then workspace `<ws>/.hz/config.jsonc` **narrowed onto** it (lattice meet; workspace may only restrict — ADR-008, `file:///data/home/forge/hzcode/docs/02-decisions.md#L163-L170`). Programs named by the workspace (hooks, LSP servers, MCP servers) are unloaded until trusted (`trust_decision`).
+1. `hzcode` resolves the workspace root and the config lattice: user config at `$XDG_CONFIG_HOME/horizon/config.jsonc`, then workspace `<ws>/.hz/config.jsonc` **narrowed onto** it (lattice meet; workspace may only restrict — ADR-008, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L163-L170`). Programs named by the workspace (hooks, LSP servers, MCP servers) are unloaded until trusted (`trust_decision`).
 2. Kernel handshake: `hzk` starts (or is attached), the asset digest is checked against the pinned manifest, `HZ_ABI=1` and `HZ_PROTO=1` are negotiated, and `Sandbox::probe()` runs. A missing, older or crashed kernel puts the process in `LOG_READ_ONLY_MODE`: the TUI opens, explains, and **cannot execute** (ADR-003).
 3. Storage opens: schema version checked; migrations applied only if log-compatible; WAL and pragmas set (§4.3 of `12-sessions-state.md`). The recovery scan runs: orphan claims and unresolved counsel records are found *before* the first prompt is accepted.
 4. Recovery decisions: each orphaned claim either resumes (`hz.session.claim.acquired{resumed:true}`) or is released (`hz.session.claim.released`); each unresolved effect becomes `hz.effect.unknown`.
@@ -626,7 +626,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 1. The model calls `task` (or `read_only_task`): `hz.step.tool.requested{toolName:'task', capabilityId:'agent.spawn'}`.
 2. The **one spawn primitive** validates and applies, in this order: depth limit, children-per-parent ceiling, global concurrency ceiling, capability narrowing (child caps ⊆ parent caps), budget derivation (child budget ⊆ remaining parent budget), context capsule construction, and correlation inheritance. Any failed check refuses the spawn; it does not “try anyway”.
-3. `hz.agent.spawned{agentId, childSessionId, parentStepId, spawnKind:'task', profileId, grant{caps[], budget{}, depth, maxChildren, postureDigest}, capsuleDigest}` — a child is always traceable to a parent receipt and a budget (ADR-016, `file:///data/home/forge/hzcode/docs/02-decisions.md#L243-L249`).
+3. `hz.agent.spawned{agentId, childSessionId, parentStepId, spawnKind:'task', profileId, grant{caps[], budget{}, depth, maxChildren, postureDigest}, capsuleDigest}` — a child is always traceable to a parent receipt and a budget (ADR-016, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L243-L249`).
 4. The child session runs its own flows (6.1–6.11) under its narrowed posture. Its events carry the same `correlationId`, so a trajectory assembles across the tree.
 5. The parent does not burn steps while waiting: the `task` tool result is pending, the parent step is open, and the parent's claim is held. A `wait`/`yield` on a long child is *not* a busy-loop — the parent's step is suspended, and progress is driven by the child's completion signal.
 6. Child terminal: `hz.agent.completed{agentId, status, resultDigest, usage, receiptsDigest}`; then the parent's tool result lands: `hz.step.tool.completed{status:'succeeded', outputDigest}` and `hz.part.created{tool}` carrying the capsule summary (bounded size; the child's full transcript is a ref, not inlined).
@@ -839,7 +839,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 3. An eval replays the trajectory hermetically: recorded provider responses, a sandboxed workspace copy, the same tool results. Scoring is deterministic, and the suite version, baseline and delta are recorded in `hz.learn.eval.completed`.
 4. A regression against the baseline is an automatic rejection: the ratchet forbids accepting a change that lowers a gated score.
 5. Candidates (memory facts, skill bundles, prompt variants, routing heuristics, doc patches) are recorded as `hz.learn.proposal.created` with a diff reference, the evidence trajectory ids, the eval id, the expected effect and a risk class.
-6. `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would add or widen a capability, edit policy, or touch the kernel is **refused at creation** (ADR-010, `file:///data/home/forge/hzcode/docs/02-decisions.md#L183-L189`). This is the hard line, enforced by the record shape rather than by review diligence.
+6. `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would add or widen a capability, edit policy, or touch the kernel is **refused at creation** (ADR-010, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L183-L189`). This is the hard line, enforced by the record shape rather than by review diligence.
 7. A human reviews. Accept applies the change with its own receipt and a revert path; reject records `status:'rejected'` with a reason, which is itself signal for the next proposal.
 8. Memory distillation is the same loop with a narrower change type: episodic observations are promoted to semantic facts only with provenance and review (`hz.memory.retained{reviewed:true}`).
 
@@ -881,7 +881,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 2. The digest is compared with the pinned expectation for the tuple `(provider, model, config revision, tool catalog version, posture digest)`.
 3. **Match** ⇒ the step proceeds; `hz.step.started.context.prefixDigest` equals the previous step's for the same tuple, and cache hits are visible in `hz.step.llm.completed.usage.cacheRead`.
 4. **Mismatch at runtime** ⇒ `hz.error.raised{class:'cache', code:'CACHE_PREFIX_DRIFT', severity:'warn', failClosed:false}`, or `fatal` and fail-closed under `--strict-cache`, which CI uses. The drift is recorded with the per-section digest table so the diff is attributable to a section rather than to “the prompt”.
-5. **Mismatch in CI** ⇒ the build fails. The cache-guard is a gate, not a suggestion (ADR-009, `file:///data/home/forge/hzcode/docs/02-decisions.md#L173-L179`).
+5. **Mismatch in CI** ⇒ the build fails. The cache-guard is a gate, not a suggestion (ADR-009, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L173-L179`).
 6. Attribution names the offending contributor: a reordered tool list, a timestamp that leaked into the prefix, unstable JSON key order, a posture change (from flow 6.5 or 6.15), or a deliberate tool catalog version bump.
 7. Remediation is one of exactly three moves: (a) move the volatile content to the tail; (b) version the section so the change is intentional, and update the pin with a recorded reason; (c) fix the instability — sort the list, canonicalise the JSON. Editing the pinned digest with no recorded reason is not a remediation.
 8. Two adjacent cases are **not** drift and are not failures: a **cache namespace change** (different credential or provider, flow 6.23) and a **legitimate epoch change** (a posture change the user explicitly made). Both are recorded with a reason and reset the expectation instead of failing it.

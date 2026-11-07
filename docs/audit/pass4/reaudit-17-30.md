@@ -78,7 +78,7 @@ This set overlaps by design (RC-14 assigns each document a class). The audit fou
 
 `docs/25-roadmap-and-glossary.md:908` — **STALE** — §9's status row: "Feature index (`NF-001`…`NF-050`) | `DESIGNED` | §4.2". The index now runs to NF-075 across §4.2 + §4.2a. — **Fix:** "Feature index (`NF-001`…`NF-075`) | `DESIGNED` | §4.2 + §4.2a; definitions owned by `24` §5".
 
-`docs/25-roadmap-and-glossary.md:929` — **STALE** — §10's related-docs row describes doc 24 as "new features (Section B, `NF-001`–`NF-050`)". — **Fix:** "`NF-001`–`NF-075`". (The same table also has no row for `30-steal-list.md` although 28/29 are listed — add "`/data/home/forge/hzcode/docs/30-steal-list.md` | the adoption queue RC-15(d) makes live".)
+`docs/25-roadmap-and-glossary.md:929` — **STALE** — §10's related-docs row describes doc 24 as "new features (Section B, `NF-001`–`NF-050`)". — **Fix:** "`NF-001`–`NF-075`". (The same table also has no row for `30-steal-list.md` although 28/29 are listed — add "`/data/home/forge/HorizonCode/docs/30-steal-list.md` | the adoption queue RC-15(d) makes live".)
 
 `docs/25-roadmap-and-glossary.md:940` — **STALE** — the derivation line cites "`_conventions.md` (names, status ladder, **RC-1…RC-8**)". — **Fix:** "RC-1…RC-15 (RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here)".
 
