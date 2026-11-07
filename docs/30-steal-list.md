@@ -198,7 +198,7 @@ Ordered by value ÷ effort. Items 1–5 are cheap, mostly local, and directly st
 8. **Verification wave:** hostile read fixtures, evals-from-post-mortems, metric contract (H-7) on every published number, answer-isolation precondition on eval runs, test-model-in-library.
 9. **Fold the register — done 2026-11-07 (RC-15):** `NF-071`…`NF-075` adopted; the six second-wave sources recorded as the A.9 addendum; the build sequence below stands.
 10. **Fold the extend-notes into their owners — done in the adoption revision (RC-15):** cache addendum (NF-005), edit-ladder detail (NF-052/069), metric contract (doc 16), git hygiene (E-1…E-4 → doc 09/05), observability (I-1…I-9 → doc 14).
-11. **Record the four repos' defects** as reference-repo observations, not ours: aider's duplicated repo-map capture (~1.41× weight inflation), DeepSeek/Anthropic cache-cost arithmetic, `cur_tokens` double count; mini-swe-agent's three v1-leftover doc/fixture breaks; hermes' shallow-clone limitation; oh-my-pi's unstated metric contract and unasserted answer isolation.
+11. **Record the four repos' defects** as reference-repo observations, not ours: aider's duplicated repo-map capture (~1.41× weight inflation), DeepSeek/Anthropic cache-cost arithmetic, `cur_tokens` double count; mini-swe-agent's three v1-leftover doc/fixture breaks; hermes' shallow-clone limitation; oh-my-pi's unstated metric contract and unasserted answer isolation. **Landed 2026-11-07** — `docs/audit/observations-reference-defects-2026-11-07.md` (88 rows, each cited to a source line; 10 queue-named; §0 resolves “four repos” → five named sources; §6.2 states the no-re-verification limit).
 
 ### What *not* to copy (deliberate refusals)
 

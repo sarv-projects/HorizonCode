@@ -60,6 +60,8 @@ The four deep dives of the second adoption wave (2026-11-07), consolidated in `3
 | `audit-hermes-report.md` | hermes-agent @ `d4e7c343` | 863 lines; 38 steal items; owner/worker persistent loop + growth machinery; shallow-clone caveat |
 | `audit-omp-deep-report.md` | oh-my-pi | 298 lines; 28 steal items; claim verification 1 confirmed / 3 partial / 2 not-verifiable |
 
+- `observations-reference-defects-2026-11-07.md` — consolidated reference-repo defect/limitation observations from the pass-3 dives plus the DeepSeek/Anthropic records (88 rows, each cited to a source line; §6.2 states the no-re-verification limit); closes `30-steal-list.md` §4 item 11.
+
 ## Pass-4 reports (`pass4/`) — stage-2 line-by-line reaudit
 
 Three report-only auditors read every doc line by line after the RC-15 adoption wave, each finding classified `STALE | DUP | SUPERSET | CONTRADICTION | DEADREF` with an exact fix. 222 findings total; the fix passes applied them across disjoint file scopes.
