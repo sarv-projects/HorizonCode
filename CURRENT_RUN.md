@@ -1,8 +1,8 @@
 # HorizonCode — Current Run State
 
-> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC** (product state) · **2026-11-07** (design corpus: RC-15 adoption wave, `docs/30`). Workspace: `/data/home/forge/HorizonCode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
+> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-07, ~15:00 UTC** (product state incl. the trust-hardening pass, docs pass-5 and the NF-072 wave). Workspace: `/data/home/forge/HorizonCode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
 >
-> **TL;DR — the V1 product mission is complete; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 297 pass / 0 fail (28 files)** and **`cargo test` 17 integration + 3 unit**. Nothing is in flight in the product. A deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md`; the 2026-11-07 adoption wave (RC-15, [`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into the owner documents it names (docs 05–12, 14–16, 24) plus `_conventions.md` RC-15, but not yet into code — adoption recorded in `docs/24` §13, queue in `docs/30` §4. RC-13 makes `docs/28` the single source of truth for implementation status.
+> **TL;DR — the V1 product mission is complete; V2 adoption is underway; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. On 2026-11-07: the trust-hardening pass (chain anchors, final kernel refusals, symlink-resolved scopes, canonical-JSON parity), docs pass-5, and **V2 wave 1 — NF-072 parallel tool batches** all landed. Latest green run: **`bun test` 303 pass / 0 fail (29 files)** and **`cargo test` 17 integration + 3 unit**. A deep audit of all twelve reference clones is recorded in `docs/29-final-audit.md`; the RC-15 adoption wave ([`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into its owner documents, and its §4 queue is now the build plan — item 2 is landed, item 1 (NF-073) is next. RC-13 makes `docs/28` the single source of truth for implementation status.
 
 ---
 
@@ -40,9 +40,10 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 |---|---|---|
 | Rust trust kernel + protocol | **VERIFIED** | `cd kernel && cargo test` (20 green) + `--selftest` → `SELFTEST OK (14 checks)` |
 | Contracts / Rust<->TS hash interop | **VERIFIED** | both directions verify each other's files (`log.verify`/`receipt.verify` → ok) |
-| Runtime core (loop, guard gate, sessions, providers) | **VERIFIED** | `bun test tests/core` (75 tests); live e2e `printf 'list files' \| ./bin/hzcode` → tool card + receipt; `kernelMode=trusted` |
+| Runtime core (loop, guard gate, sessions, providers) | **VERIFIED** | `bun test tests/core` (81 tests); live e2e `printf 'list files' \| ./bin/hzcode` → tool card + receipt; `kernelMode=trusted` |
 | Providers (Anthropic/OpenAI SSE + mock) | **VERIFIED** | `bun test tests/providers` → 72 pass; two fixes (empty `arguments`) |
 | Tools (7 base) | **VERIFIED** | `bun test tests/tools`; `shell.ts` detached process-group + drain fix |
+| **Tool batch scheduling** (NF-072) | **VERIFIED** | `bun test tests/core/batch.test.ts` → 6 pass; live: two `sleep 0.6` shell calls in one batch → ~850 ms (sequential ≥ 1.2 s); `docs/28` §1 + ruling 14 |
 | Chat TUI (interactive + headless) | **VERIFIED** | `bun test tests/tui` → 48 pass incl. real PTY scenarios |
 | **Skills** (discovery, /activation, prompt injection) | **VERIFIED** | `bun test tests/core/skills-agents.test.ts`; live chat `/demo …` → `skill active: demo` |
 | **Subagents** (`agent` tool, child session, no recursion) | **VERIFIED** | same suite: nested run through the real kernel, receipts + child stream verify |
@@ -56,6 +57,11 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 
 | Commit | What |
 |---|---|
+| `e135cef` | **V2 wave 1: NF-072 parallel tool batches** (17 files, +392; 6 tests; `docs/28` ruling 14) |
+| `660cf01` | Docs pass-5 record + corpus-wide repo-root path sweep (32 files) |
+| `91192f3` | Docs defects: the six live audit findings fixed (11 files) |
+| `7c528db` | Trust hardening: chain anchors, final kernel refusals, symlink scopes, canon parity (20 files, +843; 12 tests) |
+| `f182894` | Reaudit stage-2 fix wave: 222 findings applied across docs 00–30 |
 | `4d7eb89` | **V1: code mode + preview tools** (7 files, +1073; 12 tests) |
 | `8005e5f` | **V1: skills + subagent delegation** (8 files, +701; 10 tests) |
 | `6b86de0` | Parity: fallback `sanitizeStream` + guard `scope` default byte-identical to the Rust kernel |
@@ -74,7 +80,7 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 ```bash
 cd /data/home/forge/HorizonCode
 
-# TypeScript suite (297 tests / 28 files)
+# TypeScript suite (303 tests / 29 files)
 cd app && /home/forge/.bun/bin/bun test && cd ..
 
 # Rust suite (20 tests) + kernel selftest
@@ -106,7 +112,7 @@ export HZ_PROVIDER=anthropic HZ_API_KEY=...   # or OPENAI_API_KEY; or ~/.hzcode/
 ## 5. What remains
 
 1. **Real-provider last mile** — one live chat through each adapter (needs API keys). The adapters are pinned by canned-server tests.
-2. **V2+ features** — docs/27 is the plan (V0–V7: planner/executor duality, memory tiers, compaction, sandbox matrix, web/desktop/IDE surfaces, governance loop, self-improvement). Land additions through the same status ladder and update `docs/28` in the same commit.
+2. **V2 adoption continues from `docs/30` §4** — item 2 (NF-072) landed 2026-11-07; next item 1 (NF-073 loop safety rails: charged failures, consecutive format-error cap, budget countdown, sentinel exits), then items 3–5 (edit ladder, context-cost contracts, repo-map). docs/27 remains the coarse V0–V7 map. Land additions through the same status ladder and update `docs/28` in the same commit.
 3. **Nothing else is in flight — do not look for unfinished agent work.**
 
 ---
