@@ -65,6 +65,16 @@ Numbered, individually testable. `MUST` violations are contract-test failures (�
 | **C11** | Backpressure MUST be explicit: a bounded per-subscriber queue plus `page_end` (a page boundary) and `resnapshot_required` (cursor lost). Unbounded buffering MUST NOT be used to absorb a slow subscriber. |
 | **C12** | All three framings (JSON-RPC notification, SSE, NDJSON) MUST carry the same event envelope: `{sessionId, seq, tsMs, type, actor, payload, cursor, traceparent?}`. A front-end MUST NOT need framing-specific parsing to obtain an event's identity. |
 
+#### 2.2.1 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**1. Stream framing (NF-060):** one session stream carries three frame classes — `sync` (declares `from_seq`/`through_seq` **before** replay), `durable {seq, …}` (seq = log index; persisted), `transient` (no seq; never persisted; liveness only). Unknown frame types MUST be ignored (the envelope is allowed to grow).
+
+**2. Strict pagination:** a paginated read MUST surface "unsupported" as unsupported — never degrade to an empty page; a partial history must never be mistakable for exhaustion.
+
+**3. Feed laws (NF-060):** encode-once, per-connection dropping queues (capacity 4,096), overflow terminates only that connection (`SubscriberOverflow`), encoding failure fails connected queues but keeps the feed available for later connections; **transport errors are not session errors**.
+
 ### 2.3 Kernel ABI
 
 | ID | Rule |

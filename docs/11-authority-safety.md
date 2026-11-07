@@ -1204,6 +1204,19 @@ HorizonCode additions on top of the inherited engine:
 - **Unparseable ⇒ ask, never allow** (R7). A command the parser cannot canonicalize (obfuscated, binary, absurdly long) is a human decision.
 - **The engine is advisory, Guard is authoritative.** A `forbidden` from the engine is decisive; an `allow` from the engine only removes one obstacle on the way to Guard.
 
+#### 7.5.4 Adopted policy statements (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**Policy statements (NF-058)** — `{effect: allow|deny, action, resource}` with wildcards:
+
+1. **Safety-inverted precedence:** ordinary settings read forward; **policy documents read reversed** so user-global beats repository; organization-managed statements append last — "an organization deny cannot be lifted by a repository or user allow".
+2. **Allow-never-grants:** an allow statement never overrides a session/agent denial and never grants a saved approval; a deny overrides "Allow always".
+3. **Keep-last-snapshot:** a failed config/credential refresh keeps the last good policy snapshot (dropping it would open, not close, enforcement).
+4. **Enforcement protection:** plugins cannot add/remove/override policy; a plugin `remove` ignores policy/enforcement modules regardless of selector.
+5. **Decider-named denials:** "Blocked by ⟨scope⟩'s policy"; policy-denied skills are absent from every load path; denied MCP servers never open a connection.
+6. Unknown actions are skipped preserving order; malformed supported statements remain errors.
+
 ### 7.6 Configuration as a merge lattice
 
 #### 7.6.1 The order

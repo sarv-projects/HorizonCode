@@ -45,6 +45,8 @@ Superset is a claim we make testable:
 
 ## 2. The eight references, and what each one actually is
 
+> **Second wave (2026-11-07).** Six further sources (SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent) are recorded in [`24-feature-catalog.md`](./24-feature-catalog.md) §4.1 A.9; the eight below remain the primary set this document reasons about.
+
 ### 2.1 `sarv-projects/horizoncode` — the execution constitution (our direct ancestor)
 
 **What it is.** A TypeScript/Bun coding agent derived from a pinned OpenCode snapshot, plus three Rust crates that no other agent has: `kernel/` (the execution authority), `indexd/` (lexical repo index) and `horizoncode-sandbox/` (OS confinement).

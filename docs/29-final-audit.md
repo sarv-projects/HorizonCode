@@ -2,7 +2,7 @@
 
 > **What this document is.** The audit of record (RC-13) for the twelve reference clones under `/data/home/forge/repo-tour/`, plus the final pass over the spec set itself: every doc checked for stale claims, the sixteen insertions queued by `26-learning-synthesis-2.md` §5 carried **in full** in Part D, and a cross-analysis of where to optimise further (speed, capabilities, accuracy).
 >
-> **Status rules.** Parts A–C record facts read from the clones and analysis derived from them — no implementation claim is made here; implementation levels live in `28-implementation-status.md` (RC-13). Part D is the authoritative text of the queued insertions until each owning document folds them in. Part E lists the staleness fixes applied in this audit. Nothing in this audit touched implementation code.
+> **Status rules.** Parts A–C record facts read from the clones and analysis derived from them — no implementation claim is made here; implementation levels live in `28-implementation-status.md` (RC-13). Part D records the queued insertions in full; they were folded into their owner documents by the 2026-11-07 adoption revision (RC-15). Part E lists the staleness fixes applied in this audit. Nothing in this audit touched implementation code.
 
 ---
 
@@ -158,6 +158,8 @@ The delta reports each closed with an optimisation list; the strongest new lever
 
 Sources: `26-learning-synthesis-2.md` §5 (the queue), §2 (the distilled facts) and the verbatim reports where they carry draft rule text (`docs/audit/pass2/deep-codemode-report.md` §5.2 for CM rules; `docs/audit/pass2/deep-sweagent-aci-report.md` §6 for ACI rules). Rule IDs are final; owning documents adopt this text at their next revision (RC-13).
 
+**Adoption status (2026-11-07):** all sixteen insertions are folded into their owner documents (RC-15); this Part remains the historical verbatim copy of the queue. **One ID remap at adoption:** the rendering/state-line rules (queued here as `R-tools-56`/`R-tools-57`) collided with doc 09's existing `R-tools-56`; doc 09 adopts them as **`R-tools-57`** (rendering) and **`R-tools-58`** (state line). Every other ID was adopted verbatim.
+
 ### D-05 → `05-domain-and-schemas.md`
 
 **1. `ToolResultV1` dual output** (NF-061). Every tool result carries three independently-typed projections of one execution: `machineOutput` (schema-validated, ephemeral, visible to code mode), `content` (durable, model-facing; MUST be non-empty when `machineOutput` is absent), and `metadata` (compact UI JSON, bounded independently — never an unbounded side-channel). **Retention is fail-closed:** a payload too large for managed storage makes the call **fail operationally**; it is never published as a lossy success. Domain output does not change according to model-output bounding policy (bounding happens at the projection, not the record).
@@ -302,7 +304,7 @@ Every fix below was applied in this audit; docs-only. "Checked clean" means the 
 
 | Doc | Stale item found | Fix applied |
 |---|---|---|
-| `00-index.md` | Status line "Phase 0 — the design"; "Nothing in this set is above DESIGNED"; missing docs 28/29 rows | Status line now says V1 implemented; ceiling paragraph replaced by the RC-13 pointer to docs 28; rows for 28/29 added; "RC-1…RC-13" |
+| `00-index.md` | Status line "Phase 0 — the design"; "Nothing in this set is above DESIGNED"; missing docs 28/29 rows | Status line now says V1 implemented; ceiling paragraph replaced by the RC-13 pointer to docs 28; rows for 28/29 added; "RC-1…RC-13" (widened to "RC-1…RC-15" and the document-classes note RC-14 by the 2026-11-07 adoption revision) |
 | `03-hld.md` | "Nothing in this repository is built" blanket claim | Dated status note; sentence marked historical |
 | `04-lld.md` | "Nothing below is built" status block | Dated status note (built subset is far smaller than this doc's scope; statuses that moved are in docs 28) |
 | `05-domain` | "no implementation of HorizonCode exists yet" (perf targets) | Rephrased: targets unmeasured against the now-existing subset; measurement work item recorded |
@@ -314,9 +316,9 @@ Every fix below was applied in this audit; docs-only. "Checked clean" means the 
 | `11-authority` | "no implementation exists" | Dated status note (guard/leases/receipts have a v0.1 slice; sandbox/Starlark/THS remain design) |
 | `16-operations` | "`hzcode` and `hzk` do not exist yet" + a quote from a README section that no longer exists | Dated status note (bin/hzcode + hz-kernel exist; v0.1 kernel is not the designed `hzk` asset) |
 | `24-feature-catalog` | "No row may be upgraded…" without the pointer; Section-13 status table saying "no implementation" | Dated status notes; Section B row now names the v1 slices (NF-051/NF-055) carried in docs 28 |
-| `25-roadmap` | "No phase has been entered"; index NF range "…NF-050"; the §10 note calling 00-index stale (itself stale — OQ-R1 closed); §9 row citing the old ceiling | Dated status note; **§4.2a added** (NF-051…062 index); counts corrected to 62; OQ-R1 marked closed; §9 row points at docs 28; related-docs rows for 28/29 added |
-| `26-learning-synthesis-2` | §5 queue with no status | Dated note: staleness reconciled; the sixteen insertions are carried in **Part D of this document** (authoritative until folded in) |
-| `_conventions` | No rule for the post-implementation status split | **RC-13 added** (single owner for implementation status; Part D role; this file as audit of record) |
+| `25-roadmap` | "No phase has been entered"; index NF range "…NF-050"; the §10 note calling 00-index stale (itself stale — OQ-R1 closed); §9 row citing the old ceiling | Dated status note; **§4.2a added** (NF-051…062 index; ranges and counts later widened to NF-075 by the 2026-11-07 adoption revision); counts corrected to 62 at this audit; OQ-R1 marked closed; §9 row points at docs 28; related-docs rows for 28/29 added |
+| `26-learning-synthesis-2` | §5 queue with no status | Dated note: staleness reconciled; the sixteen insertions were carried in **Part D of this document**, then folded into their owner documents by the 2026-11-07 adoption revision (RC-15); the ledger is closed. |
+| `_conventions` | No rule for the post-implementation status split | **RC-13 added** (single owner for implementation status; Part D role; this file as audit of record); RC-14 (document classes) and RC-15 (adoption wave) added by the 2026-11-07 adoption revision |
 | `README`, `CURRENT_RUN` | No pointer to the audit | Pointers added |
 | `01`, `02`, `12`, `13`, `14`, `15`, `27`, `28` | none found | Checked clean (status-claim search + targeted reads); docs 12–15 are Part D adopters, not stale |
 

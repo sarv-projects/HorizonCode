@@ -135,6 +135,12 @@ The run loop is a single-writer state machine per session. States: `idle` · `bu
 | **R-runtime-31** | A steer MUST NOT widen the tool set, posture, capability grants or model chain of the in-flight step. Steer may influence the *next* step through re-evaluated policy, never through prompt-only authority. |
 | **R-runtime-32** | Admission order MUST be FIFO per session and MUST be observable by every attached front-end from the same projection. |
 
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**1. Step-allowance accounting:** promoting new input resets the agent's step allowance; a steer batch resets it **once**; queued next-turn prompts reset it at turn start.
+
+**2. Control-item delivery boundaries:** compaction and move are inbox items; a later steer **MUST NOT** cross an undelivered control item (ordering is by `enqueued_seq`, never wall clock).
+
 ### 2.6 Retries, backoff and circuit breaking
 
 | # | Rule |
@@ -329,6 +335,14 @@ LearnLoop.propose(kind: 'prompt' | 'policy' | 'skill' | 'memory' | 'routing', ba
 | **R-runtime-114** | Resume MUST verify its basis before acting: if the workspace digest (or snapshot id) does not match the digest recorded at the claim, the runtime MUST NOT silently continue; it MUST re-read the affected resources, invalidate stale plan windows (R-runtime-55), and report the divergence. If it cannot establish a consistent basis, it MUST fail closed into `error` with the run parked for a human. |
 | **R-runtime-115** | Drift detection MUST run at each turn boundary: compare the active goal, the plan's step set and the recent effect classes against the run's declared intent. Drift is reported (`hz.goal.updated` with `drift: true` plus a human-readable reason) and MUST result in *asking*, re-planning, or stopping — never in silently widening scope. Drift detection MUST NOT use a hidden classifier to change mode (R-runtime-46); it may only raise a flag and request review. |
 | **R-runtime-116** | Every run MUST carry a maximum lifetime (default 8 h wall-clock, configurable downward, hard ceiling 24 h) and MUST end in exactly one terminal record. A run that reaches its lifetime with an unfinished goal MUST park as `idle`-with-claim-state explicitly recorded, produce a resumable handoff note (goal, done, next, blockers, budgets spent), and MUST NOT be silently abandoned. |
+
+### 2.17 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**3. `runtime_services` URL injection (NF-055):** the backend's actual bound URLs are forwarded into new sessions as a system-context suffix "so agents use correct URLs instead of guessing ports"; the injection is recorded on the session, and the URL is data, never authority.
+
+**4. Recorder as a runtime service (NF-054):** failed verification runs may request a recorded trace; the trace is an artifact (digest-referenced), passed to the model; capture availability is a lane-health fact.
 
 ---
 
@@ -580,6 +594,10 @@ Additional authority rules for this plane:
 | **R-runtime-118** | Posture and policy MUST be enforced by the kernel. The runtime MUST NOT implement a permission shortcut, a cached-approval fast path, or a "trusted model" bypass; on any doubt the call is `ask` (or `deny` when no human is present). |
 | **R-runtime-119** | A capability that a child was denied MUST NOT be obtainable by (a) respawning a sibling under a different name, (b) asking the parent to "proxy" the call, (c) a plugin, skill, workflow node or team message, or (d) an approved plan window (R-runtime-56). |
 | **R-runtime-120** | Every spawn, plan-window open, window-invalidating call and proposal rejection MUST be attributed to a session, a run and an actor, so that the audit trail can explain *who widened nothing*. |
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**5. Override-precedence enforcement point:** the single place task overrides are applied is `SubagentFactory.spawn` (R-runtime-62), and it is the only place (boundary test).
 
 ---
 

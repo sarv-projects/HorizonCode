@@ -268,6 +268,28 @@ The event log is never compacted. Compaction rewrites the *requested context* on
 | R116 | Compaction is measured: `CompactionRecordV1` records tokens before/after, achieved ratio, wall time, model cost, the strategy set, and the estimated cache-invalidation cost (how many cached prefix tokens are discarded). `hzcode session verify <id>` includes the compaction chain, so a suspicious summary has provenance. | `compaction-measurement.test.ts` |
 | R117 | Failure modes are named and fail closed: (a) **thrash** — if a second overflow occurs within 2 steps of a compaction, the run stops with `hz.error.raised{reason_code = compaction_thrash}` and asks the user, instead of looping; (b) **lost fact** — a needed fact missing from the request is answered from the durable log by retrieval, and the summary is never trusted to reconstruct it; (c) **illegible frames** — a snapcompact strategy that fails its eval gate is disabled by rollout flag; (d) **summary fabrication** — a summary that contradicts a receipt is discarded and the contradiction is reported. | `compaction-thrash.test.ts`, `snapcompact-eval-gate.test.ts` |
 
+#### 2.I.1 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**1. Instruction epochs (NF-059):** content-addressed instruction blobs; `hz.session.instructions.updated {delta, text?}` value deltas; an epoch spans completed compactions; forks adopt newest values as baseline (§D-05.2).
+
+**2. Compaction ladder:** `keep_first` (preserve opening framing), `minimum_progress` (anti-thrash: a compaction that does not reduce the projected context below the trigger is not repeated automatically), and the **bounded hard-reset ladder** (`hard_context_reset_max_retries` × `hard_context_reset_context_scaling`), each rung with a named recovery move; the second overflow after one rebuild is terminal.
+
+**3. `toolChoice: "none"` final step:** the final call of a step retains the tool definitions with `toolChoice:"none"` instead of stripping them, so the cached prefix survives.
+
+**4. Tail-append compaction:** summaries append at the tail; the byte-stable prefix is never rewritten by compaction.
+
+#### 2.I.2 Cache and context-cost addendum (RC-15)
+
+> Adopted 2026-11-07 from the adoption wave (extensions of NF-005 and NF-074; sources A.9.4 aider, A.9.6 oh-my-pi, distilled in `30-steal-list.md` §2 B).
+
+- **Cache layout, stated as an extension of §2.F.2:** stable slabs first, exactly three cache breakpoints, and a largest-cacheable-prefix computation (`cacheable_messages()`-style); ordering is a reviewable design property, never incidental.
+- **Keep-alive during idle:** pause time is cache-expiry time — the harness pings the provider prefix cache before expiry so the next turn is a hit, not a full cache write.
+- **Append-only sync:** any in-place rewrite of the message log truncates to the longest byte-stable prefix (`syncMessages` semantics); append-only mode is gated **per provider from data** (`appendOnlyContext: auto`), never from a user preference — a provider that rewrites history between turns would be hurt by it.
+- **Output-budget fit (NF-074):** estimate prompt size from the provider's newest reported usage anchor plus a local count of the appended tail; fit the output cap to the remaining window with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed.
+- **Spill and minimisation defaults (NF-074):** tool output caps at 3000 lines / 50 KiB with spill-to-artifact; the shell-output minimiser is on by default; `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
+
 ### 2.J Prompting
 
 | # | Rule | Test |

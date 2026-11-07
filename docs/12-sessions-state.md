@@ -165,6 +165,16 @@ Numbered `S-*`, each individually testable (§9). MUST unless stated. `FC` marks
 | S-79 | A maintenance command that must write (reindex, GC, migration) takes an explicit maintenance lease, or operates on a shadow copy, so it can never race a live session. | FC |
 | S-80 | Export redacts by policy before writing: secrets, credentials and configured sensitive paths are removed or replaced, and the redaction policy revision is recorded in the archive manifest. An export that cannot redact is refused, not produced with a warning. | FC |
 
+### 2.11 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+1. **Provisional→durable retirement:** streaming slots live in a separate collection from durable events so a provisional id can never dedupe the real message away; `item_started` carries the id the durable event will have.
+2. **Forgotten-set view reconstruction:** condensation removes events from the *view* (`forgotten_event_ids`), never from the log; any view is reconstructable from the log at any time.
+3. **Sync preamble:** a log subscription declares `from_seq/through_seq` **before** replay; the watermark is emitted as one sync marker; live-only deltas are intentionally absent from replay.
+4. **Runtime-identity cache keys:** projection caches key on runtime identity, not path alone.
+5. **Placement/fencing (first-class):** id-bound values outlive an execution site; service acquisition is lazy; movement must not pin events to the old place — "local execution remains process-owned until clustering introduces an explicit placement and fencing protocol" (explicit deferral recorded as good practice).
+
 ---
 
 ## 3. Interfaces

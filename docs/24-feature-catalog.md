@@ -8,7 +8,7 @@
 
 This document decides four things, and nothing else:
 
-1. **What parity means, per reference agent.** For each of the eight references, every user-visible capability is enumerated in a table with a disposition (`Inherit` / `Supersede` / `Reject`) and a HorizonCode home.
+1. **What parity means, per reference agent.** For each of the eight primary references (A.1–A.8), every user-visible capability is enumerated in a table with a disposition (`Inherit` / `Supersede` / `Reject`) and a HorizonCode home; the six second-wave sources are recorded in the A.9 addendum, one `CapabilityRecordV1` row per source.
 2. **What is new.** Every capability HorizonCode adds that no reference has is registered here with an ID (`NF-001` …), its problem, its design, the capability IDs it needs, its authority impact, its dependencies and its status.
 3. **The counts.** How many capabilities are inherited, superseded, new and rejected, so "superset" is a number and not a slogan.
 4. **What is deliberately not built,** with a reason, so that a future contributor does not re-litigate a settled decision by accident.
@@ -130,7 +130,7 @@ Gates are named once here and used by `25-roadmap-and-glossary.md`. Each is a ra
 
 ### 3.6 Ratified rulings that bind this document
 
-[`_conventions.md`](./_conventions.md) §11 carries eleven cross-document rulings ratified after this catalog was first drafted. They are binding here, and each one is reflected in Section A or Section B:
+[`_conventions.md`](./_conventions.md) §11 carries fifteen cross-document rulings ratified after this catalog was first drafted. They are binding here, and each one is reflected in Section A or Section B:
 
 | Ruling | Effect on this catalog |
 |---|---|
@@ -145,6 +145,10 @@ Gates are named once here and used by `25-roadmap-and-glossary.md`. Each is a ra
 | RC-9 — the feature-flag registry is owned by `docs/07-apis-and-contracts.md` §4.1.5 | NF-006's surface negotiation uses flags; none are declared here. |
 | RC-10 — `hz.provider.account.rotated` and `hz.memory.expired` are canonical events | NF-024 cites `hz.provider.account.rotated`; NF-008 cites `hz.memory.expired`. Both are in §6, not Reserved. |
 | RC-11 — `hz.receipt.unknown` / `hz.receipt.reconciled` are withdrawn; the §3.3/§3.4 additions are **Reserved** names | §3.3 and §3.4 now register their lists in `_conventions.md` §5/§6 as Reserved; every `[planned]` marker in Section A/B references a Reserved name, never a canonical one. |
+| RC-12 — the second learning pass is ratified | Section B's `NF-051`…`NF-062` are the ratified register; the reserved coinages they use stay `[planned]` until implemented (RC-11). |
+| RC-13 — implementation status is owned by `docs/28-implementation-status.md` | Every status cell in this catalog is a specification claim; implemented v1 slices carry levels only in doc 28. |
+| RC-14 — document classes and authority-by-concern | This catalog is a **contract-class** document; `26`/`29`/`30` and `audit/` are historical and carry no normative force. |
+| RC-15 — the adoption wave is ratified | Section A gains the A.9 addendum; Section B gains `NF-071`…`NF-075`; the Part D insertions are folded into their owner documents. |
 
 ---
 
@@ -348,6 +352,21 @@ Conventions for every table below:
 
 **A.8 status:** all rows `DESIGNED`. The ancestor's *measured* state is recorded in `/data/home/forge/repo-tour/horizoncode/HANDOFF.md` and is explicitly **not** inherited as a claim of working capability; the residual defect it names — two edits to the same file in one message refused with `stale_preimage` — is carried as a work item in `25-roadmap-and-glossary.md` M1.
 
+### A.9 Addendum sources — the second wave (six sources)
+
+Sources added after A.1–A.8 were counted (the second learning pass and the pass-3 dives): **SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent**. Each is one addendum row in the `CapabilityRecordV1` shape — deliberately coarser than the per-capability tables above — and is counted as its own line in §6.1.
+
+| Addendum row | Upstream (clone under `/data/home/forge/repo-tour/`) | Disposition | Home |
+|---|---|---|---|
+| A.9.1 SWE-agent — the ACI reading modes | `SWE-agent` — bounded read windows with orientation, summary search with narrowing abort, window-scoped edit with repair hints, lint-gated edit that reverts, narrated empties, recovery hints, environment-derived state line | `Supersede` | NF-052 (doc 09): R-read-window-1…4, R-edit-window-1/2, R-edit-lint-1, R-grep-summary-1, R-tools-56/57 |
+| A.9.2 OpenHands — the Agent Canvas event model | `OpenHands` — durable/transient frame classes, sync preamble before replay, strict pagination, evented condensation views | `Inherit` | NF-060, NF-059; docs 07/10/12/14 |
+| A.9.3 wshobson/agents — the profile corpus | `wshobson-agents` — the engineered minority of a 202-agent roster distilled into profile contracts (P1–P10); the sprawl is the rejected failure mode | `Supersede` | doc 15 (D-15); NF-058-adjacent profile contracts |
+| A.9.4 aider — git-native engineering | `aider` — escalating edit-application ladder, tree-sitter + PageRank repo map, cache-layout invariant with keep-alive, compiler-grade lint/reflection loop, dirty-commit discipline | `Supersede` | NF-069, NF-052, NF-005; docs 09/10; `30-steal-list.md` §2 A/B/E/F |
+| A.9.5 mini-swe-agent — the industrialised lean loop | `mini-swe-agent` — sentinel exit, charged failed turns, consecutive-error caps, stateless per-action subprocess execution, per-step trajectory saves | `Supersede` | NF-073; docs 08/16; `30-steal-list.md` §2 C/J |
+| A.9.6 hermes-agent — the managed loop and the growth loop | `hermes-agent` — owner/worker turn frames with identity handshake, durable admission FIFO, process ownership, warm-cache growth fork with an editorial standard, archive-only curator | `Supersede` | NF-071, NF-075; docs 08/15; `30-steal-list.md` §2 C/D/G |
+
+**A.9 accounting:** 6 addendum rows — `Inherit` 1, `Supersede` 5, `Reject` 0. The A.1–A.8 total (117) is unchanged; §6.1 states the addendum as its own line and the grand total, and `gate:parity-ratchet` applies to addendum rows exactly as to matrix rows.
+
 ---
 
 ## 5. Section B — New features
@@ -357,7 +376,7 @@ Every feature below is measured against one question: **does any reference agent
 Two conventions apply to every entry:
 
 - **Status is `DESIGNED`.** No exceptions in this document.
-- **Authority impact** is one of `none` · `narrows` · `grant-bearing` · `kernel`. `grant-bearing` means the feature can cause authority to be *granted* (always through Guard, a lease and a receipt). `kernel` means it changes kernel behaviour and therefore needs a kernel release. **Any feature the learning loop touches declares `none`** (ADR-010); NF-008, NF-010, NF-033, NF-034 and NF-035 are the learning-loop set and every one of them is `none`.
+- **Authority impact** is one of `none` · `narrows` · `grant-bearing` · `kernel`. `grant-bearing` means the feature can cause authority to be *granted* (always through Guard, a lease and a receipt). `kernel` means it changes kernel behaviour and therefore needs a kernel release. **Any feature the learning loop touches declares `none`** (ADR-010); NF-008, NF-010, NF-033, NF-034, NF-035 and NF-075 are the learning-loop set and every one of them is `none`.
 
 ### NF-001 — Execution constitution with universal receipts
 
@@ -997,6 +1016,51 @@ Two conventions apply to every entry:
 - **Dependencies.** NF-011, NF-022, NF-061; sources: horizoncode tool-batch redaction; oh-my-pi secret placeholders; OpenHands `request_secret`.
 - **Status.** `DESIGNED`.
 
+### NF-071 — Managed persistent runtime — owner/worker turn frames and process ownership
+
+- **Problem.** A long-running managed agent needs an execution topology that degrades neither in lag nor in cost as turns accumulate, and a persistent daemon that spawns children carelessly leaks processes or re-delivers work after a crash. The corpus names neither the topology nor the ownership rules for its children.
+- **Design.** An **owner** process oversees the session; one **worker** per turn runs over a framed control pipe and proves identity (pid + birth identity + ancestor chain) before any work is reserved. Turns are JSON frames (`delta`/`tool.start`/`approval`/`clarify`/`result`/`finished`) — never filesystem diffs, which is the structural source of near-zero lag. Durability lives in the log: a per-session **admission FIFO** (each input admitted once; `unknown` halts followers, never replays — the RC-7 vocabulary) plus worker executions and receipts. **Process ownership:** all long-lived children spawn through a single `spawn_owned` path, enforced by a lint with reason-required opt-outs and an empty baseline; a POSIX `sh` owner-death supervisor (EOF-driven, ~0.5 MB resident, `killpg` on any death including SIGKILL/OOM) guarantees child-tree cleanup; process births are boot-relative so NTP steps and VM resume do not make live processes look dead; a spawn ledger quarantines on corruption instead of reading as empty. Adopt the contracts — not the upstream 25-platform adapter matrix.
+- **Capability IDs.** `session.manage`; child processes run under the ordinary `terminal.run` rules.
+- **Authority impact.** `kernel` (worker executions and admissions become durable kernel-log semantics; unreconciled turns follow the `unknown` rules).
+- **Dependencies.** NF-001, NF-036, NF-049; RC-7; source: hermes-agent (`agent/managed_worker.py`, `gateway/session_managed_worker.py`, `hermes_cli/process_identity.py`, `scripts/check_detached_spawns.py`); `30-steal-list.md` §2 C-12/D.
+- **Status.** `DESIGNED`.
+
+### NF-072 — Per-tool concurrency classes and parallel batch execution
+
+- **Problem.** Serialising every call in a batch throws away the largest wall-clock lever available to a tool-calling loop, while unmanaged parallelism races on shared paths.
+- **Design.** Every tool declaration carries one **concurrency class** — `shared` (default) with `exclusive` opt-out; the loop dispatches a batch as concurrent shared tasks behind a last-exclusive barrier with all-settled semantics (one failure cancels nothing), and every call still runs the ordinary pipeline — resolve, Guard, its own lease, settle, receipt. Edit/write/insert-style tools are `exclusive`; `shell` is conditional on PTY mode. Claim-verified upstream (`agent-loop.ts#L3906-L3940`; only 6 of 30 tools exclusive); the harness cost is one optional field on the tool interface.
+- **Capability IDs.** None (schedules existing tool IDs).
+- **Authority impact.** `none`.
+- **Dependencies.** NF-001, NF-051; source: oh-my-pi; `30-steal-list.md` §2 C-6.
+- **Status.** `DESIGNED`.
+
+### NF-073 — Loop safety rails — sentinel exits, budget countdown, consecutive-error caps, charged failures
+
+- **Problem.** Unattended loops fail in four classic ways: runaway turns, format-error spirals, budgets that burn silently or are invisible, and ceilings that are not real ceilings.
+- **Design.** (a) Terminal outcomes use the single RC-7 vocabulary and loop exit is one sentinel check, so new exit reasons require no loop changes. (b) The step prompt renders a live budget countdown (steps and wall time remaining) from runtime state. (c) Format/parse errors inject a corrective in-context message; **consecutive** format errors are capped (reset on any clean step) with their own exit status. (d) A billed-but-failed turn is still charged — the cost ceiling is never fiction. (e) Budgets are checked **before** the call under one `0 = unlimited` convention; wall clock is a separate, non-liftable terminal condition; batch runs share a lock-guarded global spend ceiling.
+- **Capability IDs.** None.
+- **Authority impact.** `none`.
+- **Dependencies.** RC-7, NF-025; source: mini-swe-agent (`agents/default.py`, `exceptions.py`, `models/__init__.py`); `30-steal-list.md` §2 C-2/C-4/C-5/B-8.
+- **Status.** `DESIGNED`.
+
+### NF-074 — Context-cost contracts — usage-anchored output budget, spill defaults, shell-output minimisation
+
+- **Problem.** Output volume is the dominant token cost of a coding agent, and a fixed output cap produces hard provider 400s on large-output models.
+- **Design.** Each request fits the output cap to the remaining window: prompt size is estimated from the provider's newest reported usage anchor plus a local count of the appended tail, with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed. Tool output is capped by lines (default 3000) and bytes (default 50 KiB) with spill-to-artifact; a shell-output minimiser compresses verbose command output before it reaches the model (default on); dedicated-tool interception rewrites `cat`/`grep`-class shell invocations to native tools with a user-visible notice; long commands auto-background instead of blocking a turn.
+- **Capability IDs.** `context.manage`; interception, minimisation and backgrounding run under the ordinary `terminal.run` admission.
+- **Authority impact.** `none`.
+- **Dependencies.** NF-052, NF-061; R-tools-56; source: oh-my-pi (`output-budget.ts`, `streaming-output.ts`, `exec/settings.ts`); `30-steal-list.md` §2 B-5/B-6/B-7/C-7.
+- **Status.** `DESIGNED`.
+
+### NF-075 — Growth loop v2 — warm-cache review fork, editorial standard, archive-only curator
+
+- **Problem.** Self-improvement dies if it costs a second full-price call; it rots if it captures unresolved failures and negative tool claims as lessons; and it is dangerous if pruning can delete.
+- **Design.** A post-turn **review fork** inherits the parent's cached prefix byte-for-byte (same system prompt and tool order — the same prefix cache; ~26 % measured cost cut upstream) and is **persistence-isolated** (no session-DB writes, frozen tool snapshot), so it is safe to run unconditionally. Its output passes an **editorial standard**: a fixed lesson-layer block plus a do-not-capture block that forbid capturing unresolved failures and negative tool claims, require read-before-write on self-edits, and enforce a test-backed description budget tied to what the prompt actually renders. A **curator** ages the library with archive-as-maximum (never delete), pre-run snapshots and pins. Growth remains `none`-impact: the fork may change memory, skills and prompts — nothing else (ADR-010).
+- **Capability IDs.** `learn.run`, `learn.propose` [planned, RC-11].
+- **Authority impact.** `none`.
+- **Dependencies.** NF-010, NF-033; ADR-010; source: hermes-agent (`agent/background_review.py`, `agent/curator.py`, `skills/AGENTS.md`); `30-steal-list.md` §2 G-1…G-4.
+- **Status.** `DESIGNED`.
+
 ---
 
 ## 6. Section C — Counts and coverage
@@ -1015,7 +1079,9 @@ Two conventions apply to every entry:
 | A.6 forgecode | 9 | 2 | 7 | 0 |
 | A.7 claude-code | 14 | 2 | 11 | 1 |
 | A.8 horizoncode (ancestor) | 15 | 10 | 5 | 0 |
-| **Total** | **117** | **36** | **79** | **2** |
+| **Total (A.1–A.8)** | **117** | **36** | **79** | **2** |
+| A.9 addendum (§4.1, six sources) | 6 | 1 | 5 | 0 |
+| **Grand total (A.1–A.8 + A.9)** | **123** | **37** | **84** | **2** |
 
 ### 6.2 What the dispositions mean in aggregate
 
@@ -1034,22 +1100,22 @@ Two conventions apply to every entry:
 
 | Measure | Count |
 |---|---:|
-| New features catalogued (`NF-001` … `NF-070`) | **70** |
-| Authority impact `none` | 46 |
+| New features catalogued (`NF-001` … `NF-075`) | **75** |
+| Authority impact `none` | 50 |
 | Authority impact `narrows` | 3 (`NF-019`, `NF-031`, `NF-064`) |
 | Authority impact `grant-bearing` | 12 (`NF-007`, `NF-012`, `NF-014`, `NF-018`, `NF-020`, `NF-030`, `NF-032`, `NF-037`, `NF-043`, `NF-054`, `NF-055`, `NF-066`) |
-| Authority impact `kernel` | 9 (`NF-001`, `NF-003`, `NF-016`, `NF-021`, `NF-022`, `NF-051`, `NF-053`, `NF-058`, `NF-063`) |
-| Learning-loop features, all required to be `none` | 5 (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`) — **all five are `none`** |
+| Authority impact `kernel` | 10 (`NF-001`, `NF-003`, `NF-016`, `NF-021`, `NF-022`, `NF-051`, `NF-053`, `NF-058`, `NF-063`, `NF-071`) |
+| Learning-loop features, all required to be `none` | 6 (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`, `NF-075`) — **all six are `none`** |
 | New capability IDs proposed (§3.3) | 16 |
 | New events proposed (§3.4) | 17 |
 | CI gate rows named (§3.5) | 18 rows, 19 distinct gates |
 
 ### 6.4 Coverage statement
 
-- **The references are covered by construction.** Every capability named in the task brief for each of the eight references has a Section A row. Where no HorizonCode home is exactly equal to a reference capability, the row is `Supersede` with the strengthening named, or `Reject` with a reason in Section D.
+- **The references are covered by construction.** Every capability named in the task brief for each of the eight primary references (A.1–A.8) and each of the six addendum sources (A.9) has a Section A row. Where no HorizonCode home is exactly equal to a reference capability, the row is `Supersede` with the strengthening named, or `Reject` with a reason in Section D.
 - **Two rejects, both deliberate, both upstream features** — `/gboom` (D-5) and x402 payments (D-7). Everything else that is refused is a rejected *technique* rather than an upstream capability, and is listed in Section D for that reason.
 - **The strict-addition claim is Section B, not Section A.** Section A asserts no reference is better in any dimension it covers; Section B is the whole of the claim that HorizonCode is better in authority, durability, evidence, orchestration, memory and self-improvement.
-- **No row claims code (R7).** 117 rows and 70 features are `DESIGNED`; `gate:parity-ratchet` becomes a runtime-parity gate only once a first implementation exists, and until then it is a specification-quality gate over this document.
+- **No row claims code (R7).** 117 matrix rows, 6 addendum rows and 75 features are `DESIGNED`; `gate:parity-ratchet` becomes a runtime-parity gate only once a first implementation exists, and until then it is a specification-quality gate over this document.
 
 ---
 
@@ -1261,17 +1327,22 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 60. **NF-068** — a side fork cannot call tools; it reuses the captured cache material rather than compiling cold; its output enters the main transcript only on explicit action.
 61. **NF-069** — a truncated JSON argument is repaired, recorded, and still Guard-checked; an ambiguous shape is rejected with a structured error; a fuzzy edit applies only when unambiguous; post-write diagnostics are fed back.
 62. **NF-070** — a canary secret in tool output never reaches the transcript, log or Code Mode boundary unredacted, while the durable machine value is unchanged.
+63. **NF-071** — a worker proves identity before work is reserved; an interrupted turn's input is admitted once and `unknown` halts followers instead of replaying; a SIGKILL of the owner leaves no orphaned child tree (the supervisor fires); a corrupt spawn ledger quarantines instead of reading as empty.
+64. **NF-072** — a batch's `shared` calls run concurrently while an `exclusive` call forms its own barrier; one call's failure cancels no sibling; every call in the batch still produces its own lease and receipt.
+65. **NF-073** — consecutive format errors hit the cap and exit with their own status while isolated errors recover; a failed-but-billed call is charged; budgets are checked before dispatch with one `0 = unlimited` convention; wall clock terminates independently of spend.
+66. **NF-074** — the output cap fits the remaining window with the measured headway (no provider 400 on a large-output model); over-cap tool output spills to an artifact with a pointer; minimised shell output is flagged as minimised; an intercepted `cat` form maps to the read tool.
+67. **NF-075** — the review fork reuses the parent's cached prefix byte-for-byte and writes nothing to the session; a lesson violating the do-not-capture block is rejected; the curator archives (never deletes) and pins survive a prune.
 
 ---
 
 ## 13. Status
 
-**Whole-document status: `DESIGNED`.** This document contains no implementation evidence and therefore cannot support a higher level. Its own evidence is: the eight upstream repositories read under `/data/home/forge/repo-tour/`, the deep-dive reports listed per section, and the binding decisions in [`02-decisions.md`](./02-decisions.md). **Implementation status (final audit, 2026-11-06):** where built slices exist, levels are maintained in [`28-implementation-status.md`](./28-implementation-status.md); the audit that re-verified the source repositories (all twelve clones) is [`29-final-audit.md`](./29-final-audit.md).
+**Whole-document status: `DESIGNED`.** This document contains no implementation evidence and therefore cannot support a higher level. Its own evidence is: the upstream repositories read under `/data/home/forge/repo-tour/` (the primary eight, plus the second-wave six in §4.1 A.9), the deep-dive reports listed per section, and the binding decisions in [`02-decisions.md`](./02-decisions.md). **Implementation status (final audit, 2026-11-06):** where built slices exist, levels are maintained in [`28-implementation-status.md`](./28-implementation-status.md); the audit that re-verified the twelve source repositories is [`29-final-audit.md`](./29-final-audit.md), and the pass-3 four-repo dives (aider, mini-swe-agent, hermes-agent, oh-my-pi) are consolidated in [`30-steal-list.md`](./30-steal-list.md).
 
 | Area | Level | Evidence |
 |---|---|---|
-| Section A parity matrix (117 rows) | `DESIGNED` | Upstream citations per row; no HorizonCode code exists. |
-| Section B new features (`NF-001` … `NF-070`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview — reduced forms) carry levels in `28-implementation-status.md`. NF-063…NF-070 were added by the final audit (`29-final-audit.md` §B.1; sources in `docs/audit/`). |
+| Section A parity matrix (117 rows + 6 addendum rows, A.9) | `DESIGNED` | Upstream citations per row; no HorizonCode code exists. |
+| Section B new features (`NF-001` … `NF-075`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview — reduced forms) carry levels in `28-implementation-status.md`. NF-063…NF-070 were added by the final audit (`29-final-audit.md` §B.1; sources in `docs/audit/`); NF-071…NF-075 by the adoption wave (`30-steal-list.md`; RC-15). |
 | Section C counts | `DESIGNED` | Derived from Section A tables by the method in §6; recomputed by the recount gate. |
 | Section D non-goals | `DESIGNED` | Normative refusals; each names a replacement or states that the need is out of scope. |
 | §3.3 capability-ID and §3.4 event proposals | `DESIGNED` (reserved) | Both lists are now registered as **Reserved** in [`_conventions.md`](./_conventions.md) §5/§6 (RC-11); they are promoted to canonical in the change that first implements each feature, per that file's §1 rule. |
@@ -1285,5 +1356,5 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 3. **The ancestor's defects are inherited as work, not as claims** — the evidence gate is unwired and the subagent/LSP/DAP lanes are dead upstream (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`); NF-002 and NF-049 exist precisely because of them, and both are `DESIGNED` here.
 4. **No upstream capability is claimed as working in HorizonCode.** Every "where it exists" cell is a statement about the reference agent.
 5. **The six delta passes are queued at Section-A level, deliberately.** Their ~270 file-cited findings (all in `docs/audit/`) each want either a Section A row with disposition and recount, or an explicit non-goal; this revision appends only the eight register rows (NF-063…NF-070) whose unique residual met the merge rule. The queue is recorded in [`29-final-audit.md`](./29-final-audit.md) §B.1(c).
-6. **The pass-3 adoption shortlist proposes NF-071…NF-075.** The four dives (aider, mini-swe-agent, hermes-agent, oh-my-pi) and their consolidated queue live in [`30-steal-list.md`](./30-steal-list.md); its register candidates pass through the normal revision before becoming Section B rows, and aider/mini-swe-agent/hermes-agent are queued as Section A sources 9–11.
+6. **The pass-3 adoption shortlist is adopted (RC-15).** `NF-071`…`NF-075` are Section B rows and the six second-wave sources are the A.9 addendum; `30-steal-list.md` remains the adoption queue — its items 1–8 and 11 are the live build plan.
 

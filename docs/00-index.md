@@ -27,14 +27,14 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 14 | [`14-surfaces.md`](./14-surfaces.md) | Headless, server, web, desktop, IDE/ACP, MCP server, SDKs, collaboration |
 | 15 | [`15-extensibility.md`](./15-extensibility.md) | Plugins, skills, commands, hooks, workflows, MCP/ACP depth |
 | 16 | [`16-operations.md`](./16-operations.md) | Install & release integrity, CI gates, observability, diagnostics, security ops, runbooks |
-| 24 | [`24-feature-catalog.md`](./24-feature-catalog.md) | Parity matrix vs all eight references + every new feature (NF-xxx) |
+| 24 | [`24-feature-catalog.md`](./24-feature-catalog.md) | Parity matrix vs the eight primary references (+ the six-source A.9 addendum) + every new feature (NF-001…NF-075) |
 | 25 | [`25-roadmap-and-glossary.md`](./25-roadmap-and-glossary.md) | M0–M8 roadmap (Foundation → Self-improvement) with exit criteria + the full glossary |
 | 26 | [`26-learning-synthesis-2.md`](./26-learning-synthesis-2.md) | Second deep-dive learning record: ten-repo distillation, adoption ledger (NF-051…NF-062), doc-update ledger |
 | 27 | [`27-implementation-plan.md`](./27-implementation-plan.md) | The build plan: bootstrap, workstreams, runtime viability, subagent build-out, gates, open ADRs |
 | 28 | [`28-implementation-status.md`](./28-implementation-status.md) | **Implemented-vs-designed map with evidence commands — the single source of truth for implementation status** |
 | 29 | [`29-final-audit.md`](./29-final-audit.md) | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
-| 30 | [`30-steal-list.md`](./30-steal-list.md) | Adoption shortlist: the consolidated steal list across aider, mini-swe-agent, hermes-agent and oh-my-pi (pass-3 audits) + the action queue |
-| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-13)** |
+| 30 | [`30-steal-list.md`](./30-steal-list.md) | Adoption shortlist: the consolidated steal list across aider, mini-swe-agent, hermes-agent and oh-my-pi (pass-3 audits) + the action queue — adopted by RC-15 (NF-071…NF-075; A.9 sources) |
+| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-15)** |
 
 ---
 
@@ -55,6 +55,8 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 `DESIGNED` → `CODE_PRESENT` → `WIRED` → `TESTED` → `VERIFIED` → `RELEASED`
 
 Every capability in every document carries a level. **Implementation status (final audit, 2026-11-06):** the blanket `DESIGNED` ceiling applied while this set was design-only; it is superseded. The implemented subset (trust kernel, runtime core, base tools, chat TUI, skills, subagents, code mode, preview) carries real, evidence-backed levels in `docs/28-implementation-status.md` — that file is the **single source of truth** for implementation status, and it is the only place a level above `DESIGNED` may be claimed. Every capability **not** listed there remains `DESIGNED`.
+
+**Document classes (RC-14).** Every document declares what kind of document it is — *contract* (normative: schemas and protocol), *decision record* (binding on design: ADRs and rulings), or *historical* (no normative force: learning records, plans, audits, queues). Which document owns which kind of truth is the authority-by-concern table in [`_conventions.md`](./_conventions.md) §11 (RC-14).
 
 ---
 

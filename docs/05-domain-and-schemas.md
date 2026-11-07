@@ -112,6 +112,22 @@ Every rule below is individually testable and named by a stable ID. A rule whose
 | **D38** | Applying any `LearnProposalV1` MUST require human approvals (`principal.kind = human`, count ≥ `review.requiredApprovers`) and MUST be revertible through a recorded `rollbackRef`. An agent principal MUST NOT count as an approver. |
 | **D39** | Rate limits MUST be expressed as `RateLimitPolicyV1` (§4.9) — one shape, owned here. When several policies match one call, the numeric limit MUST be the **meet** (min) across them, `onExceeded` MUST be the most restrictive, and the policy **reported** in the error MUST be the most specific scope (`budget > provider > principal > workspace > managed`). `HZ_RATE_LIMITED` MUST carry the effective policy id, the window and a truthful `Retry-After`; a limiter MUST NOT keep a second accounting of usage. |
 
+### 2.7 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**1. `ToolResultV1` dual output** (NF-061). Every tool result carries three independently-typed projections of one execution: `machineOutput` (schema-validated, ephemeral, visible to code mode), `content` (durable, model-facing; MUST be non-empty when `machineOutput` is absent), and `metadata` (compact UI JSON, bounded independently — never an unbounded side-channel). **Retention is fail-closed:** a payload too large for managed storage makes the call **fail operationally**; it is never published as a lossy success. Domain output does not change according to model-output bounding policy (bounding happens at the projection, not the record).
+
+**2. `InstructionsStateV1` — value deltas.** Instruction sources are stored as content-addressed blobs; sessions observe `hz.session.instructions.updated {delta, text?}` where "removed" is absence, never a tombstone; an **instruction epoch spans completed compactions**; a fork adopts the parent's newest instruction values as its baseline. Clients display *changed keys*, not privileged prose.
+
+**3. Action↔observation pairing invariant.** A tool observation with no corresponding call, and a call with no observation, are **invalid states** and fail closed: every `hz.part` observation MUST reference its `step.tool.requested` call id; a drained-but-unpaired call is failed at drain start, never replayed, never silently dropped.
+
+### 2.8 Attribution addendum (RC-15)
+
+> Adopted 2026-11-07 from the adoption wave (`30-steal-list.md` §2 E-2; source A.9.4 aider).
+
+- **Commit attribution is a configured, documented truth table.** The `attribute-*` matrix (who is author, who is co-author, what is recorded for tool and assistant contributions) is data with an env-scoped implementation and a docstring-grade specification — AI provenance policy is explicit and reviewable, never implicit in commit text or tooling defaults.
+
 ---
 
 ## 3. Interfaces
