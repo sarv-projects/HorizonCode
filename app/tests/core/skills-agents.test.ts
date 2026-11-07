@@ -8,10 +8,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { ProviderRequest, RuntimeEvent, ToolContext } from "../../src/contracts";
+import type { Lease, ProviderRequest, RuntimeEvent, ToolContext } from "../../src/contracts";
 import { KernelClient } from "../../src/core/kernel";
 import type { LoopDeps } from "../../src/core/loop";
 import { runTurn } from "../../src/core/loop";
@@ -178,6 +178,64 @@ describe("loop: skills and filter plumbing", () => {
     } finally {
       await kernel.close();
       store.close();
+    }
+  });
+
+  test("a child effect re-enters the approval path: parent session leases are not inherited (R-tools-32)", async () => {
+    const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+    const store = new SessionStore(workspace);
+    const controller = new AbortController();
+    const outside = mkdtempSync(path.join(tmpdir(), "hz-subagent-outside-"));
+    const target = path.join(outside, "written.txt");
+    const approvals: string[] = [];
+    let turn = 0;
+    const provider = {
+      name: "scripted-child",
+      async *stream() {
+        // Advance before yielding: a consumer that stops at `done` abandons the
+        // generator body, so a post-yield increment would never run.
+        const current = turn;
+        turn += 1;
+        if (current === 0) {
+          yield { type: "tool_call" as const, id: "w1", name: "write", arguments: JSON.stringify({ path: target, content: "child data" }) };
+          yield { type: "done" as const, stopReason: "tool_use" as const };
+        } else {
+          yield { type: "text" as const, text: "reported" };
+          yield { type: "done" as const, stopReason: "end" as const };
+        }
+      },
+    };
+    // What the parent's "always" answer produces: a wildcard session lease.
+    // The child must not inherit it — its own write has to ask.
+    const parentLease: Lease = {
+      leaseId: "parent-always-lease",
+      kind: "fs.write",
+      pattern: "*",
+      expiry: new Date(Date.now() + 15 * 60_000).toISOString(),
+    };
+    try {
+      const result = await runNested({
+        workspace,
+        task: "write the file",
+        model: "scripted-1",
+        provider,
+        kernel,
+        store,
+        signal: controller.signal,
+        sessionLeases: [parentLease],
+        approve: async (req) => {
+          approvals.push(req.title);
+          return true;
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(approvals.length).toBe(1);
+      expect(approvals[0]).toContain("written.txt");
+      expect(readFileSync(target, "utf8")).toBe("child data");
+    } finally {
+      await kernel.close();
+      store.close();
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 });

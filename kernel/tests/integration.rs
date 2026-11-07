@@ -1479,6 +1479,127 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
     );
 }
 
+/// The kernel state directory is structurally protected: even a policy.json that
+/// allows every write cannot unlock `fs.write` into the state dir, because the
+/// rule is evaluated before policy rules and leases. Lexical `..`, absolute
+/// targets and symlinks all resolve to the same answer.
+#[test]
+fn guard_denies_writes_inside_the_state_dir_even_when_policy_allows() {
+    let dir = TempDir::new("guard-state-protected");
+    let mut kernel = Kernel::start(dir.path());
+
+    // A permissive override: every fs.write, every scope, allowed.
+    let permissive = serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "*", "decision": "allow" },
+    ]))
+    .unwrap();
+    fs::write(dir.path().join("policy.json"), &permissive).unwrap();
+
+    let policy_path = dir.path().join("policy.json");
+    let policy_arg = policy_path.to_str().expect("utf8 path");
+
+    // Absolute target: the structural rule wins over the allow rule.
+    let decision = guard_check(&mut kernel, "fs.write", policy_arg, Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"]
+            .as_str()
+            .unwrap()
+            .contains("kernel-state-protected"),
+        "{}",
+        decision
+    );
+    assert!(decision.get("leaseId").is_none());
+
+    // Lexical traversal: out of the state dir and back in via `<state>/../<state>/`.
+    let name = dir.path().file_name().expect("temp dir name");
+    let out_and_back = format!(
+        "{}/../{}/policy.json",
+        dir.path().display(),
+        name.to_string_lossy()
+    );
+    assert_eq!(
+        guard_decision(&mut kernel, "fs.write", &out_and_back, Some("workspace"), None),
+        "deny",
+        "a lexical .. must not evade the state-dir rule"
+    );
+    // ...and through a descendant that does not exist yet (lexical collapse).
+    let through_missing = format!("{}/not-created-yet/../policy.json", dir.path().display());
+    assert_eq!(
+        guard_decision(&mut kernel, "fs.write", &through_missing, Some("workspace"), None),
+        "deny"
+    );
+
+    // A matching lease (issued by the kernel itself, and a caller copy) cannot
+    // lift the structural rule either.
+    let lease = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "fs.write", "pattern": "*", "ttlMs": 60_000 }),
+    );
+    let decision = guard_check(
+        &mut kernel,
+        "fs.write",
+        policy_arg,
+        Some("workspace"),
+        Some(json!([lease])),
+    );
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(decision["reason"].as_str().unwrap().contains("kernel-state-protected"));
+
+    // A symlink into the state dir is classified by where it lands.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let holder = TempDir::new("guard-state-link");
+        let link = holder.path().join("state-link");
+        symlink(dir.path(), &link).expect("create symlink");
+        let via_link = link.join("policy.json");
+        let decision = guard_check(
+            &mut kernel,
+            "fs.write",
+            via_link.to_str().unwrap(),
+            Some("workspace"),
+            None,
+        );
+        assert_eq!(decision["decision"], json!("deny"));
+        assert!(decision["reason"].as_str().unwrap().contains("kernel-state-protected"));
+    }
+
+    // The rule is scoped to the state dir: a target outside it still follows the
+    // permissive policy, and the state dir's own files are untouched.
+    let outside = TempDir::new("guard-state-outside");
+    let outside_file = outside.path().join("notes.txt");
+    assert_eq!(
+        guard_decision(
+            &mut kernel,
+            "fs.write",
+            outside_file.to_str().unwrap(),
+            Some("outside"),
+            None,
+        ),
+        "allow",
+        "a permissive policy must still govern writes outside the state dir"
+    );
+    assert_eq!(fs::read_to_string(&policy_path).unwrap(), permissive);
+    // A sibling directory whose name shares the state dir's prefix is outside.
+    let sibling = format!("{}-evil/policy.json", dir.path().display());
+    assert_eq!(
+        guard_decision(&mut kernel, "fs.write", &sibling, Some("workspace"), None),
+        "allow"
+    );
+
+    // Reads of the state dir are not covered by this rule (the policy decides:
+    // the override above has no fs.read rule, so the fallback is ask, not the
+    // structural deny).
+    let decision = guard_check(&mut kernel, "fs.read", policy_arg, Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"));
+    assert!(
+        !decision["reason"].as_str().unwrap().contains("kernel-state-protected"),
+        "{}",
+        decision
+    );
+}
+
 /* --------------------------------- 6. protocol --------------------------------- */
 
 #[test]

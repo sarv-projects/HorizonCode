@@ -34,6 +34,26 @@ test("the database lives under <workspace>/.hzcode/db.sqlite", () => {
   expect(existsSync(store.dbPath)).toBe(true);
 });
 
+test("durability: journal_mode=WAL and synchronous=FULL at open, and they stick across reopen (RC-16)", () => {
+  const journal = store.db.query("PRAGMA journal_mode").get() as { journal_mode: string };
+  expect(journal.journal_mode.toLowerCase()).toBe("wal");
+  const sync = store.db.query("PRAGMA synchronous").get() as { synchronous: number };
+  expect(Number(sync.synchronous)).toBe(2); // 2 = FULL
+
+  const reopened = new SessionStore(workspace);
+  try {
+    const journal2 = reopened.db.query("PRAGMA journal_mode").get() as { journal_mode: string };
+    expect(journal2.journal_mode.toLowerCase()).toBe("wal");
+    const sync2 = reopened.db.query("PRAGMA synchronous").get() as { synchronous: number };
+    expect(Number(sync2.synchronous)).toBe(2);
+    // The busy wait survives alongside them.
+    const busy = reopened.db.query("PRAGMA busy_timeout").get() as { timeout: number };
+    expect(Number(busy.timeout)).toBe(5000);
+  } finally {
+    reopened.close();
+  }
+});
+
 test("createSession round-trips and messages keep their order and tool wiring", () => {
   const session = store.createSession("First chat");
   expect(session.title).toBe("First chat");

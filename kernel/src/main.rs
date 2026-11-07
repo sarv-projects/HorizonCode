@@ -181,7 +181,14 @@ fn call(kernel: &Kernel, method: &str, params: Value) -> Result<Value, String> {
 }
 
 fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
-    let kernel = Kernel::new_with_anchor(dir, anchor.clone());
+    // Hermetic scratch: every invocation works in its own unique subdirectory
+    // and removes it afterwards, so repeating the selftest — or running it
+    // against a state dir that already holds chains, including a previous
+    // run's keyed or unkeyed leftovers — can never collide with live state.
+    // (Found in integrator verification: a second bare run against the default
+    // state dir failed half the checks on the first run's stale scratch.)
+    let scratch = dir.join(format!("selftest-{}", Uuid::new_v4()));
+    let kernel = Kernel::new_with_anchor(&scratch, anchor.clone());
     let stream = "session:selftest";
     let mut checks = Checks::new();
 
@@ -379,7 +386,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
 
     // 10. keyed anchors: anchor digest = HMAC-SHA256(key, record preimage);
     // a legacy (unkeyed) anchor fails closed unless legacy acceptance is asked for.
-    let keyed_dir = dir.join("selftest-keyed");
+    let keyed_dir = scratch.join("selftest-keyed");
     let key = b"hz-selftest-anchor-key-000000000".to_vec();
     let keyed = Kernel::new_with_anchor(&keyed_dir, eventlog::AnchorConfig::keyed(key.clone()));
     let keyed_stream = "session:selftest-keyed";
@@ -443,6 +450,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         }
     }
 
+    let _ = std::fs::remove_dir_all(&scratch);
     if checks.failures == 0 {
         println!("SELFTEST OK ({} checks)", checks.total);
         0

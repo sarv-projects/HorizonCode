@@ -127,6 +127,13 @@ export class SessionStore {
     // Two hzcode windows may share a workspace: wait instead of failing.
     try {
       this.db.exec("PRAGMA busy_timeout = 5000;");
+      // RC-16(e) / docs/12 §4.3: strict durability is the default. WAL keeps
+      // readers unblocked beside the writer; synchronous=FULL fsyncs every
+      // commit, so a committed transcript survives a crash. Both are set on
+      // every open (migration-safe: an existing rollback-journal database is
+      // converted in place; a database already in WAL stays there).
+      this.db.exec("PRAGMA journal_mode = WAL;");
+      this.db.exec("PRAGMA synchronous = FULL;");
     } catch {
       /* pragma support is best-effort */
     }
