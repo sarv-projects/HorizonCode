@@ -358,4 +358,5 @@ A second pass the same day, verifying the audit rather than re-reading the clone
 - `26-learning-synthesis-2.md` — the learning record whose §5 queue this audit carries in Part D
 - `27-implementation-plan.md` — the build plan for the NF range this audit verifies the sourcing of
 - `audit/` — the six delta reports of this audit and the fifteen pass-2 reports (historical class; the evidence this audit cites)
+- `audit/pass3/` and `30-steal-list.md` — the follow-on four-repo dives (aider, mini-swe-agent, hermes-agent, oh-my-pi) and their consolidated adoption queue
 - `AUDIT.md` — the first design-corpus audit (historical)

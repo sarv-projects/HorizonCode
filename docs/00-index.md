@@ -33,6 +33,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 27 | [`27-implementation-plan.md`](./27-implementation-plan.md) | The build plan: bootstrap, workstreams, runtime viability, subagent build-out, gates, open ADRs |
 | 28 | [`28-implementation-status.md`](./28-implementation-status.md) | **Implemented-vs-designed map with evidence commands — the single source of truth for implementation status** |
 | 29 | [`29-final-audit.md`](./29-final-audit.md) | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
+| 30 | [`30-steal-list.md`](./30-steal-list.md) | Adoption shortlist: the consolidated steal list across aider, mini-swe-agent, hermes-agent and oh-my-pi (pass-3 audits) + the action queue |
 | — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-13)** |
 
 ---
