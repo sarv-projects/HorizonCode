@@ -1,13 +1,14 @@
-//! Guard: authority evaluation (deny > allow > ask) plus in-memory leases.
+//! Guard: authority evaluation (deny > lease > ask > allow) plus in-memory leases.
 //!
 //! Policy comes from `<state-dir>/policy.json` when present and well formed,
 //! otherwise from `DEFAULT_POLICY` (replicated verbatim from contracts.ts).
 //!
-//! Evaluation, per contracts.ts:
+//! Evaluation, per docs/11-authority-safety.md R1 (deny > ask > allow):
 //!   1. any matching `deny` rule wins;
 //!   2. else an unexpired, matching lease grants `allow`;
-//!   3. else any matching `allow` rule grants `allow`;
-//!   4. otherwise `ask`.
+//!   3. else any matching `ask` rule asks (an ask beats a matching allow);
+//!   4. else any matching `allow` rule grants `allow`;
+//!   5. otherwise `ask`.
 //!
 //! A rule matches when its `kind` equals the action kind (or is `"*"`) and its
 //! `scope` equals the caller's scope (or is `"*"`). Scope is computed by the
@@ -175,6 +176,19 @@ impl Guard {
                     lease.lease_id, lease.pattern, action.kind, action.target
                 ),
                 lease_id: Some(lease.lease_id.clone()),
+            };
+        }
+
+        if let Some(ask) = matching.iter().find(|rule| rule.decision == "ask") {
+            // docs/11 R1: ask outranks allow. A lease above already won over this
+            // rule on purpose — lease semantics are unchanged.
+            return GuardDecision {
+                decision: "ask".to_string(),
+                reason: format!(
+                    "policy ask: {} @ {} (action {} on {})",
+                    ask.kind, ask.scope, action.kind, action.target
+                ),
+                lease_id: None,
             };
         }
 

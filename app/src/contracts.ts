@@ -99,10 +99,11 @@ export interface PolicyRule {
 
 /**
  * Built-in policy used when <state-dir>/policy.json is absent.
- * Evaluation: deny > lease > allow > ask (docs/28 ruling 11; guard.rs order).
+ * Evaluation: deny > lease > ask > allow (docs/11 R1; docs/28 ruling 23).
  * Any matching deny wins; then an unexpired matching lease; then any matching
- * allow; otherwise ask. "workspace" scope = the target path resolves inside
- * the workspace root, through symlinks; anything else is "outside".
+ * ask rule; then an allow rule; otherwise ask. "workspace" scope = the target
+ * path resolves inside the workspace root, through symlinks; anything else is
+ * "outside".
  */
 export const DEFAULT_POLICY: PolicyRule[] = [
   { kind: "fs.read", scope: "workspace", decision: "allow" },

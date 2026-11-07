@@ -9,11 +9,12 @@
  * session by accident, because stop is one message away.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { newId } from "../contracts";
+import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
+import { scrubEnv } from "./helpers";
 
 const OUTPUT_CAP = 4096;
 const URL_WAIT_MS = 12_000;
@@ -25,7 +26,7 @@ interface PreviewEntry {
   cwd: string;
   url?: string;
   startedAt: number;
-  child: ChildProcess;
+  proc: OwnedProc;
   output: string; // ring buffer, OUTPUT_CAP bytes
 }
 
@@ -45,6 +46,22 @@ function tail(entry: PreviewEntry): string {
   return text === "" ? "(no output yet)" : text.slice(-2000);
 }
 
+/** Drain one child stream into the entry's ring buffer until it closes. */
+async function pumpToOutput(stream: ReadableStream<Uint8Array> | undefined, entry: PreviewEntry): Promise<void> {
+  if (stream === undefined) return;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value !== undefined) appendOutput(entry, decoder.decode(value, { stream: true }));
+    }
+  } catch {
+    /* stream closed by a kill */
+  }
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -61,7 +78,7 @@ async function killEntry(entry: PreviewEntry): Promise<void> {
       process.kill(-entry.pid, sig);
     } catch {
       try {
-        entry.child.kill(sig);
+        entry.proc.kill(sig);
       } catch {
         /* already gone */
       }
@@ -154,27 +171,28 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     if (!approved) return { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" };
   }
 
-  let child: ChildProcess;
+  let proc: OwnedProc;
   try {
-    child = spawn("bash", ["-lc", command], {
+    // NF-071: the single spawn path. A preview is long-lived, so the owner-death
+    // supervisor starts with it — a SIGKILL of hzcode can no longer leave a dev
+    // server (or its children) behind; `detached` is what the supervisor's
+    // killpg needs, and it is also what stop relies on to kill the whole tree.
+    ({ proc } = await spawnOwned(["bash", "-lc", command], {
+      stateDir: kernelStateDir(ctx.workspace),
+      label: `preview: ${command}`,
       cwd,
+      // Every process-spawning tool scrubs the environment (helpers rule): a dev
+      // server must never inherit provider keys or other secrets from hzcode.
+      env: scrubEnv(),
+      stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
       detached: true, // its own process group, so stop can kill the whole tree
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, output: `could not start the preview: ${message}`, error: message };
   }
 
-  const pid = typeof child.pid === "number" && child.pid > 0 ? child.pid : -1;
-  if (pid < 0) {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      /* nothing to kill */
-    }
-    return { ok: false, output: "could not start the preview: no pid", error: "spawn failed" };
-  }
+  const pid = proc.pid;
 
   const entry: PreviewEntry = {
     id: newId().slice(0, 8),
@@ -182,7 +200,7 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     cmd: command,
     cwd,
     startedAt: Date.now(),
-    child,
+    proc,
     output: "",
   };
   const entries = entriesFor(ctx.sessionId);
@@ -190,13 +208,8 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
 
   // Keep draining the pipes for the life of the entry: a full pipe would
   // otherwise stall the server. This also feeds the ring buffer and URL scan.
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => appendOutput(entry, chunk));
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => appendOutput(entry, chunk));
-  child.on("error", () => {
-    /* reported through exitCode/status */
-  });
+  void pumpToOutput(proc.stdout, entry);
+  void pumpToOutput(proc.stderr, entry);
 
   const deadline = Date.now() + URL_WAIT_MS;
   for (;;) {
@@ -205,14 +218,14 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
       entry.url = url;
       return { ok: true, output: `Preview running at ${url} (pid ${pid}, id ${entry.id})\ncommand: ${command}` };
     }
-    if (child.exitCode !== null || child.signalCode !== null) {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
       await killEntry(entry);
       const index = entries.indexOf(entry);
       if (index >= 0) entries.splice(index, 1);
       return {
         ok: false,
-        output: `Preview command exited (code ${child.exitCode ?? "signal"}) before announcing a URL\n--- output ---\n${tail(entry)}`,
-        error: `preview exited (${child.exitCode ?? "signal"})`,
+        output: `Preview command exited (code ${proc.exitCode ?? "signal"}) before announcing a URL\n--- output ---\n${tail(entry)}`,
+        error: `preview exited (${proc.exitCode ?? "signal"})`,
       };
     }
     if (Date.now() >= deadline) {

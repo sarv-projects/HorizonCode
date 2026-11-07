@@ -7,7 +7,8 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import * as path from "node:path";
 import type { EventEnvelope, KernelMode, Receipt } from "../../src/contracts";
 import { EventTypes, canonicalJson } from "../../src/contracts";
@@ -18,6 +19,7 @@ import {
   cleanupTemps,
   ENVELOPE_KEYS,
   eventFilePath,
+  eventPreimage,
   readJsonl,
   readLines,
   RECEIPT_FIELDS,
@@ -299,4 +301,149 @@ test("tail truncation is detected and the truncated chain cannot be extended", a
   await expect(fresh.appendEvent(stream, seedFor(stream, EventTypes.error, { index: 4 }, "an-4"))).rejects.toThrow(/anchor/);
   expect(readLines(file).length).toBe(2);
   await fresh.close();
+});
+
+test("an ask rule beats a matching allow rule in the fallback (docs/11 R1)", async () => {
+  const dir = path.join(tempDir("hz-state-ask-order-"), "kernel");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, "policy.json"),
+    JSON.stringify([
+      { kind: "shell.exec", scope: "*", decision: "allow" },
+      { kind: "shell.exec", scope: "*", decision: "ask" },
+      // ask declared after allow and before allow, both ways
+      { kind: "net.fetch", scope: "*", decision: "ask" },
+      { kind: "net.fetch", scope: "*", decision: "allow" },
+    ]),
+  );
+  const kernel = new KernelClient({ workspace: tempDir("hz-ws-ask-order-"), stateDir: dir });
+  try {
+    expect(await kernel.start()).toBe("untrusted");
+    expect((await kernel.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*")).decision).toBe("ask");
+    expect((await kernel.checkGuard({ kind: "net.fetch", target: "https://example.invalid" }, "*")).decision).toBe("ask");
+    // lease semantics are unchanged: an unexpired matching lease still allows
+    const lease = await kernel.makeLease("shell.exec", "echo *", 60_000);
+    const held = await kernel.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
+    expect(held.decision).toBe("allow");
+    expect(held.leaseId).toBe(lease.leaseId);
+  } finally {
+    await kernel.close();
+  }
+});
+
+test("keyed anchors are HMAC over the preimage and fail closed on the wrong key (fallback)", async () => {
+  const key = "6f".repeat(32);
+  const wrongKey = "22".repeat(32);
+  const stateDir = path.join(tempDir("hz-state-keyed-fb-"), "kernel");
+  const workspace = tempDir("hz-ws-keyed-fb-");
+  const stream = "session:keyed-fallback";
+  const hmac = (keyHex: string, preimage: Record<string, unknown>): string =>
+    createHmac("sha256", Buffer.from(keyHex, "hex")).update(canonicalJson(preimage), "utf8").digest("hex");
+
+  setEnv({ HZ_ANCHOR_KEY: key, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+  try {
+    const keyed = new KernelClient({ workspace, stateDir });
+    expect(await keyed.start()).toBe("untrusted");
+    const events = [
+      await keyed.appendEvent(stream, seedFor(stream, EventTypes.sessionStart, { n: 1 }, "kf-1")),
+      await keyed.appendEvent(stream, seedFor(stream, EventTypes.messageEnd, { n: 2 }, "kf-2")),
+    ];
+    const receipt = await keyed.issueReceipt({
+      action: "tool.execute",
+      tool: "read",
+      argsDigest: "1".repeat(64),
+      resultDigest: "2".repeat(64),
+    });
+    expect(await keyed.verifyEventChain(stream)).toEqual({ ok: true, count: 2 });
+    expect(await keyed.verifyReceipts()).toEqual({ ok: true, count: 1 });
+
+    // anchors store HMAC(key, canonical preimage) — never the record hash
+    const head = JSON.parse(readLines(eventFilePath(stateDir, stream) + ".head")[0] as string) as { hash: string; seq: number };
+    expect(head).toEqual({ hash: hmac(key, eventPreimage(events[1]!)), seq: 2 });
+    expect(head.hash).not.toBe(events[1]!.hash);
+    expect(events[1]!.hash).toBe(recomputeEventHash(events[1]!));
+    const rhead = JSON.parse(readLines(receiptsFilePath(stateDir) + ".head")[0] as string) as { hash: string; seq: number };
+    expect(rhead).toEqual({ hash: hmac(key, receiptPreimage(receipt)), seq: 1 });
+
+    // a fresh keyed client continues the chain with keyed anchors
+    const fresh = new KernelClient({ workspace, stateDir });
+    expect(await fresh.start()).toBe("untrusted");
+    const third = await fresh.appendEvent(stream, seedFor(stream, EventTypes.sessionEnd, { n: 3 }, "kf-3"));
+    expect(third.seq).toBe(3);
+    expect(await fresh.verifyEventChain(stream)).toEqual({ ok: true, count: 3 });
+    await fresh.close();
+    await keyed.close();
+
+    // wrong key: tamper verdict on verify, refusal on append
+    setEnv({ HZ_ANCHOR_KEY: wrongKey });
+    const wrong = new KernelClient({ workspace, stateDir });
+    expect(await wrong.start()).toBe("untrusted");
+    expect(await wrong.verifyEventChain(stream)).toEqual({ ok: false, count: 3, brokenAt: 3 });
+    await expect(wrong.appendEvent(stream, seedFor(stream, EventTypes.error, { n: 4 }, "kf-4"))).rejects.toThrow(/disagrees with its anchor/);
+    await wrong.close();
+
+    // deleted anchor: the keyed material is gone, so verification fails closed
+    setEnv({ HZ_ANCHOR_KEY: key });
+    rmSync(eventFilePath(stateDir, stream) + ".head");
+    const missing = new KernelClient({ workspace, stateDir });
+    expect(await missing.start()).toBe("untrusted");
+    await expect(missing.verifyEventChain(stream)).rejects.toThrow(/HZ_PRECONDITION_FAILED: legacy \(unkeyed\) anchor/);
+    await expect(missing.verifyEventChain(stream)).rejects.toThrow(/no anchor/);
+    await missing.close();
+  } finally {
+    setEnv({ HZ_ANCHOR_KEY: undefined, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+  }
+});
+
+test("a legacy anchor is refused while keyed unless HZ_ACCEPT_LEGACY_ANCHORS=1 (fallback)", async () => {
+  const key = "7c".repeat(32);
+  const stateDir = path.join(tempDir("hz-state-legacy-fb-"), "kernel");
+  const workspace = tempDir("hz-ws-legacy-fb-");
+  const stream = "session:legacy-fallback";
+
+  // unkeyed first: the shipped default, anchor hash == record hash
+  const plain = new KernelClient({ workspace, stateDir });
+  expect(await plain.start()).toBe("untrusted");
+  const plainEvent = await plain.appendEvent(stream, seedFor(stream, EventTypes.sessionStart, { n: 1 }, "lg-1"));
+  const plainHead = JSON.parse(readLines(eventFilePath(stateDir, stream) + ".head")[0] as string) as { hash: string; seq: number };
+  expect(plainHead).toEqual({ hash: plainEvent.hash, seq: 1 });
+  await plain.close();
+
+  setEnv({ HZ_ANCHOR_KEY: key });
+  try {
+    const strict = new KernelClient({ workspace, stateDir });
+    expect(await strict.start()).toBe("untrusted");
+    await expect(strict.verifyEventChain(stream)).rejects.toThrow(/HZ_PRECONDITION_FAILED: legacy \(unkeyed\) anchor/);
+    await expect(strict.appendEvent(stream, seedFor(stream, EventTypes.sessionEnd, { n: 2 }, "lg-2"))).rejects.toThrow(/legacy \(unkeyed\) anchor/);
+    expect(readLines(eventFilePath(stateDir, stream)).length).toBe(1);
+    await strict.close();
+
+    // explicit opt-in accepts the legacy anchor and the next append re-anchors keyed
+    setEnv({ HZ_ACCEPT_LEGACY_ANCHORS: "1" });
+    const accepting = new KernelClient({ workspace, stateDir });
+    expect(await accepting.start()).toBe("untrusted");
+    expect(await accepting.verifyEventChain(stream)).toEqual({ ok: true, count: 1 });
+    const appended = await accepting.appendEvent(stream, seedFor(stream, EventTypes.sessionEnd, { n: 2 }, "lg-2"));
+    expect(appended.seq).toBe(2);
+    await accepting.close();
+
+    setEnv({ HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+    const recheck = new KernelClient({ workspace, stateDir });
+    expect(await recheck.start()).toBe("untrusted");
+    expect(await recheck.verifyEventChain(stream)).toEqual({ ok: true, count: 2 });
+    await recheck.close();
+  } finally {
+    setEnv({ HZ_ANCHOR_KEY: undefined, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+  }
+});
+
+test("a malformed HZ_ANCHOR_KEY is refused, never silently unkeyed (fallback)", () => {
+  setEnv({ HZ_ANCHOR_KEY: "not-a-hex-key" });
+  try {
+    expect(
+      () => new KernelClient({ workspace: tempDir("hz-ws-badkey-"), stateDir: path.join(tempDir("hz-state-badkey-"), "kernel") }),
+    ).toThrow(/HZ_ANCHOR_KEY must be an even-length hex string/);
+  } finally {
+    setEnv({ HZ_ANCHOR_KEY: undefined });
+  }
 });

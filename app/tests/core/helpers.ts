@@ -50,6 +50,8 @@ export const ENV_KEYS = [
   "HZ_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
+  "HZ_ANCHOR_KEY",
+  "HZ_ACCEPT_LEGACY_ANCHORS",
 ] as const;
 
 export type EnvSnapshot = Array<readonly [string, string | undefined]>;

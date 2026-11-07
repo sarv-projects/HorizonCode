@@ -8,11 +8,15 @@
 //! (`<stream>.jsonl.lock`, `create_new`), with stale-lock takeover after 30s so a
 //! crashed process cannot wedge the log.
 //!
-//! Every append also refreshes `<stream>.jsonl.head`: the seq and hash of the
+//! Every append also refreshes `<stream>.jsonl.head`: the seq and digest of the
 //! last record, written atomically (temp file + rename). `verify` compares the
 //! chain against that anchor, so tail truncation — invisible to a bare chain
-//! walk — is detected. The residual (an attacker who can rewrite the log can
-//! also delete or rewrite the anchor) is recorded in docs/28 §4.
+//! walk — is detected. The digest is sha256 of the record's canonical preimage;
+//! when a key is configured (`HZ_ANCHOR_KEY` hex), it is instead
+//! HMAC-SHA256(key, preimage) and a legacy (unkeyed) anchor fails closed unless
+//! `HZ_ACCEPT_LEGACY_ANCHORS=1` explicitly accepts it. The residual (an actor who
+//! can rewrite the log can also delete or rewrite the anchor) is recorded in
+//! docs/28 §4, narrowed by the keyed mode.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -31,6 +35,96 @@ pub const STREAM_FILE_SUFFIX: &str = ".jsonl";
 const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(5);
 const LOCK_MAX_WAIT: Duration = Duration::from_secs(5);
+
+/* -------------------------------- anchors -------------------------------- */
+
+/// Anchor mode for one state dir. `Default` = unkeyed: every byte on disk is
+/// exactly what it was before keyed anchors existed.
+#[derive(Debug, Clone, Default)]
+pub struct AnchorConfig {
+    /// HMAC-SHA256 key for `.head` anchors; `None` = plain sha256 (legacy).
+    pub key: Option<Vec<u8>>,
+    /// Explicit opt-in to accept legacy (unkeyed or absent) anchors while keyed.
+    pub accept_legacy: bool,
+}
+
+impl AnchorConfig {
+    /// A keyed config that still refuses legacy anchors (the shipped default when
+    /// HZ_ANCHOR_KEY is set).
+    pub fn keyed(key: Vec<u8>) -> AnchorConfig {
+        AnchorConfig {
+            key: Some(key),
+            accept_legacy: false,
+        }
+    }
+
+    pub fn key(&self) -> Option<&[u8]> {
+        self.key.as_deref()
+    }
+
+    /// HZ_ANCHOR_KEY (hex, at least 32 chars) and HZ_ACCEPT_LEGACY_ANCHORS
+    /// (truthy = 1/true/anything but 0/false/empty). A malformed key is an
+    /// error, never a silent fall back to unkeyed mode.
+    pub fn from_env() -> Result<AnchorConfig, String> {
+        let key = match std::env::var("HZ_ANCHOR_KEY") {
+            Ok(raw) if !raw.trim().is_empty() => Some(parse_hex_key(raw.trim())?),
+            _ => None,
+        };
+        Ok(AnchorConfig {
+            key,
+            accept_legacy: truthy_env("HZ_ACCEPT_LEGACY_ANCHORS"),
+        })
+    }
+}
+
+pub fn parse_hex_key(hex: &str) -> Result<Vec<u8>, String> {
+    if hex.len() % 2 != 0 || hex.len() < 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(
+            "HZ_ANCHOR_KEY must be an even-length hex string of at least 32 characters".to_string(),
+        );
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    for i in (0..hex.len()).step_by(2) {
+        let byte = u8::from_str_radix(&hex[i..i + 2], 16)
+            .map_err(|_| "HZ_ANCHOR_KEY must be an even-length hex string".to_string())?;
+        out.push(byte);
+    }
+    Ok(out)
+}
+
+pub fn truthy_env(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
+        }
+        Err(_) => false,
+    }
+}
+
+/// The canonical object a record's chain hash (and its anchor digest) covers.
+pub fn record_preimage(kind: ChainKind, record: &Value) -> Value {
+    match kind {
+        ChainKind::Event => crate::canon::envelope_preimage(record),
+        ChainKind::Receipt => crate::canon::receipt_preimage(record),
+    }
+}
+
+/// The digest an anchor stores for one record: sha256 of its canonical preimage
+/// when unkeyed (equal to the record's own `hash`), HMAC-SHA256 when keyed.
+pub fn anchor_digest(kind: ChainKind, record: &Value, key: Option<&[u8]>) -> String {
+    crate::canon::anchor_digest(&record_preimage(kind, record), key)
+}
+
+/// The typed refusal for a legacy anchor while a key is configured. The
+/// `HZ_PRECONDITION_FAILED` prefix is the registered wire vocabulary
+/// (docs/07 §4.10.2); the phrase `legacy (unkeyed) anchor` is the stable marker.
+fn legacy_anchor_refusal(detail: &str) -> String {
+    format!(
+        "HZ_PRECONDITION_FAILED: legacy (unkeyed) anchor: {} — HZ_ANCHOR_KEY is configured; set HZ_ACCEPT_LEGACY_ANCHORS=1 to accept it",
+        detail
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct VerifyReport {
@@ -53,12 +147,14 @@ impl VerifyReport {
 
 pub struct EventLog {
     state_dir: PathBuf,
+    anchor: AnchorConfig,
 }
 
 impl EventLog {
-    pub fn new(state_dir: &Path) -> Self {
+    pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig) -> Self {
         EventLog {
             state_dir: state_dir.to_path_buf(),
+            anchor,
         }
     }
 
@@ -145,8 +241,8 @@ impl EventLog {
         }
         let _lock = LockFile::acquire(&path)?;
 
-        let (last_seq, prev_hash) = tail_of(&path)?;
-        ensure_anchor_matches(&path, last_seq, prev_hash.as_deref())?;
+        let (last_seq, prev_hash, tail_record) = tail_of(&path)?;
+        ensure_anchor_matches(&path, ChainKind::Event, tail_record.as_ref(), &self.anchor)?;
         let mut envelope = Map::new();
         envelope.insert("id".to_string(), Value::String(id));
         envelope.insert("seq".to_string(), json!(last_seq + 1));
@@ -170,12 +266,8 @@ impl EventLog {
         }
 
         append_line(&path, &envelope)?;
-        let hash_written = envelope
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        write_head(&path, last_seq + 1, &hash_written)?;
+        let anchor_hash = anchor_digest(ChainKind::Event, &envelope, self.anchor.key());
+        write_head(&path, last_seq + 1, &anchor_hash)?;
         Ok(envelope)
     }
 
@@ -211,7 +303,13 @@ impl EventLog {
     /// Walk the chain, checking seq continuity, prevHash links and recomputed hashes.
     pub fn verify(&self, stream: &str) -> Result<VerifyReport, String> {
         let path = self.stream_path(stream)?;
-        verify_chain(read_lines(&path)?, ChainKind::Event, read_head(&path))
+        verify_chain(
+            read_lines(&path)?,
+            ChainKind::Event,
+            read_head(&path),
+            &self.anchor,
+            &path.display().to_string(),
+        )
     }
 }
 
@@ -222,10 +320,27 @@ pub enum ChainKind {
     Receipt,
 }
 
-pub fn verify_chain(lines: Vec<String>, kind: ChainKind, head: HeadState) -> Result<VerifyReport, String> {
+/// The anchor verdict for one completed, internally consistent chain walk.
+enum AnchorCheck {
+    /// Anchor matches (or no key shines light on the case: legacy unkeyed mode).
+    Ok,
+    /// Chain and anchor disagree; the seq to report as broken.
+    Breach(u64),
+    /// A legacy (unkeyed or absent) anchor while a key is configured.
+    Legacy(String),
+}
+
+pub fn verify_chain(
+    lines: Vec<String>,
+    kind: ChainKind,
+    head: HeadState,
+    anchor: &AnchorConfig,
+    label: &str,
+) -> Result<VerifyReport, String> {
     let mut expected_seq: u64 = 1;
     let mut prev_hash: Option<String> = None;
     let mut count: u64 = 0;
+    let mut last_record: Option<Value> = None;
     let hash_of = |obj: &Value| match kind {
         ChainKind::Event => crate::canon::hash_envelope(obj),
         ChainKind::Receipt => crate::canon::hash_receipt(obj),
@@ -278,22 +393,33 @@ pub fn verify_chain(lines: Vec<String>, kind: ChainKind, head: HeadState) -> Res
         prev_hash = stored_hash.map(|s| s.to_string());
         count += 1;
         expected_seq += 1;
+        last_record = Some(record);
     }
 
     // The chain is internally consistent; now compare it against its anchor.
-    if let Some(broken_at) = anchor_breach(&head, count, prev_hash.as_deref()) {
-        return Ok(VerifyReport {
+    match anchor_check(&head, count, last_record.as_ref(), kind, anchor, label) {
+        AnchorCheck::Ok => Ok(VerifyReport {
+            ok: true,
+            count,
+            broken_at: None,
+        }),
+        AnchorCheck::Breach(broken_at) => Ok(VerifyReport {
             ok: false,
             count,
             broken_at: Some(broken_at),
-        });
+        }),
+        AnchorCheck::Legacy(message) => {
+            if anchor.accept_legacy {
+                Ok(VerifyReport {
+                    ok: true,
+                    count,
+                    broken_at: None,
+                })
+            } else {
+                Err(message)
+            }
+        }
     }
-
-    Ok(VerifyReport {
-        ok: true,
-        count,
-        broken_at: None,
-    })
 }
 
 /// Integrity anchor state for a chain file.
@@ -345,51 +471,140 @@ pub fn read_head(path: &Path) -> HeadState {
 
 /// Refuse to extend a chain whose tail disagrees with its anchor: appending
 /// onto a truncated or rewritten tail would silently bless the edit.
-pub fn ensure_anchor_matches(path: &Path, tail_seq: u64, tail_hash: Option<&str>) -> Result<(), String> {
+///
+/// Keyed mode compares the anchor against HMAC-SHA256(key, tail preimage); a
+/// legacy anchor over an intact tail is refused too (a rewriter could simply
+/// keep the old unkeyed anchor) unless `accept_legacy` was set explicitly.
+pub fn ensure_anchor_matches(
+    path: &Path,
+    kind: ChainKind,
+    tail: Option<&Value>,
+    anchor: &AnchorConfig,
+) -> Result<(), String> {
+    let tail_seq = tail
+        .and_then(|record| record.get("seq").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    let tail_hash = tail.and_then(|record| record.get("hash").and_then(|v| v.as_str()));
+    let key = anchor.key();
     match read_head(path) {
-        HeadState::Absent => Ok(()),
+        HeadState::Absent => {
+            if key.is_some() && tail_seq > 0 {
+                return Err(legacy_anchor_refusal(&format!(
+                    "chain {} has {} record(s) but no anchor",
+                    path.display(),
+                    tail_seq
+                )));
+            }
+            Ok(())
+        }
         HeadState::Invalid => Err(format!(
             "chain anchor for {} is unreadable; refusing to append",
             path.display()
         )),
         HeadState::Present(seq, hash) => {
-            let aligned = seq == tail_seq && (tail_seq == 0 || tail_hash == Some(hash.as_str()));
-            if aligned {
-                Ok(())
-            } else {
-                Err(format!(
-                    "chain tail (seq {}, hash {:?}) disagrees with its anchor (seq {}, hash {}); refusing to append",
-                    tail_seq, tail_hash, seq, hash
-                ))
+            if seq == tail_seq {
+                if tail_seq == 0 {
+                    return Ok(());
+                }
+                if let (Some(key), Some(record)) = (key, tail) {
+                    if anchor_digest(kind, record, Some(key)) == hash {
+                        return Ok(());
+                    }
+                    if tail_hash == Some(hash.as_str()) {
+                        // An unkeyed anchor over an intact tail: legacy shape.
+                        if anchor.accept_legacy {
+                            return Ok(());
+                        }
+                        return Err(legacy_anchor_refusal(&format!(
+                            "chain {} is anchored with an unkeyed anchor",
+                            path.display()
+                        )));
+                    }
+                } else if let (None, Some(tail_hash)) = (key, tail_hash) {
+                    if tail_hash == hash {
+                        return Ok(());
+                    }
+                }
             }
+            Err(format!(
+                "chain tail (seq {}, hash {:?}) disagrees with its anchor (seq {}, hash {}); refusing to append",
+                tail_seq, tail_hash, seq, hash
+            ))
         }
     }
 }
 
 /// Compare a completed, internally consistent walk of `count` records against
-/// its anchor; returns the seq to report as broken, or None.
-fn anchor_breach(head: &HeadState, count: u64, last_hash: Option<&str>) -> Option<u64> {
+/// its anchor. Returns the anchor verdict (Ok / Breach(seq) / Legacy(message)).
+fn anchor_check(
+    head: &HeadState,
+    count: u64,
+    last: Option<&Value>,
+    kind: ChainKind,
+    anchor: &AnchorConfig,
+    label: &str,
+) -> AnchorCheck {
     match head {
-        HeadState::Absent => None,
-        HeadState::Invalid => Some(count + 1),
+        HeadState::Absent => {
+            // Unkeyed: an absent anchor is a legacy chain. Keyed: a non-empty
+            // chain without its anchor has lost exactly the material the key
+            // protects, so it fails closed.
+            if anchor.key().is_some() && count > 0 {
+                AnchorCheck::Legacy(legacy_anchor_refusal(&format!(
+                    "chain {} has {} record(s) but no anchor",
+                    label, count
+                )))
+            } else {
+                AnchorCheck::Ok
+            }
+        }
+        HeadState::Invalid => AnchorCheck::Breach(count + 1),
         HeadState::Present(seq, hash) => {
             if *seq > count {
-                Some(count + 1) // records were removed from the tail
-            } else if *seq < count {
-                Some(seq + 1) // records exist the anchor never saw
-            } else if count > 0 && last_hash != Some(hash.as_str()) {
-                Some(count) // the tail record was rewritten
-            } else {
-                None
+                return AnchorCheck::Breach(count + 1); // records were removed from the tail
+            }
+            if *seq < count {
+                return AnchorCheck::Breach(seq + 1); // records exist the anchor never saw
+            }
+            if count == 0 {
+                return AnchorCheck::Ok;
+            }
+            let Some(record) = last else {
+                return AnchorCheck::Breach(count);
+            };
+            match anchor.key() {
+                None => {
+                    if record.get("hash").and_then(|v| v.as_str()) != Some(hash.as_str()) {
+                        AnchorCheck::Breach(count) // the tail record was rewritten
+                    } else {
+                        AnchorCheck::Ok
+                    }
+                }
+                Some(key) => {
+                    if anchor_digest(kind, record, Some(key)) == *hash {
+                        return AnchorCheck::Ok;
+                    }
+                    let stored = record.get("hash").and_then(|v| v.as_str());
+                    if stored == Some(hash.as_str()) {
+                        AnchorCheck::Legacy(legacy_anchor_refusal(&format!(
+                            "chain {} is anchored with an unkeyed anchor",
+                            label
+                        )))
+                    } else {
+                        AnchorCheck::Breach(count)
+                    }
+                }
             }
         }
     }
 }
 
-/// (seq, hash) of the last well-formed line, or (0, None) for an empty/absent file.
-fn tail_of(path: &Path) -> Result<(u64, Option<String>), String> {
+/// (seq, hash, last well-formed record) of the file, or (0, None, None) for an
+/// empty/absent file. The record itself is needed to recompute a keyed anchor.
+pub fn tail_of(path: &Path) -> Result<(u64, Option<String>, Option<Value>), String> {
     let mut last_seq = 0u64;
     let mut last_hash = None;
+    let mut last_record = None;
     for line in read_lines(path)? {
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
@@ -401,10 +616,11 @@ fn tail_of(path: &Path) -> Result<(u64, Option<String>), String> {
                     .get("hash")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                last_record = Some(value);
             }
         }
     }
-    Ok((last_seq, last_hash))
+    Ok((last_seq, last_hash, last_record))
 }
 
 pub fn read_lines(path: &Path) -> Result<Vec<String>, String> {

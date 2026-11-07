@@ -3,13 +3,17 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
 import { isBinary, relPath, resolvePath } from "./helpers";
 
 const MAX_RESULTS = 200;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
-const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist"]);
+// `.hzcode` holds runtime state (kernel files, the NF-071 spawn ledger), never
+// source: searching it would both waste results and let the ledger self-match a
+// query — the same exclusion repo_map applies.
+const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".hzcode"]);
 /** Directory names never searched, excluded from the walk and from ripgrep. */
-const RG_EXCLUDES = ["!**/node_modules/**", "!**/.git/**", "!**/target/**", "!**/dist/**"];
+const RG_EXCLUDES = ["!**/node_modules/**", "!**/.git/**", "!**/target/**", "!**/dist/**", "!**/.hzcode/**"];
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -57,15 +61,23 @@ async function rgSearch(
   root: string,
   globFilter: string | undefined,
   cwd: string,
+  stateDir: string,
 ): Promise<string[] | null> {
   const cmd = [exe, "--json", "--no-config", "--no-messages", "--color", "never", "-e", pattern];
   if (globFilter) cmd.push("--glob", globFilter);
   for (const exclude of RG_EXCLUDES) cmd.push("--glob", exclude);
   cmd.push(root);
 
-  let proc: any;
+  let proc: Awaited<ReturnType<typeof spawnOwned>>["proc"];
   try {
-    proc = Bun.spawn({ cmd, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    // NF-071: the single spawn path (foreground: ledger row, no supervisor).
+    // cwd/env stay inherited exactly as before; only the record is added.
+    ({ proc } = await spawnOwned(cmd, {
+      stateDir,
+      label: "grep:rg",
+      stdio: { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+      longLived: false,
+    }));
   } catch {
     return null;
   }
@@ -208,7 +220,8 @@ export const grepTool: Tool = {
       if (denied) return fail(denied);
 
       const rg = Bun.which("rg");
-      let results = rg ? await rgSearch(rg, pattern, root, globFilter, ctx.cwd) : null;
+      const stateDir = kernelStateDir(ctx.workspace);
+      let results = rg ? await rgSearch(rg, pattern, root, globFilter, ctx.cwd, stateDir) : null;
       if (results === null) results = jsSearch(pattern, root, globFilter, ctx.cwd);
 
       if (results.length === 0) return { ok: true, output: "No matches." };

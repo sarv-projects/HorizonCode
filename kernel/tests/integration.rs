@@ -9,11 +9,13 @@
 //! Coverage map:
 //!   - chain           : append/verify/read order, hash conformance to contracts.ts
 //!   - tamper          : one-byte corruption, middle-payload tamper, truncated line,
-//!                       tail truncation vs the `.head` anchor, rewritten/corrupt anchor
+//!                       tail truncation vs the `.head` anchor, rewritten/corrupt anchor,
+//!                       keyed (HMAC) anchors, legacy-anchor refusal + opt-in
 //!   - concurrency     : 4 separate processes × 5 appends on one stream
 //!   - receipts        : issue/verify/tamper, empty and absent file
 //!   - guard           : default policy matrix, policy.json override + deny precedence,
-//!                       lease matching (exact / prefix `*` / `*`), expiry, scope `*`
+//!                       docs/11 R1 ask-over-allow precedence, lease matching
+//!                       (exact / prefix `*` / `*`), expiry, scope `*`
 //!   - protocol        : malformed input, unknown methods, param validation, 1 MB payload
 //!
 //! Determinism: every test owns a unique temp state dir; the only timing
@@ -83,14 +85,26 @@ struct Kernel {
 
 impl Kernel {
     fn start(state_dir: &Path) -> Kernel {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_hz-kernel"))
+        Self::start_with_env(state_dir, &[])
+    }
+
+    /// Start a kernel with explicit env overrides. KEYED/LEGACY variables are
+    /// always scrubbed first so the outer environment can never key the tests
+    /// by accident.
+    fn start_with_env(state_dir: &Path, env: &[(&str, &str)]) -> Kernel {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
+        command
             .arg("--state-dir")
             .arg(state_dir)
+            .env_remove("HZ_ANCHOR_KEY")
+            .env_remove("HZ_ACCEPT_LEGACY_ANCHORS")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("failed to spawn hz-kernel");
+            .stderr(Stdio::inherit());
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("failed to spawn hz-kernel");
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
         Kernel {
@@ -197,6 +211,34 @@ fn sha256_hex(s: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(s.as_bytes());
     hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
+}
+
+/// Test-side HMAC-SHA256 (RFC 2104): an independent statement of the keyed
+/// anchor format, so the kernel's own canon.rs is never its own witness.
+fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
+    const BLOCK: usize = 64;
+    let mut k0 = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        k0[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        k0[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Sha256::new();
+    for byte in k0.iter() {
+        inner.update([byte ^ 0x36]);
+    }
+    inner.update(message);
+    let inner = inner.finalize();
+    let mut outer = Sha256::new();
+    for byte in k0.iter() {
+        outer.update([byte ^ 0x5c]);
+    }
+    outer.update(inner);
+    outer
         .finalize()
         .iter()
         .map(|byte| format!("{:02x}", byte))
@@ -696,6 +738,172 @@ fn receipt_tail_truncation_is_detected() {
     assert!(message.contains("anchor"), "{}", message);
 }
 
+/* --------------------------------- 2c. keyed anchors --------------------------------- */
+
+/// The keyed anchor is HMAC-SHA256(key, canonical record preimage) — verified
+/// independently over both the event log and the receipt chain.
+#[test]
+fn keyed_anchor_is_hmac_over_the_record_preimage() {
+    let dir = TempDir::new("anchor-keyed");
+    let key_hex = "5a".repeat(32);
+    let key = vec![0x5au8; 32];
+    let mut kernel = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_hex.as_str())]);
+    let stream = "session:keyed";
+
+    let first = kernel.ok("log.append", json!({ "stream": stream, "event": event_seed(0) }));
+    let second = kernel.ok("log.append", json!({ "stream": stream, "event": event_seed(1) }));
+    assert_eq!(second["prevHash"], first["hash"]);
+    assert_eq!(
+        kernel.ok("log.verify", json!({ "stream": stream })),
+        json!({ "ok": true, "count": 2 })
+    );
+
+    let head: Value = serde_json::from_str(
+        fs::read_to_string(dir.path().join("events/session__keyed.jsonl.head"))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    let expected = hmac_sha256_hex(&key, canonical_json(&envelope_preimage(&second)).as_bytes());
+    assert_eq!(head, json!({ "hash": expected, "seq": 2 }));
+    assert_ne!(
+        head["hash"], second["hash"],
+        "keyed mode must replace the plain record digest with the HMAC"
+    );
+    // The chain itself is untouched: the record hash is still plain sha256.
+    assert_eq!(second["hash"], json!(hash_envelope(&second)));
+
+    let receipt = kernel.ok(
+        "receipt.issue",
+        json!({ "action": "tool.execute", "tool": "read", "argsDigest": sha256_hex("args"), "resultDigest": sha256_hex("res") }),
+    );
+    let rhead: Value = serde_json::from_str(
+        fs::read_to_string(dir.path().join("receipts.jsonl.head"))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    assert_eq!(
+        rhead["hash"],
+        json!(hmac_sha256_hex(&key, canonical_json(&receipt_preimage(&receipt)).as_bytes()))
+    );
+    assert_eq!(rhead["seq"], json!(1));
+    assert_ne!(rhead["hash"], receipt["hash"]);
+    assert_eq!(
+        kernel.ok("receipt.verify", json!({})),
+        json!({ "ok": true, "count": 1 })
+    );
+}
+
+/// Keyed mode refuses a legacy (unkeyed) anchor on verify and on append, and
+/// the explicit opt-in accepts it, re-anchoring keyed on the next append.
+#[test]
+fn keyed_verify_refuses_legacy_anchor_and_append_refuses_it_too() {
+    let dir = TempDir::new("anchor-legacy");
+    let stream = "session:legacy";
+    let key_hex = "7b".repeat(32);
+    let key = vec![0x7bu8; 32];
+    {
+        // an unkeyed kernel writes a plain chain (the shipped default)
+        let mut plain = Kernel::start(dir.path());
+        kernel_append_two(&mut plain, stream);
+        assert_eq!(
+            plain.ok("log.verify", json!({ "stream": stream })),
+            json!({ "ok": true, "count": 2 })
+        );
+    }
+
+    // keyed, without the opt-in: a typed refusal, not a verdict
+    let mut keyed = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_hex.as_str())]);
+    let message = keyed.err("log.verify", json!({ "stream": stream }));
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("legacy (unkeyed) anchor"), "{}", message);
+    assert!(message.contains("HZ_ACCEPT_LEGACY_ANCHORS=1"), "{}", message);
+    let message = keyed.err("log.append", json!({ "stream": stream, "event": event_seed(9) }));
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert_eq!(fs::read_to_string(dir.path().join("events/session__legacy.jsonl")).unwrap().lines().count(), 2);
+
+    // opt-in: verify succeeds and the next append writes a keyed anchor
+    let mut accepting = Kernel::start_with_env(
+        dir.path(),
+        &[("HZ_ANCHOR_KEY", key_hex.as_str()), ("HZ_ACCEPT_LEGACY_ANCHORS", "1")],
+    );
+    assert_eq!(
+        accepting.ok("log.verify", json!({ "stream": stream })),
+        json!({ "ok": true, "count": 2 })
+    );
+    let third = accepting.ok("log.append", json!({ "stream": stream, "event": event_seed(9) }));
+    assert_eq!(third["seq"], json!(3));
+    let head: Value = serde_json::from_str(
+        fs::read_to_string(dir.path().join("events/session__legacy.jsonl.head"))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    assert_eq!(
+        head["hash"],
+        json!(hmac_sha256_hex(&key, canonical_json(&envelope_preimage(&third)).as_bytes()))
+    );
+
+    // a strict keyed verifier (no opt-in) is happy with the re-anchored chain
+    let mut strict = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_hex.as_str())]);
+    assert_eq!(
+        strict.ok("log.verify", json!({ "stream": stream })),
+        json!({ "ok": true, "count": 3 })
+    );
+}
+
+/// Wrong key and deleted anchor both fail closed; a malformed key refuses to start.
+#[test]
+fn keyed_anchor_fails_closed_on_wrong_key_and_missing_anchor() {
+    let dir = TempDir::new("anchor-wrong-key");
+    let stream = "session:strict";
+    let key_a = "11".repeat(32);
+    let key_b = "22".repeat(32);
+    {
+        let mut writer = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_a.as_str())]);
+        kernel_append_two(&mut writer, stream);
+    }
+
+    // wrong key: the walk passes, the anchor cannot be authenticated → tamper verdict
+    let mut wrong = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_b.as_str())]);
+    assert_eq!(
+        wrong.ok("log.verify", json!({ "stream": stream })),
+        json!({ "ok": false, "count": 2, "brokenAt": 2 })
+    );
+    let message = wrong.err("log.append", json!({ "stream": stream, "event": event_seed(9) }));
+    assert!(message.contains("disagrees with its anchor"), "{}", message);
+
+    // deleting the anchor drops the keyed material: typed refusal, not legacy acceptance
+    fs::remove_file(dir.path().join("events/session__strict.jsonl.head")).unwrap();
+    let mut keyed = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_a.as_str())]);
+    let message = keyed.err("log.verify", json!({ "stream": stream }));
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("no anchor"), "{}", message);
+
+    // a malformed key is refused at startup (exit 2), never ignored
+    let output = Command::new(env!("CARGO_BIN_EXE_hz-kernel"))
+        .arg("--state-dir")
+        .arg(dir.path())
+        .env("HZ_ANCHOR_KEY", "not-a-hex-key")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS")
+        .output()
+        .expect("spawn with a malformed key");
+    assert_eq!(output.status.code(), Some(2), "malformed key must exit 2");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("HZ_ANCHOR_KEY"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn kernel_append_two(kernel: &mut Kernel, stream: &str) {
+    for i in 0..2u64 {
+        let envelope = kernel.ok("log.append", json!({ "stream": stream, "event": event_seed(i) }));
+        assert_eq!(envelope["seq"], json!(i + 1));
+    }
+}
+
 /* ------------------------------- 3. concurrency ------------------------------- */
 
 #[test]
@@ -897,6 +1105,95 @@ fn receipts_chain_verify_tamper_and_empty_file() {
 
 /* ---------------------------------- 5. guard ---------------------------------- */
 
+/// docs/11-authority-safety.md R1: when the SAME action matches an `allow` rule
+/// and an `ask` rule, `ask` wins — in either declaration order.
+#[test]
+fn guard_ask_rule_beats_allow_rule() {
+    let dir = TempDir::new("guard-ask-over-allow");
+    let mut kernel = Kernel::start(dir.path());
+
+    // allow declared first, ask second
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "shell.exec", "scope": "*", "decision": "allow" },
+            { "kind": "shell.exec", "scope": "*", "decision": "ask" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"));
+    assert!(
+        decision["reason"].as_str().unwrap().contains("ask"),
+        "reason should name the ask rule: {}",
+        decision
+    );
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", None, None),
+        "ask",
+        "scope '*' ask rule must beat a scope '*' allow rule"
+    );
+
+    // ask declared first, allow second: declaration order must not matter
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "shell.exec", "scope": "*", "decision": "ask" },
+            { "kind": "shell.exec", "scope": "*", "decision": "allow" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
+        "ask"
+    );
+
+    // deny still beats ask and allow
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "net.fetch", "scope": "*", "decision": "allow" },
+            { "kind": "net.fetch", "scope": "*", "decision": "ask" },
+            { "kind": "net.fetch", "scope": "*", "decision": "deny" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        guard_decision(&mut kernel, "net.fetch", "https://x", Some("workspace"), None),
+        "deny"
+    );
+}
+
+/// Lease semantics are unchanged by the R1 reorder: an unexpired matching lease
+/// still grants `allow` over a matching `ask` rule.
+#[test]
+fn guard_lease_still_beats_a_matching_ask_rule() {
+    let dir = TempDir::new("guard-lease-vs-ask");
+    let mut kernel = Kernel::start(dir.path());
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([{ "kind": "shell.exec", "scope": "*", "decision": "ask" }]))
+            .unwrap(),
+    )
+    .unwrap();
+
+    let lease = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo *", "ttlMs": 60_000 }),
+    );
+    let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["leaseId"], lease["leaseId"]);
+    // outside the lease the ask rule still wins over nothing
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "rm -rf /", Some("workspace"), None),
+        "ask"
+    );
+}
+
 #[test]
 fn guard_default_policy_matrix() {
     let dir = TempDir::new("guard-default");
@@ -940,7 +1237,7 @@ fn guard_policy_json_override_and_deny_precedence() {
 
     // policy.json is picked up without a restart
     let policy = json!([
-        // deny declared after allow must still win (deny > allow > ask)
+        // deny declared after allow must still win (deny > ask > allow)
         { "kind": "fs.write", "scope": "workspace", "decision": "allow" },
         { "kind": "fs.write", "scope": "workspace", "decision": "deny" },
         // scope wildcard
@@ -1352,6 +1649,8 @@ fn cli_selftest_and_version() {
         .arg("--selftest")
         .arg("--state-dir")
         .arg(dir.path())
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS")
         .output()
         .expect("run --selftest");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1367,6 +1666,8 @@ fn cli_selftest_and_version() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_hz-kernel"))
         .arg("--version")
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS")
         .output()
         .expect("run --version");
     assert!(output.status.success());

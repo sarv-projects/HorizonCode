@@ -10,9 +10,15 @@
  *
  * The only visible difference is `kernelMode`: 'trusted' for the sandboxed Rust
  * kernel, 'untrusted' for the in-process fallback.
+ *
+ * With HZ_ANCHOR_KEY set (hex), anchors become HMAC-SHA256(key, canonical record
+ * preimage) on both sides (the keyed anchor-of-record), and a legacy (unkeyed or
+ * absent) anchor fails closed unless HZ_ACCEPT_LEGACY_ANCHORS=1 is set. Unkeyed,
+ * every byte stays exactly as it was before keying existed.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
@@ -32,28 +38,56 @@ import type {
   ReceiptInput,
 } from "../contracts";
 import { DEFAULT_POLICY, hashEnvelope, hashReceipt, newId, nowIso } from "../contracts";
-import { canonicalJson } from "./canon";
+import { canonicalJson, sha256Hex } from "./canon";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 /** A chain's last-record anchor; "corrupt" when present but unreadable. */
 type ChainHead = { seq: number; hash: string } | "corrupt";
 
+/** The fields a record's chain hash — and its anchor digest — covers. */
+const EVENT_PREIMAGE_FIELDS = ["id", "seq", "ts", "stream", "type", "actor", "payload", "prevHash"] as const;
+const RECEIPT_PREIMAGE_FIELDS = ["id", "seq", "ts", "action", "tool", "argsDigest", "resultDigest", "prevHash"] as const;
+
+/** The canonical preimage of a record, mirroring canon.rs (missing field -> null). */
+function preimageOf(record: unknown, fields: readonly string[]): Record<string, unknown> {
+  const source = (record ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of fields) out[field] = source[field] === undefined ? null : source[field];
+  return out;
+}
+
+function eventPreimageOf(record: unknown): Record<string, unknown> {
+  return preimageOf(record, EVENT_PREIMAGE_FIELDS);
+}
+
+function receiptPreimageOf(record: unknown): Record<string, unknown> {
+  const out = preimageOf(record, RECEIPT_PREIMAGE_FIELDS);
+  const leaseId = (record as Record<string, unknown> | null | undefined)?.leaseId;
+  if (leaseId !== undefined && leaseId !== null) out.leaseId = leaseId;
+  return out;
+}
+
 /**
- * Compare a completed, internally consistent walk of `count` records against the
- * chain's `.head` anchor. Returns the seq to report as broken, or undefined.
- *
- * An absent anchor is a legacy file (written before anchors existed) and is
- * accepted; the residual — an attacker who can rewrite the chain can also
- * delete its anchor — is recorded in docs/28 §4.
+ * HZ_ANCHOR_KEY: hex key enabling keyed anchors (HMAC-SHA256 over the record
+ * preimage). Undefined when unset or empty; a malformed value throws — a
+ * configured-but-broken key must never quietly become unkeyed mode.
  */
-function anchorBreach(head: ChainHead | undefined, count: number, lastHash: string | null): number | undefined {
-  if (head === undefined) return undefined;
-  if (head === "corrupt") return count + 1;
-  if (head.seq > count) return count + 1; // records were removed from the tail
-  if (head.seq < count) return head.seq + 1; // records exist the anchor never saw
-  if (count > 0 && head.hash !== lastHash) return count; // the tail record was rewritten
-  return undefined;
+export function anchorKeyFromEnv(env: Record<string, string | undefined> = process.env): Buffer | undefined {
+  const raw = env.HZ_ANCHOR_KEY;
+  const hex = typeof raw === "string" ? raw.trim() : "";
+  if (hex === "") return undefined;
+  if (hex.length % 2 !== 0 || hex.length < 32 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error("HZ_ANCHOR_KEY must be an even-length hex string of at least 32 characters");
+  }
+  return Buffer.from(hex, "hex");
+}
+
+/** HZ_ACCEPT_LEGACY_ANCHORS truthiness (1/true yes; 0/false/empty no). */
+export function acceptLegacyAnchorsFromEnv(env: Record<string, string | undefined> = process.env): boolean {
+  const raw = env.HZ_ACCEPT_LEGACY_ANCHORS;
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value !== "" && value !== "0" && value.toLowerCase() !== "false";
 }
 
 /**
@@ -157,13 +191,20 @@ function kernelBinOverride(env: Record<string, string | undefined>): string {
 export class LocalKernel {
   readonly stateDir: string;
   private readonly locks = new Map<string, Promise<unknown>>();
-  private readonly tails = new Map<string, { seq: number; hash: string; stamp: string | undefined }>();
+  private readonly tails = new Map<
+    string,
+    { seq: number; hash: string; record: Record<string, unknown>; stamp: string | undefined }
+  >();
   private readonly leases = new Map<string, Lease>();
+  private readonly anchorKey: Buffer | undefined;
+  private readonly acceptLegacy: boolean;
   private policy: PolicyRule[];
 
   constructor(opts: { stateDir: string; policy?: PolicyRule[] }) {
     this.stateDir = opts.stateDir;
     this.policy = opts.policy ?? loadPolicy(opts.stateDir);
+    this.anchorKey = anchorKeyFromEnv();
+    this.acceptLegacy = acceptLegacyAnchorsFromEnv();
   }
 
   /** Serialize writers per stream so seq/prevHash can never interleave. */
@@ -238,17 +279,93 @@ export class LocalKernel {
   /**
    * Refuse to extend a chain whose tail disagrees with its anchor: appending
    * onto a truncated or rewritten tail would silently bless the edit. Mirrors
-   * eventlog.rs::ensure_anchor_matches.
+   * eventlog.rs::ensure_anchor_matches (keyed anchors included).
    */
-  private async ensureAnchorAligned(file: string, tail: { seq: number; hash: string } | undefined): Promise<void> {
+  private async ensureAnchorAligned(
+    file: string,
+    kind: "event" | "receipt",
+    tail: { seq: number; hash: string } | undefined,
+  ): Promise<void> {
     const head = await this.readHead(file);
-    if (head === undefined) return; // legacy file without an anchor
-    if (head === "corrupt") throw new Error(`chain anchor for ${file} is unreadable; refusing to append`);
     const tailSeq = tail?.seq ?? 0;
-    const aligned = head.seq === tailSeq && (tailSeq === 0 || head.hash === tail?.hash);
-    if (!aligned) {
-      throw new Error(`chain tail (seq ${tailSeq}) disagrees with its anchor (seq ${head.seq}) for ${file}; refusing to append`);
+    if (head === undefined) {
+      if (this.anchorKey !== undefined && tailSeq > 0) {
+        throw new Error(this.legacyRefusal(`chain ${file} has ${tailSeq} record(s) but no anchor`));
+      }
+      return; // legacy file without an anchor (unkeyed mode)
     }
+    if (head === "corrupt") throw new Error(`chain anchor for ${file} is unreadable; refusing to append`);
+    if (head.seq === tailSeq) {
+      if (tailSeq === 0 || tail === undefined) return;
+      if (this.anchorKey !== undefined) {
+        if (this.anchorDigest(kind, tail) === head.hash) return;
+        if (tail.hash === head.hash) {
+          // an unkeyed anchor over an intact tail: legacy shape
+          if (this.acceptLegacy) return;
+          throw new Error(this.legacyRefusal(`chain ${file} is anchored with an unkeyed anchor`));
+        }
+      } else if (tail.hash === head.hash) {
+        return;
+      }
+    }
+    throw new Error(
+      `chain tail (seq ${tailSeq}) disagrees with its anchor (seq ${head.seq}) for ${file}; refusing to append`,
+    );
+  }
+
+  /** The typed refusal for a legacy anchor while HZ_ANCHOR_KEY is configured. */
+  private legacyRefusal(detail: string): string {
+    return `HZ_PRECONDITION_FAILED: legacy (unkeyed) anchor: ${detail} — HZ_ANCHOR_KEY is configured; set HZ_ACCEPT_LEGACY_ANCHORS=1 to accept it`;
+  }
+
+  /**
+   * The digest an anchor stores for one record: plain sha256 of the canonical
+   * preimage when unkeyed (equal to the record hash), HMAC-SHA256(key, preimage)
+   * when keyed. Mirrors eventlog.rs::anchor_digest byte-for-byte.
+   */
+  private anchorDigest(kind: "event" | "receipt", record: unknown): string {
+    const preimage = kind === "event" ? eventPreimageOf(record) : receiptPreimageOf(record);
+    const canonical = canonicalJson(preimage);
+    if (this.anchorKey === undefined) return sha256Hex(canonical);
+    return createHmac("sha256", this.anchorKey).update(canonical, "utf8").digest("hex");
+  }
+
+  /**
+   * Compare a completed, internally consistent walk of `count` records against
+   * the chain's `.head` anchor. Returns the seq to report as broken, or a typed
+   * refusal when HZ_ANCHOR_KEY is configured and the anchor is legacy (unkeyed
+   * or absent). Mirrors eventlog.rs::anchor_check.
+   */
+  private checkAnchor(
+    head: ChainHead | undefined,
+    count: number,
+    last: { hash: string; record: Record<string, unknown> } | undefined,
+    kind: "event" | "receipt",
+    label: string,
+  ): { brokenAt?: number; refusal?: string } {
+    if (head === undefined) {
+      // Unkeyed: an absent anchor is a legacy chain. Keyed: a non-empty chain
+      // without its anchor has lost exactly what the key protects.
+      if (this.anchorKey !== undefined && count > 0) {
+        return { refusal: this.legacyRefusal(`chain ${label} has ${count} record(s) but no anchor`) };
+      }
+      return {};
+    }
+    if (head === "corrupt") return { brokenAt: count + 1 };
+    if (head.seq > count) return { brokenAt: count + 1 }; // records were removed from the tail
+    if (head.seq < count) return { brokenAt: head.seq + 1 }; // records exist the anchor never saw
+    if (count === 0) return {};
+    if (last === undefined) return { brokenAt: count };
+    if (this.anchorKey !== undefined) {
+      if (this.anchorDigest(kind, last.record) === head.hash) return {};
+      if (last.hash === head.hash) {
+        if (this.acceptLegacy) return {};
+        return { refusal: this.legacyRefusal(`chain ${label} is anchored with an unkeyed anchor`) };
+      }
+      return { brokenAt: count };
+    }
+    if (head.hash !== last.hash) return { brokenAt: count }; // the tail record was rewritten
+    return {};
   }
 
   private async readEnvelopes(stream: string): Promise<EventEnvelope[]> {
@@ -287,21 +404,25 @@ export class LocalKernel {
    * windows on one workspace, or a kernel that was restarted) must never let the
    * fallback reuse a stale tail and write a colliding seq.
    */
-  private async tailOf(
+  private async tailOf<T extends { seq: number; hash: string }>(
     key: string,
     file: string,
-    read: () => Promise<Array<{ seq: number; hash: string }>>,
-  ): Promise<{ seq: number; hash: string } | undefined> {
+    read: () => Promise<T[]>,
+  ): Promise<T | undefined> {
     const stamp = fileStamp(file);
     const cached = this.tails.get(key);
-    if (cached !== undefined && cached.stamp === stamp) return { seq: cached.seq, hash: cached.hash };
+    if (cached !== undefined && cached.stamp === stamp) return cached.record as unknown as T;
     if (cached !== undefined) this.tails.delete(key);
     const items = await read();
     const last = items.length > 0 ? items[items.length - 1] : undefined;
     if (!last) return undefined;
-    const tail = { seq: last.seq, hash: last.hash };
-    this.tails.set(key, { ...tail, stamp: fileStamp(file) });
-    return tail;
+    this.tails.set(key, {
+      seq: last.seq,
+      hash: last.hash,
+      record: last as unknown as Record<string, unknown>,
+      stamp: fileStamp(file),
+    });
+    return last;
   }
 
   async ping(): Promise<{ version: string }> {
@@ -313,7 +434,7 @@ export class LocalKernel {
       const file = this.streamPath(stream);
       await mkdir(this.eventsDir(), { recursive: true });
       const tail = await this.tailOf(`events:${stream}`, file, () => this.readEnvelopes(stream));
-      await this.ensureAnchorAligned(file, tail);
+      await this.ensureAnchorAligned(file, "event", tail);
       const base: Omit<EventEnvelope, "hash"> = {
         id: seed?.id || newId(),
         seq: (tail?.seq ?? 0) + 1,
@@ -326,8 +447,13 @@ export class LocalKernel {
       };
       const envelope: EventEnvelope = { ...base, hash: hashEnvelope(base) };
       await appendFile(file, canonicalJson(envelope) + "\n", "utf8");
-      await this.writeHead(file, envelope.seq, envelope.hash);
-      this.tails.set(`events:${stream}`, { seq: envelope.seq, hash: envelope.hash, stamp: fileStamp(file) });
+      await this.writeHead(file, envelope.seq, this.anchorDigest("event", envelope));
+      this.tails.set(`events:${stream}`, {
+        seq: envelope.seq,
+        hash: envelope.hash,
+        record: envelope as unknown as Record<string, unknown>,
+        stamp: fileStamp(file),
+      });
       return envelope;
     });
   }
@@ -343,9 +469,11 @@ export class LocalKernel {
   }
 
   async verifyEventChain(stream: string): Promise<{ ok: boolean; count: number; brokenAt?: number }> {
+    const file = this.streamPath(stream);
     let count = 0;
     let prevHash: string | null = null;
-    for (const line of await this.lines(this.streamPath(stream))) {
+    let lastRecord: { hash: string; record: Record<string, unknown> } | undefined;
+    for (const line of await this.lines(file)) {
       const text = line.trim();
       if (text === "") continue;
       const expected = count + 1;
@@ -363,10 +491,12 @@ export class LocalKernel {
       const { hash, ...rest } = ev;
       if (hashEnvelope(rest) !== hash) return { ok: false, count, brokenAt: ev.seq };
       prevHash = hash;
+      lastRecord = { hash, record: ev as unknown as Record<string, unknown> };
       count = expected;
     }
-    const breach = anchorBreach(await this.readHead(this.streamPath(stream)), count, prevHash);
-    if (breach !== undefined) return { ok: false, count, brokenAt: breach };
+    const check = this.checkAnchor(await this.readHead(file), count, lastRecord, "event", file);
+    if (check.refusal !== undefined) throw new Error(check.refusal);
+    if (check.brokenAt !== undefined) return { ok: false, count, brokenAt: check.brokenAt };
     return { ok: true, count };
   }
 
@@ -375,7 +505,7 @@ export class LocalKernel {
       const file = this.receiptsPath();
       await mkdir(this.stateDir, { recursive: true });
       const tail = await this.tailOf("receipts", file, () => this.readReceipts());
-      await this.ensureAnchorAligned(file, tail);
+      await this.ensureAnchorAligned(file, "receipt", tail);
       const base: Omit<Receipt, "hash"> = {
         id: newId(),
         seq: (tail?.seq ?? 0) + 1,
@@ -389,16 +519,23 @@ export class LocalKernel {
       };
       const receipt: Receipt = { ...base, hash: hashReceipt(base) };
       await appendFile(file, canonicalJson(receipt) + "\n", "utf8");
-      await this.writeHead(file, receipt.seq, receipt.hash);
-      this.tails.set("receipts", { seq: receipt.seq, hash: receipt.hash, stamp: fileStamp(file) });
+      await this.writeHead(file, receipt.seq, this.anchorDigest("receipt", receipt));
+      this.tails.set("receipts", {
+        seq: receipt.seq,
+        hash: receipt.hash,
+        record: receipt as unknown as Record<string, unknown>,
+        stamp: fileStamp(file),
+      });
       return receipt;
     });
   }
 
   async verifyReceipts(): Promise<{ ok: boolean; count: number; brokenAt?: number }> {
+    const file = this.receiptsPath();
     let count = 0;
     let prevHash: string | null = null;
-    for (const line of await this.lines(this.receiptsPath())) {
+    let lastRecord: { hash: string; record: Record<string, unknown> } | undefined;
+    for (const line of await this.lines(file)) {
       const text = line.trim();
       if (text === "") continue;
       const expected = count + 1;
@@ -416,10 +553,12 @@ export class LocalKernel {
       const { hash, ...rest } = receipt;
       if (hashReceipt(rest) !== hash) return { ok: false, count, brokenAt: receipt.seq };
       prevHash = hash;
+      lastRecord = { hash, record: receipt as unknown as Record<string, unknown> };
       count = expected;
     }
-    const breach = anchorBreach(await this.readHead(this.receiptsPath()), count, prevHash);
-    if (breach !== undefined) return { ok: false, count, brokenAt: breach };
+    const check = this.checkAnchor(await this.readHead(file), count, lastRecord, "receipt", file);
+    if (check.refusal !== undefined) throw new Error(check.refusal);
+    if (check.brokenAt !== undefined) return { ok: false, count, brokenAt: check.brokenAt };
     return { ok: true, count };
   }
 
@@ -431,8 +570,9 @@ export class LocalKernel {
     // A `*` scope matches only `*` rules, so this default is the stricter one.
     const effective: PolicyScope = scope === undefined || (scope as string) === "" ? "*" : scope;
 
-    // deny > lease > allow > ask — the exact order guard.rs::check uses, so a
-    // decision can never widen or narrow when the transport changes.
+    // deny > lease > ask > allow (docs/11-authority-safety.md R1) — the exact
+    // order guard.rs::check uses, so a decision can never widen or narrow when
+    // the transport changes.
     const matching = this.policy.filter((rule) => ruleMatches(rule, action.kind, effective));
     const deny = matching.find((rule) => rule.decision === "deny");
     if (deny) return { decision: "deny", reason: `policy denies ${action.kind} for ${effective} targets` };
@@ -444,14 +584,17 @@ export class LocalKernel {
     const best = active[0];
     if (best) return { decision: "allow", leaseId: best.leaseId };
 
+    const ask = matching.find((rule) => rule.decision === "ask");
+    if (ask) {
+      // R1: an ask rule beats a matching allow rule; the lease above still wins
+      // on purpose — lease semantics are unchanged.
+      return { decision: "ask", reason: `${action.kind} for ${effective} targets needs approval` };
+    }
+
     const allow = matching.find((rule) => rule.decision === "allow");
     if (allow) return { decision: "allow" };
 
-    const ask = matching.find((rule) => rule.decision === "ask");
-    return {
-      decision: "ask",
-      reason: ask ? `${action.kind} for ${effective} targets needs approval` : `no policy rule allows ${action.kind}`,
-    };
+    return { decision: "ask", reason: `no policy rule allows ${action.kind}` };
   }
 
   async makeLease(kind: GuardKind, pattern: string, ttlMs: number): Promise<Lease> {
