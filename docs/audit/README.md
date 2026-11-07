@@ -48,3 +48,14 @@ The fifteen reports from the earlier deep-dive passes, preserved 2026-11-06 for 
 | `opencode-report.part4.md` | opencode | **empty (2 bytes)** — the historical gap that triggered the opencode delta pass |
 
 Truncations and the empty part are preserved exactly as found: they are the defects the final audit's delta passes exist to compensate for, and the honesty record is the point.
+
+## Pass-3 reports (`pass3/`)
+
+The four deep dives of the second adoption wave (2026-11-07), consolidated in `30-steal-list.md`:
+
+| File | Repo | Note |
+|---|---|---|
+| `audit-aider-report.md` | aider @ `5dc9490` | 900 lines; 35 steal items; repo-map algorithm + edit-format engineering; 3 verified defects |
+| `audit-mini-swe-report.md` | mini-swe-agent @ `04d809c` | 1,007 lines; 41 steal items; exhaustive (221 files); 3 doc/fixture defects |
+| `audit-hermes-report.md` | hermes-agent @ `d4e7c343` | 863 lines; 38 steal items; owner/worker persistent loop + growth machinery; shallow-clone caveat |
+| `audit-omp-deep-report.md` | oh-my-pi | 298 lines; 28 steal items; claim verification 1 confirmed / 3 partial / 2 not-verifiable |
