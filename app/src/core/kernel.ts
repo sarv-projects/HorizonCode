@@ -40,6 +40,7 @@ import type {
 import { DEFAULT_POLICY, hashEnvelope, hashReceipt, newId, nowIso } from "../contracts";
 import { canonicalJson, sha256Hex } from "./canon";
 import { pathInsideWorkspace } from "./loop";
+import { kernelStateDir } from "./paths";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -713,7 +714,9 @@ export class KernelClient {
 
   constructor(opts: KernelClientOptions) {
     this.workspace = opts.workspace;
-    this.stateDir = opts.stateDir ?? path.join(opts.workspace, ".hzcode", "kernel");
+    // Canonical `<workspace>/.hz/state/kernel`, or the legacy
+    // `<workspace>/.hzcode/kernel` in place (paths.ts owns the rule).
+    this.stateDir = opts.stateDir ?? kernelStateDir(opts.workspace);
     this.timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
     this.onModeChange = opts.onModeChange;
     this.local = new LocalKernel({ stateDir: this.stateDir });

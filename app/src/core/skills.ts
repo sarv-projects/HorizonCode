@@ -1,8 +1,9 @@
 /**
  * skills.ts — user-authored skills (markdown, optional frontmatter).
  *
- * A skill is a markdown file under `<workspace>/.hzcode/skills/*.md` or
- * `~/.hzcode/skills/*.md`:
+ * A skill is a markdown file under `<workspace>/.hz/state/skills/*.md`
+ * (canonical) or `<workspace>/.hzcode/skills/*.md` (legacy, in place), and under
+ * `~/.config/horizon/skills/*.md` or `~/.hzcode/skills/*.md` correspondingly:
  *
  *   ---
  *   name: deploy
@@ -22,6 +23,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { skillsDir as resolveWorkspaceSkillsDir, userSkillsDir } from "./paths";
 
 export interface Skill {
   name: string;
@@ -88,20 +90,16 @@ function readSkillFile(file: string): Skill | undefined {
   }
 }
 
-function skillsDir(root: string): string {
-  return path.join(root, ".hzcode", "skills");
-}
-
 /** Home first, then the workspace, so a workspace skill shadows a global one. */
 function skillDirs(workspace: string): string[] {
   const dirs: string[] = [];
   try {
     const home = os.homedir();
-    if (home !== "") dirs.push(skillsDir(home));
+    if (home !== "") dirs.push(userSkillsDir(home));
   } catch {
     /* no home directory: workspace skills only */
   }
-  dirs.push(skillsDir(workspace));
+  dirs.push(resolveWorkspaceSkillsDir(workspace));
   return dirs;
 }
 

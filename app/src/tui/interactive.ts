@@ -11,6 +11,7 @@ import * as readline from "node:readline";
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { Runtime, ToolSpec } from "../contracts";
+import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting } from "./banner";
@@ -174,7 +175,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
     });
 
-  const historyFile = path.join(workspace, ".hzcode", "history");
+  const historyFile = historyFilePath(workspace);
   loadHistory(historyFile, rl);
 
   const out = (chunk: string): void => renderer.write(chunk);

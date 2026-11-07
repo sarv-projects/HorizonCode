@@ -37,7 +37,7 @@ Six gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`):
 |---|---|---|
 | `rust-kernel-suite` | `cargo test --locked` in `kernel/` (28 tests) | docs/28 §1, Rust trust kernel — `VERIFIED` |
 | `kernel-selftest` | `hz-kernel --selftest --state-dir <fresh tmpdir>` exits 0 with `SELFTEST OK` (release-built first when absent) | docs/28 §1 — `SELFTEST OK (18 checks)` |
-| `ts-suite` | `bun test` in `app/` (438 tests across 41 files) | docs/28 §1, runtime/tools/TUI rows — `TESTED + VERIFIED` |
+| `ts-suite` | `bun test` in `app/` (490 tests across 44 files) | docs/28 §1, runtime/tools/TUI rows — `TESTED + VERIFIED` |
 | `e2e-headless-smoke` | fresh workspace, `printf 'list files' \| ./bin/hzcode --workspace <tmp>` exits 0, the mock's tool exchange appears in the output, and a non-empty `receipts.jsonl` is left behind | docs/28 §1 e2e rows |
 | `e2e-budget-rail` | the same with `HZ_MAX_STEPS=1` exits 5 with the budget notice | docs/28 §3 ruling 15 |
 | `e2e-usage-error` | `./bin/hzcode --max-steps nope` exits 2 with the diagnostic naming the flag | docs/28 §3 ruling 15; docs/14 §3.2 (exit table) |

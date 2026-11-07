@@ -1,5 +1,8 @@
 /**
- * config.test.ts — settings precedence: environment > ~/.hzcode/config.json > defaults.
+ * config.test.ts — settings precedence: environment > the user config file >
+ * defaults. The file is `~/.config/horizon/config.json` (canonical) or
+ * `~/.hzcode/config.json` when that tree exists (legacy, honoured in place —
+ * see paths.ts and state-paths.test.ts).
  *
  * `loadConfig` takes the env and the config path explicitly, which is exactly how
  * production calls it; the tests write a config file into a temp HOME, install
@@ -10,14 +13,13 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import * as path from "node:path";
 import { DEFAULT_MODELS, defaultConfigPath, describeConfig, loadConfig, missingKey, readConfigFile } from "../../src/core/config";
 import { cleanupTemps, restoreEnv, setEnv, snapshotEnv, tempDir, type EnvSnapshot } from "./helpers";
 
 let envBackup: EnvSnapshot;
 
-/** A temp HOME, optionally holding a ~/.hzcode/config.json. */
+/** A temp HOME, optionally holding the user config file (canonical-first). */
 function homeWithConfig(contents?: string): { home: string; file: string } {
   const home = tempDir("hz-home-");
   const file = defaultConfigPath(home);
@@ -67,7 +69,7 @@ test("zero configuration answers with the offline mock provider", () => {
   expect(loadConfig({ HZ_PROVIDER: "", HZ_MODEL: "   " }, file).sources.provider).toBe("default");
 });
 
-test("~/.hzcode/config.json supplies provider and model", () => {
+test("the user config file (~/.config/horizon/config.json) supplies provider and model", () => {
   cleanEnv();
   const { file } = homeWithConfig(JSON.stringify({ provider: "anthropic", model: "claude-test" }));
   const config = loadConfig({}, file);
@@ -168,10 +170,9 @@ test("a malformed or wrong-shaped config file is treated as absent", () => {
 
 test("the config path follows HOME (temp HOME installed, real one restored)", () => {
   cleanEnv();
-  expect(defaultConfigPath()).toBe(path.join(homedir(), ".hzcode", "config.json"));
 
   const home = tempDir("hz-home-env-");
-  const file = path.join(home, ".hzcode", "config.json");
+  const file = path.join(home, ".config", "horizon", "config.json");
   expect(defaultConfigPath(home)).toBe(file);
 
   setEnv({ HOME: home });
@@ -184,6 +185,11 @@ test("the config path follows HOME (temp HOME installed, real one restored)", ()
   expect(config.provider).toBe("openai");
   expect(config.model).toBe("gpt-from-home");
   expect(config.sources.provider).toBe("file");
+
+  // A home that already has the legacy tree keeps its config in place.
+  const legacyHome = tempDir("hz-home-env-legacy-");
+  mkdirSync(path.join(legacyHome, ".hzcode"), { recursive: true });
+  expect(defaultConfigPath(legacyHome)).toBe(path.join(legacyHome, ".hzcode", "config.json"));
 });
 
 test("HZ_MAX_* budget variables parse; 0 means unlimited and junk is ignored", () => {

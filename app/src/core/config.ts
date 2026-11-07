@@ -1,7 +1,9 @@
 /**
  * config.ts — the runtime's settings, resolved once at startup.
  *
- * Precedence: environment > ~/.hzcode/config.json > defaults.
+ * Precedence: environment > the user config file (`~/.config/horizon/config.json`
+ * canonical, or `~/.hzcode/config.json` when that tree exists — honoured in
+ * place, see paths.ts) > defaults.
  *
  * The default provider is `mock`, so `hzcode` starts a working chat with no
  * configuration at all. A provider-specific key in the environment
@@ -13,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import type { RunBudget } from "../contracts";
+import { userConfigDir } from "./paths";
 
 export type ProviderName = "anthropic" | "openai" | "mock";
 
@@ -56,9 +59,9 @@ interface ConfigFile {
   apiKey?: unknown;
 }
 
-/** `~/.hzcode/config.json` — the one file a human may edit by hand. */
+/** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
 export function defaultConfigPath(home: string = homedir()): string {
-  return path.join(home, ".hzcode", "config.json");
+  return path.join(userConfigDir(home), "config.json");
 }
 
 function str(value: unknown): string | undefined {

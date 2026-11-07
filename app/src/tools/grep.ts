@@ -8,12 +8,20 @@ import { isBinary, relPath, resolvePath } from "./helpers";
 
 const MAX_RESULTS = 200;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
-// `.hzcode` holds runtime state (kernel files, the NF-071 spawn ledger), never
-// source: searching it would both waste results and let the ledger self-match a
-// query — the same exclusion repo_map applies.
-const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".hzcode"]);
+// `.hz` (canonical) and `.hzcode` (legacy) hold runtime state (kernel files, the
+// NF-071 spawn ledger, the session database), never source: searching them would
+// both waste results and let the ledger self-match a query — the same exclusion
+// repo_map applies.
+const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".hz", ".hzcode"]);
 /** Directory names never searched, excluded from the walk and from ripgrep. */
-const RG_EXCLUDES = ["!**/node_modules/**", "!**/.git/**", "!**/target/**", "!**/dist/**", "!**/.hzcode/**"];
+const RG_EXCLUDES = [
+  "!**/node_modules/**",
+  "!**/.git/**",
+  "!**/target/**",
+  "!**/dist/**",
+  "!**/.hz/**",
+  "!**/.hzcode/**",
+];
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };

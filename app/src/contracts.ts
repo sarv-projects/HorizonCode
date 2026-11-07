@@ -20,7 +20,9 @@
  * NF-073 budget rails: `RunBudget` / `RunExit` are the v0.1 shape of the loop
  * safety rails (docs/24 §B NF-073; docs/28 §3 ruling 15).
  *
- * Kernel state layout (under --state-dir, default <workspace>/.hzcode/kernel):
+ * Kernel state layout (under --state-dir; default `<workspace>/.hz/state/kernel`
+ * canonical, or `<workspace>/.hzcode/kernel` in a legacy workspace, honoured in
+ * place — the rule lives in app/src/core/paths.ts):
  *   events/<stream-sanitized>.jsonl   append-only chained event streams
  *   receipts.jsonl                    append-only chained receipts
  *   policy.json                       optional policy override (see DEFAULT_POLICY)

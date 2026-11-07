@@ -10,7 +10,6 @@
  */
 
 import * as path from "node:path";
-import { realpathSync } from "node:fs";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type {
   ActorRef,
@@ -46,7 +45,12 @@ import {
   windowForModel,
 } from "./output-budget";
 import type { KernelClient } from "./kernel";
+import { realpathish, spillDir as workspaceSpillDir } from "./paths";
 import type { SessionStore } from "./session";
+
+// The symlink-aware resolution moved to paths.ts (the single state-path
+// resolver); re-exported so every existing `from "./loop"` import keeps working.
+export { realpathish };
 
 /** Hard ceiling on provider calls inside a single send(). */
 export const MAX_PROVIDER_CALLS = 25;
@@ -141,29 +145,6 @@ export function parseArguments(raw: string): { args: Record<string, unknown>; er
 function escapes(root: string, target: string): boolean {
   const rel = path.relative(root, target);
   return rel !== "" && (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel));
-}
-
-/**
- * Resolve a path to where it really lives, following symlinks for the portion
- * that exists on disk. A path that does not exist yet is resolved through its
- * deepest existing ancestor, so a symlinked parent cannot hide where a new file
- * will actually land. Falls back to the lexical path when nothing can be
- * resolved (e.g. the root itself), which is the previous behaviour.
- */
-export function realpathish(target: string): string {
-  let current = path.resolve(target);
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      const real = realpathSync(current);
-      return tail.length === 0 ? real : path.join(real, ...tail.reverse());
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) return path.resolve(target);
-      tail.push(path.basename(current));
-      current = parent;
-    }
-  }
 }
 
 /**
@@ -374,6 +355,12 @@ function toolMessageContent(result: ToolResult, text: string): string {
 
 export function streamFor(sessionId: string): string {
   return `session:${sessionId}`;
+}
+
+/** The spill directory as the marker shows it: relative to the workspace. */
+function displaySpillPath(workspace: string): string {
+  const relative = path.relative(path.resolve(workspace), workspaceSpillDir(workspace));
+  return relative === "" || relative.startsWith("..") ? workspaceSpillDir(workspace) : relative;
 }
 
 /* ------------------------------- guard gate ------------------------------- */
@@ -836,8 +823,8 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
   // receipt digest below stays the digest of the FULL output — the cap is a
   // context budget, never an evidence change.
   const plan = planToolOutputCap(typeof result.output === "string" ? result.output : "", {
-    spillDir: path.join(deps.workspace, ".hzcode", "spills"),
-    displaySpillDir: path.join(".hzcode", "spills"),
+    spillDir: workspaceSpillDir(deps.workspace),
+    displaySpillDir: displaySpillPath(deps.workspace),
   });
   if (plan.spill) {
     try {

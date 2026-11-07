@@ -146,7 +146,8 @@ function scriptedProvider(turns: ProviderEvent[][], captured: Array<{ maxTokens?
 }
 
 function depsFor(provider: Provider, budget: Record<string, number>): { deps: LoopDeps; kernel: KernelClient; store: SessionStore } {
-  const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+  // Default state resolution: a fresh workspace uses the canonical tree.
+  const kernel = new KernelClient({ workspace });
   const store = new SessionStore(workspace);
   const deps: LoopDeps = {
     workspace,
@@ -186,10 +187,10 @@ describe("the loop caps tool output and shores up the spill", () => {
         .map((m) => m.content)
         .join("");
       expect(content).toContain("[truncated:");
-      expect(content).toContain(".hzcode/spills/");
+      expect(content).toContain(".hz/state/spills/");
       expect(content.length).toBeLessThan(20_000);
 
-      const spillDir = path.join(workspace, ".hzcode", "spills");
+      const spillDir = path.join(workspace, ".hz", "state", "spills");
       const files = readdirSync(spillDir);
       expect(files.length).toBe(1);
       const spill = readFileSync(path.join(spillDir, files[0] as string), "utf8");
@@ -201,7 +202,7 @@ describe("the loop caps tool output and shores up the spill", () => {
       expect(spill.startsWith(prefix)).toBe(true);
 
       // …and the receipt's digest is the digest of the FULL output, not the cap.
-      const receipts = readJsonl<{ resultDigest: string }>(receiptsFilePath(path.join(workspace, ".hzcode", "kernel")));
+      const receipts = readJsonl<{ resultDigest: string }>(receiptsFilePath(path.join(workspace, ".hz", "state", "kernel")));
       expect(receipts.length).toBe(1);
       expect(receipts[0]?.resultDigest).toBe(sha256Hex(spill));
     } finally {
