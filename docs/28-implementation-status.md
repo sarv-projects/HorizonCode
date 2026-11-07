@@ -40,7 +40,7 @@
 cd kernel && cargo test
 
 # Full TypeScript suite (~8 s)
-cd app && /home/forge/.bun/bin/bun test        # 372 pass / 0 fail / 35 files
+cd app && /home/forge/.bun/bin/bun test        # 381 pass / 0 fail / 36 files
 
 # End-to-end, human path
 cd /data/home/forge/HorizonCode && printf 'list files' | ./bin/hzcode
@@ -84,7 +84,7 @@ All suites complete — the totals above are from the integrator's final green r
 
 ## 4. Known gaps / next work (front of the queue)
 
-1. **B-1 repo-map tool landed (V2 wave 5); hostile-read fixtures (item 8, partial) in wave 6a; nothing else in flight.** The `repo_map` tool ships the B-1 ranking (personalised PageRank + focus multipliers + binary-search budget) in its documented reduced lexical form, per ruling 19 (NF-074 wave 4, NF-069/052 ladder wave 3, NF-073 rails wave 2, NF-072 batches wave 1). Wave 6a hardened `read` against hostile inputs (symlinks resolved before Guard, FIFOs/devices refused, >32 MiB refused) with 8 fixtures. Final full runs: `bun test` 372 pass / 0 fail (35 files); `cargo test` 17 integration + 3 unit green; `ops/gates.sh` 6/6. Next from the `docs/30` §4 queue: item 6 (NF-071 managed runtime, in flight), then item 7 (NF-075 growth loop), item 8 remainder.
+1. **B-1 repo-map tool landed (V2 wave 5); hostile-read fixtures (wave 6a) and the metric-contract helper (wave 6b) are item 8 partials; nothing else of mine in flight.** The `repo_map` tool ships the B-1 ranking (personalised PageRank + focus multipliers + binary-search budget) in its documented reduced lexical form, per ruling 19 (NF-074 wave 4, NF-069/052 ladder wave 3, NF-073 rails wave 2, NF-072 batches wave 1). Wave 6a hardened `read` against hostile inputs (symlinks resolved before Guard, FIFOs/devices refused, >32 MiB refused) with 8 fixtures; wave 6b adds the H-7 metric-contract helper (`core/metrics.ts`: a published number without Metric/Anchor/Population/Excludes is refused). Final full runs: `bun test` 381 pass / 0 fail (36 files); `cargo test` 17 integration + 3 unit green; `ops/gates.sh` 6/6. In-flight workstreams (not yet recorded here): NF-071 managed runtime; kernel guard precedence + keyed anchors; number-format contract + internal capability IDs. Next from the `docs/30` §4 queue after those land: item 7 (NF-075 growth loop), item 8 remainder.
 2. **Real-provider validation** (needs API keys): one live chat each through the Anthropic and OpenAI adapters. The adapters are pinned by the canned-server suites — this is the last mile.
 3. **V2+ is the next planning surface** — docs/27 sequences it (planner/executor duality, memory tiers, compaction, sandbox matrix, surfaces, governance). Land additions through the same ladder and update this table in the same commit.
 4. **Keep this file honest** — statuses and counts update in the same commit as the code that changes them.
