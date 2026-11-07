@@ -46,7 +46,10 @@ describe("edit tool", () => {
     const r = await editTool.execute({ path: "f.txt", old: "absent", new: "x" }, mockToolContext({ cwd: ws }));
     expect(r.ok).toBe(false);
     expect(r.output).toBe("");
-    expect(r.error).toBe("old string not found in f.txt");
+    // NF-069 ladder: the failure is diff-shaped feedback now, pinned in full by
+    // tests/tools/edit-ladder.test.ts; the first line stays byte-compatible.
+    expect(r.error.startsWith("old string not found in f.txt")).toBe(true);
+    expect(r.error).toContain("no similar lines found");
     expect(readFixture(ws, "f.txt")).toBe("hello world\n");
   });
 
