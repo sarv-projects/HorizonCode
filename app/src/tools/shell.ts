@@ -2,12 +2,77 @@
 
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { resolvePath, scrubEnv, truncate } from "./helpers";
+import { readTool } from "./read";
 
 const MAX_OUTPUT = 30_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 /** How long to keep draining output pipes after the direct child has exited. */
 const DRAIN_GRACE_MS = 500;
+
+/** Programs that need a terminal to be usable at all (NF-074 interception). */
+const INTERACTIVE_BLOCKLIST = new Set(["vim", "vi", "nano", "emacs", "pico", "less", "more", "man", "top", "htop", "watch", "tmux", "screen"]);
+/** Interpreters that are REPLs when invoked bare (no script argument). */
+const REPL_BLOCKLIST = new Set(["python", "python3", "ipython", "node", "irb", "ruby", "ghci", "perl", "php"]);
+
+export type ShellPlan =
+  | { action: "run" }
+  | { action: "refuse"; reason: string }
+  | { action: "intercept-read"; path: string };
+
+/**
+ * NF-074(d): dedicated-tool interception and the interactive blocklist, applied
+ * BEFORE Guard — an interception narrows (shell.exec → the read tool's own
+ * fs.read admission), so there is no widened path. Byte-stable decisions.
+ */
+export function classifyShellCommand(command: string, allowInteractive = false): ShellPlan {
+  if (allowInteractive) return { action: "run" };
+  const parts = (typeof command === "string" ? command : "").trim().split(/\s+/).filter((p) => p !== "");
+  let i = 0;
+  while (i < parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i] as string)) i += 1;
+  const head = parts[i] ?? "";
+  const base = head.split("/").pop() ?? head;
+  const rest = parts.slice(i + 1);
+  if (base === "cat" && rest.length === 1 && !(rest[0] as string).startsWith("-")) {
+    return { action: "intercept-read", path: rest[0] as string };
+  }
+  if (INTERACTIVE_BLOCKLIST.has(base)) return { action: "refuse", reason: `${base} needs a terminal` };
+  if (base === "tail" && rest.some((t) => t === "-f" || t === "-F" || /^-[0-9]*[fF]$/.test(t))) {
+    return { action: "refuse", reason: "tail -f streams forever" };
+  }
+  if (REPL_BLOCKLIST.has(base) && rest.every((t) => t.startsWith("-"))) {
+    return { action: "refuse", reason: `${base} without a script is an interactive REPL` };
+  }
+  return { action: "run" };
+}
+
+const ANSI_OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const ANSI_ESC = /\x1b[@-Z\\-_]/g;
+const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
+/**
+ * NF-074(c): the shell-output minimiser, on by default. Strips ANSI/OSC
+ * sequences and control characters, resolves carriage-return progress lines
+ * to their final state, trims trailing whitespace and collapses blank runs.
+ * Returns the text unchanged (and changed:false) when there is nothing to do.
+ */
+export function minimiseShellOutput(raw: string): { text: string; changed: boolean } {
+  const input = typeof raw === "string" ? raw : "";
+  const text = input
+    .replace(ANSI_OSC, "")
+    .replace(ANSI_CSI, "")
+    .replace(ANSI_ESC, "")
+    .split("\n")
+    .map((line) => {
+      const at = line.lastIndexOf("\r");
+      const settled = at === -1 ? line : line.slice(at + 1);
+      return settled.replace(CONTROL, "").replace(/[ \t]+$/, "");
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+  return { text, changed: text !== input };
+}
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -55,6 +120,21 @@ export const shellTool: Tool = {
 
       const dir = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(ctx.cwd, args.cwd) : ctx.cwd;
       const timeoutMs = Math.min(numberOr(args.timeoutMs, DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS);
+
+      // NF-074(d): interception and the interactive blocklist run before Guard.
+      const plan = classifyShellCommand(command, process.env.HZ_ALLOW_INTERACTIVE === "1");
+      if (plan.action === "refuse") {
+        return fail(`interactive command blocked (interception): ${plan.reason}; set HZ_ALLOW_INTERACTIVE=1 to override`);
+      }
+      if (plan.action === "intercept-read") {
+        // `cat <file>` is the read tool's job: it asks(read) for its own guard,
+        // capped output, and the model sees one honest notice.
+        const target = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(dir, plan.path) : plan.path;
+        const readResult = await readTool.execute({ path: target }, ctx);
+        const notice = `[intercepted: cat ${plan.path} \u2192 read tool]`;
+        if (readResult.ok) return { ok: true, output: `${notice}\n${readResult.output}` };
+        return { ok: false, output: notice, error: readResult.error ?? "read failed" };
+      }
 
       const action: GuardAction = { kind: "shell.exec", target: command };
       const decision = await ctx.guard(action);
@@ -150,7 +230,11 @@ export const shellTool: Tool = {
         ctx.signal.removeEventListener("abort", onAbort);
       }
 
-      const body = truncate(out, MAX_OUTPUT).replace(/\n+$/, "");
+      const minimised = minimiseShellOutput(out);
+      const flag = minimised.changed
+        ? `\n[output minimised: ${Buffer.byteLength(out, "utf8")} \u2192 ${Buffer.byteLength(minimised.text, "utf8")} bytes]`
+        : "";
+      const body = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "") + flag;
       if (aborted) return { ok: false, output: body, error: "aborted" };
       if (timedOut) {
         return { ok: false, output: `${body}\n[timed out after ${timeoutMs}ms]`, error: `timed out after ${timeoutMs}ms` };
