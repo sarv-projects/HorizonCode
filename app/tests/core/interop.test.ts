@@ -11,7 +11,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import * as path from "node:path";
 import type { EventEnvelope, GuardAction, PolicyScope, Receipt } from "../../src/contracts";
 import { EventTypes, canonicalJson } from "../../src/contracts";
@@ -21,6 +22,7 @@ import {
   assertReceiptChain,
   cleanupTemps,
   eventFilePath,
+  eventPreimage,
   hasRustKernel,
   readJsonl,
   readLines,
@@ -350,6 +352,10 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     const policy = [
       { kind: "fs.read", scope: "workspace", decision: "deny" },
       { kind: "shell.exec", scope: "*", decision: "allow" },
+      // docs/11 R1: a matching ask rule must beat a matching allow rule in both
+      // implementations, whatever the declaration order.
+      { kind: "net.fetch", scope: "*", decision: "ask" },
+      { kind: "net.fetch", scope: "*", decision: "allow" },
     ];
     const workspace = tempDir("hz-ws-pol-");
     const writePolicy = (dir: string): string => {
@@ -364,6 +370,7 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
       [{ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace", "deny"],
       [{ kind: "fs.write", target: path.join(workspace, "a.txt") }, "workspace", "ask"],
       [{ kind: "shell.exec", target: "echo hi" }, "*", "allow"],
+      [{ kind: "net.fetch", target: "https://example.invalid" }, "*", "ask"],
     ];
     for (const [action, scope, expected] of cases) {
       const [fromRust, fromLocal] = await Promise.all([rust.checkGuard(action, scope), local.checkGuard(action, scope)]);
@@ -481,5 +488,199 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     );
     expect(refused.replies[0]?.error?.message ?? "").toContain("anchor");
     await client.close();
+  });
+
+  test("keyed anchors: byte-identical files and cross-verification in both directions", async () => {
+    const key = "9c".repeat(32);
+    setEnv({ HZ_ANCHOR_KEY: key, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+    try {
+      const workspace = tempDir("hz-ws-keyed-i-");
+      const localDir = path.join(tempDir("hz-state-keyed-local-"), "kernel");
+      const rustDir = path.join(tempDir("hz-state-keyed-rust-"), "kernel");
+      const stream = "session:keyed-interop";
+      const hmac = (preimage: Record<string, unknown>): string =>
+        createHmac("sha256", Buffer.from(key, "hex")).update(canonicalJson(preimage), "utf8").digest("hex");
+
+      // (a) the TS fallback writes; its anchor is HMAC over the event preimage
+      const local = await localClient(localDir, workspace);
+      const seed = seedFor(stream, EventTypes.sessionStart, { keyed: true }, "ki-1");
+      const localEvent = await local.appendEvent(stream, seed);
+      const headLocal = JSON.parse(readLines(eventFilePath(localDir, stream) + ".head")[0] as string) as { hash: string; seq: number };
+      expect(headLocal).toEqual({ hash: hmac(eventPreimage(localEvent)), seq: 1 });
+      expect(headLocal.hash).not.toBe(localEvent.hash);
+
+      // (b) the same seed through the Rust kernel: identical record and anchor
+      const rustRun = runKernelNdjson(
+        [
+          { id: 1, method: "log.append", params: { stream, event: seed } },
+          { id: 2, method: "log.verify", params: { stream } },
+          { id: 3, method: "receipt.issue", params: { action: "tool.execute", tool: "read", argsDigest: "cd".repeat(32), resultDigest: "ef".repeat(32) } },
+          { id: 4, method: "receipt.verify", params: {} },
+        ],
+        rustDir,
+      );
+      expect(rustRun.status).toBe(0);
+      const rustEvent = replyResult<EventEnvelope>(rustRun.replies, 1);
+      expect(rustEvent).toEqual(localEvent);
+      expect(readLines(eventFilePath(rustDir, stream) + ".head")).toEqual(readLines(eventFilePath(localDir, stream) + ".head"));
+      expect(replyResult(rustRun.replies, 2)).toEqual({ ok: true, count: 1 });
+      const rustReceipt = replyResult<Receipt>(rustRun.replies, 3);
+      expect(replyResult(rustRun.replies, 4)).toEqual({ ok: true, count: 1 });
+      expect(JSON.parse(readLines(receiptsFilePath(rustDir) + ".head")[0] as string)).toEqual({
+        hash: hmac(receiptPreimage(rustReceipt)),
+        seq: 1,
+      });
+
+      // (c) a fresh TS client verifies the Rust-written keyed chain and extends it
+      const verifier = await localClient(rustDir, workspace);
+      expect(await verifier.verifyEventChain(stream)).toEqual({ ok: true, count: 1 });
+      expect(await verifier.verifyReceipts()).toEqual({ ok: true, count: 1 });
+      const extended = await verifier.appendEvent(stream, seedFor(stream, EventTypes.sessionEnd, { n: 2 }, "ki-2"));
+      expect(extended.seq).toBe(2);
+      expect(extended.prevHash).toBe(rustEvent.hash);
+      const tsReceipt = await verifier.issueReceipt({
+        action: "tool.execute",
+        tool: "grep",
+        argsDigest: "12".repeat(32),
+        resultDigest: "34".repeat(32),
+      });
+      expect(tsReceipt.seq).toBe(2);
+      expect(rustReceipt.prevHash).toBeNull();
+      await verifier.close();
+
+      // (d) the Rust kernel verifies the TS keyed extension and the keyed tail anchor
+      const after = runKernelNdjson(
+        [
+          { id: 1, method: "log.verify", params: { stream } },
+          { id: 2, method: "receipt.verify", params: {} },
+          { id: 3, method: "log.read", params: { stream, fromSeq: 2 } },
+        ],
+        rustDir,
+      );
+      expect(replyResult(after.replies, 1)).toEqual({ ok: true, count: 2 });
+      expect(replyResult(after.replies, 2)).toEqual({ ok: true, count: 2 });
+      expect(replyResult(after.replies, 3)).toEqual({ events: [extended] });
+      const finalHead = JSON.parse(readLines(eventFilePath(rustDir, stream) + ".head")[0] as string) as { hash: string; seq: number };
+      expect(finalHead).toEqual({ hash: hmac(eventPreimage(extended)), seq: 2 });
+      await local.close();
+    } finally {
+      setEnv({ HZ_ANCHOR_KEY: undefined, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+    }
+  });
+
+  test("keyed verification refuses legacy anchors in both implementations; the opt-in accepts", async () => {
+    const key = "4e".repeat(32);
+    const workspace = tempDir("hz-ws-keyed-legacy-");
+    const stateDir = path.join(tempDir("hz-state-keyed-legacy-"), "kernel");
+    const stream = "session:legacy-interop";
+
+    // an unkeyed chain written by the Rust kernel (the shipped default)
+    const plain = runKernelNdjson(
+      [
+        { id: 1, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.sessionStart, { n: 1 }, "li-1") } },
+        { id: 2, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.messageEnd, { n: 2 }, "li-2") } },
+        { id: 3, method: "receipt.issue", params: { action: "tool.execute", tool: "read", argsDigest: "aa".repeat(32), resultDigest: "bb".repeat(32) } },
+      ],
+      stateDir,
+    );
+    expect(plain.status).toBe(0);
+
+    setEnv({ HZ_ANCHOR_KEY: key });
+    try {
+      // the TS fallback refuses, and says why in the typed form
+      const strict = await localClient(stateDir, workspace);
+      await expect(strict.verifyEventChain(stream)).rejects.toThrow(/HZ_PRECONDITION_FAILED: legacy \(unkeyed\) anchor/);
+      await expect(strict.verifyReceipts()).rejects.toThrow(/legacy \(unkeyed\) anchor/);
+      await expect(strict.appendEvent(stream, seedFor(stream, EventTypes.error, { n: 3 }, "li-3"))).rejects.toThrow(/legacy \(unkeyed\) anchor/);
+      await strict.close();
+
+      // the Rust kernel refuses the same way over the wire
+      const refused = runKernelNdjson(
+        [
+          { id: 1, method: "log.verify", params: { stream } },
+          { id: 2, method: "receipt.verify", params: {} },
+          { id: 3, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.error, { n: 3 }, "li-3") } },
+        ],
+        stateDir,
+      );
+      expect(refused.replies[0]?.error?.message ?? "").toContain("HZ_PRECONDITION_FAILED");
+      expect(refused.replies[1]?.error?.message ?? "").toContain("legacy (unkeyed) anchor");
+      expect(refused.replies[2]?.error?.message ?? "").toContain("HZ_PRECONDITION_FAILED");
+
+      // explicit opt-in: both accept; the Rust kernel re-anchors keyed on append
+      setEnv({ HZ_ACCEPT_LEGACY_ANCHORS: "1" });
+      const accepting = await localClient(stateDir, workspace);
+      expect(await accepting.verifyEventChain(stream)).toEqual({ ok: true, count: 2 });
+      expect(await accepting.verifyReceipts()).toEqual({ ok: true, count: 1 });
+      await accepting.close();
+      const accepted = runKernelNdjson(
+        [
+          { id: 1, method: "log.verify", params: { stream } },
+          { id: 2, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.sessionEnd, { n: 3 }, "li-3") } },
+          { id: 3, method: "log.verify", params: { stream } },
+        ],
+        stateDir,
+      );
+      expect(replyResult(accepted.replies, 1)).toEqual({ ok: true, count: 2 });
+      const third = replyResult<EventEnvelope>(accepted.replies, 2);
+      expect(third.seq).toBe(3);
+      expect(replyResult(accepted.replies, 3)).toEqual({ ok: true, count: 3 });
+      const head = JSON.parse(readLines(eventFilePath(stateDir, stream) + ".head")[0] as string) as { hash: string; seq: number };
+      expect(head.hash).toBe(
+        createHmac("sha256", Buffer.from(key, "hex")).update(canonicalJson(eventPreimage(third)), "utf8").digest("hex"),
+      );
+
+      // strict keyed verifiers (no opt-in) accept the re-anchored chain
+      setEnv({ HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+      const recheck = await localClient(stateDir, workspace);
+      expect(await recheck.verifyEventChain(stream)).toEqual({ ok: true, count: 3 });
+      await recheck.close();
+      const strictRust = runKernelNdjson([{ id: 1, method: "log.verify", params: { stream } }], stateDir);
+      expect(replyResult(strictRust.replies, 1)).toEqual({ ok: true, count: 3 });
+    } finally {
+      setEnv({ HZ_ANCHOR_KEY: undefined, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+    }
+  });
+
+  test("a wrong key or a deleted anchor fails closed in both implementations", async () => {
+    const keyA = "11".repeat(32);
+    const keyB = "33".repeat(32);
+    const workspace = tempDir("hz-ws-keyed-wrong-");
+    const stateDir = path.join(tempDir("hz-state-keyed-wrong-"), "kernel");
+    const stream = "session:wrong-key";
+    setEnv({ HZ_ANCHOR_KEY: keyA });
+    try {
+      const writer = runKernelNdjson(
+        [
+          { id: 1, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.sessionStart, { n: 1 }, "wk-1") } },
+          { id: 2, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.messageEnd, { n: 2 }, "wk-2") } },
+        ],
+        stateDir,
+      );
+      expect(writer.status).toBe(0);
+
+      // wrong key: same tamper verdict in both implementations
+      setEnv({ HZ_ANCHOR_KEY: keyB });
+      const wrong = await localClient(stateDir, workspace);
+      expect(await wrong.verifyEventChain(stream)).toEqual({ ok: false, count: 2, brokenAt: 2 });
+      await expect(wrong.appendEvent(stream, seedFor(stream, EventTypes.error, { n: 3 }, "wk-3"))).rejects.toThrow(/disagrees with its anchor/);
+      await wrong.close();
+      const wrongRust = runKernelNdjson([{ id: 1, method: "log.verify", params: { stream } }], stateDir);
+      expect(replyResult(wrongRust.replies, 1)).toEqual({ ok: false, count: 2, brokenAt: 2 });
+
+      // deleted anchor under the right key: typed refusal in both implementations
+      setEnv({ HZ_ANCHOR_KEY: keyA });
+      rmSync(eventFilePath(stateDir, stream) + ".head");
+      const missing = await localClient(stateDir, workspace);
+      await expect(missing.verifyEventChain(stream)).rejects.toThrow(/HZ_PRECONDITION_FAILED: legacy \(unkeyed\) anchor/);
+      await expect(missing.verifyEventChain(stream)).rejects.toThrow(/no anchor/);
+      await missing.close();
+      const missingRust = runKernelNdjson([{ id: 1, method: "log.verify", params: { stream } }], stateDir);
+      const message = missingRust.replies[0]?.error?.message ?? "";
+      expect(message).toContain("HZ_PRECONDITION_FAILED");
+      expect(message).toContain("no anchor");
+    } finally {
+      setEnv({ HZ_ANCHOR_KEY: undefined, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
+    }
   });
 });

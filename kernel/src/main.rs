@@ -75,10 +75,20 @@ fn run() -> i32 {
     // Event payloads and receipts are not world-readable material.
     permm::private_dir(&dir);
 
+    // Keyed anchors: HZ_ANCHOR_KEY (hex) flips anchors to HMAC-SHA256; a
+    // malformed key is refused outright rather than silently left unkeyed.
+    let anchor = match eventlog::AnchorConfig::from_env() {
+        Ok(anchor) => anchor,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return 2;
+        }
+    };
+
     if selftest {
-        return selftest_run(&dir);
+        return selftest_run(&dir, &anchor);
     }
-    serve(&dir)
+    serve(&dir, anchor)
 }
 
 fn default_state_dir() -> PathBuf {
@@ -96,11 +106,13 @@ fn default_state_dir() -> PathBuf {
 fn print_help() {
     println!("hz-kernel {} — HorizonCode trust kernel", VERSION);
     println!("usage: hz-kernel [--state-dir <path>] [--selftest] [--version]");
+    println!("env:   HZ_ANCHOR_KEY=<hex>             keyed HMAC-SHA256 chain anchors");
+    println!("       HZ_ACCEPT_LEGACY_ANCHORS=1      accept legacy anchors while keyed");
 }
 
 /// NDJSON loop: one response line per request, flushed immediately.
-fn serve(dir: &Path) -> i32 {
-    let kernel = Kernel::new(dir);
+fn serve(dir: &Path, anchor: eventlog::AnchorConfig) -> i32 {
+    let kernel = Kernel::new_with_anchor(dir, anchor);
     let stdin = std::io::stdin();
     let mut out = BufWriter::new(std::io::stdout().lock());
 
@@ -168,8 +180,8 @@ fn call(kernel: &Kernel, method: &str, params: Value) -> Result<Value, String> {
         .ok_or_else(|| format!("{} returned no result", method))
 }
 
-fn selftest_run(dir: &Path) -> i32 {
-    let kernel = Kernel::new(dir);
+fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
+    let kernel = Kernel::new_with_anchor(dir, anchor.clone());
     let stream = "session:selftest";
     let mut checks = Checks::new();
 
@@ -364,6 +376,72 @@ fn selftest_run(dir: &Path) -> i32 {
         "malformed request -> error id null",
         malformed.get("error").is_some() && malformed.get("id") == Some(&Value::Null),
     );
+
+    // 10. keyed anchors: anchor digest = HMAC-SHA256(key, record preimage);
+    // a legacy (unkeyed) anchor fails closed unless legacy acceptance is asked for.
+    let keyed_dir = dir.join("selftest-keyed");
+    let key = b"hz-selftest-anchor-key-000000000".to_vec();
+    let keyed = Kernel::new_with_anchor(&keyed_dir, eventlog::AnchorConfig::keyed(key.clone()));
+    let keyed_stream = "session:selftest-keyed";
+    match call(
+        &keyed,
+        "log.append",
+        json!({ "stream": keyed_stream, "event": { "type": "session.start", "payload": { "keyed": true } } }),
+    ) {
+        Ok(event) => {
+            let event_hash = event
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let expected = canon::anchor_digest(&canon::envelope_preimage(&event), Some(&key));
+            let head = eventlog::read_head(&keyed_dir.join("events/session__selftest-keyed.jsonl"));
+            checks.check(
+                "keyed anchor is HMAC over the record preimage",
+                matches!(&head, eventlog::HeadState::Present(1, digest) if digest == &expected && digest != &event_hash),
+            );
+            let verified = matches!(
+                call(&keyed, "log.verify", json!({ "stream": keyed_stream })),
+                Ok(report) if report.get("ok") == Some(&Value::Bool(true)) && report.get("count") == Some(&json!(1))
+            );
+            checks.check("keyed chain verifies", verified);
+
+            // Rewrite the anchor into the legacy (unkeyed) shape: fail closed.
+            let head_path = keyed_dir.join("events/session__selftest-keyed.jsonl.head");
+            let legacy_body = serde_json::to_string(&json!({ "hash": event_hash, "seq": 1 }))
+                .unwrap_or_default();
+            let wrote = std::fs::write(&head_path, format!("{}\n", legacy_body)).is_ok();
+            let refused = matches!(
+                call(&keyed, "log.verify", json!({ "stream": keyed_stream })),
+                Err(e) if e.contains("HZ_PRECONDITION_FAILED") && e.contains("legacy (unkeyed) anchor")
+            );
+            checks.check("legacy anchor refused while keyed", wrote && refused);
+
+            let accepting = Kernel::new_with_anchor(
+                &keyed_dir,
+                eventlog::AnchorConfig {
+                    key: Some(key.clone()),
+                    accept_legacy: true,
+                },
+            );
+            let accepted = matches!(
+                call(&accepting, "log.verify", json!({ "stream": keyed_stream })),
+                Ok(report) if report.get("ok") == Some(&Value::Bool(true))
+            );
+            checks.check("legacy acceptance opt-in verifies", accepted);
+        }
+        Err(e) => {
+            for label in [
+                "keyed anchor is HMAC over the record preimage",
+                "keyed chain verifies",
+                "legacy anchor refused while keyed",
+                "legacy acceptance opt-in verifies",
+            ] {
+                checks.check(label, false);
+            }
+            eprintln!("selftest: {}", e);
+        }
+    }
 
     if checks.failures == 0 {
         println!("SELFTEST OK ({} checks)", checks.total);

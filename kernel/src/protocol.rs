@@ -10,7 +10,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::canon::error_response;
-use crate::eventlog::EventLog;
+use crate::eventlog::{AnchorConfig, EventLog};
 use crate::guard::{Guard, GuardAction, Lease};
 use crate::receipts::Receipts;
 
@@ -23,10 +23,10 @@ pub struct Kernel {
 }
 
 impl Kernel {
-    pub fn new(state_dir: &Path) -> Self {
+    pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig) -> Self {
         Kernel {
-            events: EventLog::new(state_dir),
-            receipts: Receipts::new(state_dir),
+            events: EventLog::new_with_anchor(state_dir, anchor.clone()),
+            receipts: Receipts::new_with_anchor(state_dir, anchor),
             guard: Guard::new(state_dir),
         }
     }

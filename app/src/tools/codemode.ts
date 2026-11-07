@@ -15,10 +15,10 @@
  * inside `code_mode`, no `agent`, no `preview`.
  */
 
-import { spawn } from "node:child_process";
 import * as path from "node:path";
 import type { GuardAction, GuardDecision, Tool, ToolContext, ToolResult } from "../contracts";
 import { canonicalJson, sha256Hex } from "../core/canon";
+import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
 import { scrubEnv } from "./helpers";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
@@ -138,7 +138,26 @@ export const codemodeTool: Tool = {
     const timeoutMs = clampTimeout(args.timeout_ms);
     const started = Date.now();
 
+    // NF-071: the single spawn path. The runner is long-lived (up to the timeout
+    // above), so the owner-death supervisor starts with it — a SIGKILL of hzcode
+    // cannot leave the runner, or anything it spawned, behind.
+    let proc: OwnedProc;
+    try {
+      ({ proc } = await spawnOwned([process.execPath || "bun", "run", CHILD], {
+        stateDir: kernelStateDir(ctx.workspace),
+        label: "code_mode",
+        cwd: ctx.cwd,
+        env: scrubEnv(),
+        stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+        detached: true,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, output: `failed to start the code runner: ${message}`, error: message };
+    }
+
     return await new Promise<ToolResult>((resolve) => {
+      const child = proc;
       const logs: string[] = [];
       let logBytes = 0;
       let calls = 0;
@@ -152,12 +171,6 @@ export const codemodeTool: Tool = {
       // not just the program that requested it.
       const inner = new AbortController();
       const innerCtx: ToolContext = { ...ctx, signal: inner.signal };
-
-      const child = spawn(process.execPath || "bun", ["run", CHILD], {
-        cwd: ctx.cwd,
-        env: scrubEnv(),
-        stdio: ["pipe", "pipe", "pipe"],
-      });
 
       const finish = (result: ToolResult): void => {
         if (settled) return;
@@ -198,13 +211,24 @@ export const codemodeTool: Tool = {
         return text === "" ? "" : `\n--- output ---\n${truncate(text, 2000)}`;
       };
 
-      const reply = (rpcId: unknown, result: ToolResult): void => {
-        if (typeof rpcId !== "number") return;
+      // Bun's stdin is a FileSink: write() may buffer, so every frame is
+      // followed by a flush — a small init line that never flushed would leave
+      // the runner waiting forever.
+      const writeText = (text: string): void => {
         try {
-          child.stdin.write(JSON.stringify({ rpcId, result }) + "\n");
+          const sink = child.stdin as unknown as { write(data: string): number; flush(): Promise<number> };
+          sink.write(text);
+          void sink.flush().catch(() => {
+            /* child gone; its exit path reports the failure */
+          });
         } catch {
           /* child gone; its exit path reports the failure */
         }
+      };
+
+      const reply = (rpcId: unknown, result: ToolResult): void => {
+        if (typeof rpcId !== "number") return;
+        writeText(JSON.stringify({ rpcId, result }) + "\n");
       };
 
       const runTool = async (tool: Tool, callArgs: Record<string, unknown>): Promise<ToolResult> => {
@@ -326,37 +350,53 @@ export const codemodeTool: Tool = {
         logs.push(slice);
       };
 
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        stdoutBuffer += chunk;
-        let index = stdoutBuffer.indexOf("\n");
-        while (index >= 0) {
-          const line = stdoutBuffer.slice(0, index);
-          stdoutBuffer = stdoutBuffer.slice(index + 1);
-          handleLine(line);
-          index = stdoutBuffer.indexOf("\n");
+      const stdoutPump = (async (): Promise<void> => {
+        const reader = child.stdout.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value === undefined) continue;
+            stdoutBuffer += decoder.decode(value, { stream: true });
+            let index = stdoutBuffer.indexOf("\n");
+            while (index >= 0) {
+              const line = stdoutBuffer.slice(0, index);
+              stdoutBuffer = stdoutBuffer.slice(index + 1);
+              handleLine(line);
+              index = stdoutBuffer.indexOf("\n");
+            }
+          }
+        } catch {
+          /* stream closed by a kill */
         }
-      });
-      child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (chunk: string) => {
-        stderrTail = (stderrTail + chunk).slice(-2000);
-      });
-      child.on("error", (err: Error) => {
-        finish({ ok: false, output: `failed to start the code runner: ${err.message}`, error: err.message });
-      });
-      child.on("exit", (exitCode: number | null) => {
-        if (!settled) {
-          finish({ ok: false, output: `code runner exited (code ${exitCode}) before finishing${tail()}`, error: `runner exited (${exitCode})` });
+      })();
+      void (async (): Promise<void> => {
+        const reader = child.stderr.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value !== undefined) stderrTail = (stderrTail + decoder.decode(value, { stream: true })).slice(-2000);
+          }
+        } catch {
+          /* stream closed by a kill */
         }
+      })();
+      void child.exited.then((exitCode) => {
+        // Drain stdout before reporting the exit: the final frame is often still
+        // in flight when the process ends, and dropping it would turn a real
+        // result into a false "exited before finishing".
+        void stdoutPump.then(() => {
+          if (!settled) {
+            finish({ ok: false, output: `code runner exited (code ${exitCode}) before finishing${tail()}`, error: `runner exited (${exitCode})` });
+          }
+        });
       });
 
       // Hand the program over; anything after this line is a tool reply.
-      try {
-        child.stdin.write(JSON.stringify({ init: { code } }) + "\n");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        finish({ ok: false, output: `failed to send the program: ${message}`, error: message });
-      }
+      writeText(JSON.stringify({ init: { code } }) + "\n");
     });
   },
 };

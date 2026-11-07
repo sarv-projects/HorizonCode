@@ -1,6 +1,7 @@
 /** `shell` — run one bash command in the workspace. */
 
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
 import { resolvePath, scrubEnv, truncate } from "./helpers";
 import { readTool } from "./read";
 
@@ -149,16 +150,21 @@ export const shellTool: Tool = {
 
       let proc: any;
       try {
-        proc = Bun.spawn({
-          cmd: ["bash", "-lc", command],
-          cwd: dir,
-          env: scrubEnv(),
-          stdout: "pipe",
-          stderr: "pipe",
-          stdin: "ignore",
-          // Own process group: `kill` below then reaches the whole tree, not just bash.
-          detached: true,
-        });
+        // NF-071: the single spawn path. A foreground command gets its ledger row
+        // but no owner-death supervisor — its whole lifecycle (timeout kill,
+        // abort, drain grace) is handled below, on this process's turn.
+        proc = (
+          await spawnOwned(["bash", "-lc", command], {
+            stateDir: kernelStateDir(ctx.workspace),
+            label: "shell",
+            cwd: dir,
+            env: scrubEnv(),
+            stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+            // Own process group: `kill` below then reaches the whole tree, not just bash.
+            detached: true,
+            longLived: false,
+          })
+        ).proc;
       } catch (e) {
         return fail(`failed to start command: ${msg(e)}`);
       }

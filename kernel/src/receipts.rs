@@ -11,18 +11,23 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::canon::hash_receipt;
-use crate::eventlog::{read_head, verify_chain, write_head, ChainKind, LockFile, VerifyReport};
+use crate::eventlog::{
+    anchor_digest, ensure_anchor_matches, read_head, tail_of, verify_chain, AnchorConfig, ChainKind,
+    LockFile, VerifyReport,
+};
 use crate::permm;
 use crate::time::now_iso;
 
 pub struct Receipts {
     path: PathBuf,
+    anchor: AnchorConfig,
 }
 
 impl Receipts {
-    pub fn new(state_dir: &Path) -> Self {
+    pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig) -> Self {
         Receipts {
             path: state_dir.join("receipts.jsonl"),
+            anchor,
         }
     }
 
@@ -58,8 +63,13 @@ impl Receipts {
             permm::private_dir(parent);
         }
         let _lock = LockFile::acquire(&self.path)?;
-        let (last_seq, prev_hash) = tail_of(&self.path)?;
-        crate::eventlog::ensure_anchor_matches(&self.path, last_seq, prev_hash.as_deref())?;
+        let (last_seq, prev_hash, tail_record) = tail_of(&self.path)?;
+        ensure_anchor_matches(
+            &self.path,
+            ChainKind::Receipt,
+            tail_record.as_ref(),
+            &self.anchor,
+        )?;
 
         let mut receipt = Map::new();
         receipt.insert("id".to_string(), json!(Uuid::new_v4().to_string()));
@@ -87,39 +97,21 @@ impl Receipts {
         }
 
         append_line(&self.path, &receipt)?;
-        let hash_written = receipt
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        write_head(&self.path, last_seq + 1, &hash_written)?;
+        let anchor_hash = anchor_digest(ChainKind::Receipt, &receipt, self.anchor.key());
+        crate::eventlog::write_head(&self.path, last_seq + 1, &anchor_hash)?;
         Ok(receipt)
     }
 
     pub fn verify(&self) -> Result<VerifyReport, String> {
         let lines = crate::eventlog::read_lines(&self.path)?;
-        verify_chain(lines, ChainKind::Receipt, read_head(&self.path))
+        verify_chain(
+            lines,
+            ChainKind::Receipt,
+            read_head(&self.path),
+            &self.anchor,
+            &self.path.display().to_string(),
+        )
     }
-}
-
-fn tail_of(path: &Path) -> Result<(u64, Option<String>), String> {
-    let mut last_seq = 0u64;
-    let mut last_hash = None;
-    for line in crate::eventlog::read_lines(path)? {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if let Some(seq) = value.get("seq").and_then(|v| v.as_u64()) {
-            if seq >= last_seq {
-                last_seq = seq;
-                last_hash = value
-                    .get("hash")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-            }
-        }
-    }
-    Ok((last_seq, last_hash))
 }
 
 fn append_line(path: &Path, value: &Value) -> Result<(), String> {

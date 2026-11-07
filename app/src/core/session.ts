@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS messages (
   meta TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages (session_id, ts);
+-- NF-071: the durable per-session admission FIFO (semantics in admission.ts).
+-- Additive and migration-safe: CREATE TABLE IF NOT EXISTS on every open.
+CREATE TABLE IF NOT EXISTS admissions (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  input TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('queued','running','done','unknown','failed','cancelled')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  evidence TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admissions_session ON admissions (session_id);
 `;
 
 function parseMeta(raw: string | null): MessageMeta {
@@ -99,7 +111,13 @@ function metaFor(msg: ChatMsg): string | null {
 /** The session store: create sessions, append messages, read history back. */
 export class SessionStore {
   readonly dbPath: string;
-  private readonly db: Database;
+  /**
+   * The shared SQLite handle. Public so additive stores in this directory can
+   * use the same database — the NF-071 admission FIFO (`admission.ts`) reads
+   * and writes the `admissions` table through it. Schema creation stays in this
+   * class, so a reopened store always migrates before anyone else touches it.
+   */
+  readonly db: Database;
 
   constructor(workspace: string) {
     const dir = path.join(workspace, ".hzcode");
