@@ -276,3 +276,27 @@ test("an unstarted client answers from the local kernel", async () => {
     await idle.close();
   }
 });
+
+test("tail truncation is detected and the truncated chain cannot be extended", async () => {
+  const { client: fresh, stateDir: dir } = await fallbackClient();
+  const stream = "session:anchor-fallback";
+  const appended: EventEnvelope[] = [];
+  for (const [index, type] of [EventTypes.sessionStart, EventTypes.messageStart, EventTypes.messageEnd].entries()) {
+    appended.push(await fresh.appendEvent(stream, seedFor(stream, type, { index }, `an-${index + 1}`)));
+  }
+  expect(await fresh.verifyEventChain(stream)).toEqual({ ok: true, count: 3 });
+
+  // the anchor beside the log names the last record
+  const headFile = eventFilePath(dir, stream) + ".head";
+  const anchor = JSON.parse(readLines(headFile)[0] as string) as { hash: string; seq: number };
+  expect(anchor).toEqual({ hash: appended[2]?.hash, seq: 3 });
+
+  // deleting whole trailing records used to verify clean; now the anchor sees it
+  const file = eventFilePath(dir, stream);
+  const lines = readLines(file);
+  writeFileSync(file, lines.slice(0, -1).join("\n") + "\n");
+  expect(await fresh.verifyEventChain(stream)).toEqual({ ok: false, count: 2, brokenAt: 3 });
+  await expect(fresh.appendEvent(stream, seedFor(stream, EventTypes.error, { index: 4 }, "an-4"))).rejects.toThrow(/anchor/);
+  expect(readLines(file).length).toBe(2);
+  await fresh.close();
+});

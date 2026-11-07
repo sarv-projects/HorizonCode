@@ -11,7 +11,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { EventEnvelope, GuardAction, PolicyScope, Receipt } from "../../src/contracts";
 import { EventTypes, canonicalJson } from "../../src/contracts";
@@ -241,6 +241,8 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     expect(recomputeEventHash(rustEvent)).toBe(rustEvent.hash);
     expect(readLines(eventFilePath(localDir, stream))).toEqual([canonicalJson(localEvent)]);
     expect(JSON.parse(readLines(eventFilePath(rustDir, stream))[0])).toEqual(rustEvent);
+    // the anchors beside both logs are byte-identical too
+    expect(readLines(eventFilePath(localDir, stream) + ".head")).toEqual(readLines(eventFilePath(rustDir, stream) + ".head"));
 
     const input = { action: "tool.execute", tool: "read", argsDigest: "ab".repeat(32), resultDigest: "cd".repeat(32) };
     const localReceipt = await local.issueReceipt(input);
@@ -370,5 +372,114 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     }
     await rust.close();
     await local.close();
+  });
+
+  test("astral and private-use payload keys hash identically under both implementations", async () => {
+    const stream = "session:astral";
+    // Byte order (not UTF-16 code-unit order) puts the astral key after U+E000.
+    const payload = { "\u{10000}": 1, "\uE000": 2, z: 3, "\u00e9": 4, n: 9007199254740991 };
+    const seed = seedFor(stream, EventTypes.messageDelta, payload, "astral-1");
+    const localDir = path.join(tempDir("hz-state-astral-local-"), "kernel");
+    const rustDir = path.join(tempDir("hz-state-astral-rust-"), "kernel");
+    const local = await localClient(localDir, tempDir("hz-ws-astral-local-"));
+
+    const localEvent = await local.appendEvent(stream, seed);
+    const rustEvent = replyResult<EventEnvelope>(
+      runKernelNdjson([{ id: 1, method: "log.append", params: { stream, event: seed } }], rustDir).replies,
+      1,
+    );
+    expect(rustEvent.hash).toBe(localEvent.hash);
+    expect(canonicalJson(rustEvent)).toBe(canonicalJson(localEvent));
+    expect(recomputeEventHash(rustEvent)).toBe(rustEvent.hash);
+    expect(readLines(eventFilePath(localDir, stream))).toEqual(readLines(eventFilePath(rustDir, stream)));
+    const canonical = canonicalJson(localEvent);
+    expect(canonical.indexOf("\u{10000}")).toBeGreaterThan(canonical.indexOf("\uE000"));
+    await local.close();
+  });
+
+  test("a kernel refusal is surfaced, never routed around, and the mode stays trusted", async () => {
+    const workspace = tempDir("hz-ws-refusal-");
+    const stateDir = path.join(tempDir("hz-state-refusal-"), "kernel");
+    const client = await trustedClient(stateDir, workspace);
+
+    // The kernel rejects this stream name outright; the client must not fall back
+    // and write it locally as if the kernel had not answered.
+    const bad = "session:bad..name";
+    await expect(client.appendEvent(bad, seedFor(bad, EventTypes.sessionStart, { n: 1 }, "r-1"))).rejects.toThrow(/stream name is not allowed/);
+    expect(client.mode).toBe("trusted");
+    const eventsDir = path.join(stateDir, "events");
+    expect(existsSync(eventsDir) ? readdirSync(eventsDir) : []).toEqual([]);
+
+    // ...and the client still serves the next, valid call from the kernel
+    const stream = "session:after-refusal";
+    const event = await client.appendEvent(stream, seedFor(stream, EventTypes.sessionStart, { n: 2 }, "r-2"));
+    expect(event.seq).toBe(1);
+    expect(client.mode).toBe("trusted");
+    await client.close();
+  });
+
+  test("lease patterns mean the same thing in both implementations", async () => {
+    const workspace = tempDir("hz-ws-lease-");
+    const rust = await trustedClient(path.join(tempDir("hz-state-lease-rust-"), "kernel"), workspace);
+    const local = await localClient(path.join(tempDir("hz-state-lease-local-"), "kernel"), workspace);
+
+    const cases: Array<[string, string, "allow" | "ask"]> = [
+      ["echo *", "echo hi", "allow"],
+      ["git commit", "git commit", "allow"],
+      ["git commit", "git commit -m x", "ask"],
+      ["/tmp/demo", "/tmp/demo/sub/file.txt", "ask"],
+      ["*", "anything at all", "allow"],
+    ];
+    for (const [pattern, target, expected] of cases) {
+      const rustLease = await rust.makeLease("shell.exec", pattern, 60_000);
+      const localLease = await local.makeLease("shell.exec", pattern, 60_000);
+      const [fromRust, fromLocal] = await Promise.all([
+        rust.checkGuard({ kind: "shell.exec", target }, "*", [rustLease]),
+        local.checkGuard({ kind: "shell.exec", target }, "*", [localLease]),
+      ]);
+      expect(fromRust.decision, `rust ${pattern} -> ${target}`).toBe(expected);
+      expect(fromLocal.decision, `local ${pattern} -> ${target}`).toBe(expected);
+    }
+
+    // an empty pattern is refused by both, never widened to a wildcard
+    await expect(rust.makeLease("shell.exec", "", 1_000)).rejects.toThrow();
+    await expect(local.makeLease("shell.exec", "", 1_000)).rejects.toThrow();
+    await rust.close();
+    await local.close();
+  });
+
+  test("the head anchor detects tail truncation in both implementations", async () => {
+    const stateDir = path.join(tempDir("hz-state-anchor-"), "kernel");
+    const stream = "session:anchor-i";
+    const client = await localClient(stateDir, tempDir("hz-ws-anchor-"));
+    const appended: EventEnvelope[] = [];
+    for (const [index, seed] of [
+      seedFor(stream, EventTypes.sessionStart, { index: 1 }, "ai-1"),
+      seedFor(stream, EventTypes.messageStart, { index: 2 }, "ai-2"),
+      seedFor(stream, EventTypes.messageEnd, { index: 3 }, "ai-3"),
+    ].entries()) {
+      appended.push(await client.appendEvent(stream, seed));
+    }
+    expect(await client.verifyEventChain(stream)).toEqual({ ok: true, count: 3 });
+
+    const file = eventFilePath(stateDir, stream);
+    const anchor = JSON.parse(readLines(file + ".head")[0] as string) as { hash: string; seq: number };
+    expect(anchor).toEqual({ hash: appended[2]?.hash, seq: 3 });
+
+    // drop the last whole record: both verifiers must now call it broken at 3
+    const lines = readLines(file);
+    writeFileSync(file, lines.slice(0, -1).join("\n") + "\n");
+    const expected = { ok: false, count: 2, brokenAt: 3 };
+    expect(await client.verifyEventChain(stream)).toEqual(expected);
+    expect(replyResult(runKernelNdjson([{ id: 1, method: "log.verify", params: { stream } }], stateDir).replies, 1)).toEqual(expected);
+
+    // ...and neither implementation will extend the truncated chain
+    await expect(client.appendEvent(stream, seedFor(stream, EventTypes.sessionEnd, { index: 4 }, "ai-4"))).rejects.toThrow(/anchor/);
+    const refused = runKernelNdjson(
+      [{ id: 1, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.sessionEnd, { index: 4 }, "ai-4") } }],
+      stateDir,
+    );
+    expect(refused.replies[0]?.error?.message ?? "").toContain("anchor");
+    await client.close();
   });
 });

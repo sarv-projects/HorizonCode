@@ -21,8 +21,12 @@ import { canonicalJson, sha256Hex } from "../../src/contracts";
 /** Repo root, derived from this file's location (app/tests/core -> repo root). */
 export const repoRoot = path.resolve(import.meta.dir, "../../..");
 
-/** The release build of the Rust kernel; absent on a machine without cargo. */
-export const rustKernelPath = path.join(repoRoot, "kernel", "target", "release", "hz-kernel");
+/** The Rust kernel build used by the trusted tests: release, then debug. */
+export const rustKernelPath =
+  [
+    path.join(repoRoot, "kernel", "target", "release", "hz-kernel"),
+    path.join(repoRoot, "kernel", "target", "debug", "hz-kernel"),
+  ].find((candidate) => existsSync(candidate)) ?? path.join(repoRoot, "kernel", "target", "release", "hz-kernel");
 export const hasRustKernel = existsSync(rustKernelPath);
 
 /** Version declared by kernel/Cargo.toml — the kernel's own answer to ping. */

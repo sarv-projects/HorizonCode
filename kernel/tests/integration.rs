@@ -8,7 +8,8 @@
 //!
 //! Coverage map:
 //!   - chain           : append/verify/read order, hash conformance to contracts.ts
-//!   - tamper          : one-byte corruption, middle-payload tamper, truncated line
+//!   - tamper          : one-byte corruption, middle-payload tamper, truncated line,
+//!                       tail truncation vs the `.head` anchor, rewritten/corrupt anchor
 //!   - concurrency     : 4 separate processes × 5 appends on one stream
 //!   - receipts        : issue/verify/tamper, empty and absent file
 //!   - guard           : default policy matrix, policy.json override + deny precedence,
@@ -556,6 +557,143 @@ fn truncated_line_breaks_at_that_seq() {
     assert_eq!(report["ok"], json!(false));
     assert_eq!(report["brokenAt"], json!(5));
     assert_eq!(report["count"], json!(4));
+}
+
+/* ------------------------------ 2b. chain anchor ------------------------------ */
+
+#[test]
+fn tail_truncation_is_detected_and_appends_are_refused() {
+    let dir = TempDir::new("anchor-truncate");
+    let stream = "session:anchor";
+    let path = dir.path().join("events/session__anchor.jsonl");
+    let head_path = dir.path().join("events/session__anchor.jsonl.head");
+    {
+        let mut kernel = Kernel::start(dir.path());
+        for i in 0..3u64 {
+            kernel.ok("log.append", json!({ "stream": stream, "event": event_seed(i) }));
+        }
+        let report = kernel.ok("log.verify", json!({ "stream": stream }));
+        assert_eq!(report, json!({ "ok": true, "count": 3 }));
+        // the anchor beside the log names the last record
+        let anchor: Value =
+            serde_json::from_str(fs::read_to_string(&head_path).unwrap().trim()).unwrap();
+        assert_eq!(anchor["seq"], json!(3));
+        let last = kernel.ok("log.read", json!({ "stream": stream, "fromSeq": 3 }));
+        assert_eq!(anchor["hash"], last["events"][0]["hash"]);
+    }
+
+    // delete whole trailing records: a bare chain walk can never see this
+    let original = fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<&str> = original.lines().collect();
+    lines.pop();
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let mut kernel = Kernel::start(dir.path());
+    let report = kernel.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(
+        report["brokenAt"],
+        json!(3),
+        "the record the anchor remembers is gone"
+    );
+    assert_eq!(report["count"], json!(2));
+    // and the truncated chain cannot be extended as if nothing happened
+    let message = kernel.err("log.append", json!({ "stream": stream, "event": event_seed(9) }));
+    assert!(message.contains("anchor"), "{}", message);
+    assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
+
+    // deleting the anchor too falls back to legacy acceptance of what remains —
+    // the residual recorded in docs/28 §4
+    fs::remove_file(&head_path).unwrap();
+    let report = kernel.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report, json!({ "ok": true, "count": 2 }));
+    let appended = kernel.ok("log.append", json!({ "stream": stream, "event": event_seed(9) }));
+    assert_eq!(appended["seq"], json!(3));
+    let report = kernel.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report, json!({ "ok": true, "count": 3 }));
+}
+
+#[test]
+fn a_rewritten_or_corrupt_anchor_is_detected() {
+    let dir = TempDir::new("anchor-rewrite");
+    let stream = "session:anchor2";
+    let head_path = dir.path().join("events/session__anchor2.jsonl.head");
+    {
+        let mut kernel = Kernel::start(dir.path());
+        for i in 0..3u64 {
+            kernel.ok("log.append", json!({ "stream": stream, "event": event_seed(i) }));
+        }
+    }
+
+    // rewrite the anchor to claim more records than exist (truncation shape)
+    let anchor: Value =
+        serde_json::from_str(fs::read_to_string(&head_path).unwrap().trim()).unwrap();
+    fs::write(
+        &head_path,
+        serde_json::to_string(&json!({ "hash": anchor["hash"], "seq": 5 })).unwrap(),
+    )
+    .unwrap();
+    let mut kernel = Kernel::start(dir.path());
+    let report = kernel.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["brokenAt"], json!(4));
+
+    // an unreadable anchor is a finding, not a free pass
+    fs::write(&head_path, "{not json").unwrap();
+    let report = kernel.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["brokenAt"], json!(4));
+    let message = kernel.err("log.append", json!({ "stream": stream, "event": event_seed(9) }));
+    assert!(message.contains("anchor"), "{}", message);
+
+    // a correct anchor over an intact chain verifies again
+    let last = kernel.ok("log.read", json!({ "stream": stream, "fromSeq": 3 }));
+    fs::write(
+        &head_path,
+        serde_json::to_string(&json!({ "hash": last["events"][0]["hash"], "seq": 3 })).unwrap(),
+    )
+    .unwrap();
+    let report = kernel.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report, json!({ "ok": true, "count": 3 }));
+}
+
+#[test]
+fn receipt_tail_truncation_is_detected() {
+    let dir = TempDir::new("anchor-receipts");
+    let receipts_path = dir.path().join("receipts.jsonl");
+    let head_path = dir.path().join("receipts.jsonl.head");
+    {
+        let mut kernel = Kernel::start(dir.path());
+        for i in 0..2u64 {
+            kernel.ok(
+                "receipt.issue",
+                json!({
+                    "action": "tool.execute",
+                    "tool": "shell",
+                    "argsDigest": sha256_hex(&format!("args-{}", i)),
+                    "resultDigest": sha256_hex(&format!("res-{}", i)),
+                }),
+            );
+        }
+        assert_eq!(kernel.ok("receipt.verify", json!({})), json!({ "ok": true, "count": 2 }));
+        assert!(head_path.is_file(), "receipts anchor must exist after issuing");
+    }
+
+    let original = fs::read_to_string(&receipts_path).unwrap();
+    let mut lines: Vec<&str> = original.lines().collect();
+    lines.pop();
+    fs::write(&receipts_path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let mut kernel = Kernel::start(dir.path());
+    let report = kernel.ok("receipt.verify", json!({}));
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["brokenAt"], json!(2));
+    assert_eq!(report["count"], json!(1));
+    let message = kernel.err(
+        "receipt.issue",
+        json!({ "action": "tool.execute", "tool": "shell", "argsDigest": "aa", "resultDigest": "bb" }),
+    );
+    assert!(message.contains("anchor"), "{}", message);
 }
 
 /* ------------------------------- 3. concurrency ------------------------------- */

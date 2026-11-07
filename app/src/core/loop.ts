@@ -10,6 +10,7 @@
  */
 
 import * as path from "node:path";
+import { realpathSync } from "node:fs";
 import type {
   ActorRef,
   ApprovalHandler,
@@ -122,14 +123,46 @@ export function parseArguments(raw: string): { args: Record<string, unknown>; er
   }
 }
 
-/** True when `target` resolves inside the workspace root. */
+/** True when `rel` names the root itself, an ancestor of it, or another root. */
+function escapes(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel !== "" && (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel));
+}
+
+/**
+ * Resolve a path to where it really lives, following symlinks for the portion
+ * that exists on disk. A path that does not exist yet is resolved through its
+ * deepest existing ancestor, so a symlinked parent cannot hide where a new file
+ * will actually land. Falls back to the lexical path when nothing can be
+ * resolved (e.g. the root itself), which is the previous behaviour.
+ */
+export function realpathish(target: string): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length === 0 ? real : path.join(real, ...tail.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * True when `target` resolves inside the workspace root. Both sides are
+ * resolved through symlinks first: a link inside the workspace pointing outside
+ * must be classified by where it actually lands, not by its spelling.
+ */
 export function pathInsideWorkspace(target: string, workspace: string): boolean {
   if (typeof target !== "string" || target === "") return false;
-  const root = path.resolve(workspace);
-  const resolved = path.resolve(root, target);
+  const root = realpathish(workspace);
+  const resolved = realpathish(path.resolve(workspace, target));
   if (resolved === root) return true;
-  const rel = path.relative(root, resolved);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  return !escapes(root, resolved);
 }
 
 /**
@@ -195,9 +228,9 @@ export function trimHistory(messages: ChatMsg[], limit = HISTORY_LIMIT): ChatMsg
 function displayTarget(target: string, workspace: string): string {
   if (typeof target !== "string" || target === "") return "";
   if (!path.isAbsolute(target)) return target;
-  const rel = path.relative(path.resolve(workspace), target);
-  if (rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)) return rel;
-  return target;
+  const root = path.resolve(workspace);
+  const resolved = path.resolve(root, target);
+  return resolved !== root && !escapes(root, resolved) ? path.relative(root, resolved) : target;
 }
 
 function approvalRequestFor(name: string, action: GuardAction, workspace: string): ApprovalRequest {

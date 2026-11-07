@@ -1,12 +1,15 @@
 /**
  * `code_mode` — run a JavaScript program that chains tool calls.
  *
- * The program runs in an isolated Bun subprocess (codemode-child.ts) with one
- * capability: `tools.call(name, args)`. Every call comes back here, goes
- * through the guard (deny > ask > allow, with the regular approval prompt) and
- * leaves a receipt exactly like a direct tool call would. Big tool outputs can
- * therefore be filtered and reduced inside the program instead of landing in
- * the model's context.
+ * The program runs in a Bun subprocess (codemode-child.ts). What confines it is
+ * the contract, not the process boundary: the only way it reaches the tools is
+ * `tools.call(name, args)`, every call comes back here, goes through the guard
+ * (deny > ask > allow, with the regular approval prompt) and leaves a receipt
+ * exactly like a direct tool call would. The child inherits a scrubbed
+ * environment (no credential-shaped names), and its console output travels on a
+ * tagged channel, so a logged JSON object can never be mistaken for a control
+ * frame. Big tool outputs can therefore be filtered and reduced inside the
+ * program instead of landing in the model's context.
  *
  * Only the seven base tools are reachable from a program — no `code_mode`
  * inside `code_mode`, no `agent`, no `preview`.
@@ -16,6 +19,7 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import type { GuardAction, GuardDecision, Tool, ToolContext, ToolResult } from "../contracts";
 import { canonicalJson, sha256Hex } from "../core/canon";
+import { scrubEnv } from "./helpers";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
@@ -44,9 +48,10 @@ const BASE_TOOLS = new Map<string, Tool>([
 /**
  * The guard action a call implies — the same mapping the loop uses for direct
  * calls, kept local because tools never import core/loop (that would be a
- * cycle). Kept in sync with `guardActionFor` by the codemode test suite.
+ * cycle). Exported so the codemode test suite pins it against `guardActionFor`
+ * case by case instead of trusting a comment.
  */
-function actionForCall(name: string, args: Record<string, unknown>, cwd: string): GuardAction | undefined {
+export function actionForCall(name: string, args: Record<string, unknown>, cwd: string): GuardAction | undefined {
   const argString = (...names: string[]): string | undefined => {
     for (const key of names) {
       const value = args[key];
@@ -99,6 +104,7 @@ function safeJson(value: unknown): string {
 }
 
 interface WireMessage {
+  log?: unknown;
   rpc?: unknown;
   rpcId?: unknown;
   name?: unknown;
@@ -125,6 +131,7 @@ export const codemodeTool: Tool = {
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const code = typeof args.code === "string" ? args.code : "";
     if (code.trim() === "") return { ok: false, output: "", error: "code is required" };
+    if (ctx.signal.aborted) return { ok: false, output: "code_mode aborted", error: "aborted" };
     const timeoutMs = clampTimeout(args.timeout_ms);
     const started = Date.now();
 
@@ -137,8 +144,15 @@ export const codemodeTool: Tool = {
       let stderrTail = "";
       let rpcChain: Promise<void> = Promise.resolve();
 
+      // Inner tool calls get their own controller: a code_mode timeout or abort
+      // must also stop work already delegated to a tool (an in-flight `shell`),
+      // not just the program that requested it.
+      const inner = new AbortController();
+      const innerCtx: ToolContext = { ...ctx, signal: inner.signal };
+
       const child = spawn(process.execPath || "bun", ["run", CHILD], {
         cwd: ctx.cwd,
+        env: scrubEnv(),
         stdio: ["pipe", "pipe", "pipe"],
       });
 
@@ -150,6 +164,11 @@ export const codemodeTool: Tool = {
           ctx.signal.removeEventListener("abort", onAbort);
         } catch {
           /* listener was never added */
+        }
+        try {
+          inner.abort();
+        } catch {
+          /* nothing waiting on it */
         }
         try {
           child.kill("SIGKILL");
@@ -187,7 +206,7 @@ export const codemodeTool: Tool = {
 
       const runTool = async (tool: Tool, callArgs: Record<string, unknown>): Promise<ToolResult> => {
         try {
-          const result = await tool.execute(callArgs, ctx);
+          const result = await tool.execute(callArgs, innerCtx);
           if (result === null || typeof result !== "object") {
             return { ok: false, output: "tool returned nothing", error: "tool returned nothing" };
           }
@@ -211,6 +230,7 @@ export const codemodeTool: Tool = {
         }
 
         const action = actionForCall(name, callArgs, ctx.cwd);
+        let leaseId: string | undefined;
         if (action) {
           let decision: GuardDecision;
           try {
@@ -237,6 +257,7 @@ export const codemodeTool: Tool = {
               return;
             }
           }
+          leaseId = decision.leaseId;
         }
 
         calls += 1;
@@ -247,6 +268,7 @@ export const codemodeTool: Tool = {
             tool: name,
             argsDigest: sha256Hex(canonicalJson(callArgs)),
             resultDigest: sha256Hex(result.output),
+            leaseId,
           });
         } catch {
           /* a receipt failure must not fail the program's call */
@@ -282,6 +304,13 @@ export const codemodeTool: Tool = {
         if (message.done === false) {
           const error = typeof message.error === "string" ? message.error : "program failed";
           finish({ ok: false, output: `code_mode error: ${error}${tail()}`, error });
+          return;
+        }
+        // Console output travels tagged ({"log": "..."}), so a program that logs
+        // a JSON object shaped like a frame cannot end itself early or invent a
+        // result. Anything untagged is a direct stdout write and stays a log.
+        if (typeof message.log === "string") {
+          pushLog(message.log);
           return;
         }
         pushLog(line);
