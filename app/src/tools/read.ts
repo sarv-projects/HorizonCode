@@ -1,11 +1,13 @@
 /** `read` — read a text file (optionally a line range) with line numbers. */
 
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { isBinary, relPath, resolvePath } from "./helpers";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 200 * 1024;
+/** Refuse to load files bigger than this whole; the output cap is far smaller. */
+const MAX_FILE_BYTES = 32 * 1024 * 1024;
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -45,7 +47,15 @@ export const readTool: Tool = {
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
-      const resolved = resolvePath(ctx.cwd, args.path);
+      // Resolve symlinks BEFORE Guard: the guard must see the path whose bytes
+      // will actually be read. Guarding the lexical path while `readFile`
+      // follows a symlink is an escape (workspace/link -> /etc/...).
+      let resolved = resolvePath(ctx.cwd, args.path);
+      try {
+        resolved = await realpath(resolved);
+      } catch {
+        /* nonexistent: keep the lexical path so the not-found message stays informative */
+      }
       const rel = relPath(ctx.cwd, resolved);
 
       const denied = await checkAccess(ctx, resolved, rel);
@@ -58,6 +68,12 @@ export const readTool: Tool = {
         return fail(`file not found: ${rel}`);
       }
       if (st.isDirectory()) return fail(`is a directory: ${rel}`);
+      // FIFOs block forever, devices are unbounded (e.g. /dev/zero) and sockets
+      // are not files: only regular files are read.
+      if (!st.isFile()) return fail(`not a regular file: ${rel}`);
+      if (st.size > MAX_FILE_BYTES) {
+        return fail(`file too large to read safely: ${rel} (${st.size} bytes)`);
+      }
 
       const buf = await readFile(resolved);
       if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
