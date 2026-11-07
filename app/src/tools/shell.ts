@@ -113,6 +113,10 @@ export const shellTool: Tool = {
     required: ["command"],
   },
 
+  // NF-072 / R-tools-39: a shell command is serial with every other shell
+  // command — one exclusive barrier per call, never overlapping siblings.
+  concurrencyClass: "exclusive",
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       if (typeof args.command !== "string" || args.command.trim() === "") return fail("command is required");

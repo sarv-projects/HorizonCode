@@ -201,7 +201,9 @@ function argString(args: Record<string, unknown>, ...names: string[]): string | 
 
 /**
  * The guard action a tool call implies, using the same path resolution the tools
- * themselves use. Tools that touch nothing guarded (todo) return undefined.
+ * themselves use. Every registered tool appears in the mapping table below or
+ * in `SESSION_STATE_TOOLS`; a tool with neither is refused before execution
+ * (`admissionFor`).
  */
 export function guardActionFor(name: string, args: Record<string, unknown>, workspace: string): GuardAction | undefined {
   const resolved = (value: string): string => path.resolve(workspace, value);
@@ -215,6 +217,10 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const root = argString(args, "path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
     }
+    case "repo_map": {
+      const root = argString(args, "path", "dir", "cwd") ?? ".";
+      return { kind: "fs.read", target: resolved(root) };
+    }
     case "write":
     case "edit": {
       const file = argString(args, "path", "file_path", "file");
@@ -225,9 +231,67 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const command = argString(args, "command", "cmd");
       return command ? { kind: "shell.exec", target: command } : undefined;
     }
+    case "agent": {
+      const task = argString(args, "task") ?? "";
+      return { kind: "spawn", target: taskHead(task === "" ? "(no task)" : task) };
+    }
+    case "code_mode": {
+      const code = typeof args.code === "string" ? args.code : "";
+      return { kind: "spawn", target: `code_mode ${sha256Hex(code).slice(0, 16)}` };
+    }
+    case "preview": {
+      // `start` runs a command: the same shell.exec admission the tool itself
+      // performs (one approval, not two). A command the tool resolves from
+      // package.json is guarded inside the tool at resolution time; status and
+      // stop only touch the session's own preview registry.
+      const previewAction = argString(args, "action");
+      const command = argString(args, "command");
+      if (previewAction !== "start" || command === undefined) return undefined;
+      return { kind: "shell.exec", target: command };
+    }
     default:
       return undefined;
   }
+}
+
+/** A one-line naming head of `text` (whitespace collapsed), at most `max` characters. */
+export function taskHead(text: string, max = 120): string {
+  const line = (typeof text === "string" ? text : "").replace(/\s+/g, " ").trim();
+  if (line.length <= max) return line;
+  return line.slice(0, Math.max(0, max - 3)) + "...";
+}
+
+/**
+ * Tools that only touch session-scoped state (docs/09 R-tools-30's in-process
+ * mirror): they are mapped — never silently unguarded — but need no kernel
+ * guard action. `todo` is session state; `preview`'s spawn path is guarded as
+ * described in the mapping above.
+ */
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview"] as const;
+
+/** What one tool call's admission is: a guard action, or session-state. */
+export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };
+
+/**
+ * Every tool call passes one admission before it runs. A guard admission
+ * carries the action to check; a session-state admission is the in-process
+ * mirror. `undefined` is the fail-closed answer for a tool with no mapping:
+ * executeTool refuses it rather than running it unguarded.
+ */
+export function admissionFor(name: string, args: Record<string, unknown>, workspace: string): ToolAdmission | undefined {
+  const action = guardActionFor(name, args, workspace);
+  if (action !== undefined) return { kind: "guard", action };
+  if ((SESSION_STATE_TOOLS as readonly string[]).includes(name)) return { kind: "session-state" };
+  return undefined;
+}
+
+/**
+ * Bind an action to the full operation intent: the canonical digest of the
+ * call's arguments rides in `detail.argsDigest`, so the approval cache can tell
+ * one write of X (content A) from another (content B) — see GuardGate.
+ */
+function withCallIntent(action: GuardAction, args: Record<string, unknown>): GuardAction {
+  return { ...action, detail: { ...(action.detail ?? {}), argsDigest: sha256Hex(canonicalJson(args)) } };
 }
 
 /**
@@ -322,7 +386,12 @@ export function streamFor(sessionId: string): string {
  * and an approval names the action it answers.
  */
 export class GuardGate {
-  private readonly resolved = new Map<string, { leaseId?: string }>();
+  /**
+   * family (`kind\0target`) -> intent digest -> decision. The digest is the
+   * call's canonical arguments digest; "" is a tool-level check (the tool
+   * admitting the call the loop already decided).
+   */
+  private readonly resolved = new Map<string, Map<string, { leaseId?: string }>>();
   private pending: GuardAction | null = null;
   /** One decision at a time: concurrent batch siblings are serialized here. */
   private mutex: Promise<unknown> = Promise.resolve();
@@ -334,8 +403,41 @@ export class GuardGate {
     private readonly handler: () => ApprovalHandler,
   ) {}
 
-  private static key(action: GuardAction): string {
+  private static familyOf(action: GuardAction): string {
     return `${action.kind}\u0000${action.target}`;
+  }
+
+  /** The full-intent digest the caller attached; "" when it attached none. */
+  private static intentOf(action: GuardAction): string {
+    const digest = action.detail?.argsDigest;
+    return typeof digest === "string" && digest !== "" ? digest : "";
+  }
+
+  /**
+   * A cached decision for the action: an exact (family, intent) match, or — for
+   * a tool-level check that carries no digest of its own — any admission of the
+   * family this turn, because the loop already decided that call's full intent
+   * before the tool ran. A different intent on the same family must re-ask.
+   */
+  private cached(action: GuardAction): { leaseId?: string } | undefined {
+    const family = this.resolved.get(GuardGate.familyOf(action));
+    if (family === undefined) return undefined;
+    const intent = GuardGate.intentOf(action);
+    const exact = family.get(intent);
+    if (exact !== undefined) return exact;
+    if (intent !== "") return undefined;
+    for (const entry of family.values()) return entry;
+    return undefined;
+  }
+
+  private remember(action: GuardAction, entry: { leaseId?: string }): void {
+    const family = GuardGate.familyOf(action);
+    let bucket = this.resolved.get(family);
+    if (bucket === undefined) {
+      bucket = new Map();
+      this.resolved.set(family, bucket);
+    }
+    bucket.set(GuardGate.intentOf(action), entry);
   }
 
   private serialize<T>(task: () => Promise<T>): Promise<T> {
@@ -349,8 +451,7 @@ export class GuardGate {
 
   async check(action: GuardAction): Promise<GuardDecision> {
     return this.serialize(async () => {
-      const key = GuardGate.key(action);
-      const cached = this.resolved.get(key);
+      const cached = this.cached(action);
       if (cached) return { decision: "allow" as const, reason: "already allowed in this turn", leaseId: cached.leaseId };
       let decision: GuardDecision;
       try {
@@ -360,7 +461,7 @@ export class GuardGate {
         return { decision: "deny" as const, reason: `guard unavailable: ${errorMessage(err)}` };
       }
       if (decision.decision === "ask") this.pending = action;
-      else if (decision.decision === "allow") this.resolved.set(key, { leaseId: decision.leaseId });
+      else if (decision.decision === "allow") this.remember(action, { leaseId: decision.leaseId });
       return decision;
     });
   }
@@ -383,14 +484,14 @@ export class GuardGate {
     } catch {
       ok = false;
     }
-    if (ok && waiting) this.resolved.set(GuardGate.key(waiting), { leaseId: undefined });
+    if (ok && waiting) this.remember(waiting, { leaseId: undefined });
     if (this.pending !== null && this.pending === waiting) this.pending = null;
     return ok;
   }
 
   /** The lease that covered this action, when the kernel granted one. */
   leaseFor(action: GuardAction): string | undefined {
-    return this.resolved.get(GuardGate.key(action))?.leaseId;
+    return this.cached(action)?.leaseId;
   }
 }
 
@@ -666,9 +767,16 @@ async function executeTool(
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
   }
 
-  const action = guardActionFor(call.name, parsed.args, deps.workspace);
+  const admission = admissionFor(call.name, parsed.args, deps.workspace);
+  if (admission === undefined) {
+    // Fail closed: a tool without an admission never runs. Unmapped is a bug,
+    // not a permission.
+    const message = `HZ_PRECONDITION_FAILED: no admission mapping for tool "${call.name}"; the call was refused before execution`;
+    return { result: { ok: false, output: message, error: message } };
+  }
   let leaseId: string | undefined;
-  if (action) {
+  if (admission.kind === "guard") {
+    const action = withCallIntent(admission.action, parsed.args);
     const decision = await gate.check(action);
     leaseId = decision.leaseId ?? gate.leaseFor(action);
     if (decision.decision === "deny") {

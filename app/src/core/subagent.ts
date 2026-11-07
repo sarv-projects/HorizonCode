@@ -5,7 +5,9 @@
  * here. A nested run is a small agent loop of its own, not a fork of the
  * conversation: a fresh child session, a focused system prompt, the seven base
  * tools (never `agent` itself — no recursion), the parent's abort signal, guard
- * flow, approvals and session leases.
+ * flow and approvals. Children receive NO parent session leases (docs/09
+ * R-tools-32: grants, never parent leases): every child effect that needs
+ * approval re-enters the approval path on its own.
  *
  * The child writes its own messages to its own session and its own event
  * stream; every tool it runs leaves a receipt exactly like the parent's do. The
@@ -49,8 +51,13 @@ export interface NestedRunOptions {
   kernel: KernelClient;
   store: SessionStore;
   signal: AbortSignal;
-  /** The parent's session-scoped leases (an "always" answer covers the child too). */
-  sessionLeases: Lease[];
+  /**
+   * Accepted for caller compatibility and deliberately NOT forwarded to the
+   * child: children receive no parent session leases (docs/09 R-tools-32 —
+   * grants, never leases). A child effect needing approval re-enters the
+   * approval path; passing leases here changes nothing.
+   */
+  sessionLeases?: Lease[];
   /** The parent's instance approval handler; the process one when absent. */
   approve?: ApprovalHandler;
   /** NF-073: the parent run's ledger — the child gets its own step slice but shares the ceiling. */
@@ -77,7 +84,9 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // The child's transcript lands in its own session; the parent's tool card
     // is the user-visible surface, so no events are forwarded upward.
     callbacks: { onEvent: () => undefined },
-    sessionLeases: opts.sessionLeases,
+    // R-tools-32: the child inherits no parent leases — only the parent's
+    // approval handler, so its own effects can ask.
+    sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
     systemOverride: SUBAGENT_SYSTEM_PROMPT,
     // Base seven only: a subagent delegates to no one and drives no previews.

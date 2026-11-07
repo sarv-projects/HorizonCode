@@ -4,6 +4,10 @@
 //! otherwise from `DEFAULT_POLICY` (replicated verbatim from contracts.ts).
 //!
 //! Evaluation, per docs/11-authority-safety.md R1 (deny > ask > allow):
+//!   0. a structural, hard-coded rule denies any `fs.write` whose target
+//!      resolves inside the kernel state directory (`kernel-state-protected`);
+//!      it is evaluated before policy rules and leases and cannot be lifted by
+//!      policy.json (the model must never be able to rewrite its own policy);
 //!   1. any matching `deny` rule wins;
 //!   2. else an unexpired, matching lease grants `allow`;
 //!   3. else any matching `ask` rule asks (an ask beats a matching allow);
@@ -18,8 +22,10 @@
 //! `"echo hi"`, `"*"` matches everything); otherwise the pattern is an exact
 //! match against the action target.
 
+use std::env;
+use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -102,6 +108,7 @@ pub fn pattern_matches(pattern: &str, target: &str) -> bool {
 
 pub struct Guard {
     policy_path: PathBuf,
+    state_dir: PathBuf,
     leases: Mutex<Vec<Lease>>,
 }
 
@@ -109,6 +116,7 @@ impl Guard {
     pub fn new(state_dir: &Path) -> Self {
         Guard {
             policy_path: state_dir.join("policy.json"),
+            state_dir: state_dir.to_path_buf(),
             leases: Mutex::new(Vec::new()),
         }
     }
@@ -140,6 +148,22 @@ impl Guard {
         scope: Option<&str>,
         caller_leases: &[Lease],
     ) -> GuardDecision {
+        // Structural rule, evaluated before policy rules and leases: the kernel
+        // state directory holds the policy, the event log and the receipts, so
+        // no fs.write may ever target it — a policy that says otherwise is
+        // itself part of what this rule protects. It cannot be lifted by
+        // policy.json, a caller-supplied lease, or a held lease.
+        if action.kind == "fs.write" && resolves_inside(&self.state_dir, Path::new(&action.target)) {
+            return GuardDecision {
+                decision: "deny".to_string(),
+                reason: format!(
+                    "kernel-state-protected: {} resolves inside the kernel state directory",
+                    action.target
+                ),
+                lease_id: None,
+            };
+        }
+
         let scope = scope.filter(|s| !s.is_empty()).unwrap_or("*");
         let now_ms = now_millis();
 
@@ -247,6 +271,80 @@ impl Guard {
 
 fn rule_answer_matches(rule: &PolicyRule, kind: &str, scope: &str) -> bool {
     (rule.kind == kind || rule.kind == "*") && (rule.scope == scope || rule.scope == "*")
+}
+
+/* ------------------------- protected path resolution ------------------------- */
+
+/// `true` when `target` is `root` or resolves inside it.
+///
+/// Both sides are resolved through symlinks for the deepest existing ancestor
+/// and normalised lexically for the rest, so the answer cannot be evaded with
+/// a lexical `..`, an absolute target, or a symlink that points into the state
+/// directory.
+fn resolves_inside(root: &Path, target: &Path) -> bool {
+    let root = resolve_deepest(root);
+    let target = resolve_deepest(target);
+    target == root || target.starts_with(&root)
+}
+
+/// The path made absolute against the process cwd (relative targets are how a
+/// client sitting in the workspace spells them).
+fn absolutize(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+/// Lexical normalisation: drop `.`, collapse `a/..` to `a`'s parent, keep
+/// leading `..` in a relative path.
+fn lexically_clean(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let last_is_parent = out
+                    .file_name()
+                    .map(|name| name == std::ffi::OsStr::new(".."))
+                    .unwrap_or(false);
+                if last_is_parent || (!out.pop() && !out.has_root()) {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Resolve a path to where it really lives: canonicalize its deepest existing
+/// ancestor (following symlinks), keep the remaining components verbatim, then
+/// normalise lexically. A path whose tail never exists keeps its lexical form,
+/// which is the best available statement of where a write would land.
+fn resolve_deepest(path: &Path) -> PathBuf {
+    let start = absolutize(path);
+    let mut current = start.clone();
+    let mut tail: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(real) = fs::canonicalize(&current) {
+            let mut out = real;
+            for name in tail.iter().rev() {
+                out.push(name);
+            }
+            return lexically_clean(&out);
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) if parent != current => {
+                tail.push(name.to_os_string());
+                current = parent.to_path_buf();
+            }
+            _ => return lexically_clean(&start),
+        }
+    }
 }
 
 #[cfg(test)]

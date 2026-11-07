@@ -39,6 +39,7 @@ import type {
 } from "../contracts";
 import { DEFAULT_POLICY, hashEnvelope, hashReceipt, newId, nowIso } from "../contracts";
 import { canonicalJson, sha256Hex } from "./canon";
+import { pathInsideWorkspace } from "./loop";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -146,6 +147,23 @@ export function loadPolicy(stateDir: string): PolicyRule[] {
     /* absent or unreadable: the built-in policy applies */
   }
   return DEFAULT_POLICY.slice();
+}
+
+/**
+ * The kernel state directory is structurally protected: no fs.write may target
+ * it, whatever the policy says (the policy itself lives there — a model able to
+ * rewrite it governs itself). The check runs in both transports before any
+ * policy or lease evaluation, resolves the target through symlinks for its
+ * deepest existing ancestor (the same resolution the workspace scope uses),
+ * and fails closed with the registered wire code HZ_PRECONDITION_FAILED.
+ * Returns the refusal message, or undefined when the write is not protected.
+ */
+export function protectedPathRefusal(action: GuardAction, stateDir: string): string | undefined {
+  if (action === null || typeof action !== "object" || action.kind !== "fs.write") return undefined;
+  const target = typeof action.target === "string" ? action.target : "";
+  if (target === "") return undefined;
+  if (!pathInsideWorkspace(path.resolve(target), stateDir)) return undefined;
+  return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
 }
 
 function leaseActive(lease: Lease, now: number): boolean {
@@ -566,6 +584,10 @@ export class LocalKernel {
     if (action === null || typeof action !== "object" || typeof action.kind !== "string") {
       return { decision: "deny", reason: "malformed guard action" };
     }
+    // Structural, before policy and leases: the state directory holds the policy
+    // this decision comes from, so it is never a legal fs.write target.
+    const refusal = protectedPathRefusal(action, this.stateDir);
+    if (refusal !== undefined) throw new Error(refusal);
     // The kernel defaults a missing/empty scope to "*" (guard.rs: scope.filter(non-empty).unwrap_or("*")).
     // A `*` scope matches only `*` rules, so this default is the stricter one.
     const effective: PolicyScope = scope === undefined || (scope as string) === "" ? "*" : scope;
@@ -1000,6 +1022,11 @@ export class KernelClient {
   }
 
   async checkGuard(action: GuardAction, scope?: PolicyScope, leases?: Lease[]): Promise<GuardDecision> {
+    // Structural, before any guard.check request: the trusted transport must
+    // refuse a protected fs.write itself, and the Rust kernel refuses it again
+    // on its side (defense in depth).
+    const refusal = protectedPathRefusal(action, this.stateDir);
+    if (refusal !== undefined) throw new Error(refusal);
     return this.rpc("guard.check", { action, scope, leases });
   }
 

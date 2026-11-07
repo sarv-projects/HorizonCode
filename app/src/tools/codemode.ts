@@ -6,15 +6,35 @@
  * `tools.call(name, args)`, every call comes back here, goes through the guard
  * (deny > ask > allow, with the regular approval prompt) and leaves a receipt
  * exactly like a direct tool call would. The child inherits a scrubbed
- * environment (no credential-shaped names), and its console output travels on a
- * tagged channel, so a logged JSON object can never be mistaken for a control
- * frame. Big tool outputs can therefore be filtered and reduced inside the
- * program instead of landing in the model's context.
+ * environment, and every control frame it sends carries a per-run frame key
+ * (grammar below) — so a logged JSON object, or a program writing
+ * `{"done":true}` to stdout itself, is ordinary output and cannot end the run.
+ * Big tool outputs can therefore be filtered and reduced inside the program
+ * instead of landing in the model's context.
  *
  * Only the seven base tools are reachable from a program — no `code_mode`
  * inside `code_mode`, no `agent`, no `preview`.
+ *
+ * Frame grammar, one control frame per stdout line (upstream is keyed and
+ * downstream carries no key — the program cannot inject into its own stdin):
+ *
+ *   child  -> parent   <bootstrap> {"hello":{"frameKey":"<64 hex>"}}   once, at child load
+ *   child  -> parent   <run key> {"rpc":"tool.call","rpcId":N,...}
+ *   parent -> child    {"rpcId":N,"result":{...}}
+ *   child  -> parent   <run key> {"log":"..."}
+ *   child  -> parent   <run key> {"done":true|false,...}
+ *
+ * A control frame is `<key> <json>`: a key, one space, the JSON. The bootstrap
+ * nonce travels in the child's environment (HZ_CODEMODE_FRAME_KEY) and frames
+ * exactly one line — the handshake — after which it is retired; the run key is
+ * generated inside the child and lives only there. The parent holds the program
+ * back until it has accepted the handshake, so no model code runs, and no byte
+ * a program writes is sent, before the run key is in force. Everything a
+ * program writes itself has no key and is kept as output, never as a frame;
+ * output shaped like a frame is annotated in the log so an attempt is visible.
  */
 
+import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { GuardAction, GuardDecision, Tool, ToolContext, ToolResult } from "../contracts";
 import { canonicalJson, sha256Hex } from "../core/canon";
@@ -31,8 +51,52 @@ import { writeTool } from "./write";
 const CHILD = path.join(import.meta.dir, "codemode-child.ts");
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
+/** How long a freshly started child has to present its frame key. */
+const HANDSHAKE_TIMEOUT_MS = 5_000;
 const LOG_CAP = 20_000;
 const RESULT_CAP = 8_000;
+
+/**
+ * The environment name the bootstrap nonce travels in. The child reads it and
+ * deletes it before any model code runs, and uses it to frame exactly one line.
+ * Note the name ends in `KEY` on purpose: `scrubEnv()` strips credential-shaped
+ * names, so this value can never leak onward through another spawn — and the
+ * assignment below must therefore stay *after* the scrub, not before it.
+ */
+export const FRAME_KEY_ENV = "HZ_CODEMODE_FRAME_KEY";
+
+/** Frame keys are 32 random bytes as lowercase hex (64 characters). */
+const FRAME_KEY_BYTES = 32;
+const FRAME_KEY_RE = /^[0-9a-f]{64}$/;
+
+/** A fresh frame key. Kept in step with the copy in codemode-child.ts. */
+function newFrameKey(): string {
+  return randomBytes(FRAME_KEY_BYTES).toString("hex");
+}
+
+function isFrameKey(value: unknown): value is string {
+  return typeof value === "string" && FRAME_KEY_RE.test(value);
+}
+
+/**
+ * True when a program-written line is shaped like a control frame. Such a line
+ * can only ever be output — a frame needs the key in force — but naming it in
+ * the run's log makes an attempted forgery visible to whoever reads the output,
+ * and the line itself is preserved after the notice.
+ */
+function looksLikeControlFrame(body: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  return record.done !== undefined || record.rpc !== undefined || record.log !== undefined || record.hello !== undefined;
+}
+
+const UNKEYED_FRAME_NOTICE = "[code_mode] line shaped like a control frame without the run key — kept as output: ";
 
 /** The tools a program may call. Base seven only — never code_mode itself. */
 const BASE_TOOLS = new Map<string, Tool>([
@@ -104,6 +168,7 @@ function safeJson(value: unknown): string {
 }
 
 interface WireMessage {
+  hello?: unknown;
   log?: unknown;
   rpc?: unknown;
   rpcId?: unknown;
@@ -138,6 +203,11 @@ export const codemodeTool: Tool = {
     const timeoutMs = clampTimeout(args.timeout_ms);
     const started = Date.now();
 
+    // The bootstrap half of the frame protocol: it travels in the child's
+    // environment, frames the child's single handshake line, and is retired the
+    // moment that line lands (see acceptHandshake below).
+    const bootstrapKey = newFrameKey();
+
     // NF-071: the single spawn path. The runner is long-lived (up to the timeout
     // above), so the owner-death supervisor starts with it — a SIGKILL of hzcode
     // cannot leave the runner, or anything it spawned, behind.
@@ -147,7 +217,7 @@ export const codemodeTool: Tool = {
         stateDir: kernelStateDir(ctx.workspace),
         label: "code_mode",
         cwd: ctx.cwd,
-        env: scrubEnv(),
+        env: { ...scrubEnv(), [FRAME_KEY_ENV]: bootstrapKey },
         stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         detached: true,
       }));
@@ -165,6 +235,15 @@ export const codemodeTool: Tool = {
       let stdoutBuffer = "";
       let stderrTail = "";
       let rpcChain: Promise<void> = Promise.resolve();
+      // The key in force: the bootstrap nonce until the handshake lands, the
+      // child's own run key afterwards. A line prefixed with anything else — a
+      // forged `{"done":true}` included — is program output, never a frame.
+      let activeKey = bootstrapKey;
+      let handshaken = false;
+      let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+      // Sent only once the run key is known (see acceptHandshake): the program
+      // starts after the framing that protects it is in force.
+      const initLine = JSON.stringify({ init: { code } }) + "\n";
 
       // Inner tool calls get their own controller: a code_mode timeout or abort
       // must also stop work already delegated to a tool (an in-flight `shell`),
@@ -175,6 +254,7 @@ export const codemodeTool: Tool = {
       const finish = (result: ToolResult): void => {
         if (settled) return;
         settled = true;
+        if (handshakeTimer !== undefined) clearTimeout(handshakeTimer);
         clearTimeout(timer);
         try {
           ctx.signal.removeEventListener("abort", onAbort);
@@ -197,6 +277,9 @@ export const codemodeTool: Tool = {
       const timer = setTimeout(() => {
         finish({ ok: false, output: `code_mode timed out after ${timeoutMs}ms`, error: "timed out" });
       }, timeoutMs);
+      handshakeTimer = setTimeout(() => {
+        finish({ ok: false, output: `code runner did not present a frame key within ${HANDSHAKE_TIMEOUT_MS}ms`, error: "no frame key" });
+      }, HANDSHAKE_TIMEOUT_MS);
       const onAbort = (): void => {
         finish({ ok: false, output: "code_mode aborted", error: "aborted" });
       };
@@ -303,17 +386,28 @@ export const codemodeTool: Tool = {
         reply(message.rpcId, result);
       };
 
-      const handleLine = (line: string): void => {
-        if (line.trim() === "") return;
-        let message: WireMessage;
-        try {
-          message = JSON.parse(line) as WireMessage;
-        } catch {
-          pushLog(line);
+      /**
+       * The one frame a child may send before the run key exists. Accepting it is
+       * what hands the program over: no model code has run yet, so no
+       * program-written byte can precede — or race — the handshake.
+       */
+      const acceptHandshake = (message: WireMessage): void => {
+        const hello = message.hello;
+        const presented = hello !== null && typeof hello === "object" ? (hello as { frameKey?: unknown }).frameKey : undefined;
+        if (typeof presented !== "string" || !isFrameKey(presented)) {
+          finish({ ok: false, output: "code runner presented an invalid frame key; refusing to run", error: "invalid frame key" });
           return;
         }
-        if (message === null || typeof message !== "object") {
-          pushLog(line);
+        handshaken = true;
+        activeKey = presented; // the bootstrap nonce is retired here, for good
+        if (handshakeTimer !== undefined) clearTimeout(handshakeTimer);
+        writeText(initLine);
+      };
+
+      /** One parsed, key-prefixed control frame. */
+      const handleFrame = (message: WireMessage, rawLine: string): void => {
+        if (!handshaken) {
+          acceptHandshake(message);
           return;
         }
         if (message.rpc === "tool.call") {
@@ -333,14 +427,42 @@ export const codemodeTool: Tool = {
           finish({ ok: false, output: `code_mode error: ${error}${tail()}`, error });
           return;
         }
-        // Console output travels tagged ({"log": "..."}), so a program that logs
-        // a JSON object shaped like a frame cannot end itself early or invent a
-        // result. Anything untagged is a direct stdout write and stays a log.
+        // Console output travels tagged ({"log": "..."}) on the same keyed channel.
         if (typeof message.log === "string") {
           pushLog(message.log);
           return;
         }
-        pushLog(line);
+        pushLog(rawLine);
+      };
+
+      /**
+       * One stdout line from the child. Only a line prefixed with the key in force
+       * is a control frame; every other line is the program's own output. A line
+       * shaped like a frame that does not carry the key is still output — but it
+       * is named, so an attempted forgery is visible in the run's logs instead of
+       * silent.
+       */
+      const handleLine = (line: string): void => {
+        if (line.trim() === "") return;
+        const split = line.indexOf(" ");
+        const key = split > 0 ? line.slice(0, split) : "";
+        const body = split > 0 ? line.slice(split + 1) : line;
+        if (key !== "" && key === activeKey) {
+          let message: WireMessage;
+          try {
+            message = JSON.parse(body) as WireMessage;
+          } catch {
+            pushLog(line);
+            return;
+          }
+          if (message === null || typeof message !== "object") {
+            pushLog(line);
+            return;
+          }
+          handleFrame(message, line);
+          return;
+        }
+        pushLog(looksLikeControlFrame(body) ? `${UNKEYED_FRAME_NOTICE}${line}` : line);
       };
 
       const pushLog = (line: string): void => {
@@ -389,14 +511,11 @@ export const codemodeTool: Tool = {
         // in flight when the process ends, and dropping it would turn a real
         // result into a false "exited before finishing".
         void stdoutPump.then(() => {
-          if (!settled) {
-            finish({ ok: false, output: `code runner exited (code ${exitCode}) before finishing${tail()}`, error: `runner exited (${exitCode})` });
-          }
+          if (settled) return;
+          const stage = handshaken ? "before finishing" : "before presenting its frame key";
+          finish({ ok: false, output: `code runner exited (code ${exitCode}) ${stage}${tail()}`, error: `runner exited (${exitCode})` });
         });
       });
-
-      // Hand the program over; anything after this line is a tool reply.
-      writeText(JSON.stringify({ init: { code } }) + "\n");
     });
   },
 };
