@@ -169,7 +169,7 @@ export interface DurableEventV1<TPayload = unknown> {
 
 `AuthorityPinsV1` is `{ originKind: 'SessionBatch'|'UserAction'|'ManagedRun'|'ManagedRoot'; intentDigest: string; policyRevision: string; postureDigest: string; grantId?: string }`. `originKind` is fixed by the canonical operation, never supplied by a request body (`file:///data/home/forge/HorizonCode/docs/01-vision-and-superset.md#L54-L56`).
 
-`chain.digest` is `sha256(canonicalJson(envelopeWithoutChain) || prevDigest)`. It gives the log tamper evidence that is independent of the kernel's OwnerLog hash chain, which covers kernel-side records.
+`chain.digest` is `sha256(canonicalJson(envelopeWithoutChain) || prevDigest)`. It gives the log tamper evidence that is independent of the kernel's OwnerLog hash chain, which covers kernel-side records. This envelope is the **wire envelope** on every surface: a transported event (JSON-RPC, SSE, NDJSON) parses to `DurableEventV1`; a transport MAY wrap it (cursors, watermark frames) but MUST NOT flatten, rename or re-nest its fields (`07` C12; RC-16(g)).
 
 ### 3.2 The append API
 
@@ -289,8 +289,8 @@ Legend — **Durability**: `D` durable in the session log, `E` ephemeral (broadc
 | 34 | `hz.learn.trajectory.recorded` | `trajectoryId, rootSessionId, runId, agentTreeDigest, eventCount, fromSeq, toSeq, receiptsDigest, redaction{policy,findings,quarantined}, bytes, storageRef, schemaRev` | learn service (post-run) | trajectory index, evals, audit | D | A |
 | 35 | `hz.learn.proposal.created` | `proposalId, kind(memory_fact\|skill_bundle\|prompt_variant\|routing_heuristic\|doc_patch), title, diffRef, evidenceTrajectoryIds[], evalId, expectedEffect, riskClass, authorityImpact(none\|narrowing_only), status(proposed\|rejected\|accepted\|superseded), rejectedReason?` | learn service | proposal inbox, review UI, audit | D | S |
 | 36 | `hz.learn.eval.completed` | `evalId, suite, suiteVersion, caseCount, score, baseline, delta, regression(bool), gate(pass\|fail), flakeRate, durationMs, trajectoryIds[], artifactsRef?` | eval harness | eval projector, ratchet gate, proposals | D | S |
-| 37 | `hz.permission.asked` | `askId, sessionId, effectId?, capabilityId, toolName?, question, options[allow_once\|allow_scoped\|allow_session\|deny], intentDigest, previewRef?, defaultOnTimeout(deny), timeoutMs, expiresAt, requesterAgentId` | Guard / policy host | approval UI (TUI/web/desktop/IDE), notifications, scheduler | D | L |
-| 38 | `hz.permission.answered` | `askId, decision(allow_once\|allow_scoped\|allow_session\|deny), scope?, answerDigest, answeredBy{actorKind,actorId,deviceId?}, latencyMs, grantId?, staleIntent(bool)` | front-end (**UserAction only**) | Guard, effect projector, audit, policy suggestions | D | S |
+| 37 | `hz.permission.asked` | `approvalId, sessionId, effectId?, capabilityId, toolName?, question, options[allow_once\|allow_scoped\|allow_session\|deny], intentDigest, previewRef?, defaultOnTimeout(deny), timeoutMs, expiresAt, requesterAgentId` | Guard / policy host | approval UI (TUI/web/desktop/IDE), notifications, scheduler | D | L |
+| 38 | `hz.permission.answered` | `approvalId, decision(allow_once\|allow_scoped\|allow_session\|deny), scope?, answerDigest, answeredBy{actorKind,actorId,deviceId?}, latencyMs, grantId?, staleIntent(bool)` | front-end (**UserAction only**) | Guard, effect projector, audit, policy suggestions | D | S |
 | 39 | `hz.policy.revision.changed` | `scope(user\|workspace\|session\|managed), previousRevision, newRevision, digest, source(file\|user_action\|managed_push\|trust_decision), changes[{ruleId,effect,before,after}], effectiveAt, changedBy` | policy host | posture projector, cache-guard (posture is in the prefix), audit, `doctor` | D | S |
 | 39b | `hz.provider.account.rotated` | `sessionId, providerId, fromAccountRef, toAccountRef, reason(retryable_failures\|quota_exhausted\|invalid_credentials\|user_command\|circuit_open), estimatedCacheCost{prefixTokens,cold:true}, at` | provider account pool | cache reporting (`hzcode budget --cache`), status line, audit | D | L |
 | 40 | `hz.error.raised` | `errorId, sessionId?, stepId?, severity(info\|warn\|error\|fatal), class(provider\|tool\|kernel\|sandbox\|policy\|cache\|storage\|protocol\|plugin\|mcp), code, message, retryable, transient?, detailsRef?, cause{type,eventId?}, failClosed(bool)` | any owner | error projector, TUI, OTel, verdict assembly, evals | D | S (≥warn loud) |
@@ -352,7 +352,7 @@ These were real gaps found while writing this document. The owner of `_conventio
 
 ## 5. Errors & failure modes (Part A)
 
-`FC` = fail-closed: the operation is refused rather than attempted in a degraded mode. Every code below is a stable identifier that appears in `hz.error.raised.payload.code` and in CLI exit diagnostics.
+`FC` = fail-closed: the operation is refused rather than attempted in a degraded mode. Every code below is a stable identifier that appears in `hz.error.raised.payload.code` and in `hzcode doctor` output. These codes are the log's **internal diagnostics, not wire codes**: a surface that returns an error to a caller (CLI diagnostics included) maps them to the registered `HZ_*` vocabulary of `07-apis-and-contracts.md` §4.10.2 (RC-16(b)).
 
 | Code | Raised when | Behaviour | FC |
 |---|---|---|---|
@@ -437,7 +437,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 1. Model emits `write`/`edit`: `hz.step.tool.requested{capabilityId:'files.write', effectClass:'workspace-write', inputDigest}`.
 2. STEP resolves the intent to a canonical operation and computes the **intent digest** (path set, byte ranges, content hash, argv where applicable).
 3. KRN Guard evaluates policy under the session posture ⇒ `hz.effect.decision.made{decision:'ask', reasonCode, policyRevision, postureDigest, intentDigest}`. **Nothing** is written at this point.
-4. Guard emits `hz.permission.asked{askId, capabilityId, question, options[], previewRef, intentDigest, defaultOnTimeout:'deny', expiresAt}`. FE renders the diff preview; the run is blocked on this ask (the step is open, the claim is held).
+4. Guard emits `hz.permission.asked{approvalId, capabilityId, question, options[], previewRef, intentDigest, defaultOnTimeout:'deny', expiresAt}`. FE renders the diff preview; the run is blocked on this ask (the step is open, the claim is held).
 5. The user answers: FE emits `hz.permission.answered{decision:'allow_once', answeredBy{actorKind:'user'}, answerDigest}`. The append is refused if the origin is not `UserAction` (E-21).
 6. Guard re-evaluates with the answer: if `intentDigest` no longer matches (the file changed while the user was reading) the ask is superseded (`staleIntent`) and a fresh ask is issued. Otherwise the lease is minted: `hz.effect.lease.issued{leaseId, oneUse:true, scope{paths}, expiresAt, fencingEpoch}`.
 7. EffectHost performs a durable **prepare** (journal: effect id, intent digest, lease id, pre-image hash), then executes through the native edit engine inside the sandbox.
@@ -480,8 +480,8 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 **Actors.** FE, KRN, CTL.
 
 1. Model requests `shell{command:'rm -rf *'}`: `hz.step.tool.requested{capabilityId:'terminal.run', effectClass:'process'}`.
-2. Guard evaluates the wildcard layer (`Shell(rm -rf *)`) and the Starlark prefix engine (structural argv, not string matching — ADR-007) ⇒ `hz.effect.decision.made{decision:'deny', reasonCode:'POLICY_DENY', ruleId}`. No `permission.asked` is emitted: a deny is not an ask, and asking would invite the user to override a rule that exists to be un-overridable in the moment.
-3. `hz.step.tool.completed{status:'denied', errorCode:'POLICY_DENY'}`. The model sees the denial with the reason code and cannot retry it into success (Guard re-evaluates every request; a deny does not cache as an allow).
+2. Guard evaluates the wildcard layer (`Shell(rm -rf *)`) and the Starlark prefix engine (structural argv, not string matching — ADR-007) ⇒ `hz.effect.decision.made{decision:'deny', reasonCode:'denied_by_policy', ruleId}`. No `permission.asked` is emitted: a deny is not an ask, and asking would invite the user to override a rule that exists to be un-overridable in the moment.
+3. `hz.step.tool.completed{status:'denied', errorCode:'HZ_POLICY_DENIED'}`. The model sees the denial with the reason code and cannot retry it into success (Guard re-evaluates every request; a deny does not cache as an allow).
 4. The user decides the *policy* is too strict for this workspace. Override happens as an explicit user action: FE emits `hz.policy.revision.changed{scope:'workspace', source:'user_action', changes:[{ruleId, effect:'allow'}], newRevision, digest}`. The effective posture is recomputed and `posture.digest` changes — which is a **prefix** change and therefore a cache epoch change (flow 24 notices this).
 5. Optionally the user narrows instead: a `DirectSessionGrant` is created, bounded to one intent digest, one workspace, an expiry, and a use count. It pre-authorises *that exact request*, and the request still traverses Guard, lease and receipt.
 6. The model retries with a different command: a fresh `hz.step.tool.requested` ⇒ Guard ⇒ allow (the new rule) or ask, never a silent pass because a grant exists.

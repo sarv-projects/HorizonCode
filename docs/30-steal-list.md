@@ -186,6 +186,8 @@ New Section-A sources: the six second-wave sources are recorded in the **A.9 add
 
 Ordered by value ÷ effort. Items 1–5 are cheap, mostly local, and directly strengthen the existing v0.1; items 6–8 are the next capability wave; items 9–11 are process.
 
+**Precedence (RC-16(h)):** this queue is the execution order; `docs/27-implementation-plan.md`'s V0–V7 ladder is the coarse map. Where they appear to conflict, this queue — the newest ratified one — wins.
+
 1. **Wire the loop safety rails (NF-073).** Charge failed turns, cap consecutive format errors with their own exit status, render the budget countdown, keep the sentinel exit protocol. Small diff to `loop.ts`/contracts; immediately improves long-run behaviour.
 2. **Adopt per-tool concurrency classes + parallel batch (NF-072).** One optional field on the Tool interface; `shared` default, `exclusive` for edit/write/ask; barrier semantics. The confirmed oh-my-pi win. **Landed 2026-11-07** — `docs/28` §1 (ruling 14).
 3. **Upgrade the edit path (NF-069/052 extensions, A-1…A-5).** Escalating ladder (exact → indent-normalised → 3-way → line-patch), diff-shaped failure feedback with did-you-mean, bounded reflection slot, parity fixtures with byte-identical errors.
