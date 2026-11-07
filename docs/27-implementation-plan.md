@@ -9,7 +9,7 @@
 
 ## 1. Purpose
 
-The spec set (`docs/00`–`docs/25`) defines *what* HorizonCode is. This document defines **how it gets built**, concretely:
+The spec set (`docs/00`–`docs/30`; the design corpus proper is `00`–`25`, and `26`–`30` are the learning, plan, status, audit and queue documents — RC-14) defines *what* HorizonCode is. This document defines **how it gets built**, concretely:
 
 1. The **bootstrap sequence** — the exact order in which directories, packages, crates, gates and behaviours appear, so that every week ends with something runnable.
 2. A **vertical-slice ladder** (V0–V7) that maps one-to-one onto the phases `M0`–`M8` of `docs/25-roadmap-and-glossary.md` but at the level of *demoable software*, not milestones.
@@ -31,7 +31,7 @@ What this document is *not*: a reduced scope. Nothing in the spec set is dropped
 | IP-5 | **Token economy is designed in, not squeezed out.** | Code Mode / ACI windowing / output budgeting are planned before the first MCP integration so tool outputs never become an unmanaged flood we later have to retrofit. |
 | IP-6 | **The model tier is a parameter, not an assumption.** | Every prompt, loop and tool contract is written to be tier-portable from V1; the tier-parity evals run from V2 on. |
 | IP-7 | **Long-horizon work is tested with hours-long scenarios in CI nightlies, not assumed.** | The long-horizon scenario harness (multi-hour sim) appears in V3, runs nightly from M3. |
-| IP-8 | **Documentation is the design record and it is versioned with the code.** | `docs/` moves into the implementation repo at bootstrap; PRs that change behaviour must change the doc or cite why not (see §12 doc-update ledger in `docs/26-learning-synthesis-2.md`). |
+| IP-8 | **Documentation is the design record and it is versioned with the code.** | `docs/` moves into the implementation repo at bootstrap; PRs that change behaviour must change the doc or cite why not (see the doc-update ledger in `docs/26-learning-synthesis-2.md` §5). |
 
 ---
 
@@ -81,7 +81,7 @@ Each slice states: goal · the minimum that must exist · the exit demo · gates
 | **V1** | First real turn: real providers, context compiler, five read tools, minimal TUI + headless | `scripts/demo/v1.sh`: against a local model endpoint, `hzcode run "what does this repo do?"` reads files and answers; JSONL headless output validated against schema; session resumes | **cache-guard v1**; tool-declaration completeness; event-catalogue parity (subset); bench (fast) |
 | **V2** | Authority: Guard, effects, leases, receipts, approvals, sandbox v1 (Linux), eval harness v1 | `scripts/demo/v2.sh`: a model edit request prompts for approval, executes in bwrap+landlock, produces a receipt; `kill -9` mid-effect reconciles to `UNKNOWN` then settles; sandbox guarantee tests pass on Linux runner | effect-path uniqueness; sandbox guarantee (Linux); adversarial suite v1; tier-parity evals (small set) |
 | **V3** | Surfaces & extensibility: fullscreen TUI complete, server + web minimal, MCP client, plugins v1, skills/commands/hooks; long-horizon sim v1 | `scripts/demo/v3.sh`: full TUI session recorded; web surface reviews the same hunks (parity assertions); an MCP server's tools callable; a signed plugin loaded in the sandbox host | parity ratchet; cross-platform sandbox (macOS/Windows runners); long-horizon nightly; plugin boundary tests |
-| **V4** | Intelligence: memory 4 tiers + retrieval, compaction suite, **Code Mode v2**, ACI windowed terminal, plan/goals/todos, fleets v1, teams v1, preview environments v1, debug recorder v1 | `scripts/demo/v4.sh`: a multi-file refactor driven by Code Mode with one round-trip and a filtered result; a subagent fleet with dependency graph; a failed run investigated from a recorded debug trace; a web preview environment booted and screenshotted into the loop | context-budget gates; code-mode sandbox escapes (adversarial); compaction correctness (R112 class); token-economy budget |
+| **V4** | Intelligence: memory 4 tiers + retrieval, compaction suite, **Code Mode v2**, ACI windowed terminal, plan/goals/todos, fleets v1, teams v1, preview environments v1, debug recorder v1 (NF-051 code mode and NF-055 preview have reduced v1 slices shipped per `docs/28-implementation-status.md` §1; V4 completes them) | `scripts/demo/v4.sh`: a multi-file refactor driven by Code Mode with one round-trip and a filtered result; a subagent fleet with dependency graph; a failed run investigated from a recorded debug trace; a web preview environment booted and screenshotted into the loop | context-budget gates; code-mode sandbox escapes (adversarial); compaction correctness (R112 class); token-economy budget |
 | **V5** | Scale & long-horizon: worktree pool, fleet scale, scheduler, watchdogs, remote execution | `scripts/demo/v5.sh`: three concurrent sessions in one workspace under worktree pools; a scheduled nightly job fires with occurrence journal proof; a 3-hour unattended run completes with drift watchdog events and resumption after a forced restart | multi-process access; crash-resume matrix; unattended watchdog tests |
 | **V6** | Ecosystem & enterprise: marketplace, SDKs (TS/Py/Go/Rust), managed policy, SSO, audit export, air-gapped mode, IDE bridge full, desktop | `scripts/demo/v6.sh`: SDK round-trip from each language; signed managed policy narrows a posture and the guard denies; audit export verifies receipt chain | SDK contract tests; policy precedence tests; export/import (session archive) round trip |
 | **V7** | Self-improvement under cache discipline: trajectory capture → evals → proposals → skillify; A/B under cache-guard | `scripts/demo/v7.sh`: a proposal is produced from captured trajectories, evaluated offline, human-gated, and — only when accepted — manifests as a skill via `skillify`; authority diff is asserted to be empty | proposal lifecycle tests; authority-narrowing assertion; eval-regression gate |
@@ -127,11 +127,10 @@ horizoncode/
 │   ├── kernel-client/           # the ONLY package allowed to speak the kernel ABI
 │   └── cli/                     # `hzcode` entry, `hz`/`horizon` aliases
 ├── crates/                      # Cargo workspace — Rust
-│   ├── hzk/                     # the kernel binary (starts as a stub in V0)
-│   ├── hz-core/                 # shared types (capability ids, receipts, decisions)
-│   ├── hz-sandbox/              # platform sandbox backends + guarantee vectors
-│   ├── hz-receipt/              # receipt ledger, THS hash chain
-│   └── hz-effect/               # effect host (resolve/prepare/execute/observe/settle)
+│   ├── hz_kernel/               # the kernel (binary target `hzk`; starts as a stub in V0); owns
+│   │                            #   receipts, THS hash chain and the effect host — one crate, not three
+│   ├── hz_abi/                  # shared/generated ABI types (capability ids, receipts, decisions)
+│   └── hz_sandbox/              # platform sandbox backends + guarantee vectors
 ├── bench/                       # benches + budgets.toml (one registry)
 ├── scripts/demo/vN.sh           # one demo per slice (R-impl-3)
 ├── tools/                       # dev tooling: repolint, gate scripts, codegen
@@ -204,7 +203,7 @@ W1 and W2 must agree on the **kernel ABI** before V2 work starts (the ABI is `do
 | Bun toolchain installs and runs | `bun --version` → `1.4.4`; `bun -e '…'` executed a script successfully |
 | Rust toolchain installs and builds | `cargo --version` → `1.99.1 (5f94df478 2026-08-27)`; `cargo run` compiled and executed a test binary that emitted output |
 | Sources reachable | HTTPS reachability checks passed for bun.sh, rustup.rs, registry.npmjs.org, static.crates.io |
-| Repos clonable | all ten reference clones completed (eight earlier + OpenHands, SWE-agent, wshobson/agents, opencode-v2) |
+| Repos clonable | all fifteen reference clones completed (the eight of the first tour + OpenHands, SWE-agent, wshobson/agents, opencode-v2 + aider, mini-swe-agent, hermes-agent) |
 
 ### 6.3 What this machine can *develop* vs cannot *prove*
 
@@ -267,7 +266,7 @@ Tool outputs are the dominant token cost of real sessions. The build order makes
 | Compaction ladder with `keep_first` / `minimum_progress` / bounded hard-reset retries (OpenHands lesson) | compaction | V4 |
 | Deferred tool loading (`tool_search`) so the catalogue never floods context | tool registry | V4 |
 
-**The Code Mode decision is in:** adopt with the CM-1…CM-14 rules from the deep-dive (`docs/26` §Code Mode), bringing it forward to V4, with the guarantee-vector confinement (never the phrase “QuickJS-class”) and per-nested-call leases/receipts.
+**The Code Mode decision is in:** adopt with the CM-1…CM-14 rules now owned by `docs/09-tools.md` (source: `docs/26` §2.5; verbatim copy: `docs/29` Part D §09), bringing it forward to V4, with the guarantee-vector confinement (never the phrase “QuickJS-class”) and per-nested-call leases/receipts.
 
 ### 7.4 Multi-file and multi-folder edits without losing context (user goal)
 
@@ -385,28 +384,31 @@ The plan itself was verified by the five-audit pass recorded in `AUDIT.md` and b
 
 ## 12. Open questions and proposed ADRs (owner: product/spec owner; date: before the slice they block)
 
+`docs/25-roadmap-and-glossary.md` §8.1 owns a separate register of inherited questions under its own id family; the questions below are plan-created (`OQ-P1`…`OQ-P7`) and do not collide with it.
+
 | # | Question | Blocks | Proposed default |
 |---|---|---|---|
-| OQ-I1 | Code Mode v2 engine: allowlisted interpreter (opencode-style) vs V8 with JIT disabled (codex-style) — or both behind the guarantee vector | V4 | **Both allowed; interpreter is the default**, V8 opt-in where interactive REPL semantics are needed (ADR-017 proposed) |
-| OQ-I2 | Preview environments: which runtime class (containers vs process-sandbox) and lifecycle (per-session vs per-preview) | V4 | process-sandbox first (ADR-018 proposed) |
-| OQ-I3 | Debug recorder: `rr` (Linux) + WinDbg TTD (Windows) + macOS fallback (core dump + deterministic logs) — do we ship per-platform or require a devcontainer on Linux? | V4 | ship rr-first on Linux; others recorded as unavailable with a typed residual (ADR-019 proposed) |
-| OQ-I4 | Governance blueprint config format: governed state machine declared in AGENTS.md vs a separate `.hz/workflows` file | V4 | AGENTS.md gains a `## Workflow` block parsed into the plan FSM (ADR-020 proposed) |
-| OQ-I5 | Tier-parity target: which parity threshold per task class counts as “same level” | V2 | define with first paired run; start with outcome parity on the seed suite (ADR-021 proposed) |
-| OQ-I6 | Speculative decoding: provider-side config only, or also our local server integration | V4 | provider-side config + documented llama.cpp/vLLM recipes (ADR-022 proposed) |
-| OQ-I7 | Should `hzcode` own a container runtime abstraction for preview/sandbox (podman vs docker vs built-in OCI) | V4/V5 | defer; process sandbox first, container adapters as plugins |
+| OQ-P1 | Code Mode v2 engine: allowlisted interpreter (opencode-style) vs V8 with JIT disabled (codex-style) — or both behind the guarantee vector | V4 | **Both allowed; interpreter is the default**, V8 opt-in where interactive REPL semantics are needed (ADR-017 proposed) |
+| OQ-P2 | Preview environments: which runtime class (containers vs process-sandbox) and lifecycle (per-session vs per-preview) | V4 | process-sandbox first (ADR-018 proposed) |
+| OQ-P3 | Debug recorder: `rr` (Linux) + WinDbg TTD (Windows) + macOS fallback (core dump + deterministic logs) — do we ship per-platform or require a devcontainer on Linux? | V4 | ship rr-first on Linux; others recorded as unavailable with a typed residual (ADR-019 proposed) |
+| OQ-P4 | Governance blueprint config format: governed state machine declared in AGENTS.md vs a separate `.hz/workflows` file | V4 | AGENTS.md gains a `## Workflow` block parsed into the plan FSM (ADR-020 proposed) |
+| OQ-P5 | Tier-parity target: which parity threshold per task class counts as “same level” | V2 | define with first paired run; start with outcome parity on the seed suite (ADR-021 proposed) |
+| OQ-P6 | Speculative decoding: provider-side config only, or also our local server integration | V4 | provider-side config + documented llama.cpp/vLLM recipes (ADR-022 proposed) |
+| OQ-P7 | Should `hzcode` own a container runtime abstraction for preview/sandbox (podman vs docker vs built-in OCI) | V4/V5 | defer; process sandbox first, container adapters as plugins |
 
 ---
 
 ## 13. Status
 
-All spec-level capabilities remain DESIGNED; the following are the only items this plan claims above DESIGNED, with evidence:
+> Implementation levels are owned by `docs/28-implementation-status.md` (RC-13); this plan claims no level itself. §6.2's toolchain viability and §6.3's clone availability are the only items this document evidences, and both are recorded there.
+>
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15).
 
 | Capability | Status | Evidence |
 |---|---|---|
 | Runtime viability of the toolchain (Bun + Rust) on the build machine | **VERIFIED** | install log + smoke tests (§6.2) |
-| Source availability of all ten reference repositories | **VERIFIED** | clones present under `/data/home/forge/repo-tour/` |
-| Learning corpus (deep-dive reports) for this pass | **VERIFIED** | `/tmp/deep-*-report.md` (5 reports, ~1.5k lines total) |
-| Everything else in this document | DESIGNED | — |
+| Source availability of all fifteen reference repositories | **VERIFIED** | clones present under `/data/home/forge/repo-tour/` |
+| Learning corpus (deep-dive reports) for this pass | **VERIFIED** | `docs/audit/pass2/deep-*-report.md` (5 reports, ~1.5k lines total; the reports were preserved in-repo after they had lived only in `/tmp`) |
 
 ### Related documents
 

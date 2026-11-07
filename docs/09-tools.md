@@ -1,6 +1,6 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
 
-> Status: **DESIGNED** (see §12) as a specification of the full ~60-tool catalog. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/hzcode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
+> Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/hzcode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
 > Templates and names follow `/data/home/forge/hzcode/docs/_conventions.md`.
 
@@ -19,7 +19,7 @@ It decides:
 5. The **execution pipeline** — `validate → permission decision → authorize → lease → execute → observe → settle → receipt` — and which stage fails closed for which input.
 6. The **output rendering contract**: what the model sees, what the human sees, and how truncation and pagination are bounded.
 7. **Error semantics per tool class** (read-only / mutating / network / process).
-8. **The full catalog** of the ~60 first-class tools listed in `/data/home/forge/hzcode/README.md` §3.2, each with capability ID, effect class, read-only class, permission class and notable failure modes.
+8. **The full catalog** of the 94 tools in §4 (91 entries), each with capability ID, effect class, read-only class, permission class and notable failure modes — the same set `/data/home/forge/hzcode/README.md` §3.2 names, held equal by the coverage test in §11.2.
 9. The tools we **deliberately do not ship**, and why.
 
 It does **not** decide: kernel internals (`/data/home/forge/hzcode/docs/11-authority-safety.md`), schema bodies (`/data/home/forge/hzcode/docs/05-domain-and-schemas.md`), the event vocabulary (`/data/home/forge/hzcode/docs/06-events-and-flows.md`), the context compiler and prefix discipline (`/data/home/forge/hzcode/docs/10-cognition.md`), or the session/state machine (`/data/home/forge/hzcode/docs/12-sessions-state.md`). Where this document names a schema or an event, it consumes it; the owning document defines it.
@@ -48,49 +48,33 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-1.** Every tool MUST be described by exactly one `ToolDeclarationV1` record. The declaration — not prose, not a prompt, not a registry-side annotation — is the only source of the tool's name, schema, class and authority. A tool with no declaration MUST NOT be callable.
 
-**R-tools-2.** A declaration MUST carry all of the following fields. A declaration missing any field fails the completeness gate (R-tools-12) at build time and MUST NOT be registered at runtime:
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). The `ToolDeclarationV1` **schema** — its field list, its types and every closed enum (`readOnlyClass`, `concurrencyClass`, `idempotency`, `effectClass`) — is owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.7. This section states only the behaviour the tool pipeline depends on; it MUST NOT define, restate, rename or extend a field.
 
-| Field | Type | Meaning |
-|---|---|---|
-| `name` | `string` (model-visible, `[a-z0-9_]{2,48}`, unique per session) | Short callable name |
-| `id` | `string`, `<namespace>.<name>` | Fully qualified, globally unique |
-| `title` | `string` ≤ 64 chars | Human label |
-| `description` | `string` ≤ 1024 chars | What it does, stated as capability not authority |
-| `inputSchema` | JSON Schema 2020-12 | Call arguments |
-| `outputSchema` | JSON Schema 2020-12 | Structured success payload |
-| `readOnlyClass` | `read-only` \| `conditional` \| `mutating` | `conditional` requires a `readOnlyWhen: string` predicate id |
-| `concurrencyClass` | `parallel-safe` \| `session-serial` \| `exclusive` | Scheduling class |
-| `effectClass` | `read-only` \| `workspace-write` \| `network` \| `process` \| `credential` \| `remote` \| `external-effect` | One value, the **maximum** effect any invocation may have |
-| `capabilityId` | one id from `_conventions.md` §5 | Primary capability |
-| `auxCapabilityIds` | `string[]` (MAY be empty) | Additional capabilities the tool may exercise |
-| `permissions` | `ToolPermissionV1` | Resource scope + posture floor + `ask` policy |
-| `idempotency` | `deterministic` \| `keyed` \| `at-most-once` \| `unknown` | Retry semantics |
-| `timeoutMs` | integer, 1..86_400_000 | Mid-execution budget; never 0 |
-| `renderers` | `{ model: string, human?: string, fallback?: true }` | Renderer ids |
-| `telemetry` | `{ span, attributes[], redactionProfile }` | Emission contract |
-| `promptFragment` | `string` | Bounded prompt text (R-tools-10) |
+**R-tools-2.** A declaration MUST carry **every** field of `ToolDeclarationV1` as fixed in `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.7 — that section is the single source of truth for the field list, the types and each closed enum, and this document cites it rather than copying it. A declaration missing any field fails the completeness gate (R-tools-12) at build time and MUST NOT be registered at runtime.
+
+**What this section adds, and the capability decision.** The pipeline depends on these parts of the declaration, each with its own rule below: `effectClass` as an upper bound (R-tools-3), exactly one `capabilityId` (R-tools-4), the permission defaults and their resource scope (R-tools-5), `idempotency` (R-tools-6), the timeout (R-tools-7), the two renderings (R-tools-8), telemetry (R-tools-9) and the prompt fragment (R-tools-10). There is **no `auxCapabilityIds` field and no second capability list**: a declaration names exactly **one** `capabilityId` — the capability of the effect the call is leased under (H-30 in `/data/home/forge/hzcode/docs/03-hld.md`, D22 in `05-domain-and-schemas.md`) — because a union or an inferred second grant would defeat the single-capability authorisation rule the safety model rests on. An auxiliary **read** a tool performs is declared as **read-scope** on that same capability (R-tools-5), never as a parallel grant; an extra **write** arm (e.g. `apply_patch`'s add/delete arms) takes its own one-use lease under the session's own capability for it (R-tools-32), and is refused when the session does not hold that capability.
 
 **R-tools-3.** `effectClass` MUST be the *upper bound*: if any input can cause an effect, the declaration MUST declare that effect class, even when the common path is lighter. A declaration MUST NOT under-declare to obtain a weaker permission decision; the completeness gate cross-checks `effectClass` against `capabilityId` using the capability→effect floor table in `packages/tools/capability-effects.ts` `[planned]`.
 
 **R-tools-4.** `capabilityId` MUST be one of the ids in `_conventions.md` §5. Introducing a capability id requires editing `_conventions.md` in the same change. Capability aliases MUST NOT map to a different effect class (a capability rename is a new id, never an alias; a tool that needs a weaker effect than its capability's floor is a design error resolved by a narrower capability, not by an override).
 
-**R-tools-5.** `permissions` MUST be `ToolPermissionV1 { resourceScope: string[], postureFloor: 'allow'|'ask'|'deny', escalation: 'forbidden'|'allowed' }`. Resource scope is expressed in the scheme of the effect: `workspace://src/**`, `cache://index/**`, `net://api.github.com` , `pty://local`, `memory://team/*`, `agent://child`. A scope of `**` MUST be rejected by the gate unless the owning capability is `session.manage` or `context.manage`.
+**R-tools-5.** The declaration's permission defaults MUST be `ToolPermissionV1` records as fixed in `05-domain-and-schemas.md` §4.7; this document requires only that they carry a **resource scope**, a decision and whether a one-use grant may escalate above it. Resource scope is expressed in the scheme of the effect: `workspace://src/**`, `cache://index/**`, `net://api.github.com` , `pty://local`, `memory://team/*`, `agent://child`. A scope of `**` MUST be rejected by the gate unless the owning capability is `session.manage` or `context.manage`.
 
-**R-tools-6.** `idempotency` MUST be truthful: `deterministic` only if re-running produces no additional effect; `keyed` requires an `idempotencyKeyFrom: string` expression over inputs (e.g. `sha256(workspace|path|postimage)`) and the lease MUST carry the key; `at-most-once` and `unknown` MUST NOT be auto-retried after `execute` has begun (R-tools-35).
+**R-tools-6.** `idempotency` MUST be truthful, using the closed set of `05-domain-and-schemas.md` §4.7 (`idempotent` | `at_most_once` | `at_least_once` | `non_idempotent`): `idempotent` only if re-running produces no additional effect; `at_least_once` requires an `idempotencyKeyFrom: string` expression over inputs (e.g. `sha256(workspace|path|postimage)`) and the lease MUST carry the key; `at_most_once` and `non_idempotent` MUST NOT be auto-retried after `execute` has begun (R-tools-35).
 
-**R-tools-7.** `timeoutMs` MUST be set for every tool, and MUST NOT exceed the enclosing step budget. Long-lived tools (`shell_session`, `job`, `container`, `debug`, `wait`) declare a *session* timeout and an idle timeout; “unbounded” is not a legal declaration. A call exceeding `timeoutMs` is killed at the process/driver boundary and then settles as `UNKNOWN` if an effect may already have landed (R-tools-33).
+**R-tools-7.** A timeout MUST be declared for every tool (`timeouts` in `05-domain-and-schemas.md` §4.7; the kernel enforces the hard limit), and it MUST NOT exceed the enclosing step budget. Long-lived tools (`shell_session`, `job`, `container`, `debug`, `wait`) declare a *session* timeout and an idle timeout; “unbounded” is not a legal declaration. A call exceeding the declared hard timeout is killed at the process/driver boundary and then settles as `UNKNOWN` if an effect may already have landed (R-tools-33).
 
-**R-tools-8.** Two renderers are declared: `renderers.model` (required) and `renderers.human` (MAY be absent). Absent `human` means the TUI renders the model rendering inside a generic frame and marks it `renderFallback: true`; it MUST NOT silently invent a second text. Renderer ids are stable strings (`files.read.v1`), and a renderer change that alters model-facing bytes is a prefix-affecting change (R-tools-13).
+**R-tools-8.** Two renderings exist and both MUST be declarable: the **model-facing** rendering (required — a tool with none MUST NOT register) and the **human-facing** rendering (MAY be absent). Absent `human` means the TUI renders the model rendering inside a generic frame and marks it `renderFallback: true`; it MUST NOT silently invent a second text. Renderer ids are stable strings (`files.read.v1`), and a renderer change that alters model-facing bytes is a prefix-affecting change (R-tools-13).
 
 **R-tools-9.** `telemetry` MUST declare: span name `hz.tool.<name>`, `attributes[]` from a closed set (`tool.id`, `tool.namespace`, `capability.id`, `effect.class`, `tool.outcome`, `tool.bytes.in`, `tool.bytes.out`, `tool.truncated`, `tool.duration.ms`, `tool.retry.count`), and a `redactionProfile` naming a `RedactionV1` profile. Free-form prompt/argument text MUST NOT be a span attribute.
 
-**R-tools-10.** `promptFragment` MUST be non-empty, ≤ 512 bytes, and describe *what the tool does and when to use it* — never how to obtain authority. Fragments are emitted into the provider tool schema block in a deterministic order (namespace then name) and are part of the byte-stable prefix governed by the cache guard in `/data/home/forge/hzcode/docs/10-cognition.md`.
+**R-tools-10.** The declaration's prompt fragment MUST be non-empty, ≤ 512 bytes, and describe *what the tool does and when to use it* — never how to obtain authority. Fragments are emitted into the provider tool schema block in a deterministic order (namespace then name) and are part of the byte-stable prefix governed by the cache guard in `/data/home/forge/hzcode/docs/10-cognition.md`.
 
 ### 2.2 Generation from one source of truth, and the build-time gate
 
 **R-tools-11.** `ToolDeclarationV1` is defined once in `packages/protocol` (generated by `hz_codegen`). TypeScript types, the Rust `hz_abi` mirror, the JSON-Schema blob shipped to providers and the CLI help text MUST all be derived from it. No tool schema may be hand-maintained in a second place; the gate (R-tools-14) rejects a declaration whose generated fixture drifts from the committed fixture.
 
-**R-tools-12.** The **completeness gate** `hzcode lint tools --gate completeness` `[planned]` MUST run during build and in CI and MUST fail (non-zero exit, no `--force` flag) when any declaration: (a) is missing any field of R-tools-2; (b) has a value outside a declared enum; (c) is a duplicate `id` or a colliding session-level `name` under the policy of R-tools-46; (d) names a `capabilityId` absent from `_conventions.md` §5; (e) declares an `effectClass` weaker than the capability floor; (f) declares `readOnlyClass: read-only` with an effect class other than `read-only`; (g) omits `permissions.resourceScope` or includes `**` where R-tools-5 forbids it; (h) omits `timeoutMs`; (i) declares `renderers.model` missing; (j) declares an empty or oversized `promptFragment`.
+**R-tools-12.** The **completeness gate** `hzcode lint tools --gate completeness` `[planned]` MUST run during build and in CI and MUST fail (non-zero exit, no `--force` flag) when any declaration: (a) is missing any field of `ToolDeclarationV1` (R-tools-2); (b) has a value outside a declared enum; (c) is a duplicate `id` or a colliding session-level `name` under the policy of R-tools-46; (d) names a `capabilityId` absent from `_conventions.md` §5; (e) declares an `effectClass` weaker than the capability floor; (f) declares `readOnlyClass: pure_read` with an effect class other than `read-only`; (g) omits a resource scope or includes `**` where R-tools-5 forbids it; (h) omits a timeout; (i) declares no model-facing renderer; (j) declares an empty or oversized prompt fragment.
 
 **R-tools-13.** The **prefix gate** `hzcode lint tools --gate prefix` `[planned]` MUST fail when the concatenated `promptFragment` block for the visible tool set changes bytes without a `prefixRevision` bump, mirroring the cache guard. Adding a tool or editing a fragment is therefore an explicit, reviewed event — never an accident of a refactor.
 
@@ -143,7 +127,7 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-29.** `validate` MUST run before any effect, including before a permission prompt is shown (a human MUST NOT be asked to approve a call that cannot be parsed). Validation failure is terminal for the call and emits no lease request.
 
-**R-tools-30.** The **permission decision** is produced by `Guard.authorize()` for every tool whose declaration requires a lease, and by the in-process mirror for tools that only touch session state (`leaseClass: session` or `none`). Precedence is `deny > ask > allow`; an `ask` that is never answered expires with the step and is reported as `permission.expired`, which is a denial for settlement purposes.
+**R-tools-30.** The **permission decision** is produced by `Guard.authorize()` for every tool whose declaration requires a lease, and by the in-process mirror for tools that only touch session state (`leaseClass: session` or `none`). Precedence is `deny > ask > allow`; an `ask` that is never answered expires with the step and settles as `denied` with reason code `denied_by_grant_expired` (`GuardDecisionV1.reasonCode`; failure case F9 in `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`), which is a denial for settlement purposes.
 
 **R-tools-31.** An `ask` decision emits `hz.permission.asked` and suspends the step. Answers are accepted only from an origin of kind `UserAction`; `SessionBatch` (model-origin) answers are rejected by the kernel and recorded as an attempt.
 
@@ -153,15 +137,15 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-34.** **Observe** streams deltas as parts (`hz.part.updated`) under the caps of §3.7. Observation MUST NOT buffer without bound, and MUST NOT be the mechanism by which a tool reports success — that is `settle`.
 
-**R-tools-35.** **Retry** is legal only for `read-only` tools and for `keyed` idempotent tools whose key is unchanged, and only when `RetryClassV1` says so. `at-most-once`/`unknown` tools that already reached `execute` MUST NOT be retried automatically; the run MUST go through reconciliation (`/data/home/forge/hzcode/docs/11-authority-safety.md`).
+**R-tools-35.** **Retry** is legal only for `read-only` tools and for `at_least_once` tools whose key is unchanged, and only when `RetryClassV1` says so. `at_most_once`/`non_idempotent` tools that already reached `execute` MUST NOT be retried automatically; the run MUST go through reconciliation (`/data/home/forge/hzcode/docs/11-authority-safety.md`).
 
 **R-tools-36.** **Settle** requires agreement between the harness result and host evidence for every mutating call. If the process died, was killed, hit the timeout, or the backend lost the transport after the effect may have been dispatched, the outcome MUST be recorded `UNKNOWN` (`hz.effect.unknown`) and reconciled — never assumed, never silently retried, never reported as success.
 
-**R-tools-37.** **Receipt.** Every `mutating`, `process`, `network`, `remote`, `credential` or `external-effect` call MUST settle into an `EffectReceiptV1` carrying the preimage/postimage where the resource has bytes, the `resourceScope` actually touched, the `capabilityId`, the `EffectOriginV1` (`SessionBatch`, `UserAction`, `ManagedRun`, `ManagedRoot`), and the lease id. Read-only calls MAY emit a lightweight receipt with `effectClass: read-only`; they MUST NOT emit a receipt that claims an effect. A step that contains a mutation without a receipt MUST be reported as unfinished by `hzcode session verify`.
+**R-tools-37.** **Receipt.** Every `mutating`, `process`, `network`, `remote`, `credential` or `external-effect` call MUST settle into an `EffectReceiptV1` carrying the preimage/postimage where the resource has bytes, the `resourceScope` actually touched, the `capabilityId`, the `EffectOriginV1` (`SessionBatch`, `UserAction`, `ManagedRun`, `ManagedRoot`), and the lease id. Read-only calls MUST NOT emit an effect receipt — a pure read is un-receipted, except where a read crosses the workspace boundary, which is receipted as an effect (`/data/home/forge/hzcode/docs/07-apis-and-contracts.md` §10 item 8) — and session-state tools emit session facts, never receipts (§7.2, last row). A step that contains a mutation without a receipt MUST be reported as unfinished by `hzcode session verify`.
 
 **R-tools-38.** **Origin typing.** A model-originated call is `EffectOriginKindV1: SessionBatch` and MUST NOT be able to present itself as `UserAction`, `ManagedRun` or `ManagedRoot`. Approving a prompt converts the *decision*, not the origin: the receipt records which human decision authorized which model request.
 
-**R-tools-39.** **Concurrency.** `parallel-safe` calls may overlap within the per-session ceiling (§10); `session-serial` calls serialise on the session's execution claim; `exclusive` calls take the whole session. Two calls touching the same resource path MUST be ordered even when both are `parallel-safe`; the ordering key is the resolved scope (e.g. `workspace://src/a.ts`), not the model's arguments as written.
+**R-tools-39.** **Concurrency.** `parallel_safe` calls may overlap within the per-session ceiling (§10); `serial` calls serialise on the session's execution claim; `exclusive` calls take the whole session. Two calls touching the same resource path MUST be ordered even when both are `parallel_safe`; the ordering key is the resolved scope (e.g. `workspace://src/a.ts`), not the model's arguments as written.
 
 **R-tools-40.** **Cancellation.** A cancel (user, budget, or run teardown) takes effect at stage boundaries. Once `execute` has begun, cancellation escalates to kill, then to settle + reconcile; the step MUST still end with a terminal outcome (`completed` / `failed` / `UNKNOWN`), never with a silent disappearance.
 
@@ -171,7 +155,7 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-42.** Default caps: model-facing text ≤ **16 KiB** and ≤ **4,000 tokens** per result; human-facing pane content ≤ **1 MiB** (the TUI virtualises, it does not page); the full untruncated stream ≤ **64 MiB** per call, above which the call fails with `OutputTooLarge` rather than spilling without limit. Structured output (`outputSchema` payload) is counted against the same budget as text.
 
-**R-tools-43.** Truncation is **explicit and lossless-resumable**: every truncated result carries `truncated: { reason: 'bytes'|'tokens'|'lines', omittedBytes, omittedLines, nextOffset, artifactUri? }` and a `hz://artifact/<sha256>` pointer to the complete text whenever the call spilled. Silent truncation is a bug, not a budget.
+**R-tools-43.** Truncation is **explicit and lossless-resumable**: every truncated result carries the one `truncated` shape defined by `ToolResultV1` (§3.6) — `truncated: { reason: 'bytes'|'tokens'|'lines'|'count'|'time', omittedBytes, omittedLines, nextOffset, artifactUri?, recoveryHint? }` — plus a `hz://artifact/<sha256>` pointer to the complete text whenever the call spilled. `reason: 'count'` covers a capped result set (matches, files, entries) and `reason: 'time'` a wall-clock cutoff; a budget-capped result set is never reported as complete. Silent truncation is a bug, not a budget.
 
 **R-tools-44.** **Pagination** is by `offset`/`limit` (bytes or lines, declared per tool) and MUST be resumable: `nextOffset` returned by call *n* MUST yield the immediately following bytes on call *n+1*, with no gap and no overlap, provided the underlying resource is unchanged. A tool that cannot paginate MUST declare `pagination: none` and MUST be bounded by construction (`grep` max matches, `glob` max entries, `repo_map` token budget); the gate rejects `pagination: none` without a declared bound.
 
@@ -220,7 +204,9 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 - **R-tools-57 (rendering).** Every model-facing result that reports an empty payload MUST render an explicit sentence (e.g. "the command succeeded and produced no output") instead of an empty block; every `truncated` result MUST carry a `recoveryHint` naming at least one cheaper follow-up call (`read` range, `grep -n`, `outline`, redirect-to-file).
 - **R-tools-58 (state line).** The model-facing step tail MUST project an environment-derived state line (`openFile`, window range, `cwd`), produced by a state command and refreshed from observed effects. It MUST NOT be part of the byte-stable prefix, MUST NOT be model-authorable, and MUST NOT be counted as evidence for `verify`.
 
-**2. Phase-2 `aci.*` group** (admitted only under a preset so the default tool prefix does not grow): `aci.open` (files.read, parallel-safe), `aci.goto` (line or symbol), `aci.scroll` (direction, pages), `aci.find` (summary|matches), `aci.insert` (files.patch, kernel lease). Cursor movement is session state (`lease: session`), never a kernel lease and never a tool argument. Prompt fragment + tests as drafted in the report §6 (cursor math, cursor persistence, outside-window refusal, lint-revert, summary cap at 101 files, recovery hints, narrated empty, state-not-model-authorable).
+**2. Phase-2 `aci.*` group** (admitted only under a preset so the default tool prefix does not grow): `aci.open` (files.read, parallel_safe), `aci.goto` (line or symbol), `aci.scroll` (direction, pages), `aci.find` (summary|matches), `aci.insert` (files.patch, kernel lease). Cursor movement is session state (`lease: session`), never a kernel lease and never a tool argument. Prompt fragment + tests as drafted in the report §6 (cursor math, cursor persistence, outside-window refusal, lint-revert, summary cap at 101 files, recovery hints, narrated empty, state-not-model-authorable).
+
+> **Naming note (`insert`).** The bare `insert` named in R-read-window-3 and R-edit-lint-1 is this item's `aci.insert`; §4 registers no bare `insert` tool, and the catalog↔`README.md` §3.2 coverage test (§11.2) would fail if one were added there without the README. R-edit-lint-1 therefore applies to `edit` in the v1 set and to `aci.insert` only once the preset admits it.
 
 **3. Env-taming defaults:** the shell environment MUST default `PAGER=cat`, `MANPAGER=cat`, `GIT_PAGER=cat`, `LESS=-R`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off`, and the interactive-command blocklist (`vim`, `less`, `tail -f`, bare `python`, …) applies unless explicitly overridden.
 
@@ -268,7 +254,7 @@ Everything a caller can touch is listed here. All symbols are `[planned]` (desig
 | Symbol | Kind | Responsibility |
 |---|---|---|
 | `ToolDeclarationV1` | schema | The declaration (§2.1, owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`) |
-| `ToolPermissionV1` | schema | Resource scope + posture floor + escalation policy |
+| `ToolPermissionV1` | schema | Permission rule or decision — resource scope, decision, one-use grant (owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.7) |
 | `ToolCallV1` | schema | `{ toolCallId, toolId, args, origin, stepId, leaseId? }` — the only legal way to invoke |
 | `ToolResultV1` | schema | `{ toolCallId, status, data?, rendered, truncated?, error?, usage, artifactRefs[], receiptId? }` |
 | `ToolRegistrySnapshotV1` | schema | `{ snapshotSha256, entries[], omitted[{id, reason}] }`, recorded per step |
@@ -300,7 +286,7 @@ Resolution algorithm (`resolveTool`) `[planned]`:
 3. Check the entry is in the step's registry snapshot. Miss ⇒ `ToolSnapshotMismatch` (replay safety, R-tools-22).
 4. Proceed to validation (R-tools-29).
 
-Registry invariants enforced at registration, not at call time: unique `id`; no duplicate `(id, bytes)`; no `builtin.` claim by a plugin or MCP server; no entry without a compiled validator; no entry whose `auxCapabilityIds` exceed the contributor's manifest capabilities.
+Registry invariants enforced at registration, not at call time: unique `id`; no duplicate `(id, bytes)`; no `builtin.` claim by a plugin or MCP server; no entry without a compiled validator; no entry whose `capabilityId` is absent from the contributor's manifest capabilities, and no contributed call path that leases a capability its manifest did not request (R-tools-18 — the declaration carries one capability, so this check is per declaration, not per list).
 
 ### 3.3 `tool_search` contract
 
@@ -360,13 +346,15 @@ Every tool call emits exactly one `hz.step.tool.requested` and exactly one `hz.s
 
 `status` and `settlement` are independent on purpose: a tool can return `ok` while the *effect* is unprovable (then `settlement: unknown`), and that is exactly the case reconciliation exists for.
 
+Two cross-document vocabulary rules attach to this shape. **Terminal state** is RC-7's single enum in `@horizoncode/protocol` (`_conventions.md` §11: `succeeded` | `failed` | `denied` | `cancelled` | `unknown` | `budget_exhausted` | `timeout` | `interrupted`); `status` and `settlement` above are result- and settlement-level fields and MUST NOT be used as, or renamed into, terminal-state names. **`truncated`** is likewise one shape everywhere — the discriminator above, defined by R-tools-43. No tool, event, surface or other document may use a boolean or a second object for it; a catalog entry that writes `truncated: TruncationV1` means exactly this object, and `null` (or absence) means nothing was omitted.
+
 ---
 
 ## 4. Tool catalog
 
 Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated below. Each entry states: purpose · key inputs (with types) · key outputs · capability id · effect class · read-only class · permission class · notable failure modes.
 
-**Legend.** *eff* = declared (maximum) effect class. *RO* = read-only class (`yes` = `read-only`, `cond` = `conditional`, `no` = `mutating`). *perm* = posture floor (`allow` = no prompt under the default `ask` posture; `ask` = prompt unless the user pre-approved; `deny` = not callable until explicitly enabled by the user). *lease* = `kernel` (one-use `hz` lease), `session` (session-state write claim, no kernel lease), `none`.
+**Legend.** *eff* = declared (maximum) effect class. *RO* = read-only class in this catalog's shorthand (`yes` = `pure_read`, `cond` = `read_with_side_effects`, `no` = `mutating`; the enum itself is fixed by `05-domain-and-schemas.md` §4.7). *perm* = posture floor (`allow` = no prompt under the default `ask` posture; `ask` = prompt unless the user pre-approved; `deny` = not callable until explicitly enabled by the user). *lease* = `kernel` (one-use `hz` lease), `session` (session-state write claim, no kernel lease), `none`. *aux* = a capability the call **leases separately and one-use** in addition to the declared one (R-tools-32) — a call-time fact, never a second field on the declaration (§2.1).
 
 ### 4.1 Files
 
@@ -581,7 +569,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 - **Purpose.** Manage background processes started by `shell mode: 'bg'` (or `container`): list, poll, stream logs, wait, signal, kill.
 - **Input.** `action: 'list'|'status'|'logs'|'wait'|'signal'|'kill'`, `jobId?: string`, `signal?: 'TERM'|'INT'|'KILL'`, `sinceSeq?: number`, `waitMs?: number`, `maxBytes?: number`.
 - **Output.** `jobs: Array<{jobId, commandRedacted, pid, state: 'running'|'exited'|'killed'|'unknown', exitCode?, startedAt}>`, `logs?: string`, `state?`.
-- **capability** `process.spawn` · **eff** `process` · **RO** no (except `list`/`status`/`logs`, classified `conditional`) · **perm** `allow` for observation of one's own jobs; `ask` for `signal`/`kill` of a job the session did not start (which is `deny` anyway because the job id is unforgeable) · **lease** kernel for `signal`/`kill`, none for observation
+- **capability** `process.spawn` · **eff** `process` · **RO** no (except `list`/`status`/`logs`, classified `read_with_side_effects`) · **perm** `allow` for observation of one's own jobs; `ask` for `signal`/`kill` of a job the session did not start (which is `deny` anyway because the job id is unforgeable) · **lease** kernel for `signal`/`kill`, none for observation
 - **Fails.** `JobNotFound`; `AlreadyExited` (result, not error, with the retained exit code); logs are ring-buffered (default 1 MiB) and paginated by `seq`; a job whose process group was reaped by the OS reports `state: 'unknown'` and must be reconciled.
 
 #### `repl` — `builtin.repl`
@@ -781,7 +769,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 - **Purpose.** Mark a plan step complete *with evidence* (receipts, test output, diff) — the claim that the verification gate later checks.
 - **Input.** `stepId: string`, `summary: string` (≤ 1 KiB), `evidence: Array<{kind: 'receipt'|'artifact'|'test'|'diff'|'coverage'|'screenshot', ref: string}>`, `claims?: string[]`.
 - **Output.** `stepId`, `state: 'completed'|'rejected'`, `acceptedEvidence: number`, `rejectedEvidence: Array<{ref, reason}>`, `claimable: boolean`.
-- **capability** `session.manage` · **eff** `read-only` at the host (session state; emits `hz.step.started`/`hz.step.completed` transitions on the plan projection) · **RO** yes · **perm** `allow` · **lease** session
+- **capability** `session.manage` · **eff** `read-only` at the host (session state; emits `hz.plan.updated` on the plan projection — the step itself already ended with `hz.step.llm.completed`/`hz.step.tool.completed`; `hz.step.completed` and `hz.plan.step.completed` are **not** canonical events, `_conventions.md` §6) · **RO** yes · **perm** `allow` · **lease** session
 - **Fails.** `StepNotFound`; `EvidenceInvalid` (a claim with no receipt from this run is rejected and *the step stays open*); a claim stronger than its evidence is lowered by the verification gate and MUST NOT be silently accepted at completion time.
 
 #### `update_goal` — `builtin.update_goal`
@@ -793,23 +781,25 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 
 ### 4.6 Agent & orchestration
 
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns the semantics** of subagent fan-out and dependency execution, and the two forms are disjoint: **`fleet` is a fan-out of identical workers** from one prompt template (per-item variables, a concurrency ceiling, results joined by index, **no** dependency edges), while **`parallel_tasks` is a DAG of distinct task specs** (`dependsOn` edges, `failFast`, `adoptRef`). `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`, `06-events-and-flows.md` and `08-runtime.md` consume this definition; none of them may invert it. Both tools are one primitive (`tools.boundary.child_construction`); only the scheduler differs. Subagent depth and concurrency **ceilings** are not set here — `08-runtime.md` R-runtime-67/68 owns them and §10.3 cites them.
+
 #### `task` — `builtin.task`
 - **Purpose.** Spawn one subagent with a prompt, an agent profile, a **capability grant** and a context capsule; return its final report plus the receipt ids it produced.
 - **Input.** `prompt: string` (≤ 32 KiB), `profile?: string` (default `general`), `grant: {capabilities: string[], scope: string[], maxSteps?: number, maxTokens?: number, wallClockMs?: number}`, `capsule?: {files?: string[], memoryTiers?: string[], notes?: string}`, `model?: string`, `background?: boolean` (default false).
 - **Output.** `agentId`, `status: 'completed'|'failed'|'timeout'|'cancelled'`, `report: string`, `receiptIds: string[]`, `usage: {steps, tokens, cost, wallClockMs}`, `artifacts: string[]`, `sessionId` (child session).
 - **capability** `agent.spawn` · **eff** `external-effect` — the declared maximum, because the child may exercise any capability inside its grant · **RO** no · **perm** `ask` when the grant exceeds the session's read-only set; `allow` for a grant that is a strict subset of the parent's read-only capabilities · **lease** kernel for the spawn, plus **per-call leases inside the child** (a child never inherits the parent's leases, R-tools-32)
-- **Fails.** `GrantExceedsParent` (denied at construction — this is the boundary tested by the child-construction primitive); `DepthExceeded` (default depth 3); `ConcurrencyExceeded` (per-session subagent ceiling, default 8); `BudgetExhausted`; a child that dies mid-effect leaves `UNKNOWN` receipts that the *parent* must reconcile.
+- **Fails.** `GrantExceedsParent` (denied at construction — this is the boundary tested by the child-construction primitive); `DepthExceeded` (`08-runtime.md` R-runtime-67: depth 3 default, 5 hard); `ConcurrencyExceeded` (`08-runtime.md` R-runtime-68: 4 live children per session, 8 for read-only children, 12 per root run); `BudgetExhausted`; a child that dies mid-effect leaves `UNKNOWN` receipts that the *parent* must reconcile.
 
 #### `fleet` — `builtin.fleet`
-- **Purpose.** Spawn N subagents from one prompt template with per-agent variables and a concurrency ceiling — the fan-out form of `task`.
-- **Input.** `specs: Array<{id: string, prompt: string, profile?: string, grant?: object, capsule?: object}>` (≤ 64) or `template + items[]`, `concurrency?: number` (default 4, hard 16), `strategy?: 'all'|'collect-first'|'quorum'`, `quorum?: number`.
+- **Purpose.** Spawn N **identical** workers from one prompt template, each with its own per-item variables, under a concurrency ceiling — the fan-out form of `task`. There are **no dependency edges**: every worker starts as soon as the ceiling allows and the results are joined by index.
+- **Input.** `template: string` with per-item `items: Array<Record<string, string>>` (≤ 64) — or the equivalent `specs: Array<{id: string, prompt: string, profile?: string, grant?: object, capsule?: object}>` grown from the same template — `concurrency?: number` (default 4, hard 16, and never above 08's global ceiling), `strategy?: 'all'|'collect-first'|'quorum'`, `quorum?: number`. A `specs[]` entry MUST NOT carry `dependsOn`: a dependency graph is `parallel_tasks`, not `fleet`.
 - **Output.** `fleetId`, `results: Array<{id, agentId, status, report, receiptIds, usage}>`, `partial: boolean`, `cancelled: string[]`.
 - **capability** `agent.spawn` · **eff** `external-effect` · **RO** no · **perm** `ask` (fan-out multiplies cost and blast radius; the decision shows the agent count and the union grant) · **lease** kernel per child
 - **Fails.** `DuplicateSpecId`; `GrantMismatch` (heterogeneous grants are summed, and the union is what the human approves — a mismatch between the presented union and the actual per-child grants is a bug the gate must catch); `ConcurrencyExceeded`; a partially completed fleet is reported as `partial: true` with per-child status — it is never summarised as success.
 
 #### `parallel_tasks` — `builtin.parallel_tasks`
-- **Purpose.** Run several `task` specs with a **dependency graph** (DAG) so dependent children start only after their predecessors' reports exist.
-- **Input.** `tasks: Array<{id, prompt, profile?, grant?, dependsOn?: string[]}>` (≤ 32), `maxConcurrency?: number` (default 4), `failFast?: boolean` (default false).
+- **Purpose.** Run a **dependency graph (DAG) of distinct task specs**, so a dependent child starts only after every predecessor reached `completed` and its report exists — the ordered form, as opposed to `fleet`'s unordered fan-out.
+- **Input.** `tasks: Array<{id, prompt, profile?, grant?, capsule?, dependsOn?: string[]}>` (≤ 32), `maxConcurrency?: number` (default 4), `failFast?: boolean` (default false — the first node failure cancels every node not yet terminal), `adoptRef?: boolean` (default true — a predecessor's output artifact may be injected into a dependent's capsule by `hz://artifact/<sha256>`, never as transcript text).
 - **Output.** `graphId`, `order: string[]`, `results: Record<id, {agentId, status, report, receiptIds}>`, `blocked: string[]`, `cycle: string[]|null`.
 - **capability** `agent.spawn` · **eff** `external-effect` · **RO** no · **perm** `ask` (same as `fleet`, plus the DAG is shown) · **lease** kernel per child
 - **Fails.** `CycleDetected` (rejected before any child spawns, with the cycle path); `UnknownDependency`; `BlockedByFailure` (dependents are `blocked`, not silently skipped-and-marked-done); wall-clock budgets are inherited from the root run, so a DAG cannot outlive its parent.
@@ -904,7 +894,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 - **Purpose.** The MCP client surface: list servers, connect/disconnect, list tools/resources/prompts, read a resource, get a prompt, and invoke an MCP tool (usually through the per-server namespaced tools rather than this dispatcher).
 - **Input.** `action: 'servers'|'connect'|'disconnect'|'tools'|'resources'|'prompts'|'read_resource'|'get_prompt'|'call'|'subscribe'`, `server?: string`, `uri?: string`, `name?: string`, `tool?: string`, `args?: Record<string, unknown>`, `timeoutMs?: number`.
 - **Output.** `servers: Array<{name, transport, state, toolCount, auth: 'none'|'oauth'|'token', trusted}>`, `tools`, `resources`, `prompts`, `content` (for reads), `result` (for calls), `truncated`.
-- **capability** `mcp.invoke` · **eff** `external-effect` · **RO** no (reads are `conditional`) · **perm** `ask` on `connect` (a server is a new source of tools and instructions) and on any `call` whose tool is mutating; `allow` for listing an already-connected server's tools · **lease** kernel
+- **capability** `mcp.invoke` · **eff** `external-effect` · **RO** no (reads are `read_with_side_effects`) · **perm** `ask` on `connect` (a server is a new source of tools and instructions) and on any `call` whose tool is mutating; `allow` for listing an already-connected server's tools · **lease** kernel
 - **Fails.** `ServerNotConfigured`; `AuthRequired` (OAuth flow handed to the user, never auto-approved); `UntrustedServer` (a workspace-named server stays off until the user trusts it for that folder); `ToolNotFound`; MCP servers are a **prompt-injection surface**: their tool descriptions are data, are rendered inside an explicit untrusted-content fence, and MUST NOT be able to redefine the session's tools, policy or presets.
 
 #### `tool_search` — `builtin.tool_search`
@@ -954,7 +944,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 - **Input.** `artifact_write: {content: string|bytes (base64 only for programmatic callers), mediaType, label?, ttlDays?}`; `artifact_read: {uri, offset?, limit?, as: 'text'|'json'|'base64'|'file'}`; `artifact_list: {prefix?, mediaType?, since?, limit?}`; `artifact_delete: {uri, confirm: true}`.
 - **Output.** `uri`, `sha256`, `bytes`, `mediaType`, `createdAt`; `content` / `data` / `path`; `artifacts: Array<{uri, sha256, bytes, mediaType, label, createdAt}>`.
 - **capability** `artifact.write` (write/delete), `files.read` (read/list) · **eff** `workspace-write` for write/delete, `read-only` for read/list · **RO** cond (`readOnlyWhen: action-in-read-list`) · **perm** `allow` for read/write within the session's store quota; `ask` for `artifact_delete` and for writing above the per-session artifact quota · **lease** kernel for write/delete, none for read/list
-- **Fails.** `ArtifactNotFound`; `TooLarge` above the artifact cap (64 MiB); `QuotaExceeded`; content-addressed writes are idempotent by construction (`idempotency: keyed` on the sha256) so a retry cannot duplicate; `artifact_read` of an artifact created by another session is `ask`, not `allow`.
+- **Fails.** `ArtifactNotFound`; `TooLarge` above the artifact cap (64 MiB); `QuotaExceeded`; content-addressed writes are idempotent by construction (`idempotency: idempotent` on the sha256) so a retry cannot duplicate; `artifact_read` of an artifact created by another session is `ask`, not `allow`.
 
 #### `config` — `builtin.config`
 - **Purpose.** Inspect and change project/user configuration (`.hz/` workspace config, `~/.config/horizon/` user config, model/agent/policy presets) — **narrowing only**.
@@ -1120,7 +1110,7 @@ Every tool listed in `/data/home/forge/hzcode/README.md` §3.2 is enumerated bel
 | `review` | `providers.infer` (+`vcs.read`) | `network` | yes | y |
 | `budget_report` | `session.manage` | `read-only` | yes | — |
 
-**Coverage check.** 91 catalog rows against `/data/home/forge/hzcode/README.md` §3.2: every listed tool name appears above with the exception of the `artifact_*` family, which the README names as a glob and this document expands into four tools. This equality is a test, not a promise (§11).
+**Coverage check.** **92 rows** in the table above for **91 catalog entries** and **94 tool names**: the `artifact_*` family is one entry (§4.7) covering four tools and occupying two rows here, because its read half is `read-only` and its write half is `workspace-write`. Against `/data/home/forge/hzcode/README.md` §3.2 the sets are identical (91 entries, 94 names). This equality is a test, not a promise (§11.2).
 
 ---
 
@@ -1182,7 +1172,7 @@ Schemas are defined in `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`; 
 | Declaration missing a field / enum out of range / duplicate id | Build and CI fail; the tool is absent from the shipped binary | “Register it and warn” |
 | Validator does not compile | Tool is not registered; not visible, not callable; the omission is an explicit fact | Silent skip of the schema check |
 | Guard returns an unknown or unparseable decision | `deny` | Default-allow on parser error |
-| `ask` unanswered | Step fails as `permission.expired`; the call is a denial for settlement | Auto-answer from the model, or “assume yes after N seconds” |
+| `ask` unanswered | Step fails as `denied` with `denied_by_grant_expired`; the call is a denial for settlement | Auto-answer from the model, or “assume yes after N seconds” |
 | Lease missing, expired, already used, or scope-mismatched | Execute never starts | Reissue the previous lease for convenience |
 | Effect touches a resource outside the lease scope | The confined action fails; a policy-violation fact is recorded | Partial execution with a warning |
 | Outcome unprovable after `execute` began (kill, timeout, transport loss, crash) | `UNKNOWN` + `hz.effect.unknown` + reconciliation | “Probably succeeded, retry it” |
@@ -1302,7 +1292,7 @@ A tool **requests**; the kernel **decides**; a lease **bounds**; a receipt **pro
 
 ### 9.2 Capability → first-line tools
 
-The capability IDs of `_conventions.md` §5 and the tools that use them:
+The **canonical** capability IDs of `_conventions.md` §5 and the tools whose declaration names them, one capability per declaration (§2.1; a call that additionally needs a read adjunct or a second write arm leases it separately, R-tools-32):
 
 | Capability ID | Tools |
 |---|---|
@@ -1340,6 +1330,25 @@ The capability IDs of `_conventions.md` §5 and the tools that use them:
 | `ui.present` | `ask_user` |
 | `session.manage` | `todo`, `complete_step`, `update_goal`, `tool_search`, `wait`, `yield`, `plan_enter`, `plan_exit`, `config`, `setting`, `verify`, `budget_report`, `send_message` |
 | `context.manage` | `context_notes`, `new_context`, `compress` |
+
+#### 9.2.1 Reserved capability IDs this catalog deliberately does not use
+
+`_conventions.md` §5 also registers sixteen **reserved** IDs (RC-11: "not yet canonical … MUST NOT be used by any implementation", promoted only in the change that first implements the feature). None appears in §4, and that is the correct mapping rather than a missing one — a catalog entry that named one would violate RC-11. Each reserved ID's tool keeps its canonical capability until promotion:
+
+| Reserved ID (RC-11) | Today's canonical owner here | Promoted by |
+|---|---|---|
+| `browser.control` | `net.fetch` (`browse`, §4.4) | the change that implements the browser-control feature |
+| `index.query` | `files.read` (`code_index`, `symbols`, §4.2) | the index feature's phase |
+| `media.render` | `artifact.write` (`chart`, `generate_image`, §4.4) | the media-render phase |
+| `voice.io` | `providers.infer` (`tts`, `stt`, §4.4) | the voice phase |
+| `tool.discover` | `session.manage` (`tool_search`, §4.7) | the discovery phase |
+| `learn.run`, `learn.propose` | `memory.write` (`learn`, `memory_reflect`, §4.5) | the self-improvement phase |
+| `plugin.install` | `plugins.invoke` (`skill_manage`, §4.5) | the plugin-install phase |
+| `workflow.run` | `plugins.invoke` (`workflow`, §4.7) | the workflow phase |
+| `debug.record` | `debug.session` (`debug`, §4.7) | NF (debug recording) |
+| `preview.serve` | — (no tool yet; this document's §5 does not ship one) | the preview feature |
+| `collab.manage`, `notify.emit` | — (no tool yet; reserved for a future surface) | the collab / notification features |
+| `receipt.read`, `sandbox.probe`, `enterprise.policy.read` | — (kernel-internal: `verify` reads receipts under `session.manage`, the kernel probes the sandbox and evaluates managed policy) | the features that expose them |
 
 ### 9.3 How authority is narrowed
 
@@ -1404,14 +1413,16 @@ These are **targets**, not measurements. Nothing has been benchmarked — this r
 
 | Budget | Default | Hard cap |
 |---|---|---|
-| Concurrent `parallel-safe` tool calls per session | 4 | 8 |
-| Concurrent subagents per session tree | 4 | 8 (`fleet` 16) |
-| Subagent depth | 2 | 3 |
+| Concurrent `parallel_safe` tool calls per session | 4 | 8 |
+| Concurrent live subagents | 4 per session / 8 read-only children / 12 per root run — `08-runtime.md` R-runtime-68 owns this ceiling | as 08; `fleet` may request up to 16 **only** while the global ceiling allows, and excess spawns queue with backpressure |
+| Subagent depth | 3 default — `08-runtime.md` R-runtime-67 owns it | 5 |
 | Concurrent PTY sessions | 2 | 4 |
 | Concurrent MCP in-flight calls per server | 2 | 8 |
 | Snapshot store growth per session | 500 MiB | 2 GiB (then oldest snapshots evict, oldest-first, with a recorded eviction) |
 
 **How the numbers are enforced.** The pipeline measures its own overhead per call and records it in `ToolResultV1.usage`; a run whose p95 pipeline overhead exceeds the budget for a sustained window raises a performance fact (it does not silently slow down). The truncation budgets are enforced in `truncateModelText` (R-tools-42/43) and asserted by tests, not by convention.
+
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). The depth and subagent-concurrency ceilings are **owned by `08-runtime.md`** (§2.11, R-runtime-67/R-runtime-68) and are cited here, never restated: 09 sets only the tool-surface budgets (dispatch, output, `parallel_safe` fan-out width).
 
 ---
 
@@ -1423,15 +1434,15 @@ All tests below are **designed**; none is claimed to exist. Names are the intend
 
 | Test id | Proves |
 |---|---|
-| `tools.declaration.completeness` | R-tools-2/12: for each of the 16 mandatory fields, a negative fixture (a declaration with that field removed) makes `hzcode lint tools --gate completeness` exit non-zero, and the positive fixture passes. 17 fixtures total (one per field + the well-formed control) |
-| `tools.declaration.enums_closed` | R-tools-12(b): a value outside each enum is rejected (`effectClass`, `concurrencyClass`, `readOnlyClass`, `idempotency`, `postureFloor`) |
+| `tools.declaration.completeness` | R-tools-2/12: for **each** mandatory field of `ToolDeclarationV1` (the fixture set is generated from the 05 §4.7 schema, so it cannot fall behind the field list), a negative fixture with that field removed makes `hzcode lint tools --gate completeness` exit non-zero, and the well-formed control passes |
+| `tools.declaration.enums_closed` | R-tools-12(b): a value outside each enum is rejected (`effectClass`, `concurrencyClass`, `readOnlyClass`, `idempotency`, permission decision) |
 | `tools.declaration.capability_known` | R-tools-12(d): a `capabilityId` absent from `_conventions.md` §5 fails the gate; the test parses the conventions file so the list cannot drift |
 | `tools.declaration.effect_floor` | R-tools-3/12(e): a `read-only` tool declaring `workspace-write`, and a `files.write` tool declaring `read-only`, both fail |
 | `tools.declaration.scope_rules` | R-tools-12(g)/R-tools-5: `**` rejected outside `session.manage`/`context.manage`; missing scope rejected |
-| `tools.declaration.timeout_required` | R-tools-7/12(h): missing `timeoutMs`, `0`, and “unbounded” all fail |
+| `tools.declaration.timeout_required` | R-tools-7/12(h): a missing timeout, `0`, and “unbounded” all fail |
 | `tools.declaration.prompt_fragment` | R-tools-10/12(j): empty fragment and a fragment > 512 bytes both fail |
 | `tools.declaration.unique_ids` | R-tools-12(c)/R-tools-20: duplicate ids fail; crafting a collision across namespaces produces the deterministic `_2` rename and fails if the rename is not applied |
-| `tools.declaration.conditional_predicate` | R-tools-2: `readOnlyClass: conditional` without a resolvable `readOnlyWhen` fails |
+| `tools.declaration.conditional_predicate` | R-tools-2: `readOnlyClass: read_with_side_effects` without a resolvable `readOnlyWhen` fails |
 | `tools.declaration.op_capability_map` | every op of a multi-op tool (`lsp`, `debug`, `mcp`, `job`, `github`) has a capability mapping; an unmapped op fails (this is the guard against a new op silently inheriting authority) |
 | `tools.fixtures.golden` | R-tools-14: generated fixture ≠ committed fixture ⇒ fail; `--update-fixtures` is the only accepted path |
 | `tools.prefix.stability` | R-tools-13: editing a `promptFragment` without a `prefixRevision` bump fails; reordering namespaces does not change bytes |
@@ -1460,7 +1471,7 @@ All tests below are **designed**; none is claimed to exist. Names are the intend
 | `tools.pipeline.invalid_input_no_effect` | R-tools-29: an invalid call performs no effect, requests no lease, and shows no prompt |
 | `tools.pipeline.guard_unknown_denies` | §7.1: an unparseable decision is `deny` |
 | `tools.pipeline.ask_not_model_answerable` | R-tools-31: a `SessionBatch`-origin answer is rejected and recorded |
-| `tools.pipeline.ask_expiry_is_denial` | unanswered `ask` ⇒ `permission.expired` ⇒ no lease |
+| `tools.pipeline.ask_expiry_is_denial` | unanswered `ask` ⇒ `denied`/`denied_by_grant_expired` ⇒ no lease |
 | `tools.pipeline.lease_single_use` | R-tools-32: the same lease used twice (retry, subagent, resume) ⇒ second use denied |
 | `tools.pipeline.lease_scope_confinement` | R-tools-33/R-tools-56: an effect outside the lease scope fails and is recorded as a policy violation |
 | `tools.pipeline.kill_after_effect_is_unknown` | R-tools-36: kill the process after the side effect but before the result ⇒ `UNKNOWN`, reconcile, and **no** success receipt |
@@ -1498,7 +1509,7 @@ All tests below are **designed**; none is claimed to exist. Names are the intend
 
 ## 12. Status
 
-Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document is `DESIGNED` as a specification claim.** **Implementation status (final audit, 2026-11-06):** the ten v0.1 tools (`read write edit grep glob shell todo agent code_mode preview`) are implemented and TESTED — evidence in `docs/28-implementation-status.md`, which is the single source of truth; the remaining ~50 catalog tools and every symbol in this document not backed by a file under `app/src/tools/` remain design.
+Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document is `DESIGNED` as a specification claim.** **Implementation status (final audit, 2026-11-06):** the ten v0.1 tools (`read write edit grep glob shell todo agent code_mode preview`) are implemented and TESTED — evidence in `docs/28-implementation-status.md`, which is the single source of truth; the remaining tools of the 94-name catalog in §4 and every symbol in this document not backed by a file under `app/src/tools/` remain design.
 
 | Capability | Level | Evidence |
 |---|---|---|
@@ -1511,7 +1522,7 @@ Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document i
 | Origin typing (`SessionBatch` / `UserAction` / `ManagedRun` / `ManagedRoot`) | DESIGNED | §2.5 (R-tools-38), §9.5 |
 | Rendering contract, truncation, pagination, caps | DESIGNED | §2.6, §3.6, §10.2, §11.4 |
 | Error semantics per tool class | DESIGNED | §2.7, §7.2, §7.3, §11.4 |
-| Full catalog (91 rows), capability/effect/permission/lease binding | DESIGNED | §4, §4.9, §11.2 |
+| Full catalog (92 rows / 94 tools), capability/effect/permission/lease binding | DESIGNED | §4, §4.9, §11.2 |
 | Deliberate omissions | DESIGNED | §5 |
 | Schema usage per family | DESIGNED | §6 |
 | Flows (generic, edit-conflict, shell-approval, subagent) | DESIGNED | §8 |
@@ -1524,7 +1535,7 @@ Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. **This document i
 - Every performance number in §10 is a target. **UNKNOWN**: they have not been measured.
 - The exact split of work between `@horizoncode/tools` (TS) and the native crates (`hz_shell`, `hz_edit`, `hz_vcs`, …) is described by intent here; the concrete call boundary is decided in `/data/home/forge/hzcode/docs/04-lld.md`.
 - MCP `readOnlyHint` coverage across real servers is **UNKNOWN**; the design's answer is the conservative default of §2.3 (R-tools-19).
-- Whether any single tool can be strictly `parallel-safe` in the presence of simultaneous human edits is **UNKNOWN**; the pipeline's per-scope ordering (R-tools-39) plus preimage hashes is the current answer, and it is a hypothesis to be tested.
+- Whether any single tool can be strictly `parallel_safe` in the presence of simultaneous human edits is **UNKNOWN**; the pipeline's per-scope ordering (R-tools-39) plus preimage hashes is the current answer, and it is a hypothesis to be tested.
 - Skill/plugin contributed tools are designed to enter through the same pipeline; no upstream repo was surveyed deeply enough to claim the pattern is field-proven — see the sources in §1 for what was actually read.
 
 ---

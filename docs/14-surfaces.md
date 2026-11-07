@@ -14,7 +14,7 @@ This document decides:
 4. The web app, desktop app, IDE/ACP bridge, MCP server mode, SDKs, mobile supervision and collaboration, each with capabilities and limits.
 5. The parity ratchet: how it is computed, what fails the build, and how exceptions are granted and expired.
 
-Sources: `source: /data/home/forge/hzcode/README.md` (§3.6 interface surfaces); `source: /data/home/forge/hzcode/docs/02-decisions.md` (ADR-001, ADR-003, ADR-005, ADR-006, ADR-008, ADR-013); synthesis from `source: /tmp/grok-build-report.md`, `source: /tmp/codex-report.md`, `source: /tmp/opencode-report.part1.md`, `source: /tmp/oh-my-pi-report.md`, `source: /tmp/DeepSeek-Reasonix-report.md`; reference implementations at `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs` (leader + ACP replay), `source: /data/home/forge/repo-tour/opencode/packages/cli/src/services/service-registration.ts` (registration file), `source: /data/home/forge/repo-tour/opencode/packages/server/src/pairing.ts` and `auth.ts` (pairing codes, session tokens), `source: /data/home/forge/repo-tour/codex/codex-rs/app-server` (code-generated JSON-RPC app-server), `source: /data/home/forge/repo-tour/DeepSeek-Reasonix/desktop` (desktop as a nested module), `source: /data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/modes/acp` (ACP agent mode).
+Sources: `source: /data/home/forge/hzcode/README.md` (§3.6 interface surfaces); `source: /data/home/forge/hzcode/docs/02-decisions.md` (ADR-001, ADR-003, ADR-005, ADR-006, ADR-008, ADR-013); synthesis from `source: /data/home/forge/hzcode/docs/audit/pass2/grok-build-report.md`, `source: /data/home/forge/hzcode/docs/audit/pass2/codex-report.md`, `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part1.md`, `source: /data/home/forge/hzcode/docs/audit/pass2/oh-my-pi-report.md`, `source: /data/home/forge/hzcode/docs/audit/pass2/DeepSeek-Reasonix-report.md`; reference implementations at `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs` (leader + ACP replay), `source: /data/home/forge/repo-tour/opencode/packages/cli/src/services/service-registration.ts` (registration file), `source: /data/home/forge/repo-tour/opencode/packages/server/src/pairing.ts` and `auth.ts` (pairing codes, session tokens), `source: /data/home/forge/repo-tour/codex/codex-rs/app-server` (code-generated JSON-RPC app-server), `source: /data/home/forge/repo-tour/DeepSeek-Reasonix/desktop` (desktop as a nested module), `source: /data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/modes/acp` (ACP agent mode).
 
 ### 1.1 The eight surfaces
 
@@ -57,7 +57,7 @@ Rule numbering is stable and testable. `MUST` fails a gate; `SHOULD` is reported
 | S13 | The headless entry points are: `hzcode run <prompt>` (one turn or a bounded run), `hzcode print`/`-p <prompt>` (alias; minimal output), and `hzcode exec <command>` (run one shell command under current policy and report the receipt). All three MUST be non-interactive: no TTY required, no prompt for input, no approval dialog. |
 | S14 | Output format is selected by `--output plain|json|jsonl` (default `plain` for `run`/`-p`, `json` for `exec`). `--json` is an alias for `--output json`. Schemas are `HeadlessResultV1` (docs/13-tui.md §3.5) and `ExecResultV1` (§3.3). |
 | S15 | stdout carries only the selected output; diagnostics, progress, logs and warnings go to stderr. With `--output json|jsonl`, stdout MUST contain nothing but the schema'd payload. |
-| S16 | Exit codes are canonical across all surfaces (table §3.2, referenced by `docs/13-tui.md` §2.17): `0` success, `1` error, `2` usage/config/environment error, `3` fail-closed (an outcome that cannot be proven or guaranteed: kernel absent or mismatched while a mutation was required, an `ask` with no answerer, an unreconciled `UNKNOWN`), `4` policy denial (`Guard` returned `DENY`), `5` budget exhaustion, `130` SIGINT, `143` SIGTERM. |
+| S16 | Exit codes are canonical across all surfaces and are owned by **one table, §3.2**; this rule points at it and MUST NOT restate it (RC-5). Any rule here or in another document that needs an exit code cites §3.2. |
 | S17 | A run that ends with an unreconciled `UNKNOWN` MUST set `unknowns` in the result and MUST exit `3` unless `--allow-unknown` is passed, in which case exit is `0` and `unknowns` is still populated. CI MUST be able to gate on `unknowns` without parsing prose. `--allow-unknown` MUST NOT downgrade a denial or a kernel-absence refusal. |
 | S18 | A run that was denied by policy MUST exit `4` and MUST include `denials[]` with `capabilityId`, `reasonCode` and, when one exists, `receiptId`. |
 | S19 | Non-interactive approval is policy-only: `--posture allow|ask|deny`, `--allow <rule>` (repeatable), `--deny <rule>` (repeatable), or workspace/user config. When the effective decision is `ask`, it MUST resolve to `deny` with reason code `noninteractive_ask` — never a hang, never an implicit allow. |
@@ -257,7 +257,7 @@ Rule numbering is stable and testable. `MUST` fails a gate; `SHOULD` is reported
 | S159 | Secrets MUST NOT enter team memory: any fact classified `credential` or matching the secret scanner MUST be rejected at the sync boundary with a diagnostic, not silently redacted into a half-fact. |
 | S160 | Publishing an artifact out of the team (an external share) MUST be a distinct, receipted action that names the destination, and MUST be refused for artifacts produced from `credential`-class effects. |
 | S161 | Collaboration surfaces MUST be subject to the same parity rules (§2.11): a collaboration state that only the web app can render MUST fail the ratchet unless the TUI declares an equivalent (for example, a presence line in the status bar). |
-| S162 | Every shared read and every revoked link MUST be logged locally (who, what scope, when, and the grant id) and MUST be visible in `hzcode doctor --json` under `sharing`. | |
+| S162 | Every shared read and every revoked link MUST be logged locally (who, what scope, when, and the grant id) and MUST be visible in `hzcode doctor --json` under `sharing`. |
 
 ### 2.11 (j) The parity ratchet
 
@@ -289,7 +289,7 @@ Rule numbering is stable and testable. `MUST` fails a gate; `SHOULD` is reported
 1. **Prompt inspection:** a surface MUST be able to dump the exact rendered message list and exit **without a provider call** (`--show-prompts`-class); prompt behaviour is never debugged by guesswork.
 2. **Per-chunk context cost table:** a `/tokens`-class view lists each context chunk with its token count, a `$` figure, and a remediation hint per row (which command frees it).
 3. **State externalisation:** `--show-repo-map`- and `/settings`-class flags print the exact state the harness sent; a local-only analytics log records events without any network call.
-4. **Batch progress answers "broken or slow?":** per-status histogram, ETA and running cost while a batch runs; Ctrl-C **drains** in-flight work instead of discarding results already paid for; in an interactive session Ctrl-C is user input (an injected message), not an abort.
+4. **Batch progress answers "broken or slow?":** per-status histogram, ETA and running cost while a batch runs; in a **batch** run Ctrl-C **drains** in-flight work instead of discarding results already paid for (`docs/13-tui.md` R45 governs the interactive case, where Ctrl-C is graded: once interrupts the turn, three times exits 130 — not an injected message).
 5. **No prompt without a TTY:** unattended runs degrade to a saved `LimitsExceeded` trajectory rather than an interactive prompt or a crash.
 
 ---
@@ -354,16 +354,18 @@ Method families (complete list lives in `packages/protocol`; this table fixes th
 | session | `session.list`, `session.create`, `session.prompt`, `session.cancel`, `session.fork`, `session.rewind`, `session.delete`, `session.subscribe`, `session.verify` | `session.manage` | mixed |
 | transcript | `transcript.window`, `transcript.search`, `transcript.export` | `files.read` (session projection) | no |
 | diff | `diff.list`, `diff.plan`, `diff.hunk.decision`, `diff.exportBundle` | `files.patch` (decision), `artifact.write` (export) | yes (decision) |
-| approval | `permission.answer`, `permission.pending`, `permission.history` | `session.manage` + client role `interactive` | yes |
+| approval | `permission.answer`, `permission.pending`, `permission.history` | answering an ask: **`UNKNOWN`** — no registered capability ID exists (a decision is `UserAction` origin, not a capability the asker holds); the reads carry `session.manage` + client role `interactive` | yes |
 | receipts | `receipt.list`, `receipt.get`, `receipt.verify` | `files.read` (ledger read) | no |
 | artifacts | `artifact.list`, `artifact.get`, `artifact.put` | `artifact.write` | put only |
 | memory | `memory.list`, `memory.search`, `memory.forget`, `memory.promote`, `memory.share` | `memory.read` / `memory.write` | yes (write ops) |
 | terminal | `terminal.create`, `terminal.attach`, `terminal.input`, `terminal.resize`, `terminal.close` | `terminal.pty` | yes |
-| policy | `policy.list`, `policy.grants`, `policy.revoke` | `session.manage` (revoke: `session.manage` + supervisor) | yes (revoke) |
+| policy | `policy.list`, `policy.grants`, `policy.revoke` | `policy.list`: `session.manage`; `policy.grants`/`policy.revoke`: **`UNKNOWN`** — no registered mutation ID for policy or grants | yes (revoke) |
 | usage | `usage.session`, `usage.tree`, `usage.dashboard` | `files.read` | no |
 | clients | `clients.list`, `clients.role`, `clients.driver.claim`, `clients.driver.release` | `session.manage` | yes |
-| sharing | `share.create`, `share.revoke`, `share.list` | `session.manage` | yes |
+| sharing | `share.create`, `share.revoke`, `share.list` | `collab.manage` `[planned]` (reserved in `_conventions.md` §5; promoted when sharing lands) | yes |
 | diagnostics | `doctor.report`, `parity.report`, `bench.report` | `files.read` | no |
+
+Capability IDs in this table come from `_conventions.md` §5 and nothing else — no wildcard (`share.*`) and no borrowed ID. Where no registered ID fits, the cell says **`UNKNOWN`** rather than substituting a read-only ID: answering an ask and mutating policy/grants fall into that class today, and the registry entry (plus the effect class it implies) MUST be added to `_conventions.md` §5 before either is implemented (R-ops-74; RC-11 reserved-then-promote), with this table updated in the same change.
 
 Alignment with the system interfaces (`docs/03-hld.md`): every **command** method above is a thin wrapper over an I-01 surface command (`submit`, `cancel`, `approve`, `answer`, `setPosture`, `compact`, `fork`, `rewind`, `attach`, `detach`); every **stream** method is a subscription over I-02 (`log({ after })`, addressed by `hz://session/<id>` with a monotonic cursor, replayable by cursor); no method may bypass I-03 to reach the kernel, and no surface may write the log (E-17 in `docs/06-events-and-flows.md`).
 
@@ -390,7 +392,7 @@ Exit codes (canonical for every surface, referenced by `docs/13-tui.md` §2.17):
 | 130 | interrupted by SIGINT | TUI, print, server |
 | 143 | terminated by SIGTERM | all |
 
-Codes `3` and `4` are deliberately distinct: `3` means *the tool cannot prove what happened or cannot guarantee the requested effect*, `4` means *policy said no*. Both are non-success, neither is ever reported as `0`, and `--allow-unknown` downgrades only the `UNKNOWN` case of `3` — never a denial and never a kernel-absence refusal. This matches `docs/06-events-and-flows.md` (kernel absent/older/mismatched digest ⇒ read-only + exit code 3 in headless; a residual unknown ⇒ `session verify` = `UNKNOWN` ⇒ exit code 3). |
+Codes `3` and `4` are deliberately distinct: `3` means *the tool cannot prove what happened or cannot guarantee the requested effect*, `4` means *policy said no*. Both are non-success, neither is ever reported as `0`, and `--allow-unknown` downgrades only the `UNKNOWN` case of `3` — never a denial and never a kernel-absence refusal. This matches `docs/06-events-and-flows.md` (kernel absent/older/mismatched digest ⇒ read-only + exit code 3 in headless; a residual unknown ⇒ `session verify` = `UNKNOWN` ⇒ exit code 3).
 
 ### 3.3 `ExecResultV1`
 
@@ -400,10 +402,10 @@ Codes `3` and `4` are deliberately distinct: `3` means *the tool cannot prove wh
 | `exitCode` | integer \| null | null when the process was killed by a signal |
 | `signal` | string, optional | e.g. `SIGKILL` (cgroup OOM), `SIGSEGV` |
 | `stdoutRef` / `stderrRef` | string | `hz://artifact/<sha256>`; inline only under a byte threshold |
-| `truncated` | object | `{ stdoutBytes, stderrBytes, limitBytes }` when clipped |
+| `truncated` | object | the `truncated` object of `docs/09-tools.md` R-tools-43 — `{ reason, omittedBytes, omittedLines, nextOffset, artifactUri? }` — owned there and referenced here, never re-shaped |
 | `receiptId` | string | `hz://receipt/<id>` |
-| `terminalState` | enum | `SUCCEEDED` \| `FAILED` \| `DENIED` \| `UNKNOWN` |
-| `reasonCode` | string, optional | Present for `DENIED` and `UNKNOWN` |
+| `terminalState` | enum | the RC-7 terminal vocabulary, lowercase and verbatim: `succeeded` \| `failed` \| `denied` \| `cancelled` \| `unknown` \| `budget_exhausted` \| `timeout` \| `interrupted` |
+| `reasonCode` | string, optional | Present for `denied` and `unknown` |
 | `sandbox` | object | `{ mode, residuals[] }` — typed residuals, never silent degradation |
 | `durationMs` | number | Wall clock |
 | `resources` | object, optional | peak RSS, CPU time when cgroup accounting is available |
@@ -488,6 +490,8 @@ Handshake metadata MUST include: protocol revision, exposed tools with `effectCl
 | SDK/server protocol mismatch | client refuses to start and names revisions | `proto_mismatch` |
 | `UNKNOWN` anywhere | surfaced on every surface; CI exit takes it into account (S17) | never converted to success by any surface |
 
+Three vocabularies meet in the table above and MUST stay distinct. **Guard decision reason codes** are the closed set of `docs/11-authority-safety.md` §5.1. **RPC/transport errors** (`role_forbidden`, `driver_lease_held`, `tool_not_exposed`, `client_policy_forbidden`, `pairing_expired`, `pairing_consumed`, `session_revoked`, `session_expired`, `peer_mismatch`, `abi_mismatch`, `proto_mismatch`, `leader_lost`, `rate_limited`, `share_scope`, `grant_revoked`, `pty_paused`) are this document's own error namespace and MUST NOT be added to §5.1. **Surface decision codes** — `noninteractive_ask`, `no_interactive_client`, `unrenderable_ask` — resolve an ask with no answerer and therefore do belong in the closed decision set; they are `UNKNOWN` to doc 11 today and MUST be registered in its §5.1 (G2, `exhaustive_reason_codes`) before a receipt carries them.
+
 ## 6. Flows
 
 ### 6.1 CI run and verification
@@ -511,9 +515,9 @@ Handshake metadata MUST include: protocol revision, exposed tools with `effectCl
 
 1. The editor starts `hzcode acp`; the bridge performs the ACP handshake, negotiates capabilities with the editor, and attaches to (or starts) the workspace leader.
 2. The user prompts from the editor; the session is created in the store and is immediately visible to the TUI and the web app.
-3. A tool requests `terminal.run`; the ask is rendered in the editor with the exact argv, effect class, origin, sandbox mode and policy revision. The user approves `allow once`; the server records the decision and issues the lease.
+3. A tool requests `terminal.run`; the ask is rendered in the editor with the exact argv, effect class, origin, sandbox mode and policy revision. The user approves `allow once`; the server records the decision as `hz.permission.answered` and the **kernel** consumes the challenge and issues the one-use lease — no surface or server mints a lease (`docs/11-authority-safety.md` L1–L4, A11).
 4. The agent edits two files; the editor shows the diff with per-hunk affordances. Accepting hunk 1 sends `diff.hunk.decision`; the server submits `files.patch`, the receipt settles, and the editor renders `applied` from the receipt. Hunk 2 returns `stale_preimage` and the editor offers re-diff.
-5. The leader crashes (OOM). The bridge loses the connection; the client stays alive. On reconnect the bridge replays `initialize` and the cached session attachments, swallowing the responses to replayed requests while forwarding notifications, and emits `hz/leader.reconnected` with the recovered session ids. Sessions that could not be recovered are marked `partial` with the reason.
+5. The leader crashes (OOM). The bridge loses the connection; the client stays alive. On reconnect the bridge replays `initialize` and the cached session attachments, swallowing the responses to replayed requests while forwarding notifications, and emits `hz/reconnected` (the one name, declared in S97) with the recovered session ids. Sessions that could not be recovered are marked `partial` with the reason.
 6. No prompt is re-run, no effect is duplicated, and the user sees a single reconnect notice with the recovered sessions listed.
 
 ### 6.4 Desktop supervised start and update
@@ -537,7 +541,7 @@ Handshake metadata MUST include: protocol revision, exposed tools with `effectCl
 | TUI | `ui.present`, `session.manage`, `terminal.pty`, `files.read`, `artifact.write`, `net.fetch` | interactive user answer required for anything above read-only |
 | print/exec | `session.manage`, `files.read`, `terminal.run`, `net.fetch`, `artifact.write` | policy-only approvals; `ask`⇒deny |
 | server | none of its own; it transports requests | role scoping, per-client rate limits |
-| web | `session.manage`, `terminal.pty`, `files.patch` (via decision), `memory.write`, `share.*` | client role; share tokens never execute (S151) |
+| web | `session.manage`, `terminal.pty`, `files.patch` (via decision), `memory.write`, `collab.manage` `[planned]` | client role; share tokens never execute (S151) |
 | desktop | as web, plus OS integration (no agent capability) | renderer sandbox; preload allow-list |
 | IDE | `session.manage`, `files.patch` (via decision) | S101 list enforced server-side |
 | MCP server | the exposed tool allow-list only | S110–S112 defaults; member-of-user-authority only |
@@ -615,11 +619,12 @@ Handshake metadata MUST include: protocol revision, exposed tools with `effectCl
 
 ## 10. Status
 
-Every capability below starts at **DESIGNED**. Evidence required to advance is named per row; no row may claim `WIRED` or above without the named test green and a real run recorded.
+Every capability below starts at **DESIGNED**, except the rows `28-implementation-status.md` records above it — that file owns implementation levels (RC-13) and is the only place a level above `DESIGNED` may be claimed. Evidence required to advance is named per row; no row may claim `WIRED` or above without the named test green and a real run recorded.
 
 | Capability | Surface(s) | Level | Evidence required to advance |
 |---|---|---|---|
-| Print/exec + CI contract (schemas, exit codes, gates) | print | DESIGNED | `surfaces/headless.schema`, `surfaces/ci.recipes`, `surfaces/headless.redaction` |
+| Print/exec CLI path (schemas, exit codes, approvals fail closed) | print | VERIFIED (`28-implementation-status.md` §1: `bin/hzcode`, `--output` modes, headless approvals fail closed, exit-code e2e) | `surfaces/headless.schema`, `surfaces/headless.redaction` |
+| CI recipes and gate wiring (documented recipes run green in CI) | print | DESIGNED | `surfaces/ci.recipes` |
 | Local server transports (stdio/UDS/TCP/HTTP/SSE/WS) | server | DESIGNED | `surfaces/server.transports` |
 | Discovery + leader arbitration | server | DESIGNED | `surfaces/server.discovery` |
 | Auth (token, pairing, session token, roles) | server | DESIGNED | `surfaces/server.auth` |

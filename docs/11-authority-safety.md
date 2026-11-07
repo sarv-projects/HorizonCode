@@ -17,13 +17,13 @@ This document decides, for the whole product:
 7. **How secrets, supply chain and audit are handled.** Vault and redaction, pinned digests and signatures, audit export.
 8. **What we refuse to do.** An explicit list, so no later document quietly introduces it.
 
-Everything in this document is **DESIGNED**. Nothing here is a claim that working code exists (see §10).
+Design-only except the v0.1 slice enumerated in §10: the Guard decision path, in-memory leases, the chained receipt log and `policy.json` overrides are implemented and tested in `kernel/`. Levels are owned by `docs/28-implementation-status.md` — 285 TypeScript tests and 17 Rust tests pass at the 2026-11-06 snapshot, and the provider layer is implemented. Nothing else here should be read as a claim that working code exists.
 
 ### 1.1 Scope and non-scope
 
 | In scope | Out of scope (owned elsewhere) |
 |---|---|
-| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics — `/data/home/forge/hzcode/docs/` session & state docs; TUI presentation; provider wire codecs; tool argument schemas |
+| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics — `/data/home/forge/hzcode/docs/12-sessions-state.md`, with event meaning and ordering in `/data/home/forge/hzcode/docs/06-events-and-flows.md`; TUI presentation — `/data/home/forge/hzcode/docs/13-tui.md`; provider wire codecs — `/data/home/forge/hzcode/docs/10-cognition.md`; tool argument schemas — `/data/home/forge/hzcode/docs/09-tools.md` |
 | The kernel (`hzk`) boundary and its protocol | The native capability crates' internals (`hz_shell`, `hz_edit`, `hz_diff`, …) beyond what they must guarantee to Guard |
 | Config **authority** semantics (who may widen) | Config **surface** (flags, env, file names) beyond the authority-relevant fields |
 
@@ -121,7 +121,7 @@ source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sandbox/sr
 source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs
 source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-egress-proxy/src/lib.rs
 source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-secrets/src/lib.rs
-source: /data/home/forge/repo-tour/claude-code/src/hooks/useCanUseTool.ts
+source: /data/home/forge/repo-tour/claude-code/src/hooks/useCanUseTool.tsx
 source: /data/home/forge/repo-tour/claude-code/src/types/permissions.ts
 source: /data/home/forge/repo-tour/DeepSeek-Reasonix/internal/frontend/acp/handshake.go
 ```
@@ -135,7 +135,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 ### 2.1 Authority (A)
 
 - **A1** Every effect that can change state outside the agent's own memory **MUST** be admitted by `hzk::Guard::authorize()` before it executes. There is no fast path. *(T-A1)*
-- **A2** The capability ID **MUST** be a member of the canonical registry in `/data/home/forge/hzcode/docs/_conventions.md` §5. An unknown ID **MUST** deny with `unsupported_action`. *(T-A2)*
+- **A2** The capability ID **MUST** be a member of the canonical registry in `/data/home/forge/hzcode/docs/_conventions.md` §5 **or** of the internal, non-model-visible block of §4.1 of this document (an ID that is registered here and queued for the §5 internal block; RC-11). An unknown ID **MUST** deny with `unsupported_action`. *(T-A2)*
 - **A3** An alias **MUST NOT** change an effect class. Aliases are dispatch names only. *(T-A3)*
 - **A4** The origin kind **MUST** be fixed by the canonical operation that admitted the effect and **MUST NOT** be readable from any request body, tool argument, or model output. *(T-A4)*
 - **A5** A `SessionBatch` origin **MUST** carry a session id and a `turn_context_digest`; it **MUST NOT** carry an `approval_token` field at all (not merely be ignored). *(T-A5)*
@@ -184,7 +184,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 - **R7** A command whose argv cannot be parsed into a canonical form **MUST** be decided as `ask` and **MUST NOT** be decided as `allow`. *(T-R7)*
 - **R8** `prefix_rule` examples (`match`, `not_match`) **MUST** be validated at load time and a failing example **MUST** refuse the policy revision. *(T-R8)*
 - **R9** `host_executable(name, paths)` **MUST** restrict basename fallback to the listed absolute paths; when both the invoked basename and the matched rule declare paths, the resolved path **MUST** appear in both lists. *(T-R9)*
-- **R10** The strictest severity across all matching rules **MUST** win (`forbidden > prompt > allow`). *(T-R10)*
+- **R10** The strictest severity across all matching rules **MUST** win (`forbidden > prompt > allow`, mapped by §7.5.3 to `deny > ask > allow`). *(T-R10)*
 - **R11** A rule that names a tool **MUST** resolve to exactly one capability ID; a rule that would affect multiple effect classes **MUST** be refused at compile time. *(T-R11)*
 
 ### 2.5 Configuration and trust (C)
@@ -192,7 +192,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 - **C1** The merge **MUST** be a lattice meet over a declared narrow-to-wide ordering, never an overwrite (ADR-008). *(T-C1)*
 - **C2** A workspace (`./.hz/`) layer **MUST NOT** widen any of: approval requirement, sandbox mode, allow-list membership, approved executable set, trusted program set, egress destinations, enabled plugin set, enabled MCP server set, hook set. *(T-C2)*
 - **C3** A workspace layer **MAY** narrow any of the above, and narrowing **MUST** be applied before the effective policy digest is computed. *(T-C3)*
-- **C4** Only a **signed** managed policy **MAY** grant, it **MUST** be explicitly opted into by the user or their administrator, and its grants **MUST** be narrower than or equal to an effect class already available at user level. *(T-C4)*
+- **C4** Only a **signed** managed policy **MAY** set a narrowing grant — a floor that always requires approval, a ceiling that always denies, or the removal of an `ask` requirement it itself created. It **MUST** be explicitly opted into by the user or their administrator, and it **MUST NOT** lift a `deny` from any lower layer and **MUST NOT** widen beyond an effect class already available at user level (§7.6.3). *(T-C4)*
 - **C5** A program named by a workspace config (hook, LSP server, MCP server, formatter, test runner, plugin) **MUST** be off until it is explicitly trusted for that folder. *(T-C5)*
 - **C6** A trust decision **MUST** record the canonical workspace root digest, the program kind, the canonical program path, the program content digest, the argv template digest, the decision, the decider and the time. *(T-C6)*
 - **C7** A change to the canonical path or the content digest **MUST** invalidate the trust record and require a new decision. *(T-C7)*
@@ -217,21 +217,23 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 - **E2** `prepare` **MUST** be durable (fsync'd) before the first mutating syscall. A crash after a mutating syscall **MUST** leave a durable record that reconciliation can find. *(T-E2)*
 - **E3** `resolve` **MUST** operate on directory handles relative to a pinned workspace root fd, not on re-parsed path strings. *(T-E3)*
 - **E4** Every capability in the registry **MUST** declare an observation strategy; a capability whose effect cannot be observed **MUST NOT** be granted mutation authority. *(T-E4)*
-- **E5** `settle` **MUST** write exactly one terminal state per effect: `SUCCEEDED`, `FAILED`, `DENIED`, or `UNKNOWN`. *(T-E5)*
-- **E6** An effect that cannot be proven settled **MUST** settle as `UNKNOWN` and **MUST NOT** be reported as `FAILED`. *(T-E6)*
-- **E7** An `UNKNOWN` effect **MUST NOT** be retried automatically, by any component, at any layer. *(T-E7)*
-- **E8** `UNKNOWN` **MUST** block further effects on the same resolved resource until reconciled or explicitly overridden by a human. *(T-E8)*
+- **E5** `settle` **MUST** write exactly one terminal state per effect, drawn from the single enum of `_conventions.md` RC-7: `succeeded | failed | denied | cancelled | unknown | budget_exhausted | timeout | interrupted`. `cancelled`, `budget_exhausted`, `timeout` and `interrupted` are settle-time terminals and mint a receipt carrying that value. *(T-E5)*
+- **E6** An effect that cannot be proven settled **MUST** settle as `unknown` and **MUST NOT** be reported as `failed`. *(T-E6)*
+- **E7** An `unknown` effect **MUST NOT** be retried automatically, by any component, at any layer. *(T-E7)*
+- **E8** `unknown` **MUST** block further effects on the same resolved resource until reconciled or explicitly overridden by a human. *(T-E8)*
 - **E9** Reconciliation **MUST** be performed by the kernel or a host-registered verifier; a model-originated reconciliation request **MUST** deny with `reconciliation_is_host_only`. *(T-E9)*
-- **E10** A reconciled effect **MUST** mint a receipt carrying `reconciled_from` and the probe's evidence; an `UNKNOWN` record **MUST NOT** be rewritten in place. *(T-E10)*
+- **E10** A reconciled effect **MUST** mint a receipt carrying `reconciled_from` and the probe's evidence; an `unknown` record **MUST NOT** be rewritten in place. *(T-E10)*
 - **E11** Every effect **MUST** record the sandbox profile descriptor and the guarantee vector digest under which it executed, or the explicit string `none` when the profile is `full-access`. *(T-E11)*
+
+**Terminal-state spelling.** The one vocabulary is RC-7's lowercase enum, restated in E5. Prose and example payloads in this document still carry the older uppercase spellings (`UNKNOWN`, `SUCCEEDED`, `FAILED`, `DENIED`, `CANCELLED`); they denote the same values, no component emits an uppercase terminal word, and where an example is shown in the old spelling RC-7 wins.
 
 ### 2.8 Receipts and verification (V)
 
 - **V1** Every settled effect **MUST** produce a receipt; there **MUST NOT** be a mutation class that skips the ledger (ADR-012). *(T-V1)*
 - **V2** A receipt **MUST** contain the fields in §7.9.1 and **MUST** be content-addressed (`blake3:`) over its canonical encoding. *(T-V2)*
 - **V3** Receipts **MUST** be hash-chained per session; `prev_receipt_digest` **MUST** be present for every receipt after the first. *(T-V3)*
-- **V4** A `DENIED` decision **MUST** be receipted as a `host_decision` record with no lease and no observation of the world. *(T-V4)*
-- **V5** An `UNKNOWN` outcome **MUST NOT** be given a receipt identity; it is a pending record plus an event, and only reconciliation mints a receipt. *(T-V5)*
+- **V4** A `denied` decision **MUST** be receipted as a `host_decision` record with no lease and no observation of the world. *(T-V4)*
+- **V5** An `unknown` outcome **MUST NOT** be given a receipt identity; it is a pending record plus an event, and only reconciliation mints a receipt. *(T-V5)*
 - **V6** A receipt **MUST NOT** contain credential bytes, raw secret values, full file contents, or unbounded output; it **MUST** carry digests and bounded metadata. *(T-V6)*
 - **V7** The evidence gate **MUST** be able to only **lower** a claim's confidence, never raise it. *(T-V7)*
 - **V8** A claim **MUST NOT** be satisfiable by model narration; only host observations and receipt facts **MAY** satisfy a claim. *(T-V8)*
@@ -315,6 +317,8 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 ### 3.1 Kernel protocol (`hzk`, `HZ_ABI=1`, `HZ_PROTO=1`)
 
 Transport: Unix domain socket (Windows: named pipe); framed, length-prefixed, schema-generated from `packages/protocol` → `crates/hz_abi`.
+
+The protocol method catalogue is owned by `/data/home/forge/hzcode/docs/07-apis-and-contracts.md` §4.1–§4.2. The table below is a reading aid restricted to the methods that carry an authority obligation; where the two documents disagree, doc 07 governs the method and this document governs the obligation. Method names live in the method namespace: `secret.use` below is a method, while `secrets.use` (§4.1) is the capability.
 
 | Method | Input | Output | Notes |
 |---|---|---|---|
@@ -438,7 +442,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 3.4 Events owned by this document
 
-`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`kind` field carries the reason code).
+`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class — `plugin`, `mcp`, `sandbox`, … — and `code` carries the closed reason code; payload shape owned by `/data/home/forge/hzcode/docs/06-events-and-flows.md` row 40, RC-2).
 
 ### 3.5 Types owned by this document
 
@@ -454,7 +458,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 4.1 Capability inventory
 
-Every capability ID is stable; an alias never changes an effect class (A3). Model-visible IDs are the canonical set from `/data/home/forge/hzcode/docs/_conventions.md` §5; the internal IDs below are **never projected as model tools** unless the row says otherwise.
+Every capability ID is stable; an alias never changes an effect class (A3). Model-visible IDs are the canonical set from `/data/home/forge/hzcode/docs/_conventions.md` §5. The internal IDs below are **never projected as model tools** unless the row says otherwise; they are registered here (A2) and `_conventions.md` §5 is to carry them as an internal, non-model-visible block, so the `capability_registry_parity` and `exhaustive_reason_codes` gates (§9.3) see one registry.
 
 | Capability ID | Effect classes | Default posture `allow`/`ask`/`deny` | Observing required | Model-visible |
 |---|---|---|---|---|
@@ -493,12 +497,17 @@ Every capability ID is stable; an alias never changes an effect class (A3). Mode
 | `remote.exec` | `remote`, `process` | ask/ask/deny | host identity, remote receipt digest | yes |
 | `mcp.invoke` | `external-effect` | ask/ask/deny | server identity, tool name, argument digest, declared version | yes (via `mcp__*`) |
 | `ui.present` | `read-only` | allow/allow/allow | render plan digest | yes |
-| `session.manage` | `read-only` (+ `external-effect` for delete/share) | allow/ask/deny | session id, operation | yes |
+| `session.manage` | `read-only` | allow/ask/deny | session id, operation | yes |
 | `context.manage` | `read-only` | allow/allow/allow | projection digest | yes |
 | `builtin.verifier` | `process` | ask/ask/deny | profile digest, verdict digest | **no** (A8, V10) |
 | `editor.launch` | `process` | ask/ask/deny | trusted profile revision, literal argv digest | **no** (A10) |
 | `agents.message` | `external-effect` | allow/ask/deny | parent/child session ids, mailbox digest | yes (as `send_message`) |
 | `automations.*` | `external-effect` | ask/ask/deny | definition CAS, durable idempotent receipt | yes (as `schedule`) |
+
+Two granularity notes, because an effect class is singular and immutable (A3):
+
+- **`session.manage` is read-only.** It covers listing, showing, replaying and verifying a session, and authorises no write. Log appends are not Guard effects at all: they are the storage layer's single-writer path (`12-sessions-state.md` S-7, S-8), fenced by the session claim. The user-visible mutations — fork, rewind, archive, delete, share, export, import, backup, restore, migration — are **writes** and need a write-scoped session capability. `_conventions.md` §5 names none, and this document does not invent one: that ID is **UNKNOWN** and is queued for registration (RC-11 reserved block). Until it lands, those operations are Controller commands owned by `12-sessions-state.md` §7.1, not model-requestable capabilities.
+- **`context.manage` is read-only, for projection reads only.** Compaction apply, prefix-epoch changes and memory-review decisions are mutations and **MUST NOT** be authorised by `context.manage`; they are `workspace-write`-class effects (`memory.write`, `files.write`) under the step that requested them.
 
 ### 4.2 `GuardDecisionV1`
 
@@ -573,8 +582,8 @@ The kernel builds this value; the boundary that accepts it is a private in-proce
 {
   "ruleId": "rule_01J...",
   "sourceLayer": "user",
-  "effect": "shell" | "read" | "edit" | "write" | "delete" | "web" | "provider"
-          | "mcp" | "agent" | "secret" | "terminal" | "capability",
+  "effect": "shell" | "read" | "edit" | "write" | "delete" | "move" | "vcs" | "web"
+          | "provider" | "mcp" | "agent" | "secret" | "terminal" | "capability",
   "capabilityId": "terminal.run",
   "pattern": { "kind": "glob", "value": "git *", "canonicalKey": "git " },
   "action": "allow" | "ask" | "deny",
@@ -668,7 +677,8 @@ Storage: `~/.local/state/horizon/trust/<workspace-root-digest>.json` (mode `0600
     "durationMs": 812
   },
 
-  "terminalState": "SUCCEEDED" | "FAILED" | "DENIED" | "UNKNOWN",
+  "terminalState": "succeeded" | "failed" | "denied" | "cancelled" | "unknown"
+                  | "budget_exhausted" | "timeout" | "interrupted",   // RC-7, one enum
   "settledAtMs": 1767200001200,
   "reconciledFrom": "eff_01J..." | null,
   "reconciledAtMs": null,
@@ -684,7 +694,7 @@ Two receipt kinds exist and only two (V4, V5):
 |---|---|---|
 | `effect_receipt` | an admitted effect settled with a definite observation | yes |
 | `host_decision` | a durable terminal Guard decision (`Deny`, or an expired/withdrawn challenge) | yes |
-| *(no receipt)* | outcome `UNKNOWN` | **no** — a pending record (`eff_*`) plus `hz.effect.unknown` |
+| *(no receipt)* | outcome `unknown` | **no** — a pending record (`eff_*`) plus `hz.effect.unknown` |
 
 ### 4.7 Durable tables (kernel SQLite, WAL)
 
@@ -692,13 +702,15 @@ Two receipt kinds exist and only two (V4, V5):
 |---|---|---|
 | `policy_revisions` | `revision_id, digest, layers_json, rules_json, previous_digest, recorded_at_ms` | every policy the host has ever run under |
 | `effect_challenges` | `challenge_id, intent_digest, decision, policy_digest, status ∈ {AWAITING_APPROVAL, TOKEN_ISSUED, CONSUMED, SETTLED, DENIED, EXPIRED, UNKNOWN}, expires_at_ms, lease_id, capability_lease_digest, receipt_digest` | the challenge/lease state machine |
-| `effects` | `effect_id, capability_id, origin_kind, intent_digest, plan_digest, status ∈ {PREPARED, RUNNING, SETTLED, CANCELLED, UNKNOWN}, receipt_digest` | durable prepare records |
+| `effects` | `effect_id, capability_id, origin_kind, intent_digest, plan_digest, status ∈ {PREPARED, RUNNING, SETTLED, UNKNOWN}, terminal_state (the RC-7 value once settled), receipt_digest` | durable prepare records |
 | `receipts` | `receipt_id, kind, seq, prev_digest, digest, payload_digest, settled_at_ms` | the chain |
 | `executions` | `execution_id, effect_id, pid, pgid, cgroup_path, backend, status ∈ {DISPATCHING, SETTLED, UNKNOWN}` | process observation and reconciliation |
 | `dispatch_tokens` | `token_digest, effect_id, status ∈ {TOKEN_ISSUED, CONSUMED, UNKNOWN}` | one-use dispatch, replay prevention |
 | `trust_records` | `workspace_root_digest, kind, program_digest, decision, decided_at_ms` | TOFU decisions |
 | `ths_records` | `seq, kind, payload_digest, payload_ref, prev_digest, digest, recorded_at_ms` | Trusted Host State |
 | `redaction_manifest` | `artifact_digest, field, reason, count` | what an export removed |
+
+**THS storage.** `ths_records` is Trusted Host State's single durable store: SQLite is the one durable store for kernel state, and `/data/home/forge/hzcode/docs/12-sessions-state.md` owns the storage layout (§4.1–§4.2). A `ths/*.jsonl` file is only an **exported anchor** (§7.11.3 step 6) and never the store, so `15-extensibility.md` §4.1's JSONL path names the anchor, not a second chain.
 
 A reopen of the kernel **MUST** reconcile every `PREPARED`/`RUNNING`/`DISPATCHING`/`TOKEN_ISSUED` row to `UNKNOWN` before accepting new work, exactly as the inherited design does (`UPDATE ... SET status='UNKNOWN'` on open).
 
@@ -746,9 +758,18 @@ A reopen of the kernel **MUST** reconcile every `PREPARED`/`RUNNING`/`DISPATCHIN
 | `credential_unavailable` | secret missing/rotated/expired | deny |
 | `kernel_unavailable` | handshake failed, deadline exceeded, or digest mismatch | deny + read-only mode (A11) |
 | `reconciliation_is_host_only` | a model batch attempted to reconcile | deny |
-| `resource_ambiguous_unknown` | the resource is frozen by an open `UNKNOWN` | deny |
+| `resource_ambiguous_unknown` | the resource is frozen by an open `unknown` | deny |
 | `plugin_capability_undeclared` | plugin requested something its manifest lacks | deny |
-| `plugin_host_exited` | plugin host died mid-call | settle `FAILED`, or `UNKNOWN` if the effect had been dispatched |
+| `plugin_host_exited` | plugin host died mid-call | settle `failed`, or `unknown` if the effect had been dispatched |
+| `mcp_server_request_requires_managed_scope` | an MCP server request (sampling, roots, elicitation) without a host-minted managed run (§7.2.4) | deny |
+| `plugin_signature_invalid` | a plugin manifest's Ed25519 signature does not verify (X5) | deny; refuse to load |
+| `plugin_files_drifted` | plugin files do not match the signed file-digest map (X5) | deny; refuse to load |
+| `hook_denied` | a hook's declared decision denied the effect (`15-extensibility.md` H2, §7.1); a hook is advisory and can only ever deny | deny |
+| `noninteractive_ask` | an `ask` decision in a non-interactive run with no answerer (C9; `13-tui.md` R194) | deny (fail closed) |
+| `no_interactive_client` | an `ask` decision with no attached interactive client | deny (fail closed) |
+| `unrenderable_ask` | the front-end cannot render the effect exactly, so only deny is permitted (`13-tui.md` R89) | deny (fail closed) |
+
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15): the last seven rows above were used by docs 13–16 but were missing from this closed set, which G2 and the `exhaustive_reason_codes` gate enforce. They are members now. The RPC error codes in `14-surfaces.md` (`role_forbidden`, `driver_lease_held`, `tool_not_exposed`, `client_policy_forbidden`) are a separate namespace and are **not** Guard reason codes.
 
 ### 5.2 Failure modes and what must happen
 
@@ -763,8 +784,8 @@ A reopen of the kernel **MUST** reconcile every `PREPARED`/`RUNNING`/`DISPATCHIN
 | Cgroup unavailable | probe | prepare with `ResourceLimits: best_effort` + a named residual; refuse only if a caller *requires* enforced | report `enforced` |
 | Trust record missing for a workspace program | load | treat as untrusted; deny in non-interactive runs | prompt in a non-interactive run |
 | Disk full during `prepare` | fsync error | deny; no mutating syscall was issued | proceed and hope |
-| Process killed by sandbox denial | exit status + sandbox violation log | settle `FAILED` with `denied_by_sandbox` detail; reset the sandbox and continue | mark the tool broken |
-| Output exceeds cap | bounded reader | truncate + record digests + byte counts and set `truncated: true` | buffer unbounded output |
+| Process killed by sandbox denial | exit status + sandbox violation log | settle `failed` with `denied_by_sandbox` detail; reset the sandbox and continue | mark the tool broken |
+| Output exceeds cap | bounded reader | truncate + record digests + byte counts and carry the `truncated` object of `09-tools.md` R-tools-43 (`reason`, `omittedBytes`, `omittedLines`, `nextOffset`, `artifactUri?`) — never a bare boolean | buffer unbounded output |
 | Plugin host crash loop | restart counter | quarantine the plugin for the session, emit an event | infinite restart |
 | Egress proxy down | connect error | `egress_denied`; no direct route exists for the sandbox to fall back to | bypass the proxy |
 | Clock skew / backwards time | monotonic + wall check | leases use monotonic; a wall-clock jump invalidates nothing durable; repeated skew raises a diagnostic | trusting wall clock for expiry alone |
@@ -836,11 +857,11 @@ Procedure:
    - `net.fetch` → idempotency key lookup, or the recorded response digest in the remote service if the host configured one;
    - `vcs.write` → ref digest and object presence;
    - `mcp.invoke` / `automations.*` → the remote's own idempotency record.
-4. **Decide** one of four outcomes:
-   - *Proven done* → mint `SUCCEEDED` with `reconciledFrom` and the probe evidence.
-   - *Proven not executed* (no token ACK, no process, no write) → mint `FAILED` with `reason=not_executed`; the step may then issue a **fresh** Guard request — a new decision, a new lease, a new receipt.
-   - *Proven to have begun and to have been interrupted* → mint `FAILED` with `reason=interrupted_partial` and record the observed partial state; a retry is a human decision.
-   - *Undecidable* → remain `UNKNOWN`, keep the freeze, escalate.
+4. **Decide** one of the reconciliation outcomes:
+   - *Proven done* → mint `succeeded` with `reconciledFrom` and the probe evidence.
+   - *Proven not executed* (no token ACK, no process, no write) → mint `failed` with `reason=not_executed`; the step may then issue a **fresh** Guard request — a new decision, a new lease, a new receipt.
+   - *Proven to have begun and to have been interrupted* → mint `failed` with `reason=interrupted_partial` and record the observed partial state; a retry is a human decision.
+   - *Undecidable* → remain `unknown`, keep the freeze, escalate.
 5. **Escalate if undecidable.** Emit `hz.effect.unknown` with the pending record id, the resource, the probe attempts and their digests. In an interactive session, offer the reconciliation options to the human. In an unattended run, **stop the run** — a managed run that cannot prove its last mutation does not continue mutating.
 6. **Record the reconciliation.** The reconciliation act is an event (`hz.effect.reconciled`) plus a `reconciliation` row carrying the probe's evidence digests; the *outcome* is a normal `effect_receipt` with `reconciledFrom` set. There is no third receipt kind (V5): the receipt is always an outcome, and the reconciliation record is the audit trail of how the outcome was established.
 
@@ -931,7 +952,7 @@ The example list is validated at load time; the rule matches with severity `forb
   "leaseId": null, "capabilityLeaseDigest": null,
   "sandbox": null,
   "observation": { "kind": "none" },
-  "terminalState": "DENIED",
+  "terminalState": "denied",
   "reasonCode": "rule_denied",
   "matchedRule": { "ruleId": "rule_01J…", "layer": "user", "action": "deny" },
   "settledAtMs": 1767200000123
@@ -989,7 +1010,7 @@ The boundary is a **process boundary**, and it is load-bearing (ADR-003):
 
 A capability ID is a stable public name for **one authorisable effect class**, e.g. `files.write`, `terminal.run`, `net.fetch`, `providers.infer`, `mcp.invoke`. Rules that govern IDs:
 
-1. The canonical registry lives in `/data/home/forge/hzcode/docs/_conventions.md` §5 plus the internal IDs in §4.1 of this document.
+1. The canonical registry lives in `/data/home/forge/hzcode/docs/_conventions.md` §5, plus the internal IDs registered in §4.1 of this document (never model-visible; queued for the §5 internal block per RC-11, so A2 has one answer).
 2. An ID's **effect class** is immutable. `terminal.run` is `process` + `workspace-write` forever. A future need for a different class gets a different ID, never a reinterpretation of an existing one (A3).
 3. Each ID declares: effect class(es), a default posture vector, an observation strategy, an idempotency class, whether it is model-visible, and which origins may request it.
 4. The registry is **narrower than the tool catalog**: a tool may exist that has no capability of its own because it composes already-authorised tools (Code Mode, ADR-015 and the “new capability means new composition, not new authority” lesson from `/data/home/forge/hzcode/docs/01-vision-and-superset.md` §3.3).
@@ -1026,7 +1047,7 @@ Three independent mechanisms keep a `SessionBatch` from becoming a `UserAction`:
 
 1. **The kind is not a field.** It is fixed by the canonical operation that admitted the effect, and the request struct has no origin parameter (A4). A tool argument, MCP return value, prompt injection or `AGENTS.md` line cannot set it.
 2. **The bindings are disjoint.** A `SessionBatch` requires a turn-context digest and is *rejected* if it also presents a user-style approval; a `UserAction` is rejected if it carries a turn-context digest (A5, A6). So the two shapes cannot be conflated by accident by a future code path.
-3. **Specific capabilities are origin-restricted at the classifier, before policy.** `editor.launch` from a batch denies with `editor_requires_user_action`; `providers.infer` from a batch denies with `provider_inference_requires_managed_attempt`; a batch touching `language.start`/`language.stop`/`builtin.verifier` denies with `model_process_control_denied` even though those IDs also classify as read-only protocol queries — the model-batch denial wins over the overlap resolution.
+3. **Specific capabilities are origin-restricted at the classifier, before policy.** `editor.launch` from a batch denies with `editor_requires_user_action`; `providers.infer` from a batch denies with `provider_inference_requires_managed_attempt`; a batch touching `language.start`/`language.stop`/`builtin.verifier` denies with `model_process_control_denied`. The classifier's origin restriction runs before any policy layer and regardless of the capability's effect class, so no rule, grant or posture can reach it.
 
 The last point matters most in practice: it means that *the thing that proves the work was done* (`builtin.verifier`) is not something the worker can start. A hostile model cannot initiate its own verification, and therefore cannot influence the verdict (V10).
 
@@ -1053,7 +1074,7 @@ The Guard is a pure function over `(AuthorizationRequestV1, policy snapshot, pos
 4. executable binding completeness/consistency → `executable_unverified`, `unexpected_executable_binding`, `untrusted_executable`, `invalid_executable_digest`
 5. principal/origin binding presence → `invalid_principal_or_origin`
 6. digest well-formedness → `invalid_effect_digest`
-7. resource containment → `resource_outside_workspace`
+7. resource containment → `resource_outside_workspace`. The pinned root is the workspace root, plus the user-state store root (`$XDG_STATE_HOME/horizon/`, §7.11.3) for `memory.*` and `artifact.write`, whose layout is owned by `/data/home/forge/hzcode/docs/12-sessions-state.md` §4.1. `memory.write` targets a user-state file, not the workspace, so G7 must not refuse it.
 8. policy snapshot and guarantee set identity → `unsupported_policy_or_guarantee`
 9. posture application → `posture_read_only`
 10. rule layers → `rule_denied`, `rule_ask`
@@ -1096,11 +1117,13 @@ It does **not** bind the model's prose, the tool's display string, or the UI's r
 
 ### 7.4 Postures
 
-| Posture | `sandboxMode` | `approvalPolicy` | Usable for | Not usable for |
-|---|---|---|---|---|
-| `allow` (full access) | `danger-full-access` | `never` | a human driving a throwaway container or VM, deliberately | anything a repository or a config file can set |
-| `ask` (workspace-write + on-request) | `workspace-write` | `on-request` | the default working mode | unattended runs that must not block |
-| `deny` (read-only) | `read-only` | `always` | review, exploration, CI without write needs, untrusted code | any mutation |
+Vectors are owned by P2 (`allow` = `danger-full-access` + `never`; `ask` = `workspace-write` + `on-request`; `deny` = `read-only` + `always`). The table states only what each posture is usable for.
+
+| Posture | Usable for | Not usable for |
+|---|---|---|
+| `allow` (full access) | a human driving a throwaway container or VM, deliberately | anything a repository or a config file can set |
+| `ask` (workspace-write + on-request) | the default working mode | unattended runs that must not block |
+| `deny` (read-only) | review, exploration, CI without write needs, untrusted code | any mutation |
 
 Posture is **data** (P1): it is projected by the kernel as `SessionPostureV1`, it is covered by its own digest, it is recorded on every receipt, and it is enforced by two independent mechanisms — the sandbox profile handed to the OS, and the approval policy in Guard. Prompt text may *describe* the posture; nothing in the prompt can *be* the posture (P6).
 
@@ -1146,7 +1169,7 @@ Examples with the capability each maps to:
 | `Provider(model:claude-*)` | `providers.infer` | external-effect | model-name globs |
 | `Mcp(tool:github__create_issue)` | `mcp.invoke` | external-effect | tool name is `server__tool` |
 | `Agent(*)` | `agent.spawn` | process | subagent spawns |
-| `Secret(*) : deny` | `secrets.*` | credential | the default, written out loudly |
+| `Secret(*) : deny` | `secrets.read` + `secrets.use` (and the user-only mutations in A10) | credential | the default, written out loudly |
 | `Capability(files.write)` | `files.write` | workspace-write | the escape hatch when no friendly name fits |
 
 Precedence and composition:
@@ -1196,6 +1219,8 @@ Semantics we adopt wholesale, because they are the parts that make it safe:
 | Case | exact by default; Unicode canonical caseless matching only when a rule opts in, so a homoglyph cannot silently widen a rule |
 | No match is not an allow | an unmatched command falls through to the wildcard layer and then to Guard, never to `allow` |
 
+**Severity → action mapping (R10 and the engine use these three words; nothing else does):** `forbidden → deny`, `prompt → ask`, `allow → allow`. A `forbidden` is decisive; a `prompt` is an `ask` that a lease can resolve; an `allow` only removes one obstacle on the way to Guard (the closing rule below).
+
 HorizonCode additions on top of the inherited engine:
 
 - **Argv canonicalization first.** The command line is parsed by `hz_shell` into a canonical argv form *before* the prefix engine sees it, so quoting, `$IFS`, line continuations, `env`-style prefixes and absolute-path spellings are normalized away (R6).
@@ -1210,7 +1235,12 @@ HorizonCode additions on top of the inherited engine:
 
 **Policy statements (NF-058)** — `{effect: allow|deny, action, resource}` with wildcards:
 
-1. **Safety-inverted precedence:** ordinary settings read forward; **policy documents read reversed** so user-global beats repository; organization-managed statements append last — "an organization deny cannot be lifted by a repository or user allow".
+1. **Safety-inverted precedence — as executed, the order-independent lattice meet (§7.6.1).** The layer order is fixed once, in §4.4: managed → user → workspace → session. The effective policy is the **meet** of the statements in every layer; the meet is commutative, associative and idempotent (C1), so it is **order-independent**. Consequences, stated plainly:
+   - an organisation-managed **`deny` is absorbing**: no user, workspace, session, plugin or posture value can lift it;
+   - a managed layer may only **narrow** — it sets floors ("this must always be asked") and ceilings ("this is always denied"), and removes only the asks it itself created; it never adds an option another layer did not already have (§7.6.3);
+   - an `allow` never grants and never outranks an `ask` or a `deny` from any layer (R1, R5, P7, §7.5.1(2)).
+
+   "Policy documents read reversed" and organisation-managed statements being "appended/collected last" describe **presentation and canonicalization only**: `hzcode doctor` shows the most-authoritative layer first, and canonicalization rule 5 of §4.4 is how the digest is computed. Collection order is not precedence: a later `allow` never supersedes an earlier `deny`, and removing the reversal changes no decision.
 2. **Allow-never-grants:** an allow statement never overrides a session/agent denial and never grants a saved approval; a deny overrides "Allow always".
 3. **Keep-last-snapshot:** a failed config/credential refresh keeps the last good policy snapshot (dropping it would open, not close, enforcement).
 4. **Enforcement protection:** plugins cannot add/remove/override policy; a plugin `remove` ignores policy/enforcement modules regardless of selector.
@@ -1246,24 +1276,31 @@ For each dimension a value's position is its **grant rank**; the meet takes the 
 
 | Layer | Location | May widen? | May narrow? | Signed? |
 |---|---|---|---|---|
-| managed policy | enterprise-deployed, cached with a signature | **yes**, bounded (§7.6.3) | yes | required |
+| managed policy | enterprise-deployed, cached with a signature | **no** — it sets floors and ceilings and may narrow only (§7.6.3); it can never lift a lower-layer `deny` | yes | required |
 | user config | `~/.config/horizon/` | yes (it is the user's own ceiling) | yes | no |
 | workspace config | `<repo>/.hz/` | **no** (C2) | yes | no |
 | session flags | CLI / API per session | **no**, relative to user config; may only narrow | yes | no |
 
 A repository is data, not an administrator. This is ADR-008 and it is the direct answer to `git clone && hzcode`.
 
-#### 7.6.3 The one widening exception
+#### 7.6.3 What a managed policy may do — narrowing only
 
-A **signed** managed policy may grant, subject to all of:
+A **signed** managed policy participates in the lattice as a floor/ceiling layer. It may:
+
+1. add `deny` statements (a strictness floor) anywhere in its tenant scope;
+2. add `ask` requirements, raising the minimum approval for a class, capability, pattern, origin or destination;
+3. remove an `ask` requirement **it itself created** for a named destination — a narrowing of its own contribution, not a grant above another layer (e.g. "egress to `pypi.internal.example` needs no prompt from the managed baseline that introduced the prompt").
+
+It **MUST NOT** lift a `deny` from any lower layer, and no managed statement is ever an `allow` above another layer's `ask` or `deny`. An organisation-managed deny is absorbing for exactly this reason: if a managed `allow` could outrank a user's standing deny, the one rule a human wrote to stop something would be the first rule a policy could remove.
+
+Conditions that always hold:
 
 1. the signature verifies against a key in the tenant's pinned key set;
-2. the grant is opt-in at the user or tenant level and is individually revocable;
-3. the grant's effect class is already available at the user's own level (managed may *unblock*, never *introduce* a class the user never had);
-4. the grant is narrower than or equal to an existing user-level permission (e.g. "egress to `pypi.internal.example` allowed without prompting" when `net.fetch` already exists);
-5. the grant appears in the effective policy digest and in `hzcode doctor` output.
+2. the policy is opt-in at the user or tenant level and is individually revocable;
+3. every statement it contributes appears in the effective policy digest and in `hzcode doctor` output, marked with the layer that contributed it;
+4. a managed policy that tries to introduce an effect class the user does not already have, or to widen anything, is **refused**, with the reason recorded.
 
-A managed policy that tries to grant a new effect class to an untrusted workspace is refused, with the reason recorded.
+C4 is the rule form of this section; §7.5.4(1) is the merge semantics it relies on.
 
 ### 7.7 Trust on first use
 
@@ -1411,7 +1448,7 @@ Design rules:
 
 #### 7.11.3 Verification procedure
 
-1. Read the record file(s) from the state directory; never from the workspace (T3).
+1. Read the `ths_records` chain from the kernel store — the single durable store (`12-sessions-state.md` §4.1–§4.2); never from the workspace (T3). An exported anchor file is compared in step 6, never read as the chain.
 2. Check `seq` is strictly increasing from genesis with no gaps, and `prevDigest` links exactly.
 3. Recompute each `digest` from the canonical encoding with domain `hz.ths.record.v1`.
 4. For every `payloadRef`, re-derive the payload's content address and compare.
@@ -1570,7 +1607,7 @@ Supply chain is the attack that bypasses everything else. The kernel separation 
 | `hzcode audit verify <file>` | re-checks every digest, chain link, and manifest entry offline; no dependency on the origin machine (U2) |
 | `hzcode doctor ths verify` | recomputes the THS chain and reports the tip digest for anchoring (§7.11.3) |
 | `hzcode doctor` | posture, policy digest, each layer's contribution, trust records, kernel/ABI state, capability records, sandbox guarantee matrix for this host |
-| OTel export | spans carry `hz.session.id`, `hz.step.id`, `hz.effect.receipt_id`, `hz.capability.id`, `hz.origin.kind`, `hz.policy.digest`; GenAI semantic conventions for model calls; redaction applies (K6) |
+| OTel export | Span attributes are owned by `16-operations.md` §14.2 and are not restated here; this document requires only that a receipt-bearing span carries a receipt-digest attribute and that every attribute passes redaction (K6). GenAI semantic conventions apply to model calls |
 | Retention | local by default; nothing is uploaded unless the user exports it or opts into a named telemetry category (U4) |
 | Deletion | append a tombstone; never rewrite history (U5) |
 
@@ -1648,7 +1685,7 @@ Two budget rules with teeth:
 
 ## 9. Tests
 
-Every guarantee in §2 maps to a test. All test paths below are `[planned]` — nothing in this repository is implemented yet — and live under the crate/package named by the path.
+Every guarantee in §2 maps to a test. All test paths below are `[planned]` except the single Rust integration suite that exists today (`kernel/tests/integration.rs`), and each lives under the crate/package named by its path. Implementation levels are owned by `docs/28-implementation-status.md` — 285 TypeScript tests and 17 Rust tests pass at the 2026-11-06 snapshot — so a `[planned]` path here is a claim about the test to be written, not about the repository as a whole.
 
 ### 9.1 Guarantee → test matrix
 
@@ -1835,22 +1872,22 @@ Every guarantee in §2 maps to a test. All test paths below are `[planned]` — 
 
 ## 10. Status
 
-Every capability below is **`DESIGNED`** *as a specification claim* — with one implemented slice: the Guard decision path, in-memory leases, chained receipt/tamper-evident logs and `policy.json` overrides exist in v0.1 (`kernel/` Rust + byte-identical TS fallback; evidence and levels in `docs/28-implementation-status.md`). The sandbox matrix, Starlark policy engine, Trusted Host State and managed domain remain design. Levels are per `/data/home/forge/hzcode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`).
+Every capability below is **`DESIGNED`** *as a specification claim* — with one implemented slice: the Guard decision path, in-memory leases, chained receipt/tamper-evident logs and `policy.json` overrides exist in v0.1 (`kernel/` Rust + byte-identical TS fallback; evidence and levels in `docs/28-implementation-status.md`). The sandbox matrix, Starlark policy engine, Trusted Host State and managed domain remain design. Ladder per `/data/home/forge/hzcode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`); the levels below are the ones `docs/28` §1 records, which is the only place a level above `DESIGNED` may be claimed.
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|
 | Capability registry + effect classes | DESIGNED | §4.1, §7.2; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/managed_control.rs` | `crates/hz_kernel/src/registry.rs` + `registry` test file |
 | Origin typing (4 kinds) | DESIGNED | §7.2.3; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` | `origin_typing.rs` + boundary test |
-| `GuardDecisionV1` + reason codes | DESIGNED | §4.2, §5.1, §7.3 | `guard_decision.rs`, `reason_codes.rs` |
+| `GuardDecisionV1` + reason codes | TESTED + VERIFIED | §4.2, §5.1, §7.3; `kernel/tests/integration.rs` (guard matrix, `policy.json` overrides); `docs/28` §1 | widen the matrix to the §9.1 property tests |
 | Intent digest | DESIGNED | §7.3.2 | `intent_digest.rs` property tests |
 | Postures as kernel data | DESIGNED | §4.3, §7.4; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` (`DirectSessionPermissionModeProjectionV1`) | `posture.rs` including the `danger-full-access` refusal |
 | Wildcard rule DSL | DESIGNED | §7.5.1 | `hz_policy` compile + canonical digest tests |
 | Starlark prefix engine | DESIGNED | §7.5.3; `source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/README.md` | `starlark.rs`, `unwrap.rs` |
 | Config merge lattice | DESIGNED | §7.6; ADR-008 in `/data/home/forge/hzcode/docs/02-decisions.md` | `merge.rs` property tests |
 | Trust-on-first-use | DESIGNED | §7.7 | `trust.rs` adversarial tests |
-| One-use leases | DESIGNED | §7.8; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs` (`ExecutionLease::consume`) | `lease.rs` |
+| One-use leases | TESTED + VERIFIED | §7.8; `kernel/tests/integration.rs` (lease expiry and consumption), `docs/28` §1; shape inherited from `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs` (`ExecutionLease::consume`) | `lease.rs` adversarial suite (L2, L5) |
 | Effect host (five phases) | DESIGNED | §6.2, §7.9 | `effect_host.rs` incl. crash tests |
-| Receipts + chain | DESIGNED | §4.6, §7.9 | `receipt_shape.rs`, `chain.rs` |
+| Receipts + chain | TESTED + VERIFIED | §4.6, §7.9; `kernel/tests/integration.rs` (receipt chain, tamper detection), `docs/28` §1 | `receipt_shape.rs`, `chain.rs` |
 | `UNKNOWN` + reconciliation | DESIGNED | §6.3; ADR-012 | `reconcile.rs` |
 | Evidence gate | DESIGNED | §6.4, §7.10. Inherited caveat: the reference implementation records the gate as designed but **not wired** in its direct-session lane (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) | `evidence_gate.rs` + `hzcode verify` end-to-end |
 | Trusted Host State | DESIGNED | §7.11 | `ths.rs` |

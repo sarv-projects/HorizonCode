@@ -2,7 +2,7 @@
 
 > Every surface HorizonCode exposes, the exact call shapes on each, the versioning rules that keep them compatible, and the contract tests that prove the contracts. `packages/protocol` and `crates/hz_abi` are generated from one schema; this document is the human authority for that schema and for the behaviour behind it.
 
-- **Status:** `DESIGNED` throughout. No part of this document describes running code. Primitives that exist in the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
+- **Status:** `DESIGNED` for every surface in this document. Two slices exist and are recorded in `docs/28-implementation-status.md` (RC-13): the 8-method NDJSON kernel protocol and the provider adapters — both are *narrower and different in framing* from §4.2/§4.9 below. Primitives that exist in the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
 - **Sources** (read for this document):
   - `source: /data/home/forge/hzcode/README.md`
   - `source: /data/home/forge/hzcode/docs/01-vision-and-superset.md`
@@ -14,8 +14,8 @@
   - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs` (dotted operation dispatch: `artifacts.read_range`, `host_run.bind`, `managed_provider.settle`, `managed_message.claim_wake`, `automations.create`, …)
   - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs`
   - `source: /data/home/forge/repo-tour/horizoncode/specs/v2/session.md`
-  - `source: /tmp/codex-report.md` (code-generated, schema-exported JSON-RPC shared by CLI, app-server and SDKs)
-  - `source: /tmp/opencode-report.part1.md` and `source: /tmp/opencode-report.part3.md` (contract-separated monorepo, ACP server files, plugin surface)
+  - `source: /data/home/forge/hzcode/docs/audit/pass2/codex-report.md` (code-generated, schema-exported JSON-RPC shared by CLI, app-server and SDKs)
+  - `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part1.md` and `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part3.md` (contract-separated monorepo, ACP server files, plugin surface)
 - **Related documents:** `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` owns every payload shape named here; `file:///data/home/forge/hzcode/docs/06-events-and-flows.md` owns the event catalog and projector semantics; `file:///data/home/forge/hzcode/docs/12-sessions-state.md` owns the concrete storage layout. On a shape conflict, 05 wins; on a framing conflict, this document wins; on physical layout, 12 wins.
 
 ---
@@ -79,7 +79,7 @@ Numbered, individually testable. `MUST` violations are contract-test failures (�
 
 | ID | Rule |
 |---|---|
-| **C13** | `hzk` MUST speak framed canonical MessagePack (`HzKernelRpcV1`) only. A JSON mode MUST NOT exist: the kernel's framing is part of its tamper surface. |
+| **C13** | `hzk` MUST speak framed canonical MessagePack (`HzKernelRpcV1`) only. A JSON mode MUST NOT exist: the kernel's framing is part of its tamper surface. The v0.1 kernel ships a derived NDJSON encoding with 8 methods (`docs/28`); it is a bootstrap subset, MUST NOT grow, and MUST be replaced by the MessagePack framing before any capability claims `WIRED` on the ABI. |
 | **C14** | The first frame on any kernel channel MUST be `hello`; any other first frame MUST close the channel. Application requests MUST be refused until the kernel reports `READY` (the ancestor separates the handshake from startup readiness; HorizonCode keeps that separation). |
 | **C15** | Every kernel request MUST carry `ownerEpoch`, `processIncarnation`, `requestId`, `deadlineUnixMs` and `traceId`. A request with a stale `ownerEpoch` or a foreign `processIncarnation` MUST be refused with `HZ_CONFLICT` and MUST NOT be honoured. |
 | **C16** | The kernel MUST authenticate the peer at the OS level (Unix peer credentials; Windows named-pipe owner SID/ACL) **before** processing `hello`. A reachable-but-unauthenticated channel MUST be closed, not degraded. |
@@ -182,7 +182,7 @@ Rules carried by the envelope: `deadlineMs` (C7), `idempotencyKey` (C5), `featur
 
 | Method | Params | Result | Notes |
 |---|---|---|---|
-| `hz.initialize` | `{hzProto, hzAbi, features{required[],optional[]}, client{name,version,surface}, workspaceRoot?}` | `{hzProto, hzAbi, features{enabled[],unavailable[],deprecated[]}, server{version,buildDigest}, kernel{state, buildDigest, ownerEpoch, sandboxProbe}, modes[]}` | MUST be first (C2); feature names are the closed registry in §4.1.5; `kernel.state ∈ full\|read-only-degraded\|unavailable` |
+| `hz.initialize` | `{hzProto, hzAbi, features{required[],optional[]}, client{name,version,surface}, workspaceRoot?}` | `{hzProto, hzAbi, features{enabled[],unavailable[],deprecated[]}, server{version,buildDigest}, kernel{state, buildDigest, ownerEpoch, sandboxProbe}, modes[]}` | MUST be first (C2); feature names are the closed registry in §4.1.5; `kernel.state ∈ full\|degraded_read_only\|degraded_unaccounted\|refused` — the four states of `03-hld.md` §6.2 |
 | `hz.ping` | `{nonce}` | `{nonce, nowMs, ownerEpoch}` | liveness only; MUST NOT be used as a health check for the kernel |
 | `hz.shutdown` | `{drain: bool, mode: OneOf{graceful,immediate}}` | `{drained: bool, activeSessions[]}` | graceful waits for claims to release |
 | `hz.subscribe` | see §4.4.1 | `{subscriptionId, cursor, replaying: bool}` | |
@@ -335,7 +335,7 @@ All examples use the ids and digests from `file:///data/home/forge/hzcode/docs/0
       "kernel":{"state":"full","buildDigest":"blake3:5c71…","ownerEpoch":"42",
                 "sandboxProbe":[{"dimension":"fs.isolation","strength":"enforced"},
                                  {"dimension":"net.deny","strength":"partial","residual":"udp-egress-unverified"}]},
-      "modes":["agent","read-only-degraded"]}}
+      "modes":["agent","degraded_read_only"]}}
 ```
 
 Note: `acp.sessionModes` is requested as *optional* and reported unavailable, so the connection proceeds. Had it been in `required`, the server would have answered with error `-32010 HZ_UNSUPPORTED_FEATURE` and closed (fail closed).
@@ -778,7 +778,7 @@ Base path `/v1` on the server listener `[planned]` (`hzcode serve --listen 127.0
 | `499` | client closed the request (server-side log only; no body is sent) | — |
 | `500` | internal defect (`Internal`) | error body, `HZ_GENERIC`; details MUST NOT contain secrets |
 | `501` | a method exists but is unimplemented in this build | error body, `HZ_UNSUPPORTED_FEATURE` |
-| `503` | kernel unavailable or ABI mismatch (`Unavailable`) | error body, `HZ_KERNEL_UNAVAILABLE` + `Retry-After`; the app is in `read-only-degraded` |
+| `503` | kernel unavailable or ABI mismatch (`Unavailable`) | error body, `HZ_KERNEL_UNAVAILABLE` + `Retry-After`; the app is in `degraded_read_only` |
 | `504` | deadline exceeded (`Deadline`) | error body, `HZ_DEADLINE_EXCEEDED` |
 
 **Rate limits are a named shape, not an ad-hoc limiter.** The entitlement model behind `429` is `RateLimitPolicyV1`, owned by `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.9 (per-principal, per-provider, per-budget scopes, their meet-combination and precedence). This surface MUST NOT define its own limiter: a `429` response MUST name the effective policy in `details.rateLimitPolicyId`, carry `windowMs` and a `Retry-After` derived per the policy's `retryAfterMode`, and the choice between refusing, queueing, degrading and asking belongs to the policy's `onExceeded` value, applied by the owning layer (the provider path, the budget guard, or the server's per-principal limiter). When several policies match, the numeric limit is the meet and the *reported* policy is the most specific scope; the `retryClass` MUST match the call's idempotency rather than defaulting to `SafeQueryRetry` (doc 05 D39).
@@ -1145,7 +1145,7 @@ Every SDK exposes exactly: (1) a transport layer (stdio, UDS, TCP, WS); (2) gene
 
 #### 4.9.2 `HZ_ABI` (agent ↔ kernel)
 
-Same rules applied to the kernel envelope, the operation strings, and kernel-side payloads. Additional kernel-specific rules: (1) the handshake negotiates `minProtocol`/`maxProtocol` and feature lists before any application request (C14); (2) an agent that cannot meet the kernel's minimum MUST enter `read-only-degraded`, never attempt unguarded execution; (3) a kernel that cannot meet the agent's minimum MUST reject the handshake with `HZ_PROTO_TOO_OLD` and stay in a refusing state rather than serve partial authority; (4) the kernel build digest is reported in `hello_result` and copied into every receipt, so a receipt is tied to the exact kernel that produced it.
+Same rules applied to the kernel envelope, the operation strings, and kernel-side payloads. Additional kernel-specific rules: (1) the handshake negotiates `minProtocol`/`maxProtocol` and feature lists before any application request (C14); (2) an agent that cannot meet the kernel's minimum MUST enter `degraded_read_only`, never attempt unguarded execution; (3) a kernel that cannot meet the agent's minimum MUST reject the handshake with `HZ_PROTO_TOO_OLD` and stay in a refusing state rather than serve partial authority; (4) the kernel build digest is reported in `hello_result` and copied into every receipt, so a receipt is tied to the exact kernel that produced it.
 
 #### 4.9.3 Deprecation policy
 
@@ -1198,7 +1198,7 @@ One carrier is used everywhere: the kernel ABI's `TypedErrorV1` shape, exposed a
 | `-32006` | `HZ_RATE_LIMITED` | `Unavailable` | `SafeQueryRetry` | limiter or quota | no (retryable) |
 | `-32007` | `HZ_BUSY` | `Unavailable` | `SafeQueryRetry` | a transiently busy subsystem | no |
 | `-32008` | `HZ_BUDGET_EXHAUSTED` | `Capability` | `UserActionRequired` | budget stop applied at a step boundary | yes (mutation stops) |
-| `-32009` | `HZ_KERNEL_UNAVAILABLE` | `Unavailable` | `UserActionRequired` | kernel absent, crashed or ABI-incompatible; app is `read-only-degraded` | yes (no unguarded execution) |
+| `-32009` | `HZ_KERNEL_UNAVAILABLE` | `Unavailable` | `UserActionRequired` | kernel absent, crashed or ABI-incompatible; app is `degraded_read_only` | yes (no unguarded execution) |
 | `-32010` | `HZ_UNSUPPORTED_FEATURE` | `Capability` | `Never` | a required feature or method is unsupported by this build or peer | yes |
 | `-32011` | `HZ_PROTO_TOO_OLD` | `Validation` | `UserActionRequired` | peer protocol or ABI below the supported minimum | yes |
 | `-32012` | `HZ_POSTURE_CONFIRMATION_REQUIRED` | `Authorization` | `UserActionRequired` | widening requested without an interactive human confirmation | yes |
@@ -1237,7 +1237,7 @@ One carrier is used everywhere: the kernel ABI's `TypedErrorV1` shape, exposed a
 
 | Class | Trigger | Enforced behaviour | MUST NOT happen |
 |---|---|---|---|
-| **Authority unavailable** | kernel absent, crashed, or ABI mismatch | `HZ_KERNEL_UNAVAILABLE`; app runs `read-only-degraded`; every mutating capability is refused with a reason | falling back to unguarded execution |
+| **Authority unavailable** | kernel absent, crashed, or ABI mismatch | `HZ_KERNEL_UNAVAILABLE`; app runs `degraded_read_only`; every mutating capability is refused with a reason | falling back to unguarded execution |
 | **Guarantee unavailable** | required sandbox dimension missing (`HZ_UNKNOWN_DIMENSION`, `HZ_SANDBOX_PROBE_FAILED`) | refuse the effect and surface the typed residual | silently degrading isolation (P6) |
 | **Trust absent** | a workspace program, plugin, MCP server, LSP server or workflow has no trust decision | `HZ_TRUST_REQUIRED`; the item stays inert | loading it because it was cached |
 | **Decision mismatch** | recomputed decision differs from the presented one | `HZ_PRECONDITION_FAILED`; the effect aborts as `DENIED` | using a stale decision |
@@ -1254,8 +1254,8 @@ One carrier is used everywhere: the kernel ABI's `TypedErrorV1` shape, exposed a
 
 | # | Failure | Surface | Detection | Behaviour | Fail closed? |
 |---|---|---|---|---|---|
-| F1 | Kernel process absent at startup | ABI | connect/`hello` fails | `hz.initialize` reports `kernel.state=unavailable`; app enters `read-only-degraded`; every mutating call returns `HZ_KERNEL_UNAVAILABLE` | yes |
-| F2 | Kernel declares an older `HZ_ABI` | ABI | handshake negotiation | refuse the handshake; agent enters `read-only-degraded`; the diagnostic names both revisions | yes |
+| F1 | Kernel process absent at startup | ABI | connect/`hello` fails | `hz.initialize` reports `kernel.state=unavailable`; app enters `degraded_read_only`; every mutating call returns `HZ_KERNEL_UNAVAILABLE` | yes |
+| F2 | Kernel declares an older `HZ_ABI` | ABI | handshake negotiation | refuse the handshake; agent enters `degraded_read_only`; the diagnostic names both revisions | yes |
 | F3 | Kernel crashes mid-run | ABI | channel close + missing heartbeats | in-flight effects remain in their last durable phase; unfinished effects settle as `UNKNOWN` on kernel recovery; the session cannot complete until reconciliation; the client is told via `hz.kernel.status` and `hz.error.raised` | yes |
 | F4 | Two writers hold a claim for one session | Controller | `fenceToken` comparison | the older writer's writes are refused with `HZ_CLAIM_HELD`; the `EXECUTION_CLAIM.fenceToken` monotonic rule decides the winner | yes |
 | F5 | Client disconnects mid-turn | Controller | transport close | the claim stays held and heartbeating; on TTL expiry the claim is reclaimable and resumable (`hz.session.resume`); the transcript is already durable | no (recoverable) |
@@ -1386,8 +1386,8 @@ Protocol-level targets. All are **targets**, not measurements. A subset of the r
 | `hz.subscribe` replay throughput | ≥ 20 000 events/s | paginated; `page_end` every ≤ 500 events or 8 KiB |
 | SSE frame latency (committed event → socket write) | ≤ 15 ms p95 | local loopback |
 | Kernel ABI request round trip (non-effect) | ≤ 3 ms p95 | UDS + MessagePack, no fsync |
-| `effect.authorize` | ≤ 200 µs p99 (pure) | doc 05 §8 |
-| `effect.settle` incl. receipt fsync | ≤ 8 ms p95, ≤ 40 ms p99 | doc 05 §8 |
+| `effect.authorize` | (budget owned by 08 §8) | the Guard decision budget: `08-runtime.md` §8 |
+| `effect.settle` incl. receipt fsync | (budget owned by 08 §8) | the receipt-settle budget: `08-runtime.md` §8 |
 | `hz.kernel.policy.reload` (≤ 2 000 rules) | ≤ 25 ms p95, atomic | a failed reload costs nothing |
 | `hz.kernel.receipt.verify` (1 000 receipts) | ≤ 300 ms p95 | chain walk |
 | `hz.session.verify` (1 000 receipts, full mode) | ≤ 1.5 s p95 | includes evidence checks |
@@ -1467,9 +1467,9 @@ Contract tests. `Gate = yes` means CI fails the build on violation. The last col
 | Kernel ABI envelope (`hello`, `request`, `response`, `event`, `control`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`) | `DESIGNED`; types `CODE_PRESENT (ancestor)` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/rpc_handshake.rs` |
 | Kernel effect operations (`effect.authorize`/`lease_issue`/`execute`/`observe`/`settle`/`reconcile`) | `DESIGNED`; underlying primitives `CODE_PRESENT (ancestor)` as `guard::authorize`, `EffectHost::handle_request`, `EffectHost::reconcile_effect` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs#L1289`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L4790`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L5801` |
 | Managed-domain and worktree operations | `DESIGNED`; ancestor operations exist under different names | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs` (dotted dispatch table), `source: /data/home/forge/repo-tour/horizoncode/kernel/src/worktree_lifecycle.rs` |
-| REST + SSE surface, auth modes, status mapping | `DESIGNED` — no server exists | this document; parity approach from `source: /tmp/codex-report.md` |
+| REST + SSE surface, auth modes, status mapping | `DESIGNED` — no server exists | this document; parity approach from `source: /data/home/forge/hzcode/docs/audit/pass2/codex-report.md` |
 | Event framing (SSE/NDJSON/JSON-RPC) and cursors | `DESIGNED` | this document; cursor honesty rules derived from the ancestor's owner-cursor and resnapshot semantics |
-| ACP surface | `DESIGNED` — no ACP agent is implemented | this document; mapping discipline informed by `source: /tmp/opencode-report.part3.md` (`packages/cli/src/acp/*`) |
+| ACP surface | `DESIGNED` — no ACP agent is implemented | this document; mapping discipline informed by `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part3.md` (`packages/cli/src/acp/*`) |
 | MCP server surface | `DESIGNED` — no MCP server is implemented | this document; capability/authority discipline is ours |
 | Plugin API | `DESIGNED` | this document; hook and manifest shapes from `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` |
 | SDKs (TS, Python, Go, Rust) | `DESIGNED`; nothing generated | §4.8; crate names registered (`hz_sdk` in `_conventions.md` §4), no generator exists |

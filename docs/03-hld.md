@@ -2,7 +2,7 @@
 
 > **Scope.** This document decides the *shape* of HorizonCode: which planes exist, which processes run, which components own which behaviour, what the interfaces between them are, how the whole thing is deployed, and what happens when each piece dies. It does not decide schemas, function bodies or tool semantics — those live in [`04-lld.md`](./04-lld.md) and the topical documents.
 >
-> Nothing in this document is a claim of working code. `/data/home/forge/hzcode` currently contains `README.md` and `docs/` only. Every capability below is at status **`DESIGNED`** or lower (see §11).
+> Nothing in this document is a claim of working code for the capabilities it designs. `/data/home/forge/hzcode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` — the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
 
 **Derived from** (all paths absolute; repos live under `/data/home/forge/repo-tour/`):
 
@@ -28,7 +28,7 @@
 5. The **deployment shapes** the same architecture must serve without forking behaviour.
 6. The **failure domains**: what is lost, preserved and refused when each piece dies.
 7. The **trust boundaries** the design draws explicitly.
-8. The **~25 interfaces** that carry all cross-component traffic, and their versions.
+8. The **thirty interfaces (I-01…I-30)** that carry all cross-component traffic, and their versions.
 9. The **performance targets** that the shape must not make unreachable.
 10. What is **deliberately not** decided here (§12).
 
@@ -135,7 +135,7 @@ Two consequences worth stating plainly:
   │ SessionEngine     (admission, claims)  │ │ Provider codecs + models.dev    │
   │ StepEngine        (one stream / step)  │ │ Memory(4 tiers) · retrieval     │
   │ agents/ planner·executor·fleet·teams   │ │ Compaction · prompt assembly    │
-  │ tools/ (~60 ToolDeclarationV1)         │ │                                 │
+  │ tools/ (catalog: 09-tools.md §4)       │ │                                 │
   └──────────────┬─────────────────────────┘ └─────────────────────────────────┘
                  │  PLANE 6 · DATA (TS side)         PLANE 5 · EXTENSIBILITY
                  │  event log (SQLite WAL) + projectors        │
@@ -311,7 +311,7 @@ The two truths join on three ids carried by both: `sessionId`, `effectId`, `rece
 
 | Artifact class | Location | Notes |
 |---|---|---|
-| Event log + projections | `~/.local/share/horizon/sessions/<id>/` (SQLite) | Per-session files keep one writer per aggregate cheap (H-3). |
+| Event log + projections | `<workspace>/.hz/state/hzcode.db` (SQLite WAL) — layout owned by `12-sessions-state.md` §4 | One database per workspace; one writer per session aggregate inside it (H-3). |
 | JSONL transcript | beside the log | Human- and tool-readable export; never the state of record. |
 | Content-addressed blobs / artifacts | `~/.local/share/horizon/artifacts/<sha256>` | Addressed as `hz://artifact/<sha256>`; large tool output, media, evidence bundles (H-34). |
 | Snapshots (rewind, revert, worktree pre-state) | `~/.local/share/horizon/snapshots/` | Time travel reads the log; the snapshot restores *bytes*. |
@@ -498,16 +498,18 @@ Three rules make this table mean something:
 
 Budgets exist because four of our differentiators are *latency-sensitive*: cache-stability (prefix churn costs money), receipt completeness (every effect pays for a durable write), the one-stream-per-step law (no latency hiding), and a fullscreen TUI (which is judged by feel). Numbers below are p95 unless stated. They are *shape constraints*: an architecture that cannot meet them is the wrong architecture, not a slow implementation.
 
+**Number ownership.** `PB-1`…`PB-15` are this document's ID space and MUST NOT be reused for a different metric by another document. Where a row is a *runtime* latency (kernel round trip, effect admission, event append, receipt settle), `08-runtime.md` §8 owns the single value and its anchor and population; the row here states the shape constraint only and cites that section rather than restating a rival number.
+
 | # | Metric | Target | Measured at | Notes |
 |---|---|---|---|---|
 | PB-1 | **Warm start** `hzcode` → first painted frame | **< 150 ms** (p50 ≤ 90 ms) | harness timer, TUI first render | Requires an existing kernel connection or a pre-warmed one (H-39). |
 | PB-2 | Cold start (no kernel running, first run) | < 900 ms | harness timer | Includes kernel spawn + digest verification + policy compile. |
 | PB-3 | **First-token latency overhead** added by HorizonCode | **< 20 ms** | provider request dispatch vs. stream first chunk, minus provider time | Context compilation + event append + ABI round trip, measured on a warm session. |
 | PB-4 | **Tool dispatch overhead** (runtime side) | **< 5 ms** | from validated call to submitted effect, excluding kernel time | Includes declaration validation, batch planning and ledger append. |
-| PB-5 | Kernel round trip (I-03) | p50 < 1 ms, p99 < 5 ms | kernel spans | Warm UDS/named pipe, same host. |
-| PB-6 | Effect admission (guard + policy + lease issue) | p99 < 3 ms (wildcard) / < 10 ms (Starlark) | kernel spans | Cached policy revision; no disk read on the fast path. |
-| PB-7 | Durable event append (commit + projection) | p99 < 2 ms | store spans | One transaction per fact (ADR-004). |
-| PB-8 | Receipt write + settle | p99 < 4 ms | kernel spans | Includes the OwnerLog commit for the intent. |
+| PB-5 | Kernel round trip (I-03) | (budget owned by 08 §8) | kernel spans | Warm UDS/named pipe, same host. |
+| PB-6 | Effect admission (guard + policy + lease issue) | (budget owned by 08 §8) | kernel spans | Cached policy revision; no disk read on the fast path. |
+| PB-7 | Durable event append (commit + projection) | (budget owned by 08 §8) | store spans | One transaction per fact (ADR-004). |
+| PB-8 | Receipt write + settle | (budget owned by 08 §8) | kernel spans | Includes the OwnerLog commit for the intent. |
 | PB-9 | Keystroke → glyph | < 16 ms p95, < 8 ms p50 | TUI frame log | Fullscreen path; no round trip to the kernel. |
 | PB-10 | Session resume (crash → usable) | < 250 ms for a 100k-event session | `hzcode session resume` | Projections may catch up asynchronously. |
 | PB-11 | Projection catch-up | ≥ 5,000 events/s | reindex benchmark | `hzcode session reindex` on a full log. |
@@ -631,7 +633,7 @@ Listed so that a reader cannot mistake absence for oversight. Each item belongs 
 4. **The event catalogue.** Only the canonical event names from `_conventions.md` §6 are used. Payload shape, ordering guarantees per aggregate and projection columns are not decided here.
 5. **Policy grammar.** Wildcard syntax and the Starlark prefix engine's rule set are described only to the extent that precedence (`deny > ask > allow`) and the single enforcement point are fixed.
 6. **Sandbox profile contents.** Seatbelt `.sbpl` text, Landlock ruleset construction, seccomp filters, Windows AppContainer tokens, and per-OS default dimension sets. The HLD fixes only that guarantees are *probed*, *declared* as a vector, and *residual-typed*.
-7. **Tool catalogue and semantics.** ~60 tools are referenced by family; their schemas, renderers, idempotency contracts and UI behaviour are the tools document's problem.
+7. **Tool catalogue and semantics.** The tools catalogued in `09-tools.md` §4 are referenced here only by family; their schemas, renderers, idempotency contracts and UI behaviour are that document's problem.
 8. **Provider codecs and the model catalogue.** One stream per step, typed deltas, config-not-code endpoints — no wire format, no model table, no auth flow.
 9. **TUI layout, theme, keybindings, accessibility.** Only two HLD-level constraints exist: the TUI is a protocol client (H-2), and untrusted content is sanitised at the render boundary (TB9).
 10. **Memory algorithms.** Four tiers, provenance and distillation are named; embedding choice, ranking, consolidation policy and storage layout are not decided.

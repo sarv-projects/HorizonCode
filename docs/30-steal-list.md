@@ -36,6 +36,10 @@ Reading: the *mechanisms* are worth stealing; the *ranking* is unverifiable and 
 
 Each row: mechanism → best source (report §4 item) → disposition. "Extends" means an existing NF/doc owns the topic and this sharpens it.
 
+**Candidate resolution (RC-15, 2026-11-07).** The pre-adoption `N-*` candidates named in the disposition column resolve as: `N-1` → folded as an extend-note into `docs/09` (`repo_map` ranking); `N-2` → **NF-073**; `N-3` → **NF-072**; `N-4` → **NF-071**; `N-5` → **NF-075**. The `N-*` ids are historical and resolve nowhere else.
+
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15).
+
 ### A. Edit and patch engineering (aider's strongest suit)
 
 | # | Mechanism | Source | Disposition |
@@ -58,7 +62,7 @@ Each row: mechanism → best source (report §4 item) → disposition. "Extends"
 | B-6 | Fit output cap to remaining window per request: usage-anchored prompt-size estimate, framing tokens (16/msg), measured headway (64) | omp 4,5,6 | extends NF-061 |
 | B-7 | Structural read summaries + line/byte caps with spill-to-artifact; shell minimiser default-on | omp 7,8 | extends NF-052 (rendering) |
 | B-8 | Budget countdown rendered into the prompt via template vars (steps left, seconds left) | mini 19 | extends doc 08/10 |
-| B-9 | Truncation with head/tail + `elided_chars` + remediation advice; 10 K guard in the observation template | mini 20 | extends R-tools-56 |
+| B-9 | Truncation with head/tail + `elided_chars` + remediation advice; 10 K guard in the observation template | mini 20 | extends R-tools-57 (rendering) |
 
 ### C. Loop mechanics and velocity
 
@@ -174,7 +178,7 @@ Adopted as Section B rows (`NF-071` … `NF-075`, doc 24 §5; RC-15). Each passe
 
 Extend-only notes (no new row): repo-map ranking algorithm → doc 09; edit ladder detail → NF-052/069; cache addendum → NF-005; metric contract → doc 16; hostile read fixtures → doc 16 — folded into the owner documents in the adoption revision (RC-15).
 
-New Section-A sources: the six second-wave sources are recorded in the **A.9 addendum** (doc 24 §4.1; RC-15) — SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent; per-capability rows keep the same per-row disposition requirement as the twelve-repo audit's queue (docs/29 §B.1(c)).
+New Section-A sources: the six second-wave sources are recorded in the **A.9 addendum** (doc 24 §4.9; RC-15) — SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent; per-capability rows keep the same per-row disposition requirement as the twelve-repo audit's queue (docs/29 §B.1(c)).
 
 ---
 
@@ -207,5 +211,5 @@ Ordered by value ÷ effort. Items 1–5 are cheap, mostly local, and directly st
 
 - `audit/pass3/` — the four reports this shortlist consolidates (historical class)
 - `29-final-audit.md` — the twelve-repo audit and its own queue
-- `24-feature-catalog.md` — Section B, where NF-071… candidates will land
+- `24-feature-catalog.md` — Section B rows `NF-071`…`NF-075` (adopted; RC-15(b)) and the `A.9` addendum these sources are recorded in
 - `27-implementation-plan.md` — current build plan

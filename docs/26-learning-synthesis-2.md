@@ -1,6 +1,8 @@
 # 26 — Learning Synthesis II: the ten-repo deep-dive, what we adopt, and the doc-update ledger
 
-Status: **Learning record + adoption ledger.** Every claim below was read out of a cloned repository (paths cited) or produced by a measured run; nothing in this document is implemented. The companion document is `27-implementation-plan.md` (the build plan derived from this learning); `AUDIT.md` records the spec audit that preceded it.
+Status: **Learning record + adoption ledger.** Every claim below was read out of a cloned repository (paths cited) or produced by a measured run; nothing in this document is implemented. **Implementation status (RC-13):** these claims are design-level; the only features recorded here with built slices are NF-051 (code mode) and NF-055 (preview), whose levels are owned by `docs/28-implementation-status.md`. The companion document is `27-implementation-plan.md` (the build plan derived from this learning); `AUDIT.md` records the spec audit that preceded it.
+
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15).
 
 This pass answers the brief: *speed, capability, low token consumption without cache-hit instability, multi-file/multi-folder edits without losing context, long-horizon work — and a properly designed subagent system.* It also resolves five specific questions: Code Mode (integrate: yes), small local models + speculative decoding, ACP as the plug-in standard, ephemeral preview environments, and the SWE-agent-style ACI plus execution recorders and governance blueprints.
 
@@ -8,7 +10,7 @@ This pass answers the brief: *speed, capability, low token consumption without c
 
 ## 1. Method and sources
 
-Five read-only deep dives were run against the full clones under `/data/home/forge/repo-tour/` (the eight repositories of the first tour, plus `wshobson/agents`, `OpenHands` Agent Canvas, and `SWE-agent`). Reports: `/tmp/deep-wshobson-report.md` (937 lines), `/tmp/deep-openhands-report.md` (173), `/tmp/deep-sweagent-aci-report.md` (256), `/tmp/deep-codemode-report.md` (195), `/tmp/deep-opencode-v2-report.md` (101) — ~1.7k lines of extracted, path-cited facts. Each section of each report was verified against the tree (the three agents that died mid-run were completed by direct reads; every fact retained here has a path or a command behind it).
+Five read-only deep dives were run against the full clones under `/data/home/forge/repo-tour/` (the eight repositories of the first tour, plus `wshobson/agents`, `OpenHands` Agent Canvas, and `SWE-agent`). Reports (in-repo copies): `/data/home/forge/hzcode/docs/audit/pass2/deep-wshobson-report.md` (937 lines), `…/deep-openhands-report.md` (173), `…/deep-sweagent-aci-report.md` (256), `…/deep-codemode-report.md` (195), `…/deep-opencode-v2-report.md` (101) — ~1.7k lines of extracted, path-cited facts. Each section of each report was verified against the tree (the three agents that died mid-run were completed by direct reads; every fact retained here has a path or a command behind it).
 
 The operating rule for the whole pass: **learn first, decide second, plan third.** This document is the learned part and the decisions; doc 27 is the plan.
 
@@ -159,9 +161,9 @@ Applied in this pass (spec set updated):
 
 | Doc | Change |
 |---|---|
-| `24-feature-catalog.md` | Section B extended: canonical NF-051…NF-062 entries; §3.3/§3.4 reserved lists extended; Section C counts recomputed (50 → 62) |
+| `24-feature-catalog.md` | Section B extended: canonical NF-051…NF-062 entries; §3.3/§3.4 reserved lists extended; Section C counts recomputed (50 → 62 at this pass; 75 today — `24-feature-catalog.md` §6.3) |
 | `_conventions.md` | RC-12 (this pass's adoptions ratified); reserved capability/event lists extended |
-| `13-tui.md` | Composer queue edit/reorder, bulk Keep All/Undo All, code-language detection, attachment chip previews |
+| `13-tui.md` | Composer queue edit/reorder (R197). **Correction (adoption, RC-15):** bulk Keep All/Undo All, compaction UX and the preview surface landed in `14-surfaces.md` §2.12 (D-14), not in doc 13 |
 | `26-learning-synthesis-2.md`, `27-implementation-plan.md` | New (this pass) |
 | `README.md`, `00-index.md` | Reference the new docs |
 
@@ -195,7 +197,7 @@ Queued for the next doc pass (rule text fully drafted in this document and the r
 
 ## 7. Status
 
-This document is a **learning record and adoption ledger**: everything above is DESIGNED or VERIFIED (facts read from sources / measured installs) — nothing claims implementation. The companion plan (doc 27) sequences the build; the queued doc updates in §5 are insertions with text already drafted, to be applied before the slice that depends on them ships.
+This document is a **learning record and adoption ledger**: everything above is DESIGNED or VERIFIED (facts read from sources / measured installs) — nothing claims implementation (see the RC-13 note at the head of this document for the two features that now have built slices). The companion plan (doc 27) sequences the build; the queued doc updates in §5 are insertions with text already drafted, to be applied before the slice that depends on them ships.
 
 ### Related documents
 

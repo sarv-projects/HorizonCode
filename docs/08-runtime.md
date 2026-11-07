@@ -1,6 +1,6 @@
 # 08 — Runtime: Controller, agent loop, fleets, budgets, learning
 
-**Document status:** DESIGNED (see §11), *as a specification of the full orchestration plane*. **Implementation status (final audit, 2026-11-06):** a v0.1 slice of the loop exists — `app/src/core/loop.ts` (stream → guard → approve → tool → receipt → events), sessions over SQLite, and per-session event streams — with evidence in `docs/28-implementation-status.md`; the planner/executor, teams, scheduler and budgets described below remain design, and every module path below marks an artifact to be built (paths under `app/` that exist are the exception and are named in `docs/28`).
+**Document status:** DESIGNED (see §11), *as a specification of the full orchestration plane*. **Implementation status (final audit, 2026-11-06):** a v0.1 slice of the loop exists — `app/src/core/loop.ts` (stream → guard → approve → tool → receipt → events), sessions over SQLite, per-session event streams, subagent delegation through the `agent` tool (child session, nested loop, base-seven tools), and code mode / preview — with evidence in `docs/28-implementation-status.md`; the planner/executor, teams, scheduler and budgets described below remain design, and every module path below marks an artifact to be built (paths under `app/` that exist are the exception and are named in `docs/28`).
 
 ---
 
@@ -46,9 +46,9 @@ The step is the single unit of provider interaction. `StepEngine.runStep` is the
 | **R-runtime-1** | A step MUST execute these phases in order, with no phase skipped and no phase repeated: **(1)** load history from the durable event log, **(2)** compile context (`@horizoncode/context`), **(3)** issue **exactly one** `llm.stream` call, **(4)** reduce the streamed assistant output into parts + a tool-call batch, **(5)** apply the tool batch, **(6)** close the step by appending a `StepRecordV1`. |
 | **R-runtime-2** | There MUST be at most one `hz.step.llm.requested` event per step. A retried request is a new *attempt* of the same step recorded inside the same `StepRecordV1`, not a new step (see R-runtime-34). |
 | **R-runtime-3** | A step MUST reload all input state from durable artifacts. No in-memory state may carry from step N to step N+1 except through (a) the event log, and (b) the immutable projections folded from it. |
-| **R-runtime-4** | Work MUST be admitted only under a write-ahead claim. `hz.session.claim.acquired` precedes any provider call; `hz.session.claim.released` is emitted only with a terminal outcome (`answered` · `tool_batch` · `interrupted` · `failed` · `exhausted`). |
+| **R-runtime-4** | Work MUST be admitted only under a write-ahead claim. `hz.session.claim.acquired` precedes any provider call; `hz.session.claim.released` is emitted only with a terminal outcome, using the `reason` enum of that event (`succeeded` · `failed` · `interrupted` · `superseded` · `expired`, `06-events-and-flows.md` row 4). Step outcomes (`answered` · `tool_batch` · `interrupted` · `failed` · `exhausted`) are recorded on the step, not on the claim. |
 | **R-runtime-5** | Claim release and claim acquisition MUST be durable before the next step starts, so that a crash between steps leaves a recoverable, unambiguous state (see R-runtime-113). |
-| **R-runtime-6** | A step MUST end in exactly one outcome from the enumeration in R-runtime-4 and MUST emit `hz.step.started` at phase 1 and one terminal step event at phase 6. |
+| **R-runtime-6** | A step MUST end in exactly one *step outcome* (`answered` · `tool_batch` · `interrupted` · `failed` · `exhausted`) and MUST emit `hz.step.started` at phase 1 and one terminal step event at phase 6. |
 | **R-runtime-7** | Any state a future step depends on MUST exist as a durable event first. State that exists only in memory is a defect: the fail-closed behaviour in §5 applies. |
 | **R-runtime-8** | Tool calls inside one batch MUST be scheduled on a resource-key basis: calls whose resource keys are disjoint and whose tools declare a read-only or concurrency-safe class MAY run in parallel; calls sharing a resource key MUST serialise in declared order, and calls with `effect_class != read-only` on the same resource MUST serialise on that resource. |
 
@@ -77,7 +77,7 @@ Phase → emission table (the contract other documents rely on):
 
 ### 2.3 Agent-loop state machine
 
-The run loop is a single-writer state machine per session. States: `idle` · `busy` · `awaiting-approval` · `awaiting-user` · `compacting` · `error` · `completed`. Transitions are functions of *events and decisions*, never of wall-clock time alone.
+The run loop is a single-writer state machine per session. States: `idle` · `busy` · `awaiting-approval` · `awaiting-user` · `compacting` · `error` · `completed`. These seven are the `LoopStateV1` schema of `05-domain-and-schemas.md` §4.6, and the durable `SessionV1.state` is their projection (`awaiting_approval`→`waiting_approval`, `awaiting_user`→`waiting_approval`, `compacting`→`busy`, `error`→`failed`; `blocked` and `archived` are durable-only and set outside the loop). Transitions are functions of *events and decisions*, never of wall-clock time alone.
 
 | From | Trigger | Guard | To | Emitted | Side effects |
 |---|---|---|---|---|---|
@@ -206,11 +206,11 @@ Inputs (all host-readable, no provider call): explicit request mode (`--plan`, `
 
 ### 2.10 Todos and goals as state machines
 
-`GoalV1.status ∈ {open, active, blocked, achieved, abandoned}` · `TodoV1.status ∈ {pending, in_progress, completed, blocked, cancelled}`.
+`GoalV1.status ∈ {proposed, active, blocked, achieved, abandoned}` (`05-domain-and-schemas.md` §4.8 owns the enum) · `TodoV1.status ∈ {pending, in_progress, completed, blocked, cancelled}`.
 
 | Machine | Transition | Trigger | Guard |
 |---|---|---|---|
-| Goal | `open → active` | first execution step of the turn starts | goal is the session's top goal |
+| Goal | `proposed → active` | first execution step of the turn starts | goal is the session's top goal |
 | Goal | `active → blocked` | step failed `exhausted`, or a required effect settled `UNKNOWN` | — |
 | Goal | `active → achieved` | independent-evidence gate accepts the completion claim | gate may only lower claims (`11-authority-safety.md`) |
 | Goal | `active → abandoned` | user abandon, or unattended watchdog expiry | explicit event |
@@ -225,7 +225,7 @@ Inputs (all host-readable, no provider call): explicit request mode (`--plan`, `
 | **R-runtime-58** | A session MUST have at most one `active` goal and at most one `in_progress` todo at any instant. A transition that would violate this MUST be rejected, not coerced (fail-closed). |
 | **R-runtime-59** | Goal and todo changes MUST be evented (`hz.goal.updated`, `hz.todo.updated`) and MUST become visible in context only at the next step boundary (R-runtime-28). |
 | **R-runtime-60** | Goal `achieved` MUST NOT be settable by the model alone: the model records a **claim**, and the independent-evidence gate may only lower it. |
-| **R-runtime-61** | The loop-continuation rule MUST be: continue while `goal ∈ {open, active, blocked}` **and** budget remains **and** no interrupt is pending; otherwise park in `idle`, fail, or complete. Nothing else may extend a run. |
+| **R-runtime-61** | The loop-continuation rule MUST be: continue while `goal ∈ {proposed, active, blocked}` **and** budget remains **and** no interrupt is pending; otherwise park in `idle`, fail, or complete. Nothing else may extend a run. |
 
 ### 2.11 Subagent fleet
 
@@ -234,15 +234,17 @@ Inputs (all host-readable, no provider call): explicit request mode (`--plan`, `
 | Tool | Kind | Semantics |
 |---|---|---|
 | `task` | single child | one child, one capsule, one budget slice; parent blocks or continues per `async` flag |
-| `parallel_tasks` | batch | N independent children, submitted together, results joined by index |
-| `fleet` | graph | children with `depends_on` edges, `fail_fast` policy, `adopt_ref` result inheritance |
+| `parallel_tasks` | graph | several **distinct** `task` specs with `depends_on` edges, `fail_fast` policy, `adopt_ref` result inheritance (`09-tools.md` §4) |
+| `fleet` | fan-out | N children of **one** prompt template with per-agent variables, a concurrency ceiling and a settlement strategy (`all` · `collect-first` · `quorum`); no dependency edges (`09-tools.md` §4) |
 | `read_only_task` | restricted child | child whose capability grant is `read-only ∩ parent`; cannot mutate anything, ever |
 
 **Construction primitive.** Every child — from any of the four tools, from skills with `runAs: subagent`, from workflows, from teams — MUST be built by exactly one function:
 
 ```text
-SubagentFactory.spawn(parent: AgentContext, spec: AgentSpecV1): Promise<AgentHandleV1>
+SubagentFactory.spawn(parent: AgentContext, spec: SubagentSpecV1): Promise<AgentHandleV1>
 ```
+
+`SubagentSpecV1` and `AgentHandleV1` are registered in `05-domain-and-schemas.md` §4.9; the LLD module is `packages/agents/src/fleet/subagent-factory.ts` (`04-lld.md` §3.4 names the same primitive as `agents/spawn.ts` → `spawnChild()`; the boundary test cites this signature).
 
 | # | Rule |
 |---|---|
@@ -253,8 +255,8 @@ SubagentFactory.spawn(parent: AgentContext, spec: AgentSpecV1): Promise<AgentHan
 | **R-runtime-66** | Budget inheritance MUST be reserve-then-spend: the parent reserves a slice at spawn, the child draws only from its slice, unused budget returns on teardown, and a child's spend MUST NOT exceed the parent's remaining budget even transiently. |
 | **R-runtime-67** | Depth limits MUST be enforced at spawn: default maximum depth 3, hard ceiling 5, and each child carries a decremented `remaining_depth`. `remaining_depth = 0` ⇒ leaf-only (no further spawning). |
 | **R-runtime-68** | Concurrency ceilings MUST be enforced **globally and per session**: at most 12 live children per root run, 4 live children per session by default, 8 for read-only children, configurable downward only (never upward past the global ceiling). Excess spawns MUST queue with backpressure, not fail silently. |
-| **R-runtime-69** | Dependency graph semantics MUST be exact: `depends_on: [ids]` ⇒ a node starts only when every dependency reached `completed`; `fail_fast: true` ⇒ the first node failure cancels all nodes not yet terminal and marks the fleet `failed`; `adopt_ref` ⇒ a node's output artifact MAY be injected into a dependent node's capsule, referenced by `hz://artifact/<sha256>`, never by transcript text. |
-| **R-runtime-70** | Failure propagation MUST be: node fails ⇒ dependents become `blocked` (never started) ⇒ the parent receives a structured failure (class, partial artifacts, spend) and decides whether to retry, re-plan or fail the fleet. A blocked dependent MUST NOT be silently dropped: it MUST be reported in the fleet result. |
+| **R-runtime-69** | `parallel_tasks` graph semantics MUST be exact, and the tool semantics themselves are owned by `09-tools.md` §4: `depends_on: [ids]` ⇒ a node starts only when every dependency reached `completed`; `fail_fast: true` ⇒ the first node failure cancels all nodes not yet terminal and marks the run `failed`; `adopt_ref` ⇒ a node's output artifact MAY be injected into a dependent node's capsule, referenced by `hz://artifact/<sha256>`, never by transcript text. `fleet` is the edge-free form — identical workers from one template, joined by the declared strategy — and MUST NOT accept `depends_on`. |
+| **R-runtime-70** | Failure propagation MUST be: node fails ⇒ dependents become `blocked` (never started) ⇒ the parent receives a structured failure (class, partial artifacts, spend) and decides whether to retry, re-plan or fail the run. A blocked dependent MUST NOT be silently dropped: it MUST be reported in the run result. |
 | **R-runtime-71** | A child MUST NOT ask the user directly. A child's `ask` decision MUST surface to the parent as a message; if the parent cannot decide, the ask escalates to the session origin. Origin typing is preserved: a model-originated child request MUST NOT become human authority. |
 | **R-runtime-72** | Child results MUST be (a) artifacts in the content-addressed store and (b) a bounded summary. A child's summary is **not** evidence: the independent-evidence gate reads receipts and artifacts, never summaries. |
 | **R-runtime-73** | Teardown MUST run on every terminal path (success, failure, cancel, deadline, crash recovery) and MUST: cancel the child token tree; reap its processes and PTYs; release worktrees back to the pool; flush artifacts; settle or mark `UNKNOWN` any unfinished effects; return unused budget; release a concurrency slot; emit `hz.agent.completed` with the terminal outcome. |
@@ -296,7 +298,7 @@ Teams are long-lived named groups of agents that exchange messages and share art
 
 ```text
 LearnLoop.record(trajectory: TrajectoryV1): Promise<TrajectoryRefV1>
-LearnLoop.propose(kind: 'prompt' | 'policy' | 'skill' | 'memory' | 'routing', base_rev, patch): Promise<ProposalV1>
+LearnLoop.propose(kind: 'prompt' | 'policy' | 'skill' | 'memory' | 'routing', base_rev, patch): Promise<LearnProposalV1>
 ```
 
 | # | Rule |
@@ -308,7 +310,7 @@ LearnLoop.propose(kind: 'prompt' | 'policy' | 'skill' | 'memory' | 'routing', ba
 | **R-runtime-97** | Prompt, policy, routing and skill changes MUST be **proposals**: a diff against a base revision, never an in-place mutation of the live revision. A live prompt/policy revision MUST be immutable and addressable by revision id. |
 | **R-runtime-98** | A/B evaluation of a proposal MUST respect the cache-guard discipline: each arm MUST have a byte-stable prefix for its own revision, arm assignment MUST be recorded per trajectory, and a proposal MUST NOT be promoted on a sample smaller than the declared minimum (default 20 trajectories or a declared statistical stopping rule). |
 | **R-runtime-99** | **Hard rule — authority is never widened.** A proposal whose effect diff grants a new capability ID, raises a posture, adds a rule with `allow` where the base had `ask`/`deny`, adds a tool to an allow-list, or changes origin typing MUST be rejected by the proposal compiler. This rejection MUST NOT be overridable by a human approval, by an eval score, or by an unattended run. Self-improvement MAY narrow authority, MAY reorder work, MAY change wording and routing within a mode; it MAY NOT expand the reachable effect surface. |
-| **R-runtime-100** | Proposal lifecycle MUST be `draft → proposed → evaluated → accepted | rejected | superseded | expired`, with every transition evented (`hz.learn.proposal.created`, `hz.learn.eval.completed`). `accepted` requires a human decision (`hz.permission.answered` on the proposal) except for the one narrow case in R-runtime-101. |
+| **R-runtime-100** | Proposal lifecycle MUST be the `LearnProposalV1.status` machine of `05-domain-and-schemas.md` §4.10 — `draft → proposed → under_review → approved | rejected | applied | reverted | expired` — with every transition evented (`hz.learn.proposal.created`, `hz.learn.eval.completed`). `approved` requires a human decision (`hz.permission.answered` on the proposal) except for the one narrow case in R-runtime-101. |
 | **R-runtime-101** | Human gates: **(a)** memory promotion MAY proceed automatically when the promotion is derivable from receipts and does not change any capability, prompt prefix or policy rule; **(b)** skills, prompts, policy and routing always require human approval; **(c)** anything touching the effect surface is rejected outright (R-runtime-99), approval or not. |
 | **R-runtime-102** | Background consolidation ("dream") MUST run as a scheduled, budgeted, non-interactive run whose only output is proposals and memory candidates. It MUST NOT run mutating tools outside its own scratch worktree and MUST NOT apply any proposal. |
 | **R-runtime-103** | Trajectory retention and sharing MUST be policy-controlled: capture is local by default, upload is opt-in (`opt-in crash reports` / managed policy), and a trajectory that cannot be redacted MUST NOT be persisted (fail-closed: drop the trajectory and log a redaction failure rather than store secrets). |
@@ -356,7 +358,7 @@ All paths are `[planned]`; package ownership follows `file:///data/home/forge/hz
 |---|---|---|
 | `Controller.submit(req: SubmitRequest, sink: EventSink): Promise<SubmitResult>` | `packages/core/src/controller/controller.ts` | The single entry point for every front-end. Validates, admits (`SessionEngine.admit`), routes (`route`), runs steps, emits `HzEvent`s to `sink`. MUST NOT be called concurrently with an un-finished submit on the same session (R-runtime-15). |
 | `SessionEngine.admit(sessionId, input, mode: 'steer' \| 'queue'): Promise<AdmissionResult>` | `packages/core/src/session/session-engine.ts` | Durable inbox write + `hz.session.prompt.admitted` before acknowledgement (R-runtime-27, R-runtime-29). |
-| `SessionEngine.claim(sessionId, cause): Promise<Claim>` / `release(claim, outcome)` | same | Write-ahead claim (R-runtime-4); `outcome` ∈ `answered · tool_batch · interrupted · failed · exhausted`. |
+| `SessionEngine.claim(sessionId, cause): Promise<Claim>` / `release(claim, outcome)` | same | Write-ahead claim (R-runtime-4); `outcome` ∈ `succeeded · failed · interrupted · superseded · expired`, the `reason` enum of `hz.session.claim.released` (`06-events-and-flows.md` row 4). |
 | `StepEngine.runStep(sessionId, cause, token: CancelToken): Promise<StepRecordV1>` | `packages/core/src/step/step-engine.ts` | The six phases (R-runtime-1). Exactly one `llm.stream` per step (R-runtime-2). |
 | `AgentLoop.transition(state, trigger): State` | `packages/core/src/loop/agent-loop.ts` | Implements the §2.3 table; unknown transitions rejected (R-runtime-20). Emits `hz.session.busy.entered` / `hz.session.busy.left`. |
 | `Interrupt.request(sessionId, strength: 'soft' \| 'hard', reason)` | `packages/core/src/loop/interrupt.ts` | Token-tree cancel (R-runtime-21, R-runtime-22); awaits kernel-side process termination for non-cooperative tools (R-runtime-24). |
@@ -367,8 +369,8 @@ All paths are `[planned]`; package ownership follows `file:///data/home/forge/hz
 | `route(request, sessionPosture, budgets, agentProfile, planMode): RoutingDecisionV1` | `packages/agents/src/routing/route.ts` | The deterministic table in §2.8 (R-runtime-44, R-runtime-46). Pure; no provider access; unit-tested exhaustively. |
 | `PlanWindow.open(plan: PlanV1, approval: HzPermissionAnswered): PlanWindowV1` / `PlanWindow.check(window, call): 'allow' \| 'ask' \| 'invalidate'` | `packages/core/src/plan/window.ts` | R-runtime-53 to R-runtime-57. `check` is fail-closed: anything unrecognised ⇒ `ask`. |
 | `GoalMachine.apply(goal, change): GoalV1` / `TodoMachine.apply(todo, change): TodoV1` | `packages/core/src/state/goals.ts` | R-runtime-58 to R-runtime-61; rejects illegal transitions. |
-| `SubagentFactory.spawn(parent: AgentContext, spec: AgentSpecV1): Promise<AgentHandleV1>` | `packages/agents/src/fleet/subagent-factory.ts` | **The single construction primitive** (R-runtime-62, R-runtime-63). Applies narrowing, capsule, budget reserve, depth and concurrency ceilings. |
-| `FleetScheduler.run(graph: FleetGraphV1, token): Promise<FleetResultV1>` | `packages/agents/src/fleet/fleet-scheduler.ts` | `depends_on` / `fail_fast` / `adopt_ref` semantics (R-runtime-69, R-runtime-70). |
+| `SubagentFactory.spawn(parent: AgentContext, spec: SubagentSpecV1): Promise<AgentHandleV1>` | `packages/agents/src/fleet/subagent-factory.ts` | **The single construction primitive** (R-runtime-62, R-runtime-63). Applies narrowing, capsule, budget reserve, depth and concurrency ceilings. |
+| `ParallelTasksScheduler.run(graph: ParallelTasksGraphV1, token): Promise<ParallelTasksResultV1>` / `FleetScheduler.run(spec: FleetSpecV1, token): Promise<ParallelTasksResultV1>` | `packages/agents/src/fleet/parallel-tasks-scheduler.ts` / `fleet-scheduler.ts` | `depends_on` / `fail_fast` / `adopt_ref` semantics for the graph (R-runtime-69, R-runtime-70); template fan-out with a concurrency ceiling and a settlement strategy for `fleet`. |
 | `TeamBus.send(msg, opts)` / `TeamBus.receive(deadline)` | `packages/agents/src/team/bus.ts` | Durable at-least-once delivery, FIFO mailbox, ack/backpressure, mandatory deadlines (R-runtime-77 to R-runtime-79). |
 | `TeamElection.heartbeat()` / `TeamElection.elect()` | `packages/agents/src/team/election.ts` | Term-based leader election and failover (R-runtime-81). |
 | `Scheduler.fire(jobId, occurrenceId): Promise<OccurrenceOutcome>` | `packages/core/src/schedule/scheduler.ts` | Journal entry first, then run (R-runtime-86); honours catch-up, jitter, non-overlap (R-runtime-87 to R-runtime-89). |
@@ -376,7 +378,7 @@ All paths are `[planned]`; package ownership follows `file:///data/home/forge/hz
 | `BudgetLedger.reserve(runId, slice) / spend(runId, meter, qty) / renew(leaseId, evidence) / release(runId, slice)` | `packages/core/src/budget/ledger.ts` | R-runtime-104 to R-runtime-109. `renew` requires evidence and throws `invalid-renewal` otherwise. |
 | `Watchdog.arm(runId, condition) / fire(watchdogId, reason)` | `packages/core/src/longrun/watchdog.ts` | R-runtime-111; `Heartbeat.emit(runId, digest)` for R-runtime-112. |
 | `LearnLoop.record(trajectory: TrajectoryV1): Promise<TrajectoryRefV1>` | `packages/learn/src/loop/record.ts` | Redacting, always-on capture (R-runtime-93, R-runtime-103). |
-| `LearnLoop.propose(kind, base_rev, patch): Promise<ProposalV1>` | `packages/learn/src/loop/propose.ts` | Lifecycle start (R-runtime-97, R-runtime-100). |
+| `LearnLoop.propose(kind, base_rev, patch): Promise<LearnProposalV1>` | `packages/learn/src/loop/propose.ts` | Lifecycle start (R-runtime-97, R-runtime-100). |
 | `ProposalCompiler.check(proposal): 'ok' \| 'rejected:authority-widening'` | `packages/learn/src/loop/compiler.ts` | The hard rule (R-runtime-99). Rejection is not overridable. |
 | `EvalHarness.run(suite, rev): Promise<EvalResultV1>` | `packages/learn/src/eval/harness.ts` | Evidence-graded scoring (R-runtime-94); arms recorded for A/B (R-runtime-98). |
 
@@ -405,7 +407,7 @@ Every event above MUST carry `{event_id, session_id, run_id (root), parent_agent
 
 ## 4. Data
 
-Schemas are defined in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` and follow the `<Name>V<major>` convention of `file:///data/home/forge/hzcode/docs/_conventions.md` §7. This subsystem **reads** and **writes** the following; the four names marked ✓ are already used in `_conventions.md`; the remainder are the names this document requires and MUST be registered in doc 05 in the same change (naming rule, `_conventions.md` §1 preamble).
+Schemas are defined in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` and follow the `<Name>V<major>` convention of `file:///data/home/forge/hzcode/docs/_conventions.md` §7. This subsystem **reads** and **writes** the following. The five names marked ✓ are already registered and defined in `05-domain-and-schemas.md`; every other name is reconciled to a registered shape in `05-domain-and-schemas.md` §4.18 — the owner of all `*V1` schemas — and a name listed in neither place MUST NOT be used normatively (reconciled 2026-11-07, reaudit stage 2, RC-15).
 
 | Schema | R/W | Used for |
 |---|---|---|
@@ -414,30 +416,30 @@ Schemas are defined in `file:///data/home/forge/hzcode/docs/05-domain-and-schema
 | `SessionPostureV1` ✓ | R | posture as an input to routing and plan windows (R-runtime-44, R-runtime-54) |
 | `GuardDecisionV1` ✓ | R | per-call allow/ask/deny and lease references consumed by the agent loop |
 | `SessionV1` | R/W | session identity, root/child linkage, plan mode flag, origin |
-| `RunV1` | R/W | root run, lifetime, ledger binding, unattended flag, terminal record (R-runtime-116) |
-| `PromptAdmissionV1` | R/W | inbox entry with mode `steer`/`queue`, stable id, ordering (R-runtime-27) |
+| `RunV1` (kernel OwnerLog `managed` record, RC-3) | R/W | root run, lifetime, ledger binding, unattended flag, terminal record (R-runtime-116); authority truth, not a session schema |
+| `InputAdmissionV1` | R/W | inbox entry with mode `steer`/`queue`, stable id, ordering (R-runtime-27) |
 | `ExecutionClaimV1` | R/W | write-ahead claim incl. workspace digest at acquisition (R-runtime-4, R-runtime-114) |
 | `LoopStateV1` | W | current agent-loop state + the transition that produced it (R-runtime-16) |
-| `RoutingDecisionV1` | W | mode, matched table row, inputs digest (R-runtime-44, R-runtime-51) |
+| `RoutingDecisionV1` | W | mode, matched table row, inputs digest (R-runtime-44, R-runtime-51); recomputable projection |
 | `PlanV1` | R/W | plan steps, expected effects, required capability set, hash |
 | `PlanWindowV1` | R/W | approved-plan execution window, expiry, granted set (R-runtime-53) |
 | `GoalV1` | R/W | goal state machine (R-runtime-58) |
 | `TodoV1` | R/W | todo state machine (R-runtime-58) |
-| `AgentSpecV1` | R | requested kind, tools, capabilities, capsule, budget slice, depth (R-runtime-63) |
+| `SubagentSpecV1` | R | requested kind, tools, capabilities, capsule, budget slice, depth (R-runtime-63) |
 | `AgentHandleV1` | W | live child handle: agent id, token, ledger slice, worktree, session id |
-| `ContextCapsuleV1` | R/W | the child's bounded input (R-runtime-65) |
-| `FleetGraphV1` / `FleetResultV1` | R/W | dependency edges, `fail_fast`, `adopt_ref`; joined results and blocked nodes (R-runtime-69, R-runtime-70) |
-| `TeamV1` / `TeamMemberV1` | R/W | team identity, roles, membership, leader term (R-runtime-75 to R-runtime-81) |
-| `TeamMessageV1` | R/W | bus message with id, causal parent, ack state (R-runtime-77) |
-| `ScheduleJobV1` | R/W | cron/one-shot spec, catch-up policy, jitter window, budgets |
-| `OccurrenceV1` | R/W | occurrence journal entry keyed `(job_id, occurrence_id)` (R-runtime-86) |
-| `BudgetLedgerV1` | R/W | per-run meters, reservations, spend (R-runtime-104, R-runtime-105) |
-| `ProgressLeaseV1` | R/W | adaptive lease with deadline and evidence log (R-runtime-106) |
-| `HeartbeatV1` / `WatchdogV1` | W | liveness and watchdog records (R-runtime-111, R-runtime-112) |
+| `SubagentSpecV1.contextCapsule` | R/W | the child's bounded input (R-runtime-65) |
+| `FleetSpecV1` — fan-out input | R/W | one prompt template, per-agent variables, concurrency ceiling, settlement strategy (`09-tools.md` §4) |
+| `ParallelTasksGraphV1` / `ParallelTasksResultV1` — graph input and result | R/W | distinct specs with dependency edges, `fail_fast`, `adopt_ref`; joined results and blocked nodes (R-runtime-69, R-runtime-70) |
+| `TeamStateV1` | R/W | team identity, roles, membership, leader term (R-runtime-75 to R-runtime-81) |
+| `AgentMessageV1` | R/W | bus message with id, causal parent, ack state (R-runtime-77) |
+| kernel OwnerLog journal records (RC-3) — job and occurrence | R/W | cron/one-shot spec, catch-up policy, jitter window, budgets; occurrence keyed `(job_id, occurrence_id)` (R-runtime-86) |
+| `BudgetV1` + `UsageV1` | R/W | per-run meters, reservations, spend (R-runtime-104, R-runtime-105) |
+| `BudgetV1.renewPolicy` | R/W | adaptive lease with deadline and evidence log (R-runtime-106) |
+| `HeartbeatV1` / `WatchdogV1` | W | liveness and watchdog records — projection only (R-runtime-111, R-runtime-112) |
 | `TrajectoryV1` / `TrajectoryRefV1` | R/W | captured run trajectory (R-runtime-93) |
-| `EvalResultV1` | W | evidence-graded suite result, arm, revision (R-runtime-94, R-runtime-98) |
-| `ProposalV1` | R/W | kind, base revision, patch, lifecycle state, rejection reason (R-runtime-99, R-runtime-100) |
-| `LearnStateV1` | W | proposal lifecycle transitions and human decisions |
+| `EvalCaseV1` result rows | W | evidence-graded suite result, arm, revision (R-runtime-94, R-runtime-98) |
+| `LearnProposalV1` | R/W | kind, base revision, patch, lifecycle state, rejection reason (R-runtime-99, R-runtime-100) |
+| `LearnProposalV1.status` | W | proposal lifecycle transitions and human decisions |
 | `EffectReceiptV1` ✓ | R | the evidence source for progress (R-runtime-107) and for eval grading (R-runtime-94) |
 
 Persistence: the runtime owns **no** private store. It writes events to the event log owned by `file:///data/home/forge/hzcode/docs/12-sessions-state.md`, schemas are serialised by `@horizoncode/protocol`, and budget/watchdog/heartbeat records are projections over the same log. No mutable side table may be the state of record for anything a rule above depends on.
@@ -463,8 +465,8 @@ Classification is per R-runtime-33. The table states the runtime's behaviour and
 | Plan invalid / schema-invalid | planner output validation | one re-ask within budget, then `plan-invalid`; no approval window opens | **yes** |
 | Tool call outside the approved window | `PlanWindow.check` | `ask` — never auto-allow | **yes** |
 | Capability requested by a child that the parent lacks | `SubagentFactory.spawn` | total rejection; no partial child | **yes** |
-| Depth / concurrency ceiling exceeded | `spawn`, `FleetScheduler` | depth ⇒ rejection; concurrency ⇒ queue with backpressure (never silent drop) | **yes** |
-| Child fails | fleet scheduler | dependents `blocked` and reported; `fail_fast` cancels the rest; parent decides | **yes** — blocked nodes are never treated as success |
+| Depth / concurrency ceiling exceeded | `spawn`, `ParallelTasksScheduler`/`FleetScheduler` | depth ⇒ rejection; concurrency ⇒ queue with backpressure (never silent drop) | **yes** |
+| Child fails | parallel-tasks / fleet scheduler | dependents `blocked` and reported; `fail_fast` cancels the rest; parent decides | **yes** — blocked nodes are never treated as success |
 | Mailbox full | bus backpressure | sender blocks or receives `mailbox-full`; no silent drop | **yes** |
 | Cyclic blocking wait | wait-for graph check | break the younger wait, `hz.error.raised(class: mailbox-cycle)` | **yes** |
 | Leader silent > lease | heartbeat monitor | election; assignments re-issued idempotently from the task table | **yes** — a stale leader cannot commit team state |
@@ -486,7 +488,7 @@ Classification is per R-runtime-33. The table states the runtime's behaviour and
 ### F-1 Simple turn (executor-only, no tools)
 
 1. Front-end calls `Controller.submit` with a prompt and a run spec.
-2. `SessionEngine.admit` writes a `PromptAdmissionV1` (`mode: queue`) and emits `hz.session.prompt.admitted`.
+2. `SessionEngine.admit` writes an `InputAdmissionV1` (`mode: queue`) and emits `hz.session.prompt.admitted`.
 3. `route(...)` returns `executor-only` (row 3/6 of §2.8) and the decision is persisted as `RoutingDecisionV1`.
 4. Claim taken: `hz.session.claim.acquired`, `hz.session.busy.entered`; loop state `idle → busy`.
 5. `StepEngine.runStep` phase 1–3: history loaded, context compiled (digest recorded), exactly one `llm.stream`; deltas stream to the sink as `hz.step.llm.delta`.
@@ -515,15 +517,15 @@ Classification is per R-runtime-33. The table states the runtime's behaviour and
 7. If the user interrupts instead, the ask is answered `denied-by-interrupt`; the batch is abandoned and the step closes `interrupted` (R-runtime-26).
 8. If the ask deadline (300 s) expires interactively, the decision is deny (fail-closed).
 
-### F-4 Subagent fleet
+### F-4 Subagent fleet and `parallel_tasks`
 
-1. The executor step issues a `fleet` tool call with a graph: `A` (research), `B` and `C` (`depends_on: [A]`), `D` (`read_only_task`, `adopt_ref: B`).
-2. `FleetScheduler.run` validates the graph (acyclic, ceilings, depth) and calls `SubagentFactory.spawn` once per node.
+1. The executor step issues a `parallel_tasks` call with a dependency graph — `A` (research), `B` and `C` (`depends_on: [A]`), `D` (`read_only_task`, `adopt_ref: B`) — or a `fleet` call with one template, per-agent variables, a concurrency ceiling and a settlement strategy (no edges; `09-tools.md` §4).
+2. `ParallelTasksScheduler.run` / `FleetScheduler.run` validates the input (acyclic where edges exist, ceilings, depth) and calls `SubagentFactory.spawn` once per node.
 3. Each spawn: capability grant = `parent_grant ∩ requested` (D gets `read-only ∩ parent`); context capsule built (no parent transcript); budget slice reserved from the parent ledger; worktree allocated from the pool; `hz.agent.spawned`.
 4. `A` runs; `B`/`C` wait (`depends_on` satisfied only on `A.completed`); `B`'s artifact is injected into `D`'s capsule by `hz://artifact/<sha256>` reference.
 5. `C` fails; `fail_fast: true` cancels `D` before it starts, marks it `blocked`; `A` and `B` results are retained.
 6. `Spawn` teardown per child: token tree cancelled, processes reaped, worktrees returned, artifacts flushed, unused budget returned, slot released, `hz.agent.completed` with outcome.
-7. The parent receives `FleetResultV1` (per-node status, artifacts, spend, blocked list) and decides: retry `C` once with a narrower capsule, or re-plan. The summary alone changes nothing — artifacts and receipts are the evidence.
+7. The parent receives `ParallelTasksResultV1` (per-node status, artifacts, spend, blocked list) and decides: retry `C` once with a narrower capsule, or re-plan. The summary alone changes nothing — artifacts and receipts are the evidence.
 
 ### F-5 Crash resume
 
@@ -603,33 +605,38 @@ Additional authority rules for this plane:
 
 ## 8. Performance budgets
 
-Numbers are targets for a reference machine (8-core laptop, local SQLite, warm cache). They are budgets for tests (`packages/testing` perf harness), not marketing.
+**Single owner.** This section is the single owner of runtime budget numbers. `03-hld.md` §9, `04-lld.md` §8, `05-domain-and-schemas.md` §8, `06-events-and-flows.md` §8 and `07-apis-and-contracts.md` §8 cite these values and MUST NOT restate a rival number (reconciled 2026-11-07, reaudit stage 2, RC-15).
 
-| Path | Budget |
-|---|---|
-| `Controller.submit` → durable admission event (local) | ≤ 5 ms p95, ≤ 20 ms p99 |
-| Step overhead excluding provider time (phases 1, 4, 6 + scheduling) | ≤ 15 ms p95 |
-| Context compile, warm prefix (cache guard hit) | ≤ 25 ms p95 at 100 k token session |
-| Context compile, cold | ≤ 150 ms p95 at 100 k token session |
-| Tool batch scheduling overhead (per batch, 8 calls) | ≤ 10 ms |
-| Event append (WAL, batched fsync ≤ 10 ms) | ≤ 2 ms p95 per event |
-| Projection lag behind the log | ≤ 50 ms p95 |
-| Soft interrupt → no new work scheduled | ≤ 50 ms |
-| Hard interrupt → in-flight stream aborted | ≤ 100 ms |
-| Cancel propagation to depth 3 (child tree) | ≤ 50 ms |
-| Non-cooperative tool termination (kernel escalation) | ≤ 250 ms |
-| `SubagentFactory.spawn` overhead excluding sandbox/worktree creation | ≤ 100 ms |
-| Worktree checkout for a child | ≤ 1.5 s (pooled), ≤ 4 s (cold) |
-| Plan window check per tool call | ≤ 1 ms |
-| Ledger `spend` / `renew` (in-memory with batched durability) | ≤ 1 ms p95 |
-| Mailbox send/receive, local process | ≤ 5 ms p95 |
-| Leader heartbeat interval / lease | 10 s / 30 s (R-runtime-81) |
-| Scheduler tick accuracy (local) | ±2 s; jitter ≤ 5 s; journal write ≤ 5 ms |
-| Crash-recovery claim scan | ≤ 200 ms per 1 000 sessions |
-| Resume to first step after process start | ≤ 1 s |
-| Resident overhead per idle session | ≤ 200 KB |
-| Resident overhead per active step (excluding retained deltas) | ≤ 5 MB; streaming ring buffer 64 KiB |
-| Heartbeat write interval | 15 s (R-runtime-112) |
+Numbers are targets for a named reference machine class (`ref-linux-x64-4c8g` local SQLite, warm cache; a number measured on any other class carries that class in its label). They are budgets for tests (`packages/testing` perf harness), not marketing. Every row names its **anchor** (the event from which the clock starts) and its **population** (what is included and excluded) per `16-operations.md` R-ops-113; a row whose enforcing suite does not exist yet is `UNENFORCED` and MUST NOT be quoted as a guarantee.
+
+| Path | Budget | Anchor (population) |
+|---|---|---|
+| `Controller.submit` → durable admission event (local) | ≤ 5 ms p95, ≤ 20 ms p99 | anchor: `Controller.submit` entry; population: validation, routing, inbox write and the `hz.session.prompt.admitted` commit — excluding provider and kernel work |
+| Step overhead excluding provider time (phases 1, 4, 6 + scheduling) | ≤ 15 ms p95 | anchor: phase 1 begins; population: history load, batch reduction and planning, step close — excluding context compile (own row), provider time and kernel time |
+| Context compile, warm prefix (cache guard hit) | ≤ 25 ms p95 at 100 k token session | anchor: `ContextCompiler.compile()` entry; population: prefix assembly + digest + tail projection; retrieval I/O excluded |
+| Context compile, cold | ≤ 150 ms p95 at 100 k token session | anchor: `ContextCompiler.compile()` entry; population: as above plus retrieval and skill-index load |
+| Tool batch scheduling overhead (per batch, 8 calls) | ≤ 10 ms | anchor: the batch is handed to `ToolBatch.apply`; population: resource-key planning and submission — excluding Guard decisions and the effects themselves |
+| Event append (WAL, batched fsync ≤ 10 ms) | ≤ 2 ms p95 per event | anchor: the runtime calls the store's append; population: event insert + projector writes in the same transaction — excluding projection catch-up and blob writes |
+| Receipt write + settle | ≤ 4 ms p99 | anchor: the EffectHost receives the terminal observation; population: OwnerLog commit for the intent + receipt ledger append — excluding effect execution |
+| Guard decision (`effect.authorize`, policy revision warm) | ≤ 2 ms p99 (wildcard rules); ≤ 10 ms p99 (Starlark path) | anchor: the kernel accepts the request; population: Guard + policy evaluation + lease issue — excluding transport and effect execution |
+| Kernel request round trip (non-effect, warm UDS / named pipe) | ≤ 3 ms p95 | anchor: the client writes the frame; population: transport, dispatch and encode/decode — excluding the work the method performs |
+| Projection lag behind the log | ≤ 50 ms p95 | anchor: event commit; population: until the projector's row is readable |
+| Soft interrupt → no new work scheduled | ≤ 50 ms | anchor: `Interrupt.request('soft')`; population: token-tree propagation to the step engine — excluding in-flight tool completion |
+| Hard interrupt → in-flight stream aborted | ≤ 100 ms | anchor: `Interrupt.request('hard')`; population: through provider stream close |
+| Cancel propagation to depth 3 (child tree) | ≤ 50 ms | anchor: parent token cancelled; population: descendant tokens at depth ≤ 3 — excluding process reaping (own row) |
+| Non-cooperative tool termination (kernel escalation) | ≤ 250 ms | anchor: escalation begins; population: through confirmed process kill |
+| `SubagentFactory.spawn` overhead excluding sandbox/worktree creation | ≤ 100 ms | anchor: `spawn` entry; population: narrowing, capsule, ledger reserve, ceilings — excluding sandbox and worktree creation |
+| Worktree checkout for a child | ≤ 1.5 s (pooled), ≤ 4 s (cold) | anchor: pool acquire request; population: through a writable tree at the child's root |
+| Plan window check per tool call | ≤ 1 ms | anchor: the call is presented to `PlanWindow.check`; population: comparison against the window's granted set (pure) |
+| Ledger `spend` / `renew` (in-memory with batched durability) | ≤ 1 ms p95 | anchor: ledger method entry; population: meter update — excluding the batched fsync it schedules |
+| Mailbox send/receive, local process | ≤ 5 ms p95 | anchor: `TeamBus.send` entry; population: through durable enqueue or delivery to a waiting receiver |
+| Leader heartbeat interval / lease | 10 s / 30 s (R-runtime-81) | anchor: last heartbeat persisted; population: interval to the next heartbeat and the lease expiry window |
+| Scheduler tick accuracy (local) | ±2 s; jitter ≤ 5 s; journal write ≤ 5 ms | anchor: the scheduled fire time; population: actual fire (accuracy, jitter) and the journal record write |
+| Crash-recovery claim scan | ≤ 200 ms per 1 000 sessions | anchor: process start; population: claim and `UNKNOWN` scan only — no projection rebuild |
+| Resume to first step after process start | ≤ 1 s | anchor: process start; population: through the first step's phase 1; projections may catch up asynchronously |
+| Resident overhead per idle session | ≤ 200 KB | anchor: session at rest in `idle`; population: in-memory state — excluding projections and blob cache |
+| Resident overhead per active step (excluding retained deltas) | ≤ 5 MB; streaming ring buffer 64 KiB | anchor: `busy` with one step in flight; population: step state — retained deltas excluded |
+| Heartbeat write interval | 15 s (R-runtime-112) | anchor: previous heartbeat persist; population: n/a (an interval, not a latency) |
 
 Budgets that are *safety* numbers rather than speed numbers — retry cap 5 attempts, breaker thresholds 5/60 s, ask deadline 300 s, provider silence 120 s, no-progress 3 steps, run lifetime 8 h (hard 24 h) — are normative in §2 and MUST NOT be tuned per surface.
 
@@ -654,7 +661,7 @@ Tests live in `packages/testing` `[planned]` with fixtures from `packages/testin
 | **Plan window** | `packages/core/src/plan/window.test.ts` | R-runtime-53 to R-runtime-57: out-of-set call ⇒ `ask`; every invalidation trigger; an approval cannot add a capability the session lacked. |
 | **Goal/todo machines** | `packages/core/src/state/goals.test.ts` | R-runtime-58 to R-runtime-61: at most one `active` goal / `in_progress` todo; illegal transitions rejected; model cannot set `achieved`. |
 | **Capability narrowing** | `packages/agents/src/fleet/narrowing.test.ts` | R-runtime-63, R-runtime-64, R-runtime-117 to R-runtime-119: intersection only; a child cannot obtain a denied capability by respawn, proxy call, plan window or team message. |
-| **Fleet dependency semantics** | `packages/agents/src/fleet/fleet-scheduler.test.ts` | R-runtime-69, R-runtime-70: `depends_on` ordering, `fail_fast` cancellation, `adopt_ref` by digest, blocked nodes reported not dropped. |
+| **Fleet dependency semantics** | `packages/agents/src/fleet/fleet-scheduler.test.ts` | R-runtime-69, R-runtime-70: `depends_on` ordering (`parallel_tasks`), `fail_fast` cancellation, `adopt_ref` by digest, blocked nodes reported not dropped; `fleet` fan-out has no edges. |
 | **Capsule and budget inheritance** | `packages/agents/src/fleet/capsule.test.ts` | R-runtime-65, R-runtime-66, R-runtime-105: no parent transcript by default; slice reservation arithmetic (`released + spent ≤ granted`); sibling isolation. |
 | **Depth and concurrency ceilings** | `packages/agents/src/fleet/ceilings.test.ts` | R-runtime-67, R-runtime-68: depth 3 default / 5 hard; 4 per session, 8 read-only, 12 global; excess queues with backpressure. |
 | **Teardown completeness** | `packages/agents/src/fleet/teardown.test.ts` | R-runtime-73, R-runtime-84: after any terminal path, no live process, no held worktree, no leak in the ledger, exactly one `hz.agent.completed` per child. |
@@ -695,8 +702,8 @@ Every invariant below MUST hold at every instant of every run, in every front-en
 | I-16 | `achieved` can only be lowered by evidence, never asserted by a model | evidence gate (R-runtime-60) | `goals.test.ts` |
 | I-17 | Every child agent is built by exactly one primitive | `SubagentFactory.spawn` (R-runtime-62) | **`subagent-construction.test.ts` (boundary test)** |
 | I-18 | Child capability grants are intersections, never unions | `spawn` narrowing (R-runtime-64) | `narrowing.test.ts` |
-| I-19 | Children cannot exceed parent budget, depth, or concurrency | `spawn` + `FleetScheduler` (R-runtime-66 to R-runtime-68) | `capsule.test.ts`, `ceilings.test.ts` |
-| I-20 | Failed dependency ⇒ blocked node reported, never counted as success | `FleetScheduler.run` (R-runtime-70) | `fleet-scheduler.test.ts` |
+| I-19 | Children cannot exceed parent budget, depth, or concurrency | `spawn` + `ParallelTasksScheduler`/`FleetScheduler` (R-runtime-66 to R-runtime-68) | `capsule.test.ts`, `ceilings.test.ts` |
+| I-20 | Failed dependency ⇒ blocked node reported, never counted as success | `ParallelTasksScheduler.run` (R-runtime-70) | `fleet-scheduler.test.ts` |
 | I-21 | Every terminal path tears down completely | teardown (R-runtime-73, R-runtime-84) | `teardown.test.ts` |
 | I-22 | Team messages are durable, at-least-once, idempotent by id | `TeamBus` (R-runtime-77) | `bus.test.ts` |
 | I-23 | No unbounded blocking wait exists; cyclic waits time out | `TeamBus.receive` deadlines (R-runtime-79, R-runtime-80) | `bus.test.ts` |
@@ -722,7 +729,9 @@ An invariant is owned by **exactly one** row here. A new invariant MUST be added
 
 ## 11. Status
 
-Status levels are those of `file:///data/home/forge/hzcode/docs/_conventions.md` §8. Everything in this document is **DESIGNED**: rules, interfaces, schemas, budgets and tests are specified, and nothing is implemented, wired, tested or verified in `/data/home/forge/hzcode`. Where a name or number is not yet settled it is written **UNKNOWN**, not assumed.
+> **Implementation status (RC-13).** Every rule, interface, schema, budget and test below is `DESIGNED`. One slice of the loop is implemented — the step loop in `app/src/core/loop.ts`, SQLite sessions, per-session event streams and subagent delegation — and its levels are in `docs/28-implementation-status.md`. Planner/executor, teams, scheduler and budgets are design only.
+
+Status levels are those of `file:///data/home/forge/hzcode/docs/_conventions.md` §8. Where a name or number is not yet settled it is written **UNKNOWN**, not assumed.
 
 | Capability | Level | Evidence | What would move it up |
 |---|---|---|---|
@@ -736,7 +745,7 @@ Status levels are those of `file:///data/home/forge/hzcode/docs/_conventions.md`
 | Dual-model Planner/Executor + routing decision table | DESIGNED | §2.8, R-runtime-44 to R-runtime-51 | `route` + golden table + no-I/O assertion |
 | Plan mode & approved-plan execution window | DESIGNED | §2.9, R-runtime-52 to R-runtime-57 | `PlanWindow` + invalidation matrix test |
 | Goals and todos as state machines | DESIGNED | §2.10, R-runtime-58 to R-runtime-61 | `GoalMachine`/`TodoMachine` + rejection tests |
-| Subagent fleet (kinds, graph, capsules, ceilings, teardown) | DESIGNED | §2.11, R-runtime-62 to R-runtime-74 | `SubagentFactory.spawn`, `FleetScheduler` + **boundary test** |
+| Subagent fleet (kinds, fan-out and graph forms, capsules, ceilings, teardown) | DESIGNED | §2.11, R-runtime-62 to R-runtime-74 | `SubagentFactory.spawn`, `ParallelTasksScheduler` + **boundary test** |
 | Team multi-agent (roles, bus, mailbox, election, artifacts) | DESIGNED | §2.12, R-runtime-75 to R-runtime-84 | `TeamBus`, `TeamElection` + deadlock/failover tests |
 | Scheduler & background jobs | DESIGNED | §2.13, R-runtime-85 to R-runtime-92 | `Scheduler.fire/recover` + catch-up determinism test |
 | Self-improvement loop + proposal lifecycle + human gates | DESIGNED | §2.14, R-runtime-93 to R-runtime-103 | `LearnLoop`, `ProposalCompiler` + `gates.test.ts` |
@@ -750,7 +759,7 @@ Status levels are those of `file:///data/home/forge/hzcode/docs/_conventions.md`
 
 | Item | State |
 |---|---|
-| Exact schema names for the non-✓ rows of §4 | **UNKNOWN** until reconciled against `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md`; this document requires them to be registered there in the same change |
+| Exact schema names for the non-✓ rows of §4 | **RESOLVED 2026-11-07** — each name is reconciled to a registered shape in `05-domain-and-schemas.md` §4.18; a name listed there as an ancestor name (`PromptAdmissionV1`, `AgentSpecV1`, `TeamMessageV1`, `ProposalV1`) MUST NOT be used |
 | Concrete per-model routing inputs (`files_touched_estimate`, `expected_effect_class`) | **UNKNOWN** — the *fields* are decided here; who computes them, and from which host signals, is decided in `10-cognition.md` / `04-lld.md` |
 | Depth/concurrency ceilings vs. measured platform limits | **UNKNOWN** — values chosen here are design defaults pending perf validation |
 | Membership ceiling and message budget defaults for teams | **UNKNOWN** — declared at `team_create`; no default is claimed |

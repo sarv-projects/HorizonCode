@@ -68,7 +68,7 @@ Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
 | Source device | Classification | Disposition |
 |---|---|---|
 | Code-mode subset scan, per-call hooks, dual-output results, cell lifecycle, lease amplification ceiling (opencode + codex) | common (two implementations) | NF-051 + CM-1…CM-14 (Part D §09) |
-| ACI window/goto/cursor, summary search, lint-revert edit, narrated empties, recovery hints, env-tamed shell (SWE-agent) | unique-but-general | NF-052 + R-read-window-1…4, R-edit-window-1/2, R-edit-lint-1, R-grep-summary-1, R-tools-56/57 (Part D §09) |
+| ACI window/goto/cursor, summary search, lint-revert edit, narrated empties, recovery hints, env-tamed shell (SWE-agent) | unique-but-general | NF-052 + R-read-window-1…4, R-edit-window-1/2, R-edit-lint-1, R-grep-summary-1, R-tools-57/58 (queued in Part D §09 as `R-tools-56/57`; see §D-09's remap) |
 | Kanban/queue composer UX (user brief), preview environments (OpenHands `runtime_services` + practice), governance loop (SWE-agent `review_on_submit_m`), recorders (rr/TTD practice) | unique | NF-055/062/053/054 (already in doc 24) |
 | Spec-corpus governance: authority table, statuses, generated references, "no checklists in specs" (v2 + wshobson) | common (design practice) | Part D §00 RC-13 + Part D §16 gates |
 
@@ -92,6 +92,8 @@ Snapshot: 2026-11-06 ~18:20 UTC. Twelve repositories, **67,083 files** total:
 | **NF-070** Tool-output secret redaction | horizoncode tool-batch pattern redaction; oh-my-pi secret placeholders; OpenHands `request_secret` channel | runtime invariant at the projection boundary; machine value unchanged (NF-061) |
 
 All eight are now written into `24-feature-catalog.md` §5 (NF-063…NF-070, status `DESIGNED`), counted in §6.3 (70 features), tested in §12.2 (tests 55–62), and indexed in `25-roadmap-and-glossary.md` §4.2a.
+
+> **Record of the 2026-11-06 round** (register at NF-070): 70 features, 20 index rows. Current state: 75 features (`NF-001`…`NF-075`) and 25 index rows — Part G.2.
 
 **(c) Queued — Section-A-level rows, deliberately not dumped.** The ~270 findings contain dozens of reference *devices* (per-model prompt plugins, event-feed backpressure variants, judge/chart tooling, KDL compat cascades, PTY scenario suites, prompt-encryption, artifacts/voice/forms/mDNS/pairing surfaces, PTY hand-off, embedded web UI, changelog corpora, per-PR release notes, eval hillclimbs, answer isolation, golden-prompt tests, feature-flag lifecycles…). They are catalogued **with file citations in the six reports** and queued for the next catalog revision, because each wants either a Section A row (with disposition + recount) or an explicit non-goal — work that needs per-row review, not a bulk paste. Nothing is lost: the reports are in-repo.
 
@@ -118,7 +120,7 @@ Derived from the full corpus; every item cites its source device and the doc tha
 
 | # | Lever | Note |
 |---|---|---|
-| C-7 | The NF-051…062 range is the capability increment of this cycle; NF-055 (preview) and NF-051 (code mode) already have reduced v1 slices (`28-implementation-status.md`). |
+| C-7 | The NF-051…NF-075 range is the capability increment of this cycle as adopted (NF-051…062 from this audit, NF-063…070 §B.1(b), NF-071…075 `30-steal-list.md` §3; RC-15); NF-055 (preview) and NF-051 (code mode) already have reduced v1 slices (`28-implementation-status.md`). |
 | C-8 | **Profile contracts** (P1–P10) make subagents capability-first: allowlist-as-role, tier-by-blast-radius, typed output with escalation ladder, declared refusals, partition fan-out, one-writer-per-file, relay profiles. Bundled 15 roster in docs 27. | Part D §15 |
 | C-9 | **Policy statements** (NF-058) add user-authority precedence without widening: safety-inverted order, allow-never-grants, enforcement protection. | Part D §11 |
 | C-10 | **Preview + ACI + recorder + governance** close the "vibe loop", long-file archaeology, post-mortem debugging, and pre-submit review — the four capabilities users notice missing in competitors. | Part D §09/§14; NF-052/053/054/055 |
@@ -339,6 +341,8 @@ Every fix below was applied in this audit; docs-only. "Checked clean" means the 
 
 A second pass the same day, verifying the audit rather than re-reading the clones. Every row was produced by a command run in this round; docs-only, implementation untouched.
 
+> **Record of the 2026-11-06 round, register at NF-070 — superseded by Part G.2 (2026-11-07, 75 rows).** The figures below are that round's; current values are 75 ids (`NF-001`…`NF-075`), 25 rows in `25` §4.2a and impacts 50 `none` + 3 + 12 + 10 = 75 (`24` §6.3).
+
 | Check | Method | Result |
 |---|---|---|
 | Code claims | Full suites re-run | **285 TS pass / 0 fail** (1,413 expect calls, 27 files); **17 Rust pass** (3 unit + 14 integration) — matches docs 28/README exactly. |
@@ -351,6 +355,52 @@ A second pass the same day, verifying the audit rather than re-reading the clone
 | Pass-2 durability | Copy of the fifteen earlier reports into `docs/audit/pass2/` | Preserved (5,115 lines); the two known-truncated originals and the empty part4 are kept exactly as found — the defects are part of why the delta passes exist. |
 
 **Residual findings: two — one fixed, one explained; none open.** The re-audit changes no §B.1 classification and no NF row.
+
+### Part G.2 — Adoption round (2026-11-07, commit `ff9d9c6`)
+
+Part D's sixteen insertions are now **folded into their owning documents**, verbatim, each with a dated `Adopted 2026-11-07 … (RC-15)` provenance note:
+
+| Owner | Blocks |
+|---|---|
+| 05, 06, 07 | D-05, D-06, D-07 |
+| 08, 09 | D-08, D-09 |
+| 10, 11, 12 | D-10, D-11, D-12 |
+| 14, 15, 16 | D-14, D-15, D-16 |
+| 00 + `_conventions` | D-00 (RC-14); RC-15 ratified |
+| 24 | D-24A (A.9 second-wave sources) + NF-071…NF-075 |
+
+Adoption decisions of record:
+
+1. **R-tools ID collision, resolved without renumbering.** Doc 09 already owned `R-tools-56` (no filesystem write outside the workspace). Part D's queued `R-tools-56 (rendering)` adopted as **R-tools-57** and queued `R-tools-57 (state line)` as **R-tools-58**; both insertions carry the remap clause in their provenance note (§D-09). No pre-existing rule ID changed.
+2. **One smart skip.** D-16 item 3 (mutation-tested gates) was already normative in doc 16 as `R-ops-27` + §9.1 — the adopter skipped it rather than duplicating it; the existing text is the owner.
+3. **D-08/D-09 completion.** The assigned adopter completed doc 08 in full, then died on a provider credit error before writing doc 09; the integrator completed doc 09 (the §2.9/§2.10 blocks above) — the same takeover pattern Part F records for other dead workstreams.
+4. **Verification sweep.** All sixteen blocks grepped in their owners (62 patterns); the only apparent misses were case-sensitivity artifacts of the check itself ("Document classes", "Observability affordances", "Metric and fixture contracts"), each confirmed present. CM rows in doc 09: 14/14. Register: 75 NF ids, no duplicates; impacts 50 `none` (46 strict + 4 bold) + 3 + 12 + 10 = 75.
+
+**Residual findings: none.** Part D is closed as an ownership-transfer record; the text now lives in the contracts, and this part remains only as the decision trail.
+
+### Part G.3 — Final reaudit (2026-11-07, the line-by-line round)
+
+Three report-only auditors read **every document line by line** after the adoption wave (docs 10–16 alone: 7,331 lines; docs 24–30 + `_conventions`: 2,325 lines; docs 00–09 + root: every line). **222 findings** were recorded with exact fixes, then applied by six fix passes on disjoint file scopes (≈286 edits total): `STALE` ceilings → pointers to docs/28; `DUP`/`SUPERSET` families collapsed to one owner + pointer; `CONTRADICTION` resolved by document class and the rulings below; `DEADREF` repaired by verifying each ID and each path against the target file.
+
+**Rulings of record (they settle whole classes, not single lines):**
+
+1. **Guard precedence is one sentence everywhere** — `deny > ask > allow`: a deny wins, an allow never grants and never outranks an ask (doc 11 R1). Every restatement is a pointer; the managed layer may only **narrow**, and the meet is order-independent. `deny > allow > ask`, `deny > lease > allow > ask` and "append last overrides" are gone from the corpus.
+2. **One owner per kind of truth** — doc 05 owns all `*V1` schemas (`ToolDeclarationV1`, `AgentProfileV1`); doc 09 owns tool *semantics* (including `fleet` = fan-out of identical workers vs `parallel_tasks` = DAG); doc 08 §8 owns every runtime budget number (each row with anchor + population per R-ops-113); doc 10 owns compaction; doc 12 owns storage layout; doc 16 owns the span/metric catalogues; doc 24 owns the register; doc 28 owns implementation levels; doc 29 owns this audit.
+3. **One terminal vocabulary** — RC-7's eight lowercase values, verbatim, in schemas and receipts; a UI may render upper-case copy. `05` §4.15.1's registry was corrected to RC-7 (it had carried a four-value upper-case set).
+4. **One capability per effect** — `auxCapabilityIds` is removed; a tool that needs a second effect is two admitted calls, each leased on its own.
+5. **One tool count** — stated only where verified (92 catalog rows / 94 entries in doc 09 §4); every other document points at it. The "~60 tools" figure is gone from all six files that carried it.
+6. **Adoption IDs are stable** — queued `R-tools-56/57` adopted as **57/58**; only the two queued lines moved, no existing rule ID was renumbered.
+
+**Two implementation divergences recorded (not papered over, not silently coded around):**
+
+- docs/28 §4 gap 5 — the shipped `kernel/src/guard.rs` evaluates deny → lease → allow-rule → default ask, so a matching allow beats a matching ask: it does not implement doc 11 R1 yet.
+- docs/28 §4 gap 6 — the shipped code uses `.hzcode/` (state, receipts, skills) and `~/.hzcode/config.json` where `_conventions.md` §1 names `.hz/` and `~/.config/horizon/`; both sides stated, rename-or-ratify is open work.
+
+**Mechanical gates (run, not eyeballed):** 75 NF ids, no duplicates or skips; 67 test items numbered 1→67; 25 index rows (NF-051…NF-075); RC-1…RC-15 contiguous; doc 09 `R-tools-1…58` with `R-read-window-1…4`, `R-edit-window-1/2`, `R-edit-lint-1`, `R-grep-summary-1`, `CM-1…14` intact; doc 10 `R1…R127`; doc 11's 134 rules across A/G/P/R/C/L/E/V/T/S/N/K/X/U with no duplicates; doc 12 `S-1…S-80`; doc 13 `R1…R201`; doc 14 `S1…S172`; doc 16 `R-ops-1…119`; docs/28's status ladder matches `_conventions.md` §8 exactly (`DESIGNED, CODE_PRESENT, WIRED, TESTED, VERIFIED, RELEASED`); `bun test` 285 pass / 0 fail and `cargo test` 17 green — implementation byte-identical throughout.
+
+**Dup-hunt result:** eight overlap families across 24/25/26/27/28/29/30/`_conventions`; seven are correctly layered (owner + pointer) by design; the one true duplicate (RC-15(a) restating RC-13(b) verbatim) was collapsed to a pointer.
+
+**Residual findings: two, both recorded as implementation gaps above; none unresolved in the documents.** The three reports are preserved at `audit/pass4/`.
 
 ---
 

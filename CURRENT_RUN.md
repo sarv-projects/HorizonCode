@@ -1,8 +1,8 @@
 # HorizonCode — Current Run State
 
-> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC**. Workspace: `/data/home/forge/hzcode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
+> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC** (product state) · **2026-11-07** (design corpus: RC-15 adoption wave, `docs/30`). Workspace: `/data/home/forge/hzcode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
 >
-> **TL;DR — the V1 mission is complete.** Design corpus (docs 01–27) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 285 pass / 0 fail (27 files)** and **`cargo test` 14 integration + 3 unit**. Nothing is in flight. A final deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md` (RC-13 makes `docs/28` the single source of truth for implementation status).
+> **TL;DR — the V1 product mission is complete; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 285 pass / 0 fail (27 files)** and **`cargo test` 14 integration + 3 unit**. Nothing is in flight in the product. A deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md`; the 2026-11-07 adoption wave (RC-15, [`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into docs 03/08/09/24 but not yet into code — see `docs/28` §4. RC-13 makes `docs/28` the single source of truth for implementation status.
 
 ---
 
@@ -26,7 +26,7 @@ Two-language trust stack:
 ```
 
 - **`app/src/contracts.ts` is LAW** — canonical-JSON + sha256 rules, event envelope, the 8-method NDJSON kernel protocol, every interface. Rust and TS interop byte-for-byte.
-- **Kernel** (Rust): append-only chained event logs per stream, chained receipts, guard decisions (deny > allow > ask, leases, `policy.json`).
+- **Kernel** (Rust): append-only chained event logs per stream, chained receipts, guard decisions (precedence `deny > ask > allow` per `docs/11-authority-safety.md` R1; leases, `policy.json`; shipped divergence tracked in `docs/28` §4).
 - **Runtime** (Bun): byte-identical TS fallback when the Rust binary is missing — `kernelMode: trusted | untrusted`.
 - **TUI**: chat-first charter — no subcommand menus; every capability reachable by conversation; headless mode for scripts/tests.
 
@@ -48,7 +48,7 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 | **Subagents** (`agent` tool, child session, no recursion) | **VERIFIED** | same suite: nested run through the real kernel, receipts + child stream verify |
 | **Code Mode** (Bun JS subprocess, tool bridge) | **VERIFIED** | `bun test tests/core/codemode-preview.test.ts` (12 pass: deny/ask, receipts, timeout, abort) |
 | **Preview servers** (start/stop/status) | **VERIFIED** | same suite: live URL capture, process-group kill (pid gone) |
-| Everything else in docs 01–27 (~60-tool catalog, memory tiers, compaction, sandbox matrix, surfaces, governance, self-improvement) | **DESIGNED ONLY** | sequenced in docs/27 (V0–V7) |
+| Everything else in docs 00–30 (the tool catalog in `docs/09-tools.md` §4 — authoritative — memory tiers, compaction, sandbox matrix, surfaces, governance, self-improvement, the RC-15 adoption wave) | **DESIGNED ONLY** | sequenced in docs/27 (V0–V7); adoption tracked in `docs/28` §4 |
 
 ---
 

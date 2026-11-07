@@ -1,8 +1,10 @@
 # 28 — Implementation Status
 
-> **What this file is:** the single map from the design corpus (docs 01–27) to implementation reality. Every status here is backed by a command that was actually run. Snapshot: **2026-11-06, evening** (see `CURRENT_RUN.md` for the live handoff view and exact continuation steps).
+> **What this file is:** the single map from the design corpus (docs 01–30; the design corpus proper is 01–25) to implementation reality. Every status here is backed by a command that was actually run. Snapshot: **2026-11-06, evening** (see `CURRENT_RUN.md` for the live handoff view and exact continuation steps). Audit of record: `docs/29-final-audit.md`; adoption queue: `docs/30-steal-list.md`.
 >
-> Status ladder: **DESIGNED** → **IMPLEMENTED** (code exists and builds) → **TESTED** (automated tests exist and pass) → **VERIFIED** (the integrator ran the evidence command and observed the result; agent reports alone never reach VERIFIED).
+> Status ladder per `docs/_conventions.md` §8: **`DESIGNED`** → **`CODE_PRESENT`** → **`WIRED`** → **`TESTED`** (automated tests exist and pass) → **`VERIFIED`** (the integrator ran the evidence command and observed the result; agent reports alone never reach `VERIFIED`) → **`RELEASED`**. Only `TESTED` and `VERIFIED` are claimed below; a level above what the evidence supports is never claimed, and an unknown is written `UNKNOWN`, never an implied success.
+>
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15).
 
 ---
 
@@ -10,7 +12,7 @@
 
 | Area | Status | Evidence (run it yourself) | Notes |
 |---|---|---|---|
-| **Rust trust kernel** — chained event log, receipt chain, guard (deny > allow > ask, leases, `policy.json`), NDJSON protocol (8 methods) | **VERIFIED** | `cd kernel && cargo test` → 14 integration + 3 unit green; `kernel/target/release/hz-kernel --selftest` → `SELFTEST OK (14 checks)` | Includes tamper detection, 4-process concurrent append lock test, guard matrix, 1MB payloads |
+| **Rust trust kernel** — chained event log, receipt chain, guard (leases, `policy.json`; precedence owned by `docs/11-authority-safety.md` R1, shipped divergence in §4 gap 5), NDJSON protocol (8 methods) | **VERIFIED** | `cd kernel && cargo test` → 14 integration + 3 unit green; `kernel/target/release/hz-kernel --selftest` → `SELFTEST OK (14 checks)` | Includes tamper detection, 4-process concurrent append lock test, guard matrix, 1MB payloads |
 | **Frozen contracts / hashing** (`app/src/contracts.ts`) | **VERIFIED** | Rust↔TS interop: each side verifies the other's files (`log.verify`, `receipt.verify` → `ok:true`) | Canonical JSON + sha256 rules shared byte-for-byte |
 | **Runtime core** — config, kernel client (`trusted`) + TS fallback (`untrusted`), SQLite sessions, agent loop (stream → guard → approve → tool → receipt → events) | **TESTED + VERIFIED** | Kernel-client suite 11/11 green; e2e: `printf 'list files' \| ./bin/hzcode` → streamed answer → tool card → receipt; `kernelMode=trusted` checked live | Fallback/both-directions/config/session interop suites: **all landed and green** |
 | **Providers** — Anthropic, OpenAI, mock + SSE parser | **VERIFIED** | `cd app && /home/forge/.bun/bin/bun test tests/providers` → 72 pass / 0 fail | Canned localhost servers, byte-level chunk splitting, aborts, 2 parallel tool calls; two real fixes landed (empty `arguments` for no-input tool calls) |
@@ -21,7 +23,7 @@
 | **Subagents** — `agent` tool, child session, nested loop, base-seven tools only (no recursion), steps 12 default / 20 cap, abort inheritance, own receipts | **VERIFIED** | same suite: child session titled `subagent: …`, glob through the guard, receipts chain + child event stream verify | `ToolContext.delegate?: DelegateRunner` (additive); child toolSpecs = base seven exactly |
 | **Code Mode** — Bun subprocess JS runner, NDJSON tool bridge, guard/approve/receipt per call, 30s/120s budget | **VERIFIED** (NF-015, NF-051) | `bun test tests/core/codemode-preview.test.ts` → 12 pass (deny, ask/decline, receipts, isolation, timeout, abort, errors) | Only the seven base tools reachable inside a program; logs stream out; killed on timeout/abort |
 | **Preview environments** — start/stop/status dev server, URL capture, process-group kill | **VERIFIED** (NF-055) | same suite: live Bun server URL captured, status shows running, stop kills the group (pid gone) | Command from arg or package.json dev/start; guard `shell.exec` + approval; no orphans on failure |
-| **Everything else in docs 01–27** — ~60-tool catalog, planner/executor duality, memory tiers, compaction, full sandbox matrix, web/desktop/IDE surfaces, plugins/marketplace, governance loop, execution recorder, ACI windowing, self-improvement | **DESIGNED ONLY** | docs 09/10/11/14/15 and the NF registry in doc 24 | Sequenced in docs/27 (V0–V7). Nothing beyond v0.1 scope has code yet. |
+| **Everything else in docs 01–30** — the tool catalog in `docs/09-tools.md` §4 (authoritative), planner/executor duality, memory tiers, compaction, full sandbox matrix, web/desktop/IDE surfaces, plugins/marketplace, governance loop, execution recorder, ACI windowing, self-improvement | **DESIGNED ONLY** | docs 09/10/11/14/15 and the NF registry in doc 24 | Sequenced in docs/27 (V0–V7). Nothing beyond v0.1 scope has code yet. |
 
 ---
 
@@ -55,7 +57,7 @@ All suites complete — the totals above are from the integrator's final green r
 1. **Issued leases are honoured by both implementations.** The kernel (`guard.rs`) consults caller-supplied leases (expiry-filtered) ∪ internally held leases; the TS fallback (`kernel.ts:344`) merges the same way. An expired *copy* passed by a caller cannot revoke a held lease — expiry happens by time. Tests assert this ordering deliberately.
 2. **`arguments` is always a JSON string.** No-input tool calls produce `{}`, never `""` (both adapters fixed).
 3. **`log.read` `limit` is strict** — `limit:0` returns zero events (kernel fix).
-4. **Guard defaults** (no `policy.json`): `fs.read`/`fs.write` inside workspace → `allow`; outside → `ask`; `shell.exec`/`net.fetch`/`spawn` → `ask`. Precedence: deny > lease > allow > ask.
+4. **Guard defaults** (no `policy.json`): `fs.read`/`fs.write` inside workspace → `allow`; outside → `ask`; `shell.exec`/`net.fetch`/`spawn` → `ask`. Precedence is not restated here: it is owned by `docs/11-authority-safety.md` R1 (the shipped guard's divergence is §4 gap 5).
 5. **Headless approvals fail closed** (auto-deny with a notice). PTY/TUI prompts y/n/a (`a` = session lease).
 6. **Zero-config default is the mock provider** — chat must work with no keys. Real providers via `HZ_PROVIDER` + keys or `~/.hzcode/config.json`.
 7. **Delegation is an optional capability on the context.** `ToolContext.delegate?: DelegateRunner` — present on parent runs, absent in child runs; a subagent's tools are exactly the seven base tools (children are filtered in both `toolSpecs` and `getTool`).
@@ -71,6 +73,8 @@ All suites complete — the totals above are from the integrator's final green r
 2. **Real-provider validation** (needs API keys): one live chat each through the Anthropic and OpenAI adapters. The adapters are pinned by the canned-server suites — this is the last mile.
 3. **V2+ is the next planning surface** — docs/27 sequences it (planner/executor duality, memory tiers, compaction, sandbox matrix, surfaces, governance). Land additions through the same ladder and update this table in the same commit.
 4. **Keep this file honest** — statuses and counts update in the same commit as the code that changes them.
+5. **Shipped kernel guard encodes the inverted precedence order vs `docs/11-authority-safety.md` R1** — `kernel/src/guard.rs` evaluates deny → lease → allow-rule → default ask, so a matching `allow` rule beats a matching `ask` (read: `file:///data/home/forge/hzcode/kernel/src/guard.rs#L1-L10` and `file:///data/home/forge/hzcode/kernel/src/guard.rs#L151-L199`). Doc 11 R1 owns the order; the code does not implement it yet. This is an implementation divergence, tracked here, not silently corrected in either the docs or the code.
+6. **State/config directory name diverges from `_conventions.md` §1** — the shipped code uses `.hzcode/` for workspace state, kernel receipts and skills, and `~/.hzcode/config.json` for user config (`app/src/core/kernel.ts`, `app/src/core/config.ts`, `app/src/core/skills.ts`), while the canonical names in `_conventions.md` §1 are `.hz/` and `~/.config/horizon/`. `README.md` and `CURRENT_RUN.md` document the shipped paths truthfully; the contracts (`docs/03`, `docs/04`, `docs/12`) specify the canonical ones. Renaming the code (or amending the canonical names via an RC) is open work — recorded here rather than papered over in either direction (reaudit 2026-11-07, RC-15).
 
 ---
 

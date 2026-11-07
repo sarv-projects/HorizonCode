@@ -1,6 +1,8 @@
 # HorizonCode — Specification Index
 
-> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set frozen · **V1 implemented, tested and green** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
+> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-15 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
+>
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15).
 
 This directory is the authoritative specification for HorizonCode, a coding agent designed as the strict superset of the state of the art, with an execution constitution: model reasoning is separated from the authority to mutate.
 
@@ -19,7 +21,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 06 | [`06-events-and-flows.md`](./06-events-and-flows.md) | Event catalog + 24 end-to-end flows |
 | 07 | [`07-apis-and-contracts.md`](./07-apis-and-contracts.md) | Controller protocol, kernel ABI, HTTP/SSE, ACP, MCP, plugin API, SDKs |
 | 08 | [`08-runtime.md`](./08-runtime.md) | Agent loop, planner/executor, subagents, teams, budgets, self-improvement |
-| 09 | [`09-tools.md`](./09-tools.md) | The complete ~60-tool catalog and the tool system |
+| 09 | [`09-tools.md`](./09-tools.md) | The complete tool catalog (§4 is authoritative) and the tool system |
 | 10 | [`10-cognition.md`](./10-cognition.md) | Providers, context compiler, cache contract, memory, retrieval, compaction |
 | 11 | [`11-authority-safety.md`](./11-authority-safety.md) | Threat model, Guard, leases, receipts, sandbox matrix, policy |
 | 12 | [`12-sessions-state.md`](./12-sessions-state.md) | Event log, projections, inbox, claims, snapshots, time travel, durability |
@@ -48,13 +50,15 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 6. **Workspace config may only narrow user config.**
 7. **Self-improvement never widens authority.**
 
+(Normative form: `01-vision-and-superset.md` §1.1 P1–P10; binding form: ADR-001…ADR-016 in `02-decisions.md`. Wording here changes only when those change.)
+
 ---
 
 ## Status levels (used everywhere)
 
 `DESIGNED` → `CODE_PRESENT` → `WIRED` → `TESTED` → `VERIFIED` → `RELEASED`
 
-Every capability in every document carries a level. **Implementation status (final audit, 2026-11-06):** the blanket `DESIGNED` ceiling applied while this set was design-only; it is superseded. The implemented subset (trust kernel, runtime core, base tools, chat TUI, skills, subagents, code mode, preview) carries real, evidence-backed levels in `docs/28-implementation-status.md` — that file is the **single source of truth** for implementation status, and it is the only place a level above `DESIGNED` may be claimed. Every capability **not** listed there remains `DESIGNED`.
+Every capability carries a level. Levels above `DESIGNED` exist only in `docs/28-implementation-status.md` — the **single source of truth** (RC-13); every capability not listed there is `DESIGNED`.
 
 **Document classes (RC-14).** Every document declares what kind of document it is — *contract* (normative: schemas and protocol), *decision record* (binding on design: ADRs and rulings), or *historical* (no normative force: learning records, plans, audits, queues). Which document owns which kind of truth is the authority-by-concern table in [`_conventions.md`](./_conventions.md) §11 (RC-14).
 

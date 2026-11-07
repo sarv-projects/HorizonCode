@@ -2,7 +2,7 @@
 
 > The event log is the state of record, and every flow in the product is a sequence of events. This document fixes the envelope, the sequence and writer rules, the append transaction, the projector contract, the retention policy, the complete canonical event catalogue, and twenty-four end-to-end flows.
 
-**Reading note.** This document has two parts. **Part A** is the event system (§2–§5). **Part B** is the flow catalogue (§6). Every flow names its actors, its numbered steps, the events emitted per step, and its failure branches. Nothing in this document is implemented: `hzcode` is a specification set (`/data/home/forge/hzcode/README.md`), so §10 Status declares levels honestly.
+**Reading note.** This document has two parts. **Part A** is the event system (§2–§5). **Part B** is the flow catalogue (§6). Every flow names its actors, its numbered steps, the events emitted per step, and its failure branches. **Implementation status (RC-13):** the kernel event log and the v0.1 session stream implement the *shape* of the catalogue below; levels are in `28-implementation-status.md`, and nothing in §6's flow catalogue executes anywhere yet.
 
 ---
 
@@ -14,7 +14,7 @@ This document decides seven things:
 2. **Who may write one** — the single-writer rule, per aggregate, with lease and epoch fencing.
 3. **How one becomes true** — the append transaction that commits an event together with its projections.
 4. **How the log survives time** — versioning, upcasting, `min_reader_version`, retention, snapshots and rebuild.
-5. **What every canonical event means** — payload fields, emitter, consumers, durability, client visibility (all 44 names from `file:///data/home/forge/hzcode/docs/_conventions.md#L86-L88`).
+5. **What every canonical event means** — payload fields, emitter, consumers, durability, client visibility (all 44 names from `file:///data/home/forge/hzcode/docs/_conventions.md` §6).
 6. **How the product behaves end to end** — 24 flows, each with failure branches.
 7. **What is claimed** — per capability, a status level that may not exceed its evidence.
 
@@ -32,7 +32,7 @@ Rules are numbered `E-*` (event system) and `F-*` (flows). Each is a MUST unless
 |---|---|
 | E-1 | Every durable fact is exactly one log record with the envelope defined in §3.1. State that is not in the log is a projection and is disposable. |
 | E-2 | `event.id` is an `evt_<ulid>`: globally unique, monotonic at its creation site, and never reused — including across import, fork, replay and re-index. |
-| E-3 | `event.type` is one of the canonical names in `file:///data/home/forge/hzcode/docs/_conventions.md#L86-L88`. A component that needs a new name MUST add it to that file in the same change; this document lists the gaps it found in §4.6 instead of inventing names. |
+| E-3 | `event.type` is one of the canonical names in `file:///data/home/forge/hzcode/docs/_conventions.md` §6. A component that needs a new name MUST add it to that file in the same change; this document lists the gaps it found in §4.6 instead of inventing names. |
 | E-4 | `event.payload` validates against the schema registered for `(type, typeVersion)`. An unvalidated payload MUST NOT be appended. |
 | E-5 | Durability is a property of the type, not of the call site: a `durable`-typed event MUST reach the log before its effect is observable to a caller; an `ephemeral`-typed event MUST NOT be written to the log even if a caller asks. |
 | E-6 | `causationId` names the immediate cause (another event id, or an effect id for effects). `correlationId` names the run, and is inherited by every child session, subagent and background job, so one trajectory can be assembled from the log. A record with a `causationId` that is absent from the log and absent from the imported archive is `LOG_DANGLING_CAUSE` (warn; refuse in `--strict`). |
@@ -59,7 +59,7 @@ Rules are numbered `E-*` (event system) and `F-*` (flows). Each is a MUST unless
 | E-17 | Front-ends (TUI, print, server, web, desktop, IDE bridge, MCP server, SDKs) and plugins MUST NOT write the log. They send commands to the owner and observe events. This is what makes eight surfaces one agent rather than eight (ADR-005, `file:///data/home/forge/hzcode/docs/02-decisions.md#L130-L140`). |
 | E-18 | A second process that wants to write acquires the lease from `session_claim` and, on failure, MUST downgrade to a read-only observer with an explicit diagnostic (`SESSION_LEASE_HELD`). There is no “last writer wins”. |
 | E-19 | Every write carries the owner epoch. The append transaction compares the epoch against `session_claim.owner_epoch` and rejects a stale writer (`SESSION_EPOCH_STALE`) — fencing, not advisory locking. |
-| E-20 | Emitter authority is fixed per event type (§4.2, “emitted by”). An event emitted by a component other than its declared writer fails the boundary test (`packages/horizoncode-testing`, `EVENT_EMITTER_DRIFT`). |
+| E-20 | Emitter authority is fixed per event type (§4.2, “emitted by”). An event emitted by a component other than its declared writer fails the boundary test (`packages/testing`, `EVENT_EMITTER_DRIFT`). |
 | E-21 | A model-originated or plugin-originated command can never produce an event that asserts human authority. `actorKind: user` is admissible only for a session with `authority.originKind == UserAction`, and that origin kind is fixed by the canonical operation, never by a request body. |
 
 ### 2.4 The append transaction
@@ -245,13 +245,13 @@ Triggers `event_no_update` and `event_no_delete` raise on any attempted mutation
 
 ### 4.2 The canonical event catalogue
 
-All 44 names from `file:///data/home/forge/hzcode/docs/_conventions.md#L86-L88` (41 at first writing, plus `hz.session.moved` ratified as RC-1, plus `hz.memory.expired` and `hz.provider.account.rotated` ratified as RC-10). Nothing is omitted and nothing is added.
+All 44 names from `file:///data/home/forge/hzcode/docs/_conventions.md` §6 (41 at first writing, plus `hz.session.moved` ratified as RC-1, plus `hz.memory.expired` and `hz.provider.account.rotated` ratified as RC-10). Nothing is omitted and nothing is added.
 
 Legend — **Durability**: `D` durable in the session log, `E` ephemeral (broadcast only, never written). **Client visibility**: `S` on the session stream for any scoped client, `A` audit scope (full log read), `I` internal (not projected to clients; consumed by projectors/telemetry only), `L` loud (must be surfaced prominently and must not be scrolled away).
 
 | # | Event | Payload fields | Emitted by | Consumed by | Dur | Vis |
 |---|---|---|---|---|---|---|
-| 1 | `hz.session.created` | `sessionId, projectId, workspaceId, parentId?, forkOf?{parentId,boundary}, location{directory,workspaceId}, posture{sandboxMode,approvalPolicy,source,revision,digest}, policyRevision, agentProfileId, modelRef{providerId,modelId}, title, slug, reattachedFrom?` | Controller session actor | session projector, session list, audit, IDE attach | D | S |
+| 1 | `hz.session.created` | `sessionId, projectId, workspaceId, parentId?, forkOf?{parentId,boundary}, location{directory,workspaceId}, posture{sandboxMode,approvalPolicy,source,revision,digest}, policyRevision, agentProfileId, modelRef{providerId,modelId}, title, slug` | Controller session actor | session projector, session list, audit, IDE attach | D | S |
 | 2 | `hz.session.prompt.admitted` | `sessionId, inboxId, delivery(steer\|queue), kind(user\|synthetic\|skill\|compaction\|move), payloadDigest, attachments[{sha256,mime,bytes}], enqueuedSeq, admissionActorKind` | Controller admission (before any work) | inbox projector, drain scheduler, queue indicator | D | S |
 | 3 | `hz.session.claim.acquired` | `sessionId, claimId, ownerIncarnation, ownerEpoch, resumed(bool), recoveredFromClaimId?, acquiredSeq, ttlMs, resumeAttempt` | execution coordinator | claim projector, recovery scanner, session tree, budget gate | D | S |
 | 4 | `hz.session.claim.released` | `sessionId, claimId, reason(succeeded\|failed\|interrupted\|superseded\|expired\|shutdown_preserved=false), durationMs` | execution coordinator | claim projector, orphan scanner | D | S |
@@ -266,7 +266,7 @@ Legend — **Durability**: `D` durable in the session log, `E` ephemeral (broadc
 | 13 | `hz.part.created` | `sessionId, messageId, partId, ordinal, role(user\|assistant\|system\|tool), partType(text\|reasoning\|tool\|file\|image\|artifact\|summary), ref?{sha256,mime,bytes}, metadata{inboxId?,callId?,skillId?,memoryIds?,agentId?}, bytes` | step engine, inbox delivery, shell, skill loader | message/part projector, context compiler, TUI | D | S |
 | 14 | `hz.part.updated` | `sessionId, messageId, partId, ordinal, patchKind(append\|replace\|status), contentRef?, bytesAdded, coalescedCount, complete(bool)` | step engine (coalesced ≤ 4/s per part) | part projector, TUI streaming, context compiler | D | S |
 | 15 | `hz.plan.updated` | `sessionId, planId, revision, status(draft\|awaiting_approval\|approved\|executing\|completed\|abandoned), steps[{id,title,status,dependsOn[]}], planDigest, approvedBy?, window?{maxSteps,maxTokens,expiresAt}` | plan engine / `plan_enter`/`plan_exit` | plan projector, router (plan-for-approval), TUI plan view | D | S |
-| 16 | `hz.todo.updated` | `sessionId, revision, todos[{id,text,status(pending\|in_progress\|completed\|cancelled),dependsOn[]}], change(added\|updated\|removed\|reordered)` | `todo` tool | todo projector, fleet/task DAG view, TUI | D | S |
+| 16 | `hz.todo.updated` | `sessionId, revision, todos[{id,text,status(pending\|in_progress\|completed\|cancelled),dependsOn[]}], change(added\|updated\|removed\|reordered)` | `todo` tool | todo projector, `parallel_tasks` DAG view, TUI | D | S |
 | 17 | `hz.goal.updated` | `sessionId, goalId, revision, statement, status(active\|achieved\|abandoned\|blocked), acceptance[{id,text,verifyHint}], evidenceRefs[]` | goal engine / `update_goal` | goal projector, verifier, TUI | D | S |
 | 18 | `hz.effect.decision.made` | `effectId, sessionId, stepId?, callId?, capabilityId, effectClass, originKind, decision(allow\|ask\|deny), reasonCode, ruleId?, policyRevision, postureDigest, intentDigest, resourceResolutionRef` | `hzk` Guard | effect projector, approval UI, audit, parity tests | D | S |
 | 19 | `hz.effect.lease.issued` | `effectId, leaseId, capabilityId, scope{workspaceId,paths[],argvPrefix?,domainAllow[]}, expiresAt, oneUse(true), fencingEpoch, poolRevision?, grantId?` | `hzk` lease registry | effect projector, EffectHost, audit, budget gate | D | A |
@@ -278,7 +278,7 @@ Legend — **Durability**: `D` durable in the session log, `E` ephemeral (broadc
 | 25 | `hz.session.rewound` | `sessionId, toTurn, toSeq, toMessageId, checkpointId?, scope(messages\|workspace\|both), reason(user\|policy\|cascade), priorHeadSeq, actor, workspaceVerdict?` | rewind engine (**UserAction origin only**) | message/part/inbox projector truncation, blob ref release, instruction rewind, audit | D | L |
 | 26 | `hz.session.forked` | `parentSessionId, sessionId, boundary{messageId,type(before\|after)}, copiedThroughSeq, messageIdMapDigest, instructionEntriesDigest, postureChildDigest, costReset(true)` | fork engine | fork projector (copies settled history, dedups blobs), session tree, audit | D | S |
 | 26b | `hz.session.moved` | `sessionId, movedFrom{projectId?,workspaceId,directory}, movedTo{projectId?,workspaceId,directory}, reason(user\|import), priorHeadSeq` | session identification (UserAction/import only) | session projector (identification update, same `sessionId`), session list, audit | D | L |
-| 27 | `hz.agent.spawned` | `agentId, childSessionId, parentSessionId, parentStepId, spawnKind(task\|fleet_member\|team_member\|read_only_task\|skill\|background), profileId, grant{caps[],budget{tokens,wallMs,steps,costMicroUsd},depth,maxChildren,postureDigest}, capsuleDigest, correlationId` | the one spawn primitive (`agent.spawn`) | session projector, agent-tree projector, budget gate, TUI | D | S |
+| 27 | `hz.agent.spawned` | `agentId, childSessionId, parentSessionId, parentStepId, spawnKind(task\|fleet_member\|parallel_task\|team_member\|read_only_task\|skill\|background), profileId, grant{caps[],budget{tokens,wallMs,steps,costMicroUsd},depth,maxChildren,postureDigest}, capsuleDigest, correlationId` | the one spawn primitive (`agent.spawn`) | session projector, agent-tree projector, budget gate, TUI | D | S |
 | 28 | `hz.agent.completed` | `agentId, childSessionId, status(succeeded\|failed\|denied\|budget_exhausted\|timeout\|cancelled\|unknown), resultDigest, summaryPartId?, usage{costMicroUsd,tokens}, receiptsDigest, durationMs, terminalReason?` | the one spawn primitive (on child terminal) | parent step engine, budget gate, trajectory, TUI | D | S |
 | 29 | `hz.agent.message.sent` | `messageId, fromAgentId, toAgentId\|toChannel, targetSessionId, mailboxId, kind(instruction\|status\|result\|question\|control), payloadDigest, bodyRef?, delivery(steer\|queue), admittedSeq, budgetCharged` | message bus (`send_message`) | target inbox projector, agent-tree projector, TUI team view | D | S |
 | 30 | `hz.memory.retained` | `memoryId, tier(working\|episodic\|semantic\|team), scope(session\|workspace\|user\|team), text\|contentRef, provenance{sourceSessionId,sourceSeq,evidenceDigest}, confidence, reviewed(bool), dedupKey, expiresAt?` | memory service (`memory_retain`, distillation) | memory projector, FTS+vector index, review UI | D | S (scope-filtered) |
@@ -342,7 +342,7 @@ These were real gaps found while writing this document. The owner of `_conventio
 
 | # | Gap | Ruling | Where |
 |---|---|---|---|
-| G-1 | Session **re-home** had no canonical event. | **Resolved — RC-1.** `hz.session.moved` added to the catalogue (row 26b) and to `_conventions.md` §6. A re-home emits it in the destination log with `movedFrom`; the interim `created` + `reattachedFrom` encoding is superseded. | `_conventions.md` §11 RC-1 |
+| G-1 | Session **re-home** had no canonical event. | **Resolved — RC-1.** `hz.session.moved` added to the catalogue (row 26b) and to `_conventions.md` §6. A re-home emits it in the destination log with `movedFrom`; the interim `created` + `reattachedFrom` encoding is superseded. A legacy record may still carry `reattachedFrom`; it is read only by the `created→moved` upcaster and MUST NOT be written by any new code. | `_conventions.md` §11 RC-1 |
 | G-2 | **Log snapshot / retention markers** had no canonical event. | **Ratified — RC-3.** They remain `event_snapshot` / `retention_ledger` rows: storage metadata, deliberately not facts. | `_conventions.md` §11 RC-3 |
 | G-3 | **Credit side of usage for cancelled attempts** had no separate name. | **Ratified — RC-4.** `hz.usage.recorded` with `attribution.stepId` pointing at the cancelled step (which carries `retryOfStepId`). | `_conventions.md` §11 RC-4 |
 | G-4 | **Worktree lease transitions** and **schedule occurrences** were not session events. | **Ratified — RC-3.** Kernel OwnerLog records referenced by digest; `hzcode worktree list --journal` must expose them for audit. | `_conventions.md` §11 RC-3 |
@@ -387,7 +387,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 **Actors.** FE, CTL, CTX, PROV, KRN.
 
-1. `hzcode` resolves the workspace root and the config lattice: user config at `~/.config/horizon/`, then workspace `.hz/config` **narrowed onto** it (lattice meet; workspace may only restrict — ADR-008, `file:///data/home/forge/hzcode/docs/02-decisions.md#L163-L170`). Programs named by the workspace (hooks, LSP servers, MCP servers) are unloaded until trusted (`trust_decision`).
+1. `hzcode` resolves the workspace root and the config lattice: user config at `$XDG_CONFIG_HOME/horizon/config.jsonc`, then workspace `<ws>/.hz/config.jsonc` **narrowed onto** it (lattice meet; workspace may only restrict — ADR-008, `file:///data/home/forge/hzcode/docs/02-decisions.md#L163-L170`). Programs named by the workspace (hooks, LSP servers, MCP servers) are unloaded until trusted (`trust_decision`).
 2. Kernel handshake: `hzk` starts (or is attached), the asset digest is checked against the pinned manifest, `HZ_ABI=1` and `HZ_PROTO=1` are negotiated, and `Sandbox::probe()` runs. A missing, older or crashed kernel puts the process in `LOG_READ_ONLY_MODE`: the TUI opens, explains, and **cannot execute** (ADR-003).
 3. Storage opens: schema version checked; migrations applied only if log-compatible; WAL and pragmas set (§4.3 of `12-sessions-state.md`). The recovery scan runs: orphan claims and unresolved counsel records are found *before* the first prompt is accepted.
 4. Recovery decisions: each orphaned claim either resumes (`hz.session.claim.acquired{resumed:true}`) or is released (`hz.session.claim.released`); each unresolved effect becomes `hz.effect.unknown`.
@@ -639,28 +639,28 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 - Child exhausts its budget ⇒ child terminal `status:'budget_exhausted'`; the parent is told, keeps its own budget, and decides whether to continue. A child can never borrow from its siblings.
 - Child crashes ⇒ its claim is recovered (flow 8); the child's unresolved effects are `UNKNOWN`; the parent's wait returns `status:'unknown'` (never `succeeded`), and the parent may not treat an unknown child as done.
 - Child attempts to widen its posture (e.g. requests a capability it was not granted) ⇒ Guard denies against the child's posture; there is no upward escalation path, only a fresh ask to the human — which in unattended mode resolves to deny (F-5).
-- Spawn primitive called from a second call site ⇒ the boundary test fails at build (`packages/horizoncode-testing`, `SUBAGENT_SPAWN_BOUNDARY`). This is the point of ADR-016.
+- Spawn primitive called from a second call site ⇒ the boundary test fails at build (`packages/testing`, `SUBAGENT_SPAWN_BOUNDARY`). This is the point of ADR-016.
 - Parent cancelled while a child runs ⇒ the parent releases its claim only after recording the child's disposition; children are either awaited-to-terminal, or cancelled with `hz.agent.completed{status:'cancelled'}` — never silently orphaned.
 
-### 6.13 Fleet with dependency graph
+### 6.13 `parallel_tasks` — dependency graph
 
 **Actors.** CTL, AG, KRN, FE.
 
-1. The model calls `fleet` with a task list and `dependsOn` edges: `hz.step.tool.requested{capabilityId:'agent.spawn'}`.
-2. Admission validates the graph: a cycle refuses the whole fleet (`errorCode:'fleet_cycle'`); out-of-range depth/width refuses; the graph is recorded in the projection as `hz.todo.updated` nodes carrying `dependsOn`.
-3. A shared budget pool is reserved for the fleet (tokens, wall-clock, steps, cost) and each node gets a **reservation** from the pool; a node may not exceed its reservation, and unused reservation returns to the pool at node settlement.
-4. Ready nodes (no unmet `dependsOn`) spawn through the one primitive: `hz.agent.spawned{spawnKind:'fleet_member'}` with the fleet/node identity in the grant, up to the concurrency ceiling.
+1. The model calls `parallel_tasks` with distinct task specs and `dependsOn` edges: `hz.step.tool.requested{capabilityId:'agent.spawn'}`. (`fleet` is the edge-free form — identical workers from one template with per-agent variables and a concurrency ceiling, `09-tools.md` §4 — and reuses steps 3–5 below without a graph.)
+2. Admission validates the graph: a cycle refuses the whole run (`errorCode:'parallel_tasks_cycle'`); out-of-range depth/width refuses; the graph is recorded in the projection as `hz.todo.updated` nodes carrying `dependsOn`.
+3. A shared budget pool is reserved for the run (tokens, wall-clock, steps, cost) and each node gets a **reservation** from the pool; a node may not exceed its reservation, and unused reservation returns to the pool at node settlement.
+4. Ready nodes (no unmet `dependsOn`) spawn through the one primitive: `hz.agent.spawned{spawnKind:'parallel_task'}` with the node identity in the grant, up to the concurrency ceiling.
 5. As each node settles: `hz.agent.completed`, its dependents become ready (DAG state advances in `hz.todo.updated`), and the scheduler launches the next wave.
-6. Node failures: a failed node marks its dependents `blocked` (fail-closed) rather than skipping them; independent branches continue and the fleet reports a partial result.
-7. Fleet terminal: the aggregate settles into `hz.agent.completed` for the parent with per-node statuses, `receiptsDigest` and consolidated usage. A fleet with any `UNKNOWN` descendant terminal is itself `status:'unknown'`.
+6. Node failures: a failed node marks its dependents `blocked` (fail-closed) rather than skipping them; independent branches continue and the run reports a partial result.
+7. Terminal: the aggregate settles into `hz.agent.completed` for the parent with per-node statuses, `receiptsDigest` and consolidated usage. A run with any `UNKNOWN` descendant terminal is itself `status:'unknown'`.
 
-**Events.** `hz.step.tool.requested`, `hz.todo.updated` (graph), `hz.agent.spawned` ×N, child step events, `hz.agent.completed` ×N, `hz.usage.recorded` (per node + fleet + root), `hz.step.tool.completed` (parent).
+**Events.** `hz.step.tool.requested`, `hz.todo.updated` (graph), `hz.agent.spawned` ×N, child step events, `hz.agent.completed` ×N, `hz.usage.recorded` (per node + run + root), `hz.step.tool.completed` (parent).
 
 **Failure branches.**
 - Cycle, self-edge, or unknown node reference ⇒ refuse before any spawn; nothing runs.
-- A node crashes ⇒ its descendants are `blocked`; the node's claim is recovered (flow 6.8) and its `UNKNOWN` effects are listed in the fleet summary.
-- The pool is exhausted ⇒ no new node launches; running nodes complete; the fleet returns `status:'budget_exhausted'` with the graph state so a human can resume it after granting more budget.
-- Concurrency ceiling reached and no node can progress (all blocked on a failed node) ⇒ the fleet terminal is `failed`, not hung: the scheduler proves quiescence instead of waiting forever.
+- A node crashes ⇒ its descendants are `blocked`; the node's claim is recovered (flow 6.8) and its `UNKNOWN` effects are listed in the run summary.
+- The pool is exhausted ⇒ no new node launches; running nodes complete; the run returns `status:'budget_exhausted'` with the graph state so a human can resume it after granting more budget.
+- Concurrency ceiling reached and no node can progress (all blocked on a failed node) ⇒ the terminal is `failed`, not hung: the scheduler proves quiescence instead of waiting forever.
 - Two nodes request the same exclusive resource ⇒ serialized by the resource-set rule (flow 6.4 step 2), never both at once.
 
 ### 6.14 Team multi-agent with message bus
@@ -939,12 +939,12 @@ Raw secrets, credentials, tokens, private keys, and unredacted contents of sensi
 
 ## 8. Performance budgets
 
-Targets for a developer workstation (local SSD, 8 cores, SQLite in WAL on a local filesystem), single session, `strict` durability. These are budgets, not measurements: this document is a design, and §10 says so.
+Targets for a developer workstation (local SSD, 8 cores, SQLite in WAL on a local filesystem), single session, `strict` durability. Runtime latencies shared with the orchestration plane are owned by `08-runtime.md` §8 and cited here rather than restated; the rows below cover log-side costs. These are budgets, not measurements: this document is a design, and §10 says so.
 
 | Budget | Target | Notes |
 |---|---|---|
-| Append latency, single durable record (batched commit) | p50 ≤ 2 ms, p99 ≤ 15 ms | `BEGIN IMMEDIATE` plus one fsync under `strict`. |
-| Append latency with 8 concurrent readers | p99 ≤ 25 ms | WAL readers do not block the writer. |
+| Append latency, single durable record (batched commit) | (budget owned by 08 §8) | `BEGIN IMMEDIATE` plus one fsync under `strict`. |
+| Append latency with 8 concurrent readers | (budget owned by 08 §8) | WAL readers do not block the writer. |
 | Batch append (N ≤ 32 records) | ≤ 4 ms + 0.3 ms per record | One transaction (E-27). |
 | Durable bytes per typical step | ≤ 1.5 KiB | Delta coalescing (E-14) is what keeps this small. |
 | Ephemeral fan-out latency (append to client frame) | p99 ≤ 50 ms local, ≤ 150 ms over UDS/TCP | Best-effort; a lost frame is caught up by cursor. |
@@ -966,28 +966,28 @@ A budget breach is instrumentation output, not a failure mode: a run does not ab
 
 | Test | Proves | Where |
 |---|---|---|
-| `event-envelope.spec` | E-1…E-6: required fields, id uniqueness, payload validation, causation and correlation propagation | `packages/horizoncode-core/test` |
-| `sequence.monotonic.spec` | E-7…E-14: contiguity under concurrent appends, gap detection, ephemeral `seq: null` | `packages/horizoncode-core/test` |
-| `single-writer.fence.spec` | E-15…E-21: two-process write attempt, stale-epoch rejection, forged-authority refusal | `packages/horizoncode-testing/test` (multi-process) |
-| `append.atomicity.spec` | E-22…E-30: a projector failure rolls back the record; the commit hook runs in-transaction; batch atomicity | `packages/horizoncode-core/test` |
-| `versioning.upcast.spec` | E-31…E-37: fixture-driven upcasters, unsupported-version read-only, `min_reader_version` | `packages/horizoncode-protocol/test` |
-| `projector.contract.spec` | E-38…E-46: determinism, idempotent replay, table ownership, digest stability | `packages/horizoncode-core/test` |
-| `rebuild.shadow.spec` | E-47…E-53: shadow-rebuild equality, divergence retention, rebuild while live | `packages/horizoncode-core/test` |
-| `event-catalogue.parity.spec` | §4.2 contains every name in the conventions catalogue and no extras; emitter authority matches §4.5 | `packages/horizoncode-testing/test` (gate) |
-| `flow.replay.spec` | F-1: each of the 24 flows, assembled from fixtures, replays to identical projections, decisions and terminals | `packages/horizoncode-testing/test` |
-| `flow.crash.matrix.spec` | F-2, F-3: kill at every effect phase — before prepare, after prepare, after execute, before settle ⇒ exactly one terminal, `UNKNOWN` where unobservable | `packages/horizoncode-testing/test` (fault injection) |
-| `approval.binding.spec` | F-4: a decision bound to a stale intent digest is re-asked; a timeout denies; a denial is never laundered into model output | `packages/horizoncode-kernel-client/test` |
-| `unattended.fail-closed.spec` | F-5: schedules and CI deny every `ask` that lacks a pre-authorisation | `packages/horizoncode-core/test` |
-| `authority.narrowing.spec` | F-6: child, fork, skill and plugin postures are lattice meets; no widening path exists in the matrix | `packages/horizoncode-testing/test` |
-| `evidence.gate.spec` | F-7: a claim contradicted by a receipt is lowered; a claim with no receipt cannot be raised | `packages/horizoncode-core/test` |
-| `cache-guard.spec` | Flow 6.24: prefix byte-stability per tuple, drift attribution names a section, namespace change is not drift | `packages/horizoncode-context/test` (CI gate) |
-| `budget.ratchet.spec` | §8: log growth per step stays inside budget across the fixture suite | `packages/horizoncode-testing/test` |
+| `event-envelope.spec` | E-1…E-6: required fields, id uniqueness, payload validation, causation and correlation propagation | `packages/core/test` |
+| `sequence.monotonic.spec` | E-7…E-14: contiguity under concurrent appends, gap detection, ephemeral `seq: null` | `packages/core/test` |
+| `single-writer.fence.spec` | E-15…E-21: two-process write attempt, stale-epoch rejection, forged-authority refusal | `packages/testing/test` (multi-process) |
+| `append.atomicity.spec` | E-22…E-30: a projector failure rolls back the record; the commit hook runs in-transaction; batch atomicity | `packages/core/test` |
+| `versioning.upcast.spec` | E-31…E-37: fixture-driven upcasters, unsupported-version read-only, `min_reader_version` | `packages/protocol/test` |
+| `projector.contract.spec` | E-38…E-46: determinism, idempotent replay, table ownership, digest stability | `packages/core/test` |
+| `rebuild.shadow.spec` | E-47…E-53: shadow-rebuild equality, divergence retention, rebuild while live | `packages/core/test` |
+| `event-catalogue.parity.spec` | §4.2 contains every name in the conventions catalogue and no extras; emitter authority matches §4.5 | `packages/testing/test` (gate) |
+| `flow.replay.spec` | F-1: each of the 24 flows, assembled from fixtures, replays to identical projections, decisions and terminals | `packages/testing/test` |
+| `flow.crash.matrix.spec` | F-2, F-3: kill at every effect phase — before prepare, after prepare, after execute, before settle ⇒ exactly one terminal, `UNKNOWN` where unobservable | `packages/testing/test` (fault injection) |
+| `approval.binding.spec` | F-4: a decision bound to a stale intent digest is re-asked; a timeout denies; a denial is never laundered into model output | `packages/kernel-client/test` |
+| `unattended.fail-closed.spec` | F-5: schedules and CI deny every `ask` that lacks a pre-authorisation | `packages/core/test` |
+| `authority.narrowing.spec` | F-6: child, fork, skill and plugin postures are lattice meets; no widening path exists in the matrix | `packages/testing/test` |
+| `evidence.gate.spec` | F-7: a claim contradicted by a receipt is lowered; a claim with no receipt cannot be raised | `packages/core/test` |
+| `cache-guard.spec` | Flow 6.24: prefix byte-stability per tuple, drift attribution names a section, namespace change is not drift | `packages/context/test` (CI gate) |
+| `budget.ratchet.spec` | §8: log growth per step stays inside budget across the fixture suite | `packages/testing/test` |
 
 ---
 
 ## 10. Status
 
-**Every row is `DESIGNED`** *as a specification claim.* **Implementation status (final audit, 2026-11-06):** the built subset (`docs/28-implementation-status.md` — kernel event log/receipts/guard + session streams, which implement the *shape* of `session.start`/`message.*`/`tool.*`/`receipt.issued`/`approval.*`/`error` flows only) carries real levels there; everything else in this document is design. The HorizonCode repository's reference repositories cited in this document are *design inputs*, and their contents are not evidence about HorizonCode. Where a reference records an unfinished lane of its own, this document says so rather than inheriting a claim.
+**Every row is `DESIGNED`** *as a specification claim.* **Implementation status (final audit, 2026-11-06):** the built subset (`docs/28-implementation-status.md` — kernel event log/receipt chain/guard + the v0.1 session stream, which implement the shape of `hz.session.created`, `hz.part.*`, `hz.step.tool.*`, `hz.effect.settled`, `hz.permission.*` and `hz.error.raised` only) carries real levels there; everything else in this document is design. The HorizonCode repository's reference repositories cited in this document are *design inputs*, and their contents are not evidence about HorizonCode. Where a reference records an unfinished lane of its own, this document says so rather than inheriting a claim.
 
 | Artifact | Capability ID(s) | Level | Evidence |
 |---|---|---|---|

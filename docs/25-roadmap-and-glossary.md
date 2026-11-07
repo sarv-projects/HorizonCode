@@ -17,7 +17,7 @@ The roadmap is a *plan*, not a promise. A phase that cannot satisfy a gate repor
 
 **Not in scope of this document:** the content of the phases (owned by the subsystem documents), the feature designs themselves (owned by `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5), and any implementation. This document owns ordering, gates, the evidence ladder and the words.
 
-**Phase-id reconciliation.** Earlier drafts of this set used `P0`–`P7` for the same plan and the current `/data/home/forge/hzcode/docs/00-index.md` still describes this document as a "`P0`–`P7` roadmap". The plan of record is `M0`–`M8`; the mapping and the stale index line are recorded in §8 (OQ-R4). Sibling documents that cite a `P<n>` phase identifier resolve through that mapping table.
+**Phase-id reconciliation (closed).** Earlier drafts used `P0`–`P7`; the plan of record is `M0`–`M8`. The mapping (P0→M0 · P1+P3→M2 · P2→M1 · P4→M4 · P5→M5 · P6→M3 and M6 · P7→M7 and M8) is recorded in §8.2 OQ-R1, and `00-index.md` now describes this document as the `M0`–`M8` roadmap. Sibling documents that cite a `P<n>` phase identifier resolve through that mapping.
 
 ---
 
@@ -52,7 +52,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | Role | Owns |
 |---|---|
-| `spec-owner` | Documents `01`–`25`; schema/status discipline; `gate:doc-status` |
+| `spec-owner` | Documents `00`–`30` (the class of each per RC-14); schema/status discipline; `gate:doc-status` |
 | `kernel-owner` | `crates/hz_kernel`, `hz_abi`, `hz_sandbox`, `hz_policy`; Guard, policy, leases, receipts, reconciliation, sandbox matrix |
 | `runtime-owner` | `@horizoncode/core`, `@horizoncode/tools`, `@horizoncode/agents`; step engine, event log, projections, tools, fleets |
 | `cognition-owner` | `@horizoncode/provider`, `@horizoncode/context`; providers, context compiler, cache contract, memory, compaction |
@@ -279,6 +279,8 @@ Risk registers below name a *role*, not a person, because this set is a specific
 | M4-D9 | Append-only price table + `pricecheck`; every usage record cites its rate revision (NF-050) | `/data/home/forge/hzcode/docs/16-operations.md` |
 | M4-D10 | Observability plumbing: OTel with GenAI conventions, local dashboard, redacted export (NF-041 partial) | `/data/home/forge/hzcode/docs/16-operations.md` |
 | M4-D11 | Record/replay harness completes the matrix (NF-039): cassettes keyed by request digest, deterministic clock/randomness/ids, used by the cache guard and later by evals | `/data/home/forge/hzcode/docs/18-testing-and-gates.md` [planned] |
+| M4-D12 | Code Mode v2 (NF-051), ACI reading modes (NF-052), execution recorder (NF-054), pre-submit governance loop (NF-053), preview environments (NF-055) | `/data/home/forge/hzcode/docs/27-implementation-plan.md` §3.1 (V4); `/data/home/forge/hzcode/docs/09-tools.md`, `/data/home/forge/hzcode/docs/06-events-and-flows.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
+| M4-D13 | Tool-result dual output (NF-061), instruction epochs (NF-059), event-feed laws (NF-060), composer and review UX (NF-062) | `/data/home/forge/hzcode/docs/27-implementation-plan.md` §3.1 (V4); `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`, `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/10-cognition.md`, `/data/home/forge/hzcode/docs/13-tui.md` |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -475,7 +477,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 ### 4.1 Document assignments (`03`–`23`)
 
-`24-feature-catalog.md` §1 and NF-047 refer to the ownership map in this section. Documents `00`–`16`, `24` and `25` exist at this revision; titles below are confirmed by `/data/home/forge/hzcode/docs/00-index.md`. Documents `17`–`23` are **proposals** and carry no authority until `spec-owner` ratifies them; until a document exists, its topic is owned by the closest existing document and the gap is recorded in §8.
+`24-feature-catalog.md` §1 and NF-047 refer to the ownership map in this section. Documents `00`–`16` and `24`–`30` exist; titles below are confirmed by `/data/home/forge/hzcode/docs/00-index.md`. Documents `17`–`23` are **proposals** and carry no authority until `spec-owner` ratifies them; until a document exists, its topic is owned by the closest existing document and the gap is recorded in §8.
 
 | Doc | File | Owns |
 |---|---|---|
@@ -506,7 +508,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 ### 4.2 Feature index — `NF-001`…`NF-050`
 
-Every id below has a definition section in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5 (anchor `NF-<id>`); the owning document is the assignment from §4.1. Where a phase column shows two phases, the first is the partial claim and the second the completion (the partial scope must be named in the status line — see §8 OQ-R7).
+Every id below has a definition section in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5 (anchor `NF-<id>`); the owning document is the assignment from §4.1. Where a phase column shows two phases, the first is the partial claim and the second the completion (the partial scope must be named in the status line — see §8.2 OQ-R3).
 
 | Id | Name | Owning doc | Phase |
 |---|---|---|---|
@@ -891,7 +893,7 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 |---|---|---|---|---|
 | OQ-R1 | **Phase-id reconciliation.** ~~Earlier drafts used `P0`–`P7`; the plan of record is `M0`–`M8`.~~ **Resolved by the spec owner**: the plan of record is `M0`–`M8`; the historical mapping was P0→M0 · P1+P3→M2 · P2→M1 · P4→M4 · P5→M5 · P6→M3 and M6 · P7→M7 and M8. `00-index.md` has been updated to describe this document as the `M0`–`M8` roadmap. | §1, §3 | `spec-owner` | **Closed** |
 | OQ-R2 | **Dependency inversion:** `NF-019` (worktree pool) is scheduled in M5 while its declared dependency `NF-018` (managed domain) is scheduled in M8. M5 claims pool primitives only. | §3.6 | `kernel-owner` | Blocking for any `NF-019` status above `CODE_PRESENT` |
-| OQ-R3 | **Partial claims must be enumerated:** `NF-015`, `NF-019`, `NF-023`, `NF-026`, `NF-031`, `NF-033`, `NF-039`, `NF-041`, `NF-042`, `NF-046`, `NF-048` and `NF-049` each have a partial phase and a completion phase; the partial scope must name exactly which operations are in and which are out. | §4.2 | `runtime-owner` | Blocking for status lines on those features |
+| OQ-R3 | **Partial claims must be enumerated:** fourteen features — `NF-006`, `NF-009`, `NF-011`, `NF-015`, `NF-019`, `NF-023`, `NF-031`, `NF-033`, `NF-039`, `NF-041`, `NF-042`, `NF-046`, `NF-048` and `NF-049` — carry a partial phase and a completion phase in §4.2; `NF-026` is scheduled single-phase at `M1` and therefore takes no partial claim. Each partial scope must name exactly which operations are in and which are out. | §4.2 | `runtime-owner` | Blocking for status lines on those features |
 | OQ-R4 | Documents `17`–`23` have proposed titles only (§4.1); the gate implementations, evidence-bundle format and adversarial certification suite therefore have no owning document. | §4.1 | `spec-owner` | Blocking for M8-D6 (needs doc 22) and for the D4 bundle of every phase (needs doc 18) |
 | OQ-R5 | The evidence-bundle format and the phase gate manifest are needed by §6 but are owned by no existing document (proposed doc 18). | §6.2 | `release-owner` | Blocking for D4 in every phase |
 
@@ -905,7 +907,7 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 |---|---|---|
 | Roadmap M0–M8 | `DESIGNED` | This document, §3 |
 | Phase exit criteria / gate checklists | `DESIGNED` | §3; gate names from `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
-| Feature index (`NF-001`…`NF-050`) | `DESIGNED` | §4.2; definitions owned by `24-feature-catalog.md` §5 |
+| Feature index (`NF-001`…`NF-075`) | `DESIGNED` | §4.2 + §4.2a; definitions owned by `24-feature-catalog.md` §5 |
 | ADR index | `DESIGNED` | §4.3; decisions owned by `/data/home/forge/hzcode/docs/02-decisions.md` |
 | Document ownership map (`03`–`23`) | `DESIGNED` | §4.1; `17`–`23` unratified |
 | Glossary | `DESIGNED` | §5; definitions owned by the cited documents |
@@ -926,7 +928,7 @@ A claim above `DESIGNED` in this document, without a named artifact, is a defect
 | `/data/home/forge/hzcode/docs/_conventions.md` | Names, packages, crates, capability IDs, events, schemas, status levels, writing rules; §11 rulings are binding here |
 | `/data/home/forge/hzcode/docs/01-vision-and-superset.md` | Why the product exists; the superset claim the parity ratchet measures |
 | `/data/home/forge/hzcode/docs/02-decisions.md` | The 16 ADRs indexed in §4.3 |
-| `/data/home/forge/hzcode/docs/24-feature-catalog.md` | Parity matrix (Section A), new features (Section B, `NF-001`–`NF-050`), gates (§3.5), rejections (§7) |
+| `/data/home/forge/hzcode/docs/24-feature-catalog.md` | Parity matrix (Section A), new features (Section B, `NF-001`–`NF-075`), gates (§3.5), rejections (§7) |
 | `/data/home/forge/hzcode/README.md` | Product description |
 | `/data/home/forge/hzcode/docs/11-authority-safety.md` | Guard, leases, receipts, sandbox, policy — the M2 core |
 | `/data/home/forge/hzcode/docs/12-sessions-state.md` | Log, projections, claims, snapshots, time travel — the M1 core |
@@ -936,7 +938,8 @@ A claim above `DESIGNED` in this document, without a named artifact, is a defect
 | `/data/home/forge/hzcode/docs/16-operations.md` | Install, release integrity, observability, enterprise — the M7 core |
 | `/data/home/forge/hzcode/docs/28-implementation-status.md` | Implementation levels and evidence for everything built today — the single source of truth for status |
 | `/data/home/forge/hzcode/docs/29-final-audit.md` | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
+| `/data/home/forge/hzcode/docs/30-steal-list.md` | The adoption queue RC-15(d) makes live: the pass-3 shortlist and the ordered work plan (items 1–8 and 11) |
 
-**Derivation.** `source: /data/home/forge/hzcode/docs/_conventions.md` (names, status ladder, RC-1…RC-8); `source: /data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: /data/home/forge/hzcode/docs/02-decisions.md` §1 (ADR table); `source: /data/home/forge/hzcode/docs/00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
+**Derivation.** `source: /data/home/forge/hzcode/docs/_conventions.md` (names, status ladder, RC-1…RC-15 — RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here); `source: /data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: /data/home/forge/hzcode/docs/02-decisions.md` §1 (ADR table); `source: /data/home/forge/hzcode/docs/00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
 
 
