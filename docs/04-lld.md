@@ -2,9 +2,9 @@
 
 > **Scope.** This document decides the *inside* of HorizonCode: the package and crate map, the kernel's internal modules, the TypeScript core's module layout, the exact signatures of the load-bearing functions, the concurrency model, the error taxonomy, and the invariant table. It implements the shape fixed by [`03-hld.md`](./03-hld.md) and must not contradict [`02-decisions.md`](./02-decisions.md).
 >
-> **Status.** `/data/home/forge/hzcode` contains documentation only. Nothing below is built; every capability is at **`DESIGNED`**, and every name that has no counterpart in an ancestor or reference repository is marked `[planned]`. Where a counterpart exists, a `source:` line names it so a reader can read real code instead of prose.
+> **Status.** `/data/home/forge/hzcode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`); the package/crate layout below is not that implementation, so every module path here still names an artifact to be built. Levels live in `docs/28-implementation-status.md` (RC-13). Every name with no counterpart in an ancestor or reference repository is marked `[planned]`; a `source:` line names a real counterpart where one exists.
 >
-> **Implementation status (final audit, 2026-11-06).** The built subset (per `28-implementation-status.md`) is far smaller than this document's scope — v0.1 implements a minimal kernel (event log, receipts, guard, NDJSON protocol) and a Bun runtime under `app/`, not the package/crate layout below — so every module path in this document still names an artifact to be built. The statuses that *have* moved are recorded in `docs/28`.
+> **Implementation status (final audit, 2026-11-06).** The built subset (per `28-implementation-status.md`) is far smaller than this document's scope — v0.1 implements a minimal kernel (chained event log, receipt chain, guard, NDJSON protocol) and a Bun runtime under `app/` — providers, the seven base tools plus `agent`/`code_mode`/`preview`, the chat TUI and headless mode, skills and subagents — not the package/crate layout below — so every module path in this document still names an artifact to be built. The statuses that *have* moved are recorded in `docs/28`.
 
 **Conventions used here** (mandatory): `hzcode`, `hzk`, `.hz/`, `~/.config/horizon/`, `hz://`, `@horizoncode/*`, `hz_*`, `HZ_ABI=1`, `HZ_PROTO=1`, the six plane names, the capability IDs and effect classes of `_conventions.md` §5, the canonical `hz.<entity>.<past-tense-verb>` event names of §6, and the `<Name>V<major>` schema convention of §7. Declared status values are `DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`.
 
@@ -143,6 +143,7 @@ Rank is the layering position from `03-hld.md` §3.5: **a package may only depen
 | `hz_native` | 4 | The single N-API addon: one typed facade over the capability crates for the TypeScript runtime. **MUST NOT depend on `hz_kernel`.** | `WalkerHandle`, `IndexHandle`, `AstHandle`, `DiffHandle`, `EditHandle`, `VcsHandle`, `ShellHandle`, `PtyHandle`, `VoiceHandle` ⊳ `open_walker()`, `open_index()`, `open_ast()`, `diff()`, `plan_edit()`, `vcs_status()`, `shell_run()`, `pty_spawn()`, `stt_stream()` | capability crates only |
 | `hz_kernel` | 5 | The authority kernel: Guard, policy host, leases, effect host, receipts, OwnerLog, managed domain, verifier, budgets, worktree pool, supervisors, cgroup containment, sandbox bridge. | see §3.3 ⊳ `startup::run()`, `host::serve()` | `hz_abi`, `hz_policy`, `hz_sandbox`, `hz_shell`, `hz_edit`, `hz_diff`, `hz_ast`, `hz_vcs`, `hz_walker`, `hz_index`, `hz_pty`, `hz_voice` |
 | `hz_codegen` | build | Protocol/ABI/SDK generator: one source of truth → `@horizoncode/protocol`, `hz_abi`, generated SDKs. | `SchemaSource`, `EmitTarget` ⊳ `generate()`, `verify_fresh()` | `hz_abi` (source schema only) |
+| `hz_sdk` | 7 | Generated Rust SDK client: thin client over the surface protocol (never over ABI types). Generated output, not a hand-written crate. | `HzClient`, `HzClientOptions`, `EventCursor` ⊳ `connect()`, `submit()`, `events()`, `replay()`, `cancel()`, `approve()` | `hz_abi` (generated output only) |
 
 **Crate rules.**
 
@@ -208,11 +209,11 @@ Each module has one job. `source:` lines name the ancestor module the design inh
 | `agents/spawn.ts` | **The one child-construction primitive** (H-14): narrowing, budget split, capsule, child session, receipt linkage. | `spawnChild()` |
 | `agents/profile.ts` | Agent profiles and capability ceilings; profile validation against the kernel's ceiling. | `AgentProfileV1`, `resolveProfile()`, `narrowGrant()` |
 | `agents/planner.ts` | Deterministic host routing (no classifier): `executor-only · light · full · plan-for-approval · plan-only`, with planner/executor prefixes kept separate. | `routeTask()`, `runPlanner()`, `handoffPlan()` |
-| `agents/fleet.ts` / `agents/team.ts` / `agents/message-bus.ts` | Dependency-graph fleets with ceilings, teams with a shared message bus, and the durable agent message projection. | `Fleet.run()`, `Team.create()`, `sendMessage()`, `waitForMessage()` |
+| `agents/fleet.ts` / `agents/team.ts` / `agents/message-bus.ts` | Fan-out fleets of identical workers under a concurrency ceiling, dependency-graph `parallel_tasks`, teams with a shared message bus, and the durable agent message projection. | `Fleet.run()`, `ParallelTasks.run()`, `Team.create()`, `sendMessage()`, `waitForMessage()` |
 | `tools/registry.ts` | Registry construction, effective-tool computation per posture, Code-Mode namespace tree, and snapshotting for the provider request. | `ToolRegistry`, `register()`, `effective()`, `snapshot()` |
 | `tools/declaration.ts` | `ToolDeclarationV1` validation: capability ID exists in the registry, effect class agrees, observation method present (H-24). | `validateDeclaration()`, `assertEffectClass()` |
 | `tools/runtime.ts` | Dispatch and settlement: decode input at the untrusted boundary, execute, classify failures, return declared effect intents. | `execute()`, `settle()`, `toEffectIntent()` |
-| `tools/builtin/*.ts` | The ~60 built-in tools, each declaring its own schema, capability ID and renderers. | one module per tool family |
+| `tools/builtin/*.ts` | The built-in tools catalogued in `09-tools.md` §4, each declaring its own schema, capability ID and renderers. | one module per tool family |
 | `context/compiler.ts` | `ContextCompiler.compile()`: prefix + tail assembly, digesting, determinism. | `compile()`, `compilePrefix()`, `projectTail()`, `digestPrefix()` |
 | `context/memory.ts` | Four memory tiers with provenance: retain, recall, edit, reflect, and the review path for distillation. | `retain()`, `recall()`, `reflect()`, `listProvenance()` |
 | `context/retrieval.ts` | BM25 + embeddings + symbol/reference index queries, bounded by budget, all local-first. | `retrieve()`, `retrieveSymbols()`, `rerank()` |
@@ -249,18 +250,18 @@ Every durable fact has exactly one writer and one owning module. Two components 
 | Authority artifacts, checkpoints | `artifact.rs`, `checkpoint.rs` | `$XDG_STATE_HOME/horizon/kernel/artifacts/` CAS | `verifier.rs`, `verifySession()` | Separate CAS from the runtime-side `blobs` store; the only join is the digest. |
 | Worktree leases | `worktree.rs` (`WorktreePool`) | SQLite `worktrees` in kernel state + `.hz/worktrees/` on disk | `agents/spawn.ts`, `hzcode worktree` | Pool is bounded; a lease references a managed worktree root, never a user directory. |
 | Schedule journal | `automation.rs` (`Journal`) | Kernel OwnerLog records referenced by digest | `automation.rs`, `hzcode schedule` | RC-3: storage metadata, not a session event. |
-| Config, policy, secrets key refs | `resolveConfig()` in `@horizoncode/cli`; `policy.rs` for the compiled set | `.hz/config.toml`, `~/.config/horizon/` | every package (read), `hz_policy` (compile) | Secrets are handles only; no value is ever written to a store or a log. |
+| Config, policy, secrets key refs | `resolveConfig()` in `@horizoncode/cli`; `policy.rs` for the compiled set | `.hz/config.jsonc`, `~/.config/horizon/` | every package (read), `hz_policy` (compile) | JSONC (§4.16.1 of `05-domain-and-schemas.md` owns the document shape). Secrets are handles only; no value is ever written to a store or a log. |
 
 ### 4.2 Session store (SQLite) — tables
 
-The session store is one SQLite database per workspace: `<workspace>/.hz/state.db`. Table names follow `12-sessions-state.md`; the field lists live in `05-domain-and-schemas.md`, so only the role is fixed here.
+The session store is one SQLite database per workspace: `<workspace>/.hz/state/hzcode.db` (layout owned by `12-sessions-state.md` §4). Table names follow `12-sessions-state.md`; the field lists live in `05-domain-and-schemas.md`, so only the role is fixed here.
 
 | Table | Owner | Role | Invariants |
 |---|---|---|---|
 | `events` | `session/log.ts` | The append-only event log: `seq`, `sessionId`, `name`, `payload`, `cursor`, `idempotencyKey`, `createdAt`. | Monotonic per-session `seq`; unique `(sessionId, cursor)`; insert-only; L-41 enforced by the admission path, not by a trigger. |
 | `projections` | `session/projector.ts` | One row per (session, projector, key) materialized projection, written in the same transaction as its event. | L-30: a projector reads only `events` and writes only its own rows. Projectors are pure; `rebuild()` truncates and replays. |
 | `blobs` | CAS writer (`context/`, `tools/runtime.ts`) | Metadata for each content-addressed blob: `digest`, `size`, `kind`, `refcount`, `firstSeen`. | Bytes live in `.hz/blobs/` (§4.4); a `blobs` row without a file, or a file without a row, is `internal.cas_inconsistent`. |
-| `claims` | `session/claim.ts` | The write-ahead claim: `sessionId`, `ownerEpoch`, `acquiredAt`, `renewedAt`, `state ∈ {held, released, recovered}`. | At most one `held` row per session (L-6). Survives process death on purpose (§6.6). |
+| `claims` | `session/claim.ts` | The write-ahead claim (`ExecutionClaimV1`): `fenceToken`, `ownerProcessIncarnation`, `ownerEpoch`, `acquiredAtMs`, `heartbeatAtMs`, `ttlMs`, `state ∈ {held, released, expired, revoked}`; recovery is recorded as `resumedFromClaimId` on the successor claim. | At most one `held` row per session (L-6). Survives process death on purpose (§6.6). |
 | `usage` | `session/verify.ts` | Usage and cost per attempt, joined later with receipts: `runId`, `stepId`, `provider`, `tokensIn/Out`, `costMicros`, `attribution`. | Written once at verification; never adjusted. Unknown cost is stored as `UNKNOWN`, never as `0`. |
 | `event_snapshot`, `retention_ledger` | `session/log.ts` | Log snapshots, and retention markers that make deletions auditable. | RC-3: storage metadata; surfaced by `hzcode doctor` and `hzcode worktree list --journal`, never re-emitted as events. |
 
@@ -275,9 +276,9 @@ The session store is one SQLite database per workspace: `<workspace>/.hz/state.d
 
 ```text
 <workspace>/.hz/
-  config.toml                 # workspace config (rank-0 read, cli writes)
-  state.db                    # §4.2 session store (events, projections, blobs, claims, usage)
-  state.db-wal                # WAL; never copied without its sibling
+  config.jsonc               # workspace config (rank-0 read, cli writes) — JSONC (§4.16.1 of doc 05)
+  state/hzcode.db            # §4.2 session store (events, projections, blobs, claims, usage)
+  state/hzcode.db-wal        # WAL; never copied without its sibling
   blobs/<ab>/<sha256>         # CAS: two-level shard, bytes only
   checkpoints/<checkpointId>.json
   worktrees/<attemptId>/      # managed worktrees, leased by worktree.rs
@@ -285,7 +286,7 @@ The session store is one SQLite database per workspace: `<workspace>/.hz/state.d
   logs/                       # per-session debug logs (telemetry, redacted)
 
 $XDG_CONFIG_HOME/horizon/          # default ~/.config/horizon/
-  config.toml                 # user config
+  config.jsonc               # user config (JSONC)
   models.toml                 # model catalogue overrides
   policy/*.star, *.toml       # rule sources; hz_policy compiles them
   secrets/keyrefs.toml        # references only — never values
@@ -335,7 +336,7 @@ One error type crosses every boundary: `HzError` from `@horizoncode/shared` / `K
 
 ### 5.2 Code prefixes
 
-Codes are `hz.<prefix>.<snake_case>`. The prefix identifies the module that owns the meaning, and therefore who may fix it.
+Codes are `<prefix>.<snake_case>`, where the prefix names the owning module. Only event names carry the `hz.` namespace (`_conventions.md` §1). The prefix identifies the module that owns the meaning, and therefore who may fix it.
 
 | Prefix | Owner | Example codes | Default class | Fail-closed? |
 |---|---|---|---|---|
@@ -393,7 +394,7 @@ Six LLD-level flows. Each names the process (`[cli]`, `[hzk]`, `[surface]`, `[co
 
 ### 6.1 F1 — cold start: `hzcode` → `hzk` handshake → first prompt
 
-1. `[cli]` `main(argv)` → `runCommand()`; `resolveConfig()` reads `~/.config/horizon/` then `.hz/config.toml` (workspace wins). No network is touched on this path.
+1. `[cli]` `main(argv)` → `runCommand()`; `resolveConfig()` reads `$XDG_CONFIG_HOME/horizon/config.jsonc` then `<ws>/.hz/config.jsonc` (workspace wins). No network is touched on this path.
 2. `[cli]` `loadNative()` — the single native-addon loader (`@horizoncode/shared`, L-24). Failure is `native.load_failed`, `refuse`, exit `3`; the CLI MUST NOT start a degraded shell that pretends to have the engine.
 3. `[cli]` `spawnSupervisor()`: if `$XDG_RUNTIME_DIR/horizon/hzk.sock` answers a hello, attach; otherwise start `hzk`.
 4. `[hzk]` `startup::run()` → `gate_startup()` → `acquire_lease()` on the host-wide supervisor lease; a second live owner causes `supervisor.epoch_behind` and exit, so exactly one `hzk` owns the host (CB-6).
@@ -521,7 +522,7 @@ A module that needs a *wider* authority than it holds MUST fail with `guard.deni
 
 ## 8. Performance budgets
 
-Numbers are the plan, not a measurement: they are the thresholds the tests of §9 assert against once code exists. Where a number also appears in `03-hld.md`, doc 03 owns the goal and this table owns the LLD-level split. Reference hardware is the `perf` profile of the CI runner (4 vCPU, NVMe); a budget is measured on the hot path only — no debug spans, no `--doctor`, no telemetry export.
+Numbers are the plan, not a measurement: they are the thresholds the tests of §9 assert against once code exists. **Runtime** latencies (event append, guard decision, receipt settle, kernel round trip) are owned by `08-runtime.md` §8 — the single owner of runtime budget numbers — and the rows below cite that section instead of restating a rival value (reconciled 2026-11-07, reaudit stage 2, RC-15). Reference hardware is the `perf` profile of the CI runner (4 vCPU, NVMe); a budget is measured on the hot path only — no debug spans, no `--doctor`, no telemetry export.
 
 | # | Metric | p50 | p95 | Measurement point | Owning module |
 |---|---|---|---|---|---|
@@ -531,10 +532,10 @@ Numbers are the plan, not a measurement: they are the thresholds the tests of §
 | PB-L03 | Module load | per package ≤ 8 ms; core spine ≤ 45 ms; native addon ≤ 15 ms | ≤ 2× | `import()` measured per package at first use | all packages |
 | PB-L04 | TUI first paint | ≤ 50 ms fullscreen, ≤ 30 ms inline | ≤ 100 ms | Surface selection → first frame flushed | `@horizoncode/tui` |
 | PB-L05 | Tool dispatch overhead (excludes the effect itself) | ≤ 3 ms per call | ≤ 12 ms for a batch of 8 | `planBatch()` → first admission of the batch | `core/step/batch.ts`, `tools/runtime.ts` |
-| PB-L06 | Event append latency | ≤ 1.5 ms | ≤ 5 ms (≤ 10 ms with projection commit) | `appendWithProjections()` call | `session/log.ts` |
+| PB-L06 | Event append latency | (budget owned by 08 §8) | (budget owned by 08 §8) | `appendWithProjections()` call | `session/log.ts` |
 | PB-L06b | Replay of 10 000 events into a fresh projection set | ≤ 400 ms | ≤ 1 s | `rebuild()` | `session/projector.ts` |
 | PB-L07 | Projection update per event | ≤ 1 ms | ≤ 4 ms | inside the append transaction | `session/projector.ts` |
-| PB-L08 | Guard decision per batch | ≤ 2 ms | ≤ 8 ms | `authorize()` round trip, warm policy revision | `guard.rs`, `policy.rs` |
+| PB-L08 | Guard decision per batch | (budget owned by 08 §8) | (budget owned by 08 §8) | `authorize()` round trip, warm policy revision | `guard.rs`, `policy.rs` |
 | PB-L08b | Lease consume + validate | ≤ 0.5 ms | ≤ 2 ms | `lease.rs` `consume()` / `validate()` | `lease.rs` |
 | PB-L09 | Effect dispatch overhead before the child runs | ≤ 2 ms | ≤ 5 ms | `execute()` → child spawned | `effect_host.rs`, `sandbox.rs`, `cgroup/` |
 | PB-L10 | Context compile | prefix digest hit ≤ 3 ms; full compile ≤ 25 ms for a 100 k-token window | ≤ 2× | `ContextCompiler.compile()` | `context/compiler.ts` |
@@ -642,7 +643,9 @@ All three are **structural**: they fail on code that was never run, which is the
 
 ## 10. Status
 
-Nothing in `/data/home/forge/hzcode` is built; every row is at **`DESIGNED`**. The evidence column names the rule, flow or table in this document that designs the capability, plus the ancestor module it descends from where one exists. A row may not claim `CODE_PRESENT` or above until code and its test exist in the same repository; a row whose design is incomplete says so instead of implying more.
+> **Implementation status (RC-13).** Every row below is `DESIGNED` in the package/crate layout this document fixes. The v0.1 implementation that exists is a different, smaller layout; its evidence-backed levels are in `docs/28-implementation-status.md`.
+
+The evidence column names the rule, flow or table in this document that designs the capability, plus the ancestor module it descends from where one exists. A row may not claim `CODE_PRESENT` or above until code and its test exist in the same repository; a row whose design is incomplete says so instead of implying more.
 
 | Capability | Level | Evidence |
 |---|---|---|
@@ -683,7 +686,7 @@ Nothing in `/data/home/forge/hzcode` is built; every row is at **`DESIGNED`**. T
 | Generated surfaces (`protocol`, `hz_abi`, SDKs) | `DESIGNED` | §3.2 rule 4, L-26, `gate/codegen` |
 | Import, effect-path and single-writer gates | `DESIGNED` | §9.3–§9.4 |
 | Performance budgets | `DESIGNED` (no measurement) | §8; numbers are thresholds, not results |
-| TUI first paint independent of the kernel | `DESIGNED` | PB-L04, PB-L04 rule 2, F1 step 7 |
+| TUI first paint independent of the kernel | `DESIGNED` | §8, PB-L04 + §8 budget rule 2, F1 step 7 |
 | Windows peer authentication | `UNKNOWN` in depth | §3.3 `windows_peer.rs` names the mechanism only; the profile contents are owned by `11-authority-safety.md` |
 
 **Status notes.** (1) The two capability crates with the widest blast radius — `hz_native` (no kernel dependency, H-17) and `hz_kernel` (no TypeScript dependency, L-36) — are designed as *testable topology claims*, not as conventions; §9.4 makes them gates. (2) Every `UNKNOWN` above is deliberate: this document designs the boundary and leaves the profile contents to doc 11. (3) No row may be promoted past `DESIGNED` on the strength of an ancestor repository: the `source:` lines of §3.3 point at real code to read, not at evidence for this design.

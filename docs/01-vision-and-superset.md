@@ -45,7 +45,7 @@ Superset is a claim we make testable:
 
 ## 2. The eight references, and what each one actually is
 
-> **Second wave (2026-11-07).** Six further sources (SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent) are recorded in [`24-feature-catalog.md`](./24-feature-catalog.md) §4.1 A.9; the eight below remain the primary set this document reasons about.
+> **Second wave (2026-11-07).** Six further sources (SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent) are recorded in [`24-feature-catalog.md`](./24-feature-catalog.md) §4 A.9; the eight below remain the primary set this document reasons about.
 
 ### 2.1 `sarv-projects/horizoncode` — the execution constitution (our direct ancestor)
 
@@ -190,7 +190,7 @@ These are table stakes; HorizonCode must have every one of them and they are *no
 
 | Dimension | Weakest in set | Strongest in set | HorizonCode's position |
 |---|---|---|---|
-| **Execution authority** | prompt-based permissions | HorizonCode's Guard/lease/receipt | **Kernel-enforced, universal receipts** |
+| **Execution authority** | prompt-based permissions | HorizonCode's Guard/lease/receipt | **Kernel-enforced, universal receipts** (designed; v0.1 kernel receipts only) |
 | **Durability under crash** | in-memory loops | OpenCode write-ahead claim | **Claims + event sourcing + replay** |
 | **Prompt-cache discipline** | ad hoc | Reasonix cache-guard | **Prefix contract tested in CI** |
 | **Sandbox depth** | bwrap-only | Codex (3 OSes + policy engine) | **Full matrix + typed residuals** |
@@ -200,7 +200,7 @@ These are table stakes; HorizonCode must have every one of them and they are *no
 | **Multi-agent** | single task tool | Claude coordinator + teams | **Fleet + teams + message bus** |
 | **Memory** | none | Claude hierarchy + team sync | **Four tiers + distillation** |
 | **Self-improvement** | none | (dream/autolearn fragments) | **Full, human-gated loop** |
-| **Evidence/verification** | prose claims | HorizonCode design | **Evidence gate wired end-to-end** |
+| **Evidence/verification** | prose claims | HorizonCode design | **Evidence gate designed end-to-end, wired in M2+** |
 
 ### 3.3 Structural lessons we adopt
 
@@ -214,6 +214,10 @@ These are table stakes; HorizonCode must have every one of them and they are *no
 ---
 
 ## 4. The ten things HorizonCode does that none of them do
+
+> Each item is registered normatively as `NF-001`…`NF-010` in [`24-feature-catalog.md`](./24-feature-catalog.md) §5; this section is the narrative summary and adds no rule.
+>
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15).
 
 ### 4.1 Execution constitution (universal receipts)
 Every mutation — file write, shell run, network fetch, provider call, plugin effect — settles into a **receipt** with an intent digest, capability ID, origin kind, lease ID, observation and terminal state. There is no "small" effect that skips the ledger. *Pain point solved:* "the agent said it ran the tests."
@@ -251,4 +255,4 @@ The agent captures trajectories, runs evals, distills memory, synthesises skills
 
 - We do not claim the reference agents are bad. Several are excellent, and HorizonCode deliberately inherits their best ideas rather than inventing replacements.
 - We do not claim HorizonCode will be better at *every* task on day one. The claim is architectural: a superset capability set, plus trust, durability and learning properties the others do not enforce.
-- We do not claim the design here is proven. It is a specification, with status levels, and the roadmap in [`25-roadmap.md`](./25-roadmap.md) says what must be built and proven.
+- We do not claim the design here is proven. It is a specification, with status levels, and the roadmap in [`25-roadmap-and-glossary.md`](./25-roadmap-and-glossary.md) says what must be built and proven.

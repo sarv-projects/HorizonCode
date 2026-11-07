@@ -2,7 +2,7 @@
 
 > The complete, versioned data model of HorizonCode: every durable and wire object, its fields, its invariants, where it lives, and how it changes. This document is the single source of truth for schema shape; `packages/protocol` (TypeScript) and `crates/hz_abi` (Rust) are **generated outputs of it** by `hz_codegen`.
 
-- **Status:** the whole set is `DESIGNED`. Nothing in this document is a claim of working code. Primitives inherited from the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
+- **Status:** every schema in this document is `DESIGNED`; the digest/identity rules of D3 are the one part already implemented and verified in `app/src/contracts.ts` (`docs/28-implementation-status.md`, RC-13). Primitives inherited from the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
 - **Sources** (read for this document):
   - `source: /data/home/forge/hzcode/README.md`
   - `source: /data/home/forge/hzcode/docs/01-vision-and-superset.md`
@@ -200,7 +200,7 @@ Named surfaces that own or consume the schemas. Anything not present in the pinn
 | `prv_` | `ProviderConfigV1` | `mdl_` | `ModelRefV1` |
 | `wf_` | `WorkflowDefV1` | `evl_` | `EvalCaseV1` |
 | `prp_` | `LearnProposalV1` | `trj_` | `TrajectoryV1` (`06-events-and-flows.md`) |
-| `rlp_` | `RateLimitPolicyV1` | — | — |
+| `rlp_` | `RateLimitPolicyV1` | `hnd_` | `AgentHandleV1` |
 
 `hz://` path kinds (from `_conventions.md` §1 plus this document): `session`, `message`, `part`, `step`, `prompt`, `realm-less plan`→`plan`, `todo`, `goal`, `agent`, `team`, `receipt`, `decision`, `lease`, `reconciliation`, `artifact`, `worktree`, `snapshot`, `checkpoint`, `memory`, `skill`, `command`, `plugin`, `hook`, `mcp`, `lsp`, `provider`, `model`, `workflow`, `eval`, `proposal`, `tool`, `trusted-state`.
 
@@ -336,7 +336,7 @@ Purpose: the durable unit of work — one conversation plus its execution state,
 | `postureRef` | `{revision: u64, digest: Digest}` | → `SessionPostureV1` |
 | `configRef` | `{revision: u64, effectiveConfigDigest: Digest}` | → effective `SessionConfigV1` |
 | `agentProfileRef` | `{id: Id, revision: u64, digest: Digest}` | pinned at creation, immutable for the session |
-| `state` | `OneOf{idle, busy, waiting_approval, blocked, completed, failed, archived}` | projected from events only |
+| `state` | `OneOf{idle, busy, waiting_approval, blocked, completed, failed, archived}` | the durable projection of `LoopStateV1` (below); `blocked` (corruption / user action required, §5.3) and `archived` are set outside the loop |
 | `busyClaimId` | `Id?` | non-null **iff** `state = busy` |
 | `lastSeq` | `Seq` | last applied event |
 | `lastEventType` | `string` | diagnostic only |
@@ -401,12 +401,12 @@ Purpose: the root of the config lattice for one session, with per-key provenance
 | `sessionId` | `Id` | |
 | `modelRef` | `ModelRefV1` | default model |
 | `plannerRef`, `executorRef` | `ModelRefV1?` | dual-model planning |
-| `routingPolicy` | `OneOf{executor-only, light, full, plan-for-approval, plan-only}` | deterministic host policy, never a classifier (ADR-004.4) |
+| `routingPolicy` | `OneOf{executor-only, light, full, plan-for-approval, plan-only}` | deterministic host policy, never a classifier (`01-vision-and-superset.md` §4.4; NF-004) |
 | `reasoning` | `{level: OneOf{minimal, low, medium, high, max}, effort: OneOf{low, medium, high}?, budgetTokens: u64?}` | |
 | `temperature` | `f64?` | `null` means provider default |
 | `maxSteps` | `u32` | hard cap per claim |
 | `maxParallelTools` | `u32` | |
-| `compaction` | `{strategy: OneOf{summary, structured_digest, verbatim_tail, snapcompact}, autoTriggerRatio: f64, keepTailTokens: u64, providerVisibleCheckpoint: bool}` | one automatic trigger ratio (ADR from vision §3.3) |
+| `compaction` | `{strategy: OneOf{summary, structured_digest, verbatim_tail, snapcompact}, autoTriggerRatio: f64, keepTailTokens: u64, providerVisibleCheckpoint: bool}` | one automatic trigger ratio, default 0.72 of the usable window — owned by `06-events-and-flows.md` (compaction flow); shown in the TUI per `13-tui.md` R153 |
 | `toolAllowPatterns`, `toolDenyPatterns` | `[]string` | glob or canonical wildcard form |
 | `permissions` | `[]ToolPermissionV1` | effective rules (already meet-merged) |
 | `hooks` | `[]HookBindingV1` | only trusted ones are active (D31) |
@@ -518,6 +518,26 @@ Purpose: the write-ahead claim that makes a busy period recoverable instead of a
 Invariants: at most one `held` claim per session (enforced by a partial unique index); a writer with a stale `fenceToken` MUST be rejected (`HZ_CLAIM_HELD`); a claim found `held` after process death MUST be resumable — the successor claim records `resumedFromClaimId` and adopts `lastSeq`; release MUST be the final act of a terminal outcome so `busy` can never be left set; an expired claim MUST NOT be resumed by two processes (fence wins).
 Versioning: additive.
 Persisted: `hz.db::claims`.
+
+**`LoopStateV1`** — no id; derived per session
+
+Purpose: the seven-state, single-writer agent-loop machine of `08-runtime.md` §2.3, named here so the loop cannot invent an eighth state and so the durable session state has one declared source.
+
+| Field | Type | Notes |
+|---|---|---|
+| `schemaVersion` | `1` | |
+| `sessionId` | `Id` | |
+| `state` | `OneOf{idle, busy, awaiting_approval, awaiting_user, compacting, error, completed}` | exactly one current value per session (R-runtime-16) |
+| `previousState` | `same enum?` | `null` at session creation |
+| `transitionEventId` | `Id` | the event that caused the current state; the projection is written in the same transaction |
+| `sinceSeq` | `Seq` | |
+| `terminalUntilInput` | `bool` | `true` in `error` and `completed` (R-runtime-17) |
+| `heldClaimId` | `Id?` | non-null when the claim was deliberately retained rather than released |
+
+Projection to `SessionV1.state`: `idle`→`idle`, `busy`→`busy`, `compacting`→`busy`, `awaiting_approval`→`waiting_approval`, `awaiting_user`→`waiting_approval`, `error`→`failed`, `completed`→`completed`; `blocked` and `archived` are set outside the loop. `awaiting_user` and `compacting` are transient and MUST NOT be read as durable session states.
+Invariants: a value outside the seven MUST be rejected by the machine, never coerced (R-runtime-20); a transition MUST be appended before it takes observable effect (write-ahead, R-runtime-16).
+Versioning: a new state requires `LoopStateV2`.
+Persisted: derived — the durable home is the session event log; the current value is projected into `hz.db::sessions.state`.
 
 **`StepV1`** — `stp_<ulid>`
 
@@ -709,7 +729,9 @@ Purpose: the single declarative contract for one tool, generated from a single s
 | `cacheKey` | `string` | stable for identical semantics; part of the prefix contract |
 | `extensions` | `Map<string, JsonValue>` | |
 
-Invariants: exactly one capability ID from the closed registry; `readOnlyClass=mutating` ⇒ `observation.required=true` (D22); `cacheKey` MUST be stable across sessions and releases for unchanged semantics (cache-guard test); a declaration missing a required field MUST fail the build; a deprecated declaration MUST still execute until `removalProto` and MUST emit a deprecation warning.
+**One capability, no auxiliaries.** `capabilityId` is the only capability field on this schema: there is no `auxCapabilityIds` and no secondary grant, so a tool that needs a second effect is two admitted calls with two declarations, each leased on its own — this keeps the single-capability authorisation rule of `03-hld.md` H-30 and D22 intact, and a declaration naming more than one capability is a build failure. `09-tools.md` annotates the fields this schema fixes and MUST NOT introduce or rename one (reconciled 2026-11-07, reaudit stage 2, RC-15).
+
+Invariants: exactly one capability ID from the closed registry; `readOnlyClass=mutating` ⇒ `observation.required=true` (D22); `cacheKey` MUST be stable across sessions and releases for unchanged semantics (cache-guard test); a declaration missing any field listed above (a field typed `?` excepted) MUST fail the build; a deprecated declaration MUST still execute until `removalProto` and MUST emit a deprecation warning.
 Versioning: additive fields ⇒ `revision` bump; changing `inputSchema` semantics, `effectClass` or `capabilityId` ⇒ a new revision plus a deprecation window for the old one.
 Persisted: the `@horizoncode/tools` registry (source) and a per-session snapshot in `hz.db::tool_declarations` so a receipt can name the exact contract it ran against.
 
@@ -851,7 +873,7 @@ Purpose: a named, versioned agent definition — the template from which a sessi
 | `description` | `string` | |
 | `systemPrompt` | `{ref: Sha256Ref, digest: Digest, templateVariables: []string, tokensEstimate: u32}` | artifact-backed, never inline |
 | `modelPreference` | `{modelRef: ModelRefV1?, reasoning: JsonValue?, fallbackModelRefs: []ModelRefV1}` | |
-| `routingRole` | `OneOf{executor, planner, either}` | used by deterministic routing (ADR `02-decisions` §4.4) |
+| `routingRole` | `OneOf{executor, planner, either}` | used by deterministic routing (`01-vision-and-superset.md` §4.4; `24-feature-catalog.md` NF-004) |
 | `toolAllowlist`, `toolDenylist` | `[]string` | patterns; denylist wins |
 | `capabilityCeiling` | `[]CapabilityId` | may only **narrow** the session ceiling (D17) |
 | `budgetDefaults` | `BudgetV1` | |
@@ -896,6 +918,27 @@ Purpose: the complete, auditable description of one child agent construction —
 Invariants: `capabilityGrant.capabilities` MUST be a strict (or equal) subset of the parent's effective capabilities — a widening grant MUST be rejected before the child session exists; `budget` MUST be ≤ the parent's remaining budget at spawn time; `contextCapsule` MUST be produced inside the primitive (a caller-supplied capsule MUST be rejected); every child creation MUST emit `hz.agent.spawned` and reference `parentReceiptId`.
 Versioning: additive; a new `kind` value is additive-gated.
 Persisted: `hz.db::subagent_specs`.
+
+**`AgentHandleV1`** — `hnd_<ulid>`
+
+Purpose: the live handle the spawn primitive returns for a running child — enough to join it, cancel it, read its ledger slice and locate its worktree; never a second authority.
+
+| Field | Type | Notes |
+|---|---|---|
+| `schemaVersion` | `1` | |
+| `id` | `Id` | |
+| `agentId`, `childSessionId` | `Id`, `Id` | `childSessionId` is the `SessionV1` the child writes |
+| `specId` | `Id` | the `SubagentSpecV1` this handle was built from |
+| `capabilityGrantDigest` | `Digest` | digest of the narrowed grant actually issued — the handle carries no grant of its own |
+| `budgetRef` | `{budgetId: Id, scope: string}` | the reserved slice; unused budget returns at teardown |
+| `worktreeRef` | `Id?` | required when `isolation = own_worktree` |
+| `cancelTokenRef` | `string` | the child token in the parent token tree (R-runtime-21) |
+| `state` | `OneOf{running, completing, completed, failed, cancelled, unknown}` | `unknown` after a crash until recovery |
+| `createdAtMs`, `settledAtMs` | `Ms`, `Ms?` | |
+
+Invariants: only the spawn primitive may create a handle (R-runtime-62); a handle MUST NOT be usable to widen a grant; a handle is closed on every terminal path (R-runtime-73).
+Versioning: additive.
+Persisted: projection only (`hz.db::agents`); the durable facts are `hz.agent.spawned` and `hz.agent.completed`.
 
 **`AgentMessageV1`** — `agm_<ulid>`
 
@@ -957,7 +1000,7 @@ Purpose: one scoped spending envelope with consumption and reservation accountin
 | `limits` | `{maxInputTokens: u64, maxOutputTokens: u64, maxSteps: u32, maxToolCalls: u32, maxWallMs: u64, maxUsdMicros: MoneyMicros, maxWebSearches: u32, maxTriageChecks: u32, maxChildren: u32, maxParallelChildren: u32}` | any field may be `0` = unlimited-but-audited |
 | `consumed` | same shape as `limits` | monotone |
 | `reserved` | same shape as `limits` | in-flight reservations | |
-| `renewPolicy` | `{mode: OneOf{none, on_progress}, minProgressEvents: u32, graceFactor: f64, maxRenewals: u32}` | adaptive progress lease (vision §3.1) | |
+| `renewPolicy` | `{mode: OneOf{none, on_progress}, minProgressEvents: u32, graceFactor: f64, maxRenewals: u32}` | adaptive progress lease (`08-runtime.md` R-runtime-106) | |
 | `hardStop` | `OneOf{fail, cancel, ask}` | |
 | `inheritedFrom` | `Id?` | parent budget |
 | `renewals` | `u32` | |
@@ -1201,7 +1244,7 @@ Persisted: `hz.db::proposals`; the payload is an artifact (so the diff is review
 
 ### 4.11 Authority schemas (the execution constitution)
 
-These five schemas are the reason HorizonCode exists (README §2, ADR-012). Each is written **only** by the kernel; each is durable; each is citable from a `hz://` URI. The ancestor implements the primitives — the HorizonCode names, envelopes and terminal-state vocabulary are the canonical ones going forward.
+These six schemas are the reason HorizonCode exists (README §2, ADR-012). Each is written **only** by the kernel; each is durable; each is citable from a `hz://` URI. The ancestor implements the primitives — the HorizonCode names, envelopes and terminal-state vocabulary are the canonical ones going forward.
 
 **`EffectRequestV1`** — `eff_<ulid>`
 
@@ -1646,11 +1689,11 @@ Values that grant, deny or settle MUST come from a closed list (D7). The followi
 | Posture preset | `read-only`, `ask-for-approval`, `full-access`, `custom` |
 | Guard decision | `Allow`, `Ask`, `Deny` |
 | Decision reason code | the 16 values in `GuardDecisionV1.reasonCode` |
-| Effect terminal state | `SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN` |
+| Effect terminal state | the RC-7 enum, lowercase and verbatim: `succeeded`, `failed`, `denied`, `cancelled`, `unknown`, `budget_exhausted`, `timeout`, `interrupted` (a UI MAY render upper-case copy; schemas and receipts carry the lowercase values) |
 | Lease state | `issued`, `consumed`, `expired`, `revoked`, `superseded` |
 | Permission decision | `allow`, `ask`, `deny` (precedence `deny > ask > allow`) |
 | Tool call status | `declared`, `admitted`, `running`, `settled`, `denied`, `unknown`, `abandoned` |
-| Config app state (kernel presence) | `full`, `read-only-degraded`, `unavailable` |
+| Config app state (kernel presence) | `full`, `degraded_read_only`, `degraded_unaccounted`, `refused` — the four named states of `03-hld.md` §6.2; a receipt MUST record which one it ran under (H-41) |
 
 **4.15.2 Status levels (from `_conventions.md` §8)**
 
@@ -1658,7 +1701,9 @@ Values that grant, deny or settle MUST come from a closed list (D7). The followi
 
 **4.15.3 Hook lifecycle events (additive-gated)**
 
-`session_start`, `session_resume`, `session_end`, `prompt_submitted`, `prompt_admitted`, `before_model_call`, `after_model_call`, `before_tool_call`, `after_tool_call`, `before_effect`, `after_effect`, `compaction`, `checkpoint`, `commit`, `error`, `agent_spawn`, `agent_complete`, `learn_proposal`.
+`session_start`, `session_resume`, `session_end`, `prompt_submitted`, `prompt_admitted`, `before_model_call`, `after_model_call`, `before_tool_call`, `after_tool_call`, `before_effect`, `after_effect`, `compaction`, `checkpoint`, `commit`, `error`, `agent_spawn`, `agent_complete`, `learn_proposal`, `file_change`, `worktree_create`, `worktree_release`, `elicitation`, `config_change`.
+
+The list is the union required by `24-feature-catalog.md` NF-066 and stays additive-gated: a new name is added here in the same change as the binding that needs it.
 
 **4.15.4 Capability and effect-class registries**
 
@@ -1745,6 +1790,32 @@ Every prevented widening MUST produce a diagnostic record `{path: <absolute conf
 
 Migration rules: (1) a schema major bump MUST ship a reader for the previous major and a migration command (`hzcode migrate --dry-run` first); (2) a migration MUST be reversible or MUST write a backup, and MUST be receipted; (3) a migration MUST NOT silently reinterpret a value — a re-meaning requires an explicit mapping table; (4) after migration, `hzcode session verify` MUST still pass on a pre-migration session or the migration MUST abort.
 
+### 4.18 Names requested by `08-runtime.md` and their registered shape
+
+`08-runtime.md` §4 names runtime records normatively. Each name is either registered in this document or reconciled to the registered shape it is a field, projection or storage record of; a name that appears in neither column MUST NOT be used normatively (reconciled 2026-11-07, reaudit stage 2, RC-15).
+
+| Name used in `08-runtime.md` | Registered shape / home | Note |
+|---|---|---|
+| `PromptAdmissionV1` | `InputAdmissionV1` (§4.6) | ancestor name; do not use |
+| `AgentSpecV1` | `SubagentSpecV1` (§4.9) | ancestor name; do not use |
+| `LoopStateV1` | `LoopStateV1` (§4.6) | registered here; `SessionV1.state` is its projection |
+| `AgentHandleV1` | `AgentHandleV1` (§4.9) | registered here |
+| `ContextCapsuleV1` | `SubagentSpecV1.contextCapsule` (§4.9) | a field, not a top-level schema |
+| `PlanWindowV1` | composite of `PlanV1` (§4.8), `GuardDecisionV1` (§4.11) and `BudgetV1` (§4.9) | fields fixed by `08-runtime.md` R-runtime-53; not a durable truth of its own |
+| `RoutingDecisionV1` | projection (`hz.db::routing`); the table is `08-runtime.md` §2.8 | recomputable, never the state of record |
+| `RunV1` | kernel OwnerLog `managed` run records (RC-3) | authority truth, not a session schema |
+| `FleetSpecV1` | a set of `SubagentSpecV1` with `kind = fleet_member` | fan-out of identical workers, no dependency edges (`09-tools.md` §4) |
+| `ParallelTasksGraphV1` / `ParallelTasksResultV1` | a set of `SubagentSpecV1` with `kind = parallel_task` + `failurePolicy`; the graph is held in the plan/todo projection (`hz.todo.updated`) | dependency-graph form (`09-tools.md` §4) |
+| `TeamV1` / `TeamMemberV1` | `TeamStateV1` (§4.9) | membership is the `members` field |
+| `TeamMessageV1` | `AgentMessageV1` (§4.9) | ancestor name; do not use |
+| `ScheduleJobV1` / `OccurrenceV1` | kernel OwnerLog journal records (RC-3; `06-events-and-flows.md` G-4) | storage metadata, never session events |
+| `BudgetLedgerV1` | `BudgetV1` (§4.9) + `UsageV1` (§4.9) | ledger = limits/consumed/reserved plus usage rows |
+| `ProgressLeaseV1` | `BudgetV1.renewPolicy` (§4.9) | a progress lease is a renewal policy on a budget |
+| `HeartbeatV1` / `WatchdogV1` | projection (`hz.db::longrun`); fields fixed by `08-runtime.md` §2.16 | never authority |
+| `EvalResultV1` | `EvalCaseV1` (§4.10) run rows | one row per case per arm |
+| `ProposalV1` | `LearnProposalV1` (§4.10) | ancestor name; do not use |
+| `LearnStateV1` | `LearnProposalV1.status` (§4.10) | the lifecycle is a field of the proposal |
+
 ## 5. Errors & failure modes
 
 ### 5.1 Categories
@@ -1768,7 +1839,7 @@ Migration rules: (1) a schema major bump MUST ship a reader for the previous maj
 | Budget exhausted mid-step | finish settling the in-flight effect, then stop at the boundary with `HZ_BUDGET_EXHAUSTED` / `UserActionRequired` | no (graceful stop) |
 | Config key more permissive than the user scope | ignore the workspace value, record a narrowing diagnostic, continue | no (by design, D30) |
 | Untrusted workspace program referenced | stay inert, report `requires_trust`, continue without it | no (by design, D31) |
-| Kernel absent / ABI too old | enter `read-only-degraded`: no mutating effect is admitted, reads still work; never fall back to unguarded execution | yes |
+| Kernel absent / ABI too old | enter `degraded_read_only`: no mutating effect is admitted, reads still work; never fall back to unguarded execution | yes |
 | Sandbox dimension unavailable but required | refuse the effect with `HZ_UNKNOWN_DIMENSION` / `Never`, surface the typed residual | yes |
 | Plugin signature invalid / API version unsupported | do not load, keep the rest of the session running | yes (for that plugin) |
 | Corrupt `StepRecordV1` during replay | abort the replay with `Corruption`, never replay partially | yes |
@@ -1776,7 +1847,7 @@ Migration rules: (1) a schema major bump MUST ship a reader for the previous maj
 
 ### 5.4 Degraded modes (explicit, never silent)
 
-The session's app state is one of `full`, `read-only-degraded`, `unavailable`, and it is a *visible* projection field, not an internal flag. In `read-only-degraded`: reads, search, context compile and memory recall work; every mutating capability is refused with a reason code rather than a generic error; the TUI shows the reason in the status line; `hz.kernel.status` reports the degradation cause.
+The session's app state is one of `full`, `degraded_read_only`, `degraded_unaccounted`, `refused` (`03-hld.md` §6.2), and it is a *visible* projection field, not an internal flag. In `degraded_read_only`: reads, search, context compile and memory recall work; every mutating capability is refused with a reason code rather than a generic error; the TUI shows the reason in the status line; `hz.kernel.status` reports the degradation cause. In `degraded_unaccounted` work proceeds but every receipt carries `accounting: unavailable` (H-41); `refused` fails closed with an explicit reason and a non-zero exit code.
 
 ---
 
@@ -1841,12 +1912,14 @@ Additional model-level rules that carry security weight:
 
 ## 8. Performance budgets
 
+Runtime budgets shared with the orchestration plane — event append, guard decision, receipt settle — are owned by `08-runtime.md` §8 and cited here, never restated (reconciled 2026-11-07, reaudit stage 2, RC-15). The rows below are schema-side costs.
+
 | Operation | Budget | Basis |
 |---|---|---|
 | Schema validation of one part or tool result | ≤ 50 µs p95, ≤ 250 µs p99 | pure schema walk, no I/O |
-| Event append + projection commit (one transaction) | ≤ 3 ms p95, ≤ 15 ms p99 | SQLite WAL, local SSD |
-| `guard::authorize` (kernel, pure) | ≤ 200 µs p99 | ancestor measurement target; #L1289 |
-| Receipt write including fsync | ≤ 8 ms p95, ≤ 40 ms p99 | kernel journal |
+| Event append + projection commit (one transaction) | (budget owned by 08 §8) | SQLite WAL, local SSD; the schema-side cost measured alone is the row below |
+| `guard::authorize` (kernel, pure) | (budget owned by 08 §8) | pure decision function; the admission budget includes the round trip |
+| Receipt write including fsync | (budget owned by 08 §8) | kernel journal |
 | Config load + lattice merge (6 scopes, ≤ 2 000 rules) | ≤ 5 ms p95 | pure computation |
 | Projection rebuild from log | ≥ 100 000 events / 10 s | `hzcode session reindex` |
 | Session list query (10 000 sessions) | ≤ 20 ms p95 | indexed projection |
@@ -1905,7 +1978,7 @@ The tests that prove the rules in this document. Gate = a CI gate that MUST fail
 
 ## 10. Status
 
-Nothing in this document is `WIRED`, `TESTED`, `VERIFIED` or `RELEASED`. Everything HorizonCode-specific is `DESIGNED`. Where the pinned ancestor already implements a primitive, the level is `CODE_PRESENT (ancestor)` with the file that carries it, and it MUST NOT be read as a HorizonCode implementation.
+> **Implementation status (RC-13).** No schema in this document is generated or `WIRED`; every HorizonCode-specific schema is `DESIGNED`. The identity/digest rules (D3) are implemented and verified in `app/src/contracts.ts` per `docs/28-implementation-status.md`. Where the pinned ancestor already implements a primitive, the level is `CODE_PRESENT (ancestor)` with the file that carries it, and it MUST NOT be read as a HorizonCode implementation.
 
 | Capability | Level | Evidence |
 |---|---|---|
@@ -1920,7 +1993,7 @@ Nothing in this document is `WIRED`, `TESTED`, `VERIFIED` or `RELEASED`. Everyth
 | Rate-limit / entitlement model (`RateLimitPolicyV1`) | `DESIGNED` — no limiter exists; this document owns the shape behind `HZ_RATE_LIMITED`, referenced by `file:///data/home/forge/hzcode/docs/07-apis-and-contracts.md` §4.3.2 | §4.9, D39 |
 | Memory/learning schemas | `DESIGNED` — no extraction, distillation or proposal store exists | this document |
 | Config schema and merge lattice | `DESIGNED` — no loader implements the lattice yet | ADR-008, §4.16 |
-| Persistence map and `hz.db` projections | `DESIGNED` — no database exists; paths are the intended layout | §4.4, §4.5 |
+| Persistence map and `hz.db` projections | `DESIGNED` — the v0.1 runtime ships SQLite sessions, but none of the `hz.db` projections or tables below exist | §4.4, §4.5 |
 | Ancestor caveats inherited as work items | `UNKNOWN` to `WIRED` depending on lane | the ancestor's own handoff records that its independent-evidence gate is designed but not wired into the direct-session lane, subagent delegation is behind a flag, and two edits to one file in one message are refused (`file:///data/home/forge/hzcode/docs/01-vision-and-superset.md` §2.1). HorizonCode MUST NOT claim those as done. |
 
 **Open items owned by this document**

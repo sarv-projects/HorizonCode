@@ -17,7 +17,7 @@ This document decides four things, and nothing else:
 
 **Status of everything here.** This directory contains a **specification**, not code. Every HorizonCode capability in this catalog is at status **`DESIGNED`**, which is the lowest level in `_conventions.md` §8. Where a disposition depends on a capability that exists upstream, the *upstream* is cited by absolute path and is not a HorizonCode evidence claim. **No row in this catalog may be upgraded above `DESIGNED` on the strength of this document.** Upgrades require code, wiring and tests, in that order. **Implementation status (final audit, 2026-11-06):** rows remain specification claims, but where a row's capability has a working, tested slice in v0.1 (kernel guard/receipts, runtime loop, ten tools, TUI, skills/subagents, code mode, preview), the real level and evidence are maintained in [`28-implementation-status.md`](./28-implementation-status.md) — the single source of truth — not in this table.
 
-**Document ownership (proposal).** The set numbers documents `00`–`25`. Documents `00`–`16`, `24` and `25` exist at this revision; `17`–`23` are **unassigned** (see `25-roadmap-and-glossary.md` §4.1, which proposes titles for them). The capability IDs, event names and CI gates proposed in §3 of this document are **not** registered in [`_conventions.md`](./_conventions.md): at this revision `_conventions.md` §5 carries the 34 ratified capability IDs, §6 the ratified event catalogue (including `hz.session.moved`) and §11 eight ratified cross-document rulings (`RC-1` … `RC-8`). §3 below lists exactly what must be added to `_conventions.md` in the same change as the first implementation, and §3.6 records the rulings that bind this document.
+**Document ownership.** The set is documents `00`–`30`; `00`–`16` and `24`–`30` exist, `17`–`23` remain unassigned (§13 gap 1). `_conventions.md` §5 carries 34 canonical + 16 Reserved capability IDs, §6 44 canonical + 17 Reserved event names, §11 **RC-1…RC-15**. The §3.3/§3.4 lists are Registered as Reserved (RC-11) and are promoted on first implementation.
 
 ---
 
@@ -73,7 +73,7 @@ The machine-readable unit of Section A. One record per table row.
 
 ### 3.3 Proposed capability-ID additions [planned] — for `_conventions.md` §5
 
-Not registered by this change (see §1). Each MUST be added to §5 of `_conventions.md` in the same change as its first implementation.
+Registered as Reserved in `_conventions.md` §5 (RC-11); each is promoted to canonical in the change that first implements its feature.
 
 | Proposed ID | Effect class | Used by |
 |---|---|---|
@@ -163,7 +163,7 @@ Conventions for every table below:
 
 ### A.1 opencode — event-sourced core and Code Mode
 
-`source: /data/home/forge/repo-tour/opencode` (dev branch, v2.2.5) and `/tmp/opencode-report.part1.md` … `part3.md`.
+`source: /data/home/forge/repo-tour/opencode` (dev branch, v2.2.5) and `docs/audit/pass2/opencode-report.part1.md` … `part3.md`.
 
 | Capability | Where it exists in opencode | HorizonCode disposition | HorizonCode home |
 |---|---|---|---|
@@ -186,7 +186,7 @@ Conventions for every table below:
 
 ### A.2 codex — sandbox depth, policy-as-code, three surfaces
 
-`source: /data/home/forge/repo-tour/codex` (tour commit `ddd1812a`) and `/tmp/codex-report.md`.
+`source: /data/home/forge/repo-tour/codex` (tour commit `ddd1812a`) and `docs/audit/pass2/codex-report.md`.
 
 | Capability | Where it exists in codex | HorizonCode disposition | HorizonCode home |
 |---|---|---|---|
@@ -216,7 +216,7 @@ Conventions for every table below:
 
 ### A.3 grok-build — the TUI as the product
 
-`source: /data/home/forge/repo-tour/grok-build` and `/tmp/grok-build-report.md`.
+`source: /data/home/forge/repo-tour/grok-build` and `docs/audit/pass2/grok-build-report.md`.
 
 | Capability | Where it exists in grok-build | HorizonCode disposition | HorizonCode home |
 |---|---|---|---|
@@ -241,7 +241,7 @@ Conventions for every table below:
 
 ### A.4 DeepSeek-Reasonix — one Controller, cache discipline, ratchets
 
-`source: /data/home/forge/repo-tour/DeepSeek-Reasonix` (commit `b1106b9`, branch `studio`) and `/tmp/DeepSeek-Reasonix-report.md`.
+`source: /data/home/forge/repo-tour/DeepSeek-Reasonix` (commit `b1106b9`, branch `studio`) and `docs/audit/pass2/DeepSeek-Reasonix-report.md`.
 
 | Capability | Where it exists in Reasonix | HorizonCode disposition | HorizonCode home |
 |---|---|---|---|
@@ -265,7 +265,7 @@ Conventions for every table below:
 
 ### A.5 oh-my-pi — native capability stack and bidirectional ACP
 
-`source: /data/home/forge/repo-tour/oh-my-pi` and `/tmp/oh-my-pi-report.md`.
+`source: /data/home/forge/repo-tour/oh-my-pi` and `docs/audit/pass2/oh-my-pi-report.md`.
 
 | Capability | Where it exists in oh-my-pi | HorizonCode disposition | HorizonCode home |
 |---|---|---|---|
@@ -289,7 +289,7 @@ Conventions for every table below:
 
 ### A.6 forgecode — clean architecture and compile-time tool specs
 
-`source: /data/home/forge/repo-tour/forgecode` (no separate report; every path below was read from the tree).
+`source: /data/home/forge/repo-tour/forgecode`; full first-pass report `docs/audit/audit-forgecode-report.md` (`29-final-audit.md` §A.1 cluster 1).
 
 | Capability | Where it exists in forgecode | HorizonCode disposition | HorizonCode home |
 |---|---|---|---|
@@ -358,7 +358,7 @@ Sources added after A.1–A.8 were counted (the second learning pass and the pas
 
 | Addendum row | Upstream (clone under `/data/home/forge/repo-tour/`) | Disposition | Home |
 |---|---|---|---|
-| A.9.1 SWE-agent — the ACI reading modes | `SWE-agent` — bounded read windows with orientation, summary search with narrowing abort, window-scoped edit with repair hints, lint-gated edit that reverts, narrated empties, recovery hints, environment-derived state line | `Supersede` | NF-052 (doc 09): R-read-window-1…4, R-edit-window-1/2, R-edit-lint-1, R-grep-summary-1, R-tools-56/57 |
+| A.9.1 SWE-agent — the ACI reading modes | `SWE-agent` — bounded read windows with orientation, summary search with narrowing abort, window-scoped edit with repair hints, lint-gated edit that reverts, narrated empties, recovery hints, environment-derived state line | `Supersede` | NF-052 (doc 09): R-read-window-1…4, R-edit-window-1/2, R-edit-lint-1, R-grep-summary-1, R-tools-57/58 |
 | A.9.2 OpenHands — the Agent Canvas event model | `OpenHands` — durable/transient frame classes, sync preamble before replay, strict pagination, evented condensation views | `Inherit` | NF-060, NF-059; docs 07/10/12/14 |
 | A.9.3 wshobson/agents — the profile corpus | `wshobson-agents` — the engineered minority of a 202-agent roster distilled into profile contracts (P1–P10); the sprawl is the rejected failure mode | `Supersede` | doc 15 (D-15); NF-058-adjacent profile contracts |
 | A.9.4 aider — git-native engineering | `aider` — escalating edit-application ladder, tree-sitter + PageRank repo map, cache-layout invariant with keep-alive, compiler-grade lint/reflection loop, dirty-commit discipline | `Supersede` | NF-069, NF-052, NF-005; docs 09/10; `30-steal-list.md` §2 A/B/E/F |
@@ -854,7 +854,7 @@ Two conventions apply to every entry:
 
 - **Problem.** "Done" is a claim, not a state: agents submit with the repro script still in the tree, tests edited to pass, and no verification run — or they skip a mandated test phase entirely, and nothing stops them.
 - **Design.** Two halves. **Pre-submit review gate:** completion may require a configurable, ordered review loop before the final answer — re-run the reproduction, remove repro artifacts, restore test files (`git checkout --` the protected paths), then resubmit; bypass exists only as an explicit, audited force path. **Governed workflow:** an AGENTS.md `## Workflow` block (or `.hz/workflow`) declares a state machine (Plan → Propose changes → Await verification → Enforce linting) that the runtime compiles into the plan FSM; a transition that skips a required phase or breaches a declared constraint is refused, the workspace state is rolled back to the last committed plan checkpoint (itself effects with receipts), and the model must re-plan. Governance structures authority; it never adds any — the FSM can only demand *more* verification, never fewer grants.
-- **Capability IDs.** `verify.run`, `test.run`, `lint.run`, `files.patch` (restore), `vcs.write` (none — restore uses `files.patch`/`git checkout` under policy).
+- **Capability IDs.** `terminal.run` (the verification, test and lint commands this loop re-runs all execute through the exec-class capability — no new IDs), `files.patch` (restore); `vcs.write` is not used — restore runs through `files.patch`/`git checkout` under policy.
 - **Authority impact.** `kernel` (rollback = revert effects with receipts; the force path is audited).
 - **Dependencies.** NF-001, NF-002, NF-012; `update-checkpoint`/`rewind` machinery (doc 12); tools `verify`, `complete_step`.
 - **Status.** `DESIGNED`.
@@ -1049,7 +1049,7 @@ Two conventions apply to every entry:
 - **Design.** Each request fits the output cap to the remaining window: prompt size is estimated from the provider's newest reported usage anchor plus a local count of the appended tail, with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed. Tool output is capped by lines (default 3000) and bytes (default 50 KiB) with spill-to-artifact; a shell-output minimiser compresses verbose command output before it reaches the model (default on); dedicated-tool interception rewrites `cat`/`grep`-class shell invocations to native tools with a user-visible notice; long commands auto-background instead of blocking a turn.
 - **Capability IDs.** `context.manage`; interception, minimisation and backgrounding run under the ordinary `terminal.run` admission.
 - **Authority impact.** `none`.
-- **Dependencies.** NF-052, NF-061; R-tools-56; source: oh-my-pi (`output-budget.ts`, `streaming-output.ts`, `exec/settings.ts`); `30-steal-list.md` §2 B-5/B-6/B-7/C-7.
+- **Dependencies.** NF-052, NF-061; R-tools-57; source: oh-my-pi (`output-budget.ts`, `streaming-output.ts`, `exec/settings.ts`); `30-steal-list.md` §2 B-5/B-6/B-7/C-7.
 - **Status.** `DESIGNED`.
 
 ### NF-075 — Growth loop v2 — warm-cache review fork, editorial standard, archive-only curator
@@ -1080,7 +1080,7 @@ Two conventions apply to every entry:
 | A.7 claude-code | 14 | 2 | 11 | 1 |
 | A.8 horizoncode (ancestor) | 15 | 10 | 5 | 0 |
 | **Total (A.1–A.8)** | **117** | **36** | **79** | **2** |
-| A.9 addendum (§4.1, six sources) | 6 | 1 | 5 | 0 |
+| A.9 addendum (§4.9, six sources) | 6 | 1 | 5 | 0 |
 | **Grand total (A.1–A.8 + A.9)** | **123** | **37** | **84** | **2** |
 
 ### 6.2 What the dispositions mean in aggregate
@@ -1108,7 +1108,7 @@ Two conventions apply to every entry:
 | Learning-loop features, all required to be `none` | 6 (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`, `NF-075`) — **all six are `none`** |
 | New capability IDs proposed (§3.3) | 16 |
 | New events proposed (§3.4) | 17 |
-| CI gate rows named (§3.5) | 18 rows, 19 distinct gates |
+| CI gate rows named (§3.5) | 17 rows, 18 distinct gates |
 
 ### 6.4 Coverage statement
 
@@ -1220,7 +1220,7 @@ Every entry states what is refused, why, and what covers the user need instead. 
 1. **This catalog introduces no authority of its own.** It is a specification. Every capability it maps or adds is exercised through Guard, a one-use lease and a receipt (NF-001, ADR-012).
 2. **Capability IDs are the vocabulary of authority.** A row's home column names the IDs that will appear in `arch_V1`-style contracts and in `hz.effect.decision.made` events; an implementation that introduces a capability with no ID fails `gate:tool-declaration`.
 3. **Narrowing is the only direction config may move.** Workspace files narrow user config; managed policy narrows both; imported settings from other agents narrow (ADR-008, NF-031). The catalog's `Supersede` rows must never be implemented as *widening* relative to the reference they supersede for a given grant.
-4. **The learning loop is fenced.** The five learning-loop features (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`) are `none`; a proposal that would touch policy, capability sets or the kernel is refused at the proposal boundary (ADR-010, NF-010).
+4. **The learning loop is fenced.** The six learning-loop features (`NF-008`, `NF-010`, `NF-033`, `NF-034`, `NF-035`, `NF-075`) are `none`; a proposal that would touch policy, capability sets or the kernel is refused at the proposal boundary (ADR-010, NF-010).
 5. **Extension and plugin surfaces declare before they act.** Manifest-declared capabilities, admission per use, no ambient authority (NF-032, NF-043).
 6. **Residuals are security data.** A typed residual is a statement about what is *not* protected, and it is surfaced, logged and exported on purpose (NF-016, NF-021).
 7. **Rejected rows are security decisions.** D-9, D-10, D-11, D-12, D-13 and D-18 are refusals of techniques that would weaken the authority boundary; they are normative (§7).
@@ -1264,6 +1264,8 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 | `gate:receipt-coverage` | Every mutating capability has a declared observation path. |
 
 ### 12.2 Tests that prove the new features once they exist
+
+**Coverage note.** `NF-015`, `NF-027`, `NF-037`, `NF-041`, `NF-043`, `NF-046`, `NF-047`, `NF-048` are proven by the §12.1 gates (`gate:cross-plane-abi`, `gate:receipt-coverage`, `gate:frontend-parity`, `gate:doc-status`, `gate:provenance`, `gate:kernel-pin`) rather than by a dedicated item; every other row has one of the 67 items below.
 
 1. **NF-001** — a mutating tool cannot execute without a receipt; a tool with no observation path cannot be granted mutation authority; an adversarial batch cannot present `UserAction` origin.
 2. **NF-002** — a claim contradicted by a receipt is lowered and reported; the gate never raises a claim (negative test: a fabricated receipt cannot raise it).
@@ -1337,11 +1339,11 @@ Numbers are stated so they can be tested; a budget without a number is a prefere
 
 ## 13. Status
 
-**Whole-document status: `DESIGNED`.** This document contains no implementation evidence and therefore cannot support a higher level. Its own evidence is: the upstream repositories read under `/data/home/forge/repo-tour/` (the primary eight, plus the second-wave six in §4.1 A.9), the deep-dive reports listed per section, and the binding decisions in [`02-decisions.md`](./02-decisions.md). **Implementation status (final audit, 2026-11-06):** where built slices exist, levels are maintained in [`28-implementation-status.md`](./28-implementation-status.md); the audit that re-verified the twelve source repositories is [`29-final-audit.md`](./29-final-audit.md), and the pass-3 four-repo dives (aider, mini-swe-agent, hermes-agent, oh-my-pi) are consolidated in [`30-steal-list.md`](./30-steal-list.md).
+**Whole-document status: `DESIGNED`.** This document contains no implementation evidence and therefore cannot support a higher level. Its own evidence is: the upstream repositories read under `/data/home/forge/repo-tour/` (the primary eight, plus the second-wave six in §4.9 A.9), the deep-dive reports listed per section, and the binding decisions in [`02-decisions.md`](./02-decisions.md). **Implementation status (final audit, 2026-11-06):** where built slices exist, levels are maintained in [`28-implementation-status.md`](./28-implementation-status.md); the audit that re-verified the twelve source repositories is [`29-final-audit.md`](./29-final-audit.md), and the pass-3 four-repo dives (aider, mini-swe-agent, hermes-agent, oh-my-pi) are consolidated in [`30-steal-list.md`](./30-steal-list.md).
 
 | Area | Level | Evidence |
 |---|---|---|
-| Section A parity matrix (117 rows + 6 addendum rows, A.9) | `DESIGNED` | Upstream citations per row; no HorizonCode code exists. |
+| Section A parity matrix (117 rows + 6 addendum rows, A.9) | `DESIGNED` | Upstream citations per row; no HorizonCode code implements a Section A row (built slices are owned by `28-implementation-status.md`). |
 | Section B new features (`NF-001` … `NF-075`) | `DESIGNED` | Problem/design/authority/dependencies recorded per entry; implemented v1 slices (NF-051 code mode, NF-055 preview — reduced forms) carry levels in `28-implementation-status.md`. NF-063…NF-070 were added by the final audit (`29-final-audit.md` §B.1; sources in `docs/audit/`); NF-071…NF-075 by the adoption wave (`30-steal-list.md`; RC-15). |
 | Section C counts | `DESIGNED` | Derived from Section A tables by the method in §6; recomputed by the recount gate. |
 | Section D non-goals | `DESIGNED` | Normative refusals; each names a replacement or states that the need is out of scope. |

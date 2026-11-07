@@ -61,7 +61,7 @@
 |---|---|
 | Web-first (Electron/browser only) | Slower start, heavier install, worse for SSH/CI, and it spends the effort budget on UI instead of agent quality. |
 | TUI-only | Loses team sharing, long-diff review, dashboards and mobile supervision; also forks behaviour later when a surface is bolted on. |
-| IDE-extension-first( VS Code only) | Subordinates the agent to one editor and one vendor; ACP + a bridge covers many editors without that lock-in. |
+| IDE-extension-first (VS Code only) | Subordinates the agent to one editor and one vendor; ACP + a bridge covers many editors without that lock-in. |
 
 **Consequences.**
 
@@ -77,7 +77,7 @@
 
 **Why not pure TypeScript.** Authority cannot be enforced by the process it constrains. A policy check written in the same runtime as the plugin it is checking is advisory. Additionally, the native capability stack (in-process bash with an injectable VFS, streaming edit engine, AST rewrites, gitoxide-class VCS access, OS sandboxing) is either impossible or an order of magnitude slower in JS.
 
-**Why not pure Rust.** Terminal UI iteration speed and ecosystem (React-style component model, streaming markdown, schema validation, provider SDK knowledge) strongly favour TypeScript; ~300 provider integrations are config-and-codec work that benefits from a high-level language and a huge package ecosystem. Every high-velocity reference agent that is Rust-first (codex, grok-build) pays for it in slower UI iteration and heavier crate scaffolding.
+**Why not pure Rust.** Terminal UI iteration speed and ecosystem (React-style component model, streaming markdown, schema validation, provider SDK knowledge) strongly favour TypeScript; ~300 provider/model entries served by a smaller set of wire codecs (cf. `01-vision-and-superset.md` §2.2) are config-and-codec work that benefits from a high-level language and a huge package ecosystem. Every high-velocity reference agent that is Rust-first (codex, grok-build) pays for it in slower UI iteration and heavier crate scaffolding.
 
 **Consequences.**
 
@@ -154,7 +154,7 @@
 
 **Decision.** Permissions are expressed in two composable layers. **Layer 1 (ergonomic):** wildcard rules with the Claude-Code-style shape — `Shell(git *)`, `Edit(src/**)`, `Read(*)`, `Web(domain:github.com)`, `Provider(model:claude-*)`. **Layer 2 (semantic):** a Starlark prefix engine that evaluates command decisions structurally (`execpolicy`), never by string matching on prose.
 
-**Why.** Wildcards alone are unsafe (`Shell(rm -rf*)` cannot see `xargs rm`), and a semantic engine alone is unusable for everyday expression. The two together give expressiveness *and* safety. Precedence is always `deny > ask > allow`.
+**Why.** Wildcards alone are unsafe (`Shell(rm -rf*)` cannot see `xargs rm`), and a semantic engine alone is unusable for everyday expression. The two together give expressiveness *and* safety. Precedence and its single enforcement point are owned by `11-authority-safety.md` R1.
 
 **Consequences.** Every rule compiles to a canonical form with a digest; the effective policy set is hashed into the session posture so a run can be shown to have run under a specific policy revision.
 
@@ -202,7 +202,7 @@
 
 ## ADR-012 — Every mutation produces a receipt; `UNKNOWN` is a first-class state
 
-**Decision.** Any effect that changes the world (file write, process execution, network effect, credential use, plugin effect, external API call) settles into a receipt with: capability ID, origin kind, intent digest, policy revision, lease ID, observation, and a terminal state of `SUCCEEDED`, `FAILED`, `DENIED` or **`UNKNOWN`**. `UNKNOWN` is never retried automatically.
+**Decision.** Any effect that changes the world (file write, process execution, network effect, credential use, plugin effect, external API call) settles into a receipt with: capability ID, origin kind, intent digest, policy revision, lease ID, observation, and a terminal state of `SUCCEEDED`, `FAILED`, `DENIED` or **`UNKNOWN`** — the receipt subset of the RC-7 outcome enum, mapped by `05-domain-and-schemas.md` §4.11. `UNKNOWN` is never retried automatically.
 
 **Why.** "Probably fine" is the worst possible outcome for an autonomous agent. An explicit unknown forces reconciliation, and the honesty of the state machine is what makes unattended operation legitimate.
 

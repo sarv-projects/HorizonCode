@@ -59,3 +59,15 @@ The four deep dives of the second adoption wave (2026-11-07), consolidated in `3
 | `audit-mini-swe-report.md` | mini-swe-agent @ `04d809c` | 1,007 lines; 41 steal items; exhaustive (221 files); 3 doc/fixture defects |
 | `audit-hermes-report.md` | hermes-agent @ `d4e7c343` | 863 lines; 38 steal items; owner/worker persistent loop + growth machinery; shallow-clone caveat |
 | `audit-omp-deep-report.md` | oh-my-pi | 298 lines; 28 steal items; claim verification 1 confirmed / 3 partial / 2 not-verifiable |
+
+## Pass-4 reports (`pass4/`) — stage-2 line-by-line reaudit
+
+Three report-only auditors read every doc line by line after the RC-15 adoption wave, each finding classified `STALE | DUP | SUPERSET | CONTRADICTION | DEADREF` with an exact fix. 222 findings total; the fix passes applied them across disjoint file scopes.
+
+| File | Scope | Findings |
+|---|---|---|
+| `reaudit-00-09.md` | docs 00–09 + `README.md` + `CURRENT_RUN.md` | 85 needing an edit (22 STALE / 8 DUP / 40 CONTRADICTION / 15 DEADREF) + 20 verified-OK notes |
+| `reaudit-10-16.md` | docs 10–16 (7,331 lines read in full) | ~89 (≈45 CONTRADICTION / ≈31 DEADREF / ≈12 STALE / ≈7 DUPLICATE + a 16-row duplicate-ownership table) |
+| `reaudit-17-30.md` | docs 24–30 + `_conventions.md` | 48 (14 CONTRADICTION / 20 STALE / 13 DEADREF / 1 SUPERSET / 1 DUPLICATE) |
+
+Dup-hunt result: eight overlap families across 24/25/26/27/28/29/30/`_conventions` — seven correctly layered (owner + pointer), one true duplicate collapsed (RC-15(a) restating RC-13(b)).

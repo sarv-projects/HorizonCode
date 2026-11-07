@@ -9,7 +9,7 @@
 |---|---|
 | Document | `/data/home/forge/hzcode/docs/10-cognition.md` |
 | Owner plane | Cognition (`_conventions.md` §2.3) |
-| Packages | `@horizoncode/provider`, `@horizoncode/context`, `@horizoncode/prompts` [planned], `@horizoncode/tools` |
+| Packages | `@horizoncode/provider`, `@horizoncode/context` (which holds the prompt library — `packages/context/prompts/` [planned]), `@horizoncode/tools` |
 | Crates | `hz_index`, `hz_ast` (through `hz_native`), `hz_kernel` (secret use, receipts) |
 | Depends on | `docs/03-hld.md`, `docs/08-runtime.md`, `docs/11-authority-safety.md` |
 | Supersedes | nothing |
@@ -57,6 +57,12 @@ Every row is **DESIGNED** in HorizonCode unless §10 says otherwise.
 Rules are numbered and individually testable; §9 names the tests. MUST / MUST NOT are fail-closed: a violation is a
 defect, not a warning. Where a rule encodes a policy table, the table is data with a digest, so the rule is checkable
 by comparing digests rather than by reading code.
+
+**Vocabulary.** An **effect terminal state** uses RC-7's single enum and its lower-case spelling (`_conventions.md`
+§11): `succeeded` | `failed` | `denied` | `cancelled` | `unknown` | `budget_exhausted` | `timeout` | `interrupted`.
+This document cites that enum and never invents a terminal word. Upper-case `UNKNOWN` is a *different* vocabulary —
+the `_conventions.md` §8 status level meaning "this document does not settle it" (also used for an unmeasured ratio,
+R66) — not a terminal state.
 
 ### 2.A Provider layer
 
@@ -106,7 +112,7 @@ by comparing digests rather than by reading code.
 | R32 | Stop sequences MAY come from the caller (declared config) and from a codec (protocol framing only). Caller stop sequences MUST appear in `ContextPlanV1.declared.stop_sequences` so a truncated answer is explainable after the fact. | `stop-sequences.test.ts` |
 | R33 | `max_output_tokens` MUST always be emitted, and MUST equal `min(model.max_output_tokens, run_budget_remaining, step_ceiling)` — never a hard-coded default that ignores the budget. | `max-tokens.test.ts` |
 | R34 | Media conversion and costing happen before admission: the codec re-encodes to accepted formats and downscales to declared caps, and the token cost is computed from the descriptor's `media_tokens` formula (never estimated by a magic constant) before the request is admitted to the budget. | `media-budget.test.ts` |
-| R35 | Request construction is deterministic: identical inputs produce a byte-identical body except for explicitly declared volatile fields (`stream`, and a provider-required nonce/`user` id), which are excluded from the prefix digest input. | `request-determinism.test.ts` |
+| R35 | Request construction is deterministic: identical inputs produce a byte-identical body except for explicitly declared volatile fields (`stream`; `tool_choice`, a per-request field that is **not** part of `DeclaredConfigV1` or of R56's `tool_mode`; and a provider-required nonce/`user` id), which are excluded from the prefix digest input. | `request-determinism.test.ts` |
 
 ### 2.D Streaming, errors, retries and fallback
 
@@ -114,7 +120,7 @@ by comparing digests rather than by reading code.
 |---|---|---|
 | R36 | Every provider failure is classified into exactly one class: `retryable_transient`, `retryable_ratelimit`, `retryable_context_overflow`, `fatal_auth`, `fatal_request`, `fatal_model_missing`, `fatal_content_filter`, `fatal_user_abort`, `unknown`. Classification is structural (HTTP status, provider error code field) and never prose matching. | `error-taxonomy.test.ts` |
 | R37 | `retryable_transient` and `retryable_ratelimit` retry with exponential backoff and full jitter (base 500 ms, cap 20 s), honouring `Retry-After` up to 60 s; more than 3 attempts is forbidden. | `retry-policy.test.ts` (fake clock) |
-| R38 | `retryable_context_overflow` MUST NOT be retried by truncating the request. It raises the compaction path once (`hz.error.raised`, `reason_code = context_overflow`) and, after exactly one post-compaction retry, fails the step. | `overflow-path.test.ts` |
+| R38 | `retryable_context_overflow` MUST NOT be retried by truncating the request. It raises the compaction path once (`hz.error.raised`, `reason_code = context_overflow`) and then climbs the **ladder of §2.I.1(2)**, whose first rung *is* the single post-compaction retry and whose top rung is terminal for the step. There is no second retry ceiling anywhere in this document. | `overflow-path.test.ts` |
 | R39 | `fatal_content_filter` terminates the step, records the provider's reason code, preserves partial output as an artifact, and MUST NOT admit any claim from it. | `content-filter.test.ts` |
 | R40 | A stream that dies after tool-call arguments began MUST drop those tool calls entirely: a partial tool call is never executed, because there is no receipt for a half-intent. | `partial-toolcall.test.ts` |
 | R41 | The `FallbackChainV1` fires only on `retryable_*` classes, only before any tool call of the step was admitted, at most one hop per step and three per turn. Every substitution is an event and is visible in the UI; a silent model substitution is forbidden. | `fallback-chain.test.ts` |
@@ -134,8 +140,8 @@ by comparing digests rather than by reading code.
 | R50 | The **price table is append-only** (`PriceRateV1`): a rate is superseded, never edited; lookup is `(provider_id, model_id, at_timestamp)`. A missing rate yields `cost = unknown` and is never recorded as `0`. | `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `/data/home/forge/repo-tour/DeepSeek-Reasonix/internal/contract/pricing/rates.go`) |
 | R51 | Cache pricing is explicit: `cache_read_per_mtok` and `cache_write_per_mtok` are separate rates. When the provider reports no cache counters, input is priced at the full input rate and the record sets `cache_measured = false` — conservative, never optimistic. | `cache-pricing.test.ts` |
 | R52 | Currency: the ledger stores the vendor's declared currency plus the id of the FX snapshot used for display. Reconciliation MAY convert for display; accounting MUST NOT convert. A display conversion never mutates a stored amount. | `currency-ledger.test.ts` |
-| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream`), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
-| R54 | Every provider call is preceded by a budget check against the enclosing run's token and cost budgets. A call that cannot fit is refused before any network effect, and the refusal is a receipted `DENIED` effect, not a silent failure. | `budget-preflight.test.ts` |
+| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` — `dream` is the background-consolidation run defined in `/data/home/forge/hzcode/docs/08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
+| R54 | Every provider call is preceded by a budget check against the enclosing run's token and cost budgets. A call that cannot fit is refused before any network effect, and the refusal is a receipted `denied` effect (RC-7), not a silent failure. | `budget-preflight.test.ts` |
 
 ### 2.F The context compiler in depth
 
@@ -252,43 +258,45 @@ Retrieval is local-first: the default configuration needs no network, and every 
 
 ### 2.I Compaction
 
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** — triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `/data/home/forge/hzcode/docs/12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
+
 The event log is never compacted. Compaction rewrites the *requested context* only.
 
 | # | Rule | Test |
 |---|---|---|
 | R107 | There is exactly one automatic trigger: `agent.compact_ratio` (default 0.90, presets 0.70/0.80/0.90), with `trigger_tokens = floor(context_window × ratio)` computed from the estimator and reconciled against provider-reported usage after each call. Explicit triggers are the `compress` tool, `/compact`, and the single post-overflow path (R38). | `compaction-trigger.test.ts`, `trigger-ratio-presets.test.ts` |
 | R108 | Strategies are `digest`, `summary`, `verbatim-tail` and `snapcompact`, applied together as `digest + verbatim-tail` by default. Selection is a **deterministic host policy** over `(model capabilities, evicted span size, observed compressibility)`; the model never chooses whether and how to compact. The chosen strategy set and its inputs are recorded in `CompactionRecordV1`, so the outcome is reproducible. | `strategy-selection.test.ts` |
-| R109 | The **host digest** is authoritative: it is built from events and receipts (goal, plan, todos, files touched with digests, effect terminal states including `UNKNOWN`, failures, open questions) with no model involvement. The model-written **summary** is labelled non-authoritative in the tail and MUST NOT restate receipts in a way that could be read as evidence. Where they disagree, the digest wins and the summary is discarded. | `digest-authoritative.test.ts`, `digest-summary-conflict.test.ts` |
+| R109 | The **host digest** is authoritative: it is built from events and receipts (goal, plan, todos, files touched with digests, effect terminal states including `unknown`, failures, open questions) with no model involvement. The model-written **summary** is labelled non-authoritative in the tail and MUST NOT restate receipts in a way that could be read as evidence. Where they disagree, the digest wins and the summary is discarded. | `digest-authoritative.test.ts`, `digest-summary-conflict.test.ts` |
 | R110 | **Verbatim tail**: the most recent turns are never compacted — at least the last 2 user turns and at least 12 % of the context window, whichever is larger, retained byte-for-byte. A compaction that would violate this MUST be refused and reported. | `verbatim-tail-floor.test.ts` |
 | R111 | **Snapcompact** renders the evicted span to bitmap frames and attaches them as images. It is eligible only when the model declares `vision`, the estimated reduction is ≥ 3×, and a text index of the frames is retained alongside them. Each frame is stored as an artifact (`hz://artifact/<sha256>`), so frames are content-addressed, auditable and byte-stable across replays. | `snapcompact-eligibility.test.ts`, `snapcompact-artifacts.test.ts` |
-| R112 | **What must survive compaction** — all of these MUST be present in the post-compaction request, and each has its own assertion in `compaction-preservation.test.ts`: the goal and its state; the plan, plan-mode gate and approved-plan window; the todos; constraints and preferences in force (from memory and instruction files); open questions and blockers; the *set* of mutation receipts as `(path, post-digest, terminal state)`; unresolved `UNKNOWN` effects (they stay visible until reconciled); pending permission asks; the active skill and its materialised instructions; remaining budgets; and the retention floor of R110. | `compaction-preservation.test.ts` |
+| R112 | **What must survive compaction** — all of these MUST be present in the post-compaction request, and each has its own assertion in `compaction-preservation.test.ts`: the goal and its state; the plan, plan-mode gate and approved-plan window; the todos; constraints and preferences in force (from memory and instruction files); open questions and blockers; the *set* of mutation receipts as `(path, post-digest, terminal state)`; unresolved `unknown` effects (they stay visible until reconciled); pending permission asks; the active skill and its materialised instructions; remaining budgets; and the retention floor of R110. | `compaction-preservation.test.ts` |
 | R113 | **The single provider-visible checkpoint rule**: a request contains at most one provider-visible checkpoint — one digest block, installed by `hz.session.checkpoint.created`. Repeated compaction folds into the existing checkpoint chain instead of adding a second narrative block, and the request shape stays `prefix + one checkpoint + verbatim tail`. A second checkpoint block in one request is a hard defect. | `single-checkpoint.test.ts` |
 | R114 | Compaction MUST NOT alter the prefix: `prefix_digest` before and after a compaction is identical, and the cache-guard test asserts this (R65b applies). Only T4's content and the checkpoint change. | `compaction-prefix-stability.test.ts` |
 | R115 | Compaction is its own step with its own prefix variant (`prompt_family = compaction`), its own budget label and its own receipts. Planner, executor and compaction prefixes are never mixed (ADR-009 corollary). | `compaction-step-isolation.test.ts` |
 | R116 | Compaction is measured: `CompactionRecordV1` records tokens before/after, achieved ratio, wall time, model cost, the strategy set, and the estimated cache-invalidation cost (how many cached prefix tokens are discarded). `hzcode session verify <id>` includes the compaction chain, so a suspicious summary has provenance. | `compaction-measurement.test.ts` |
-| R117 | Failure modes are named and fail closed: (a) **thrash** — if a second overflow occurs within 2 steps of a compaction, the run stops with `hz.error.raised{reason_code = compaction_thrash}` and asks the user, instead of looping; (b) **lost fact** — a needed fact missing from the request is answered from the durable log by retrieval, and the summary is never trusted to reconstruct it; (c) **illegible frames** — a snapcompact strategy that fails its eval gate is disabled by rollout flag; (d) **summary fabrication** — a summary that contradicts a receipt is discarded and the contradiction is reported. | `compaction-thrash.test.ts`, `snapcompact-eval-gate.test.ts` |
+| R117 | Failure modes are named and fail closed: (a) **thrash** — a second overflow within 2 steps of a compaction is thrash *inside the current rung of the ladder in §2.I.1(2)*: that rung fails and the next rung is entered; at the top rung the run stops with `hz.error.raised{reason_code = compaction_thrash}` and asks the user, instead of looping; (b) **lost fact** — a needed fact missing from the request is answered from the durable log by retrieval, and the summary is never trusted to reconstruct it; (c) **illegible frames** — a snapcompact strategy that fails its eval gate is disabled by rollout flag; (d) **summary fabrication** — a summary that contradicts a receipt is discarded and the contradiction is reported. | `compaction-thrash.test.ts`, `snapcompact-eval-gate.test.ts` |
 
 #### 2.I.1 Adopted insertions (RC-15)
 
 > Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
 
-**1. Instruction epochs (NF-059):** content-addressed instruction blobs; `hz.session.instructions.updated {delta, text?}` value deltas; an epoch spans completed compactions; forks adopt newest values as baseline (§D-05.2).
+**1. Instruction epochs (NF-059):** content-addressed instruction blobs; `hz.session.instructions.updated` `[planned]` `{delta, text?}` value deltas — the name is reserved per RC-11 and is promoted to a canonical event in the change that implements NF-059 (`_conventions.md` §6); an epoch spans completed compactions; forks adopt newest values as baseline (§D-05.2).
 
-**2. Compaction ladder:** `keep_first` (preserve opening framing), `minimum_progress` (anti-thrash: a compaction that does not reduce the projected context below the trigger is not repeated automatically), and the **bounded hard-reset ladder** (`hard_context_reset_max_retries` × `hard_context_reset_context_scaling`), each rung with a named recovery move; the second overflow after one rebuild is terminal.
+**2. Compaction ladder:** `keep_first` (preserve opening framing), `minimum_progress` (anti-thrash: a compaction that does not reduce the projected context below the trigger is not repeated automatically), and the **bounded hard-reset ladder** (`hard_context_reset_max_retries` × `hard_context_reset_context_scaling`), each rung with a named recovery move; the **first** rung is the single post-compaction retry of R38, and the second overflow after one rebuild is terminal.
 
-**3. `toolChoice: "none"` final step:** the final call of a step retains the tool definitions with `toolChoice:"none"` instead of stripping them, so the cached prefix survives.
+**3. `toolChoice: "none"` final step:** the final call of a step retains the tool definitions with `toolChoice:"none"` instead of stripping them, so the cached prefix survives. `tool_choice` is a **per-request** field: it is not a member of `DeclaredConfigV1` and is distinct from the P2 `tool_mode` of R56, and it sits on R35's declared volatile list — a per-step flip therefore starts no cache epoch and cannot invalidate the prefix it is preserving (R114).
 
 **4. Tail-append compaction:** summaries append at the tail; the byte-stable prefix is never rewritten by compaction.
 
 #### 2.I.2 Cache and context-cost addendum (RC-15)
 
-> Adopted 2026-11-07 from the adoption wave (extensions of NF-005 and NF-074; sources A.9.4 aider, A.9.6 oh-my-pi, distilled in `30-steal-list.md` §2 B).
+> Adopted 2026-11-07 from the adoption wave (extensions of NF-005 and NF-074; source A.9.4 aider, plus oh-my-pi per `30-steal-list.md` §2 B — oh-my-pi is an A.1–A.8 source distilled there, not an A.9 one).
 
 - **Cache layout, stated as an extension of §2.F.2:** stable slabs first, exactly three cache breakpoints, and a largest-cacheable-prefix computation (`cacheable_messages()`-style); ordering is a reviewable design property, never incidental.
 - **Keep-alive during idle:** pause time is cache-expiry time — the harness pings the provider prefix cache before expiry so the next turn is a hit, not a full cache write.
 - **Append-only sync:** any in-place rewrite of the message log truncates to the longest byte-stable prefix (`syncMessages` semantics); append-only mode is gated **per provider from data** (`appendOnlyContext: auto`), never from a user preference — a provider that rewrites history between turns would be hurt by it.
 - **Output-budget fit (NF-074):** estimate prompt size from the provider's newest reported usage anchor plus a local count of the appended tail; fit the output cap to the remaining window with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed.
-- **Spill and minimisation defaults (NF-074):** tool output caps at 3000 lines / 50 KiB with spill-to-artifact; the shell-output minimiser is on by default; `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
+- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here — `/data/home/forge/hzcode/docs/09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
 
 ### 2.J Prompting
 
@@ -551,7 +559,7 @@ Classification is structural — HTTP status and the provider's error-code field
 |---|---|---|---|---|
 | `retryable_transient` | 5xx other than 429, reset after headers, truncated body | yes, ≤ 3 attempts, exponential backoff with full jitter (base 500 ms, cap 20 s) | eligible, if no tool call of this step was admitted | attempt sequence in the log; `hz.error.raised` only on exhaustion |
 | `retryable_ratelimit` | 429, provider quota code, `Retry-After` | yes, honour `Retry-After` up to 60 s, then backoff | eligible; also an affinity-rotation trigger | attempt sequence; two consecutive failures are a rotation trigger |
-| `retryable_context_overflow` | provider overflow code or context-length status | **no truncating retry**: raises the compaction path once, then exactly one post-compaction retry, then the step fails | not eligible | `hz.error.raised{reason_code = context_overflow}` |
+| `retryable_context_overflow` | provider overflow code or context-length status | **no truncating retry**: raises the compaction path once, then climbs the ladder of §2.I.1(2) — first rung the single post-compaction retry, top rung terminal | not eligible | `hz.error.raised{reason_code = context_overflow}` |
 | `fatal_auth` | 401 / 403, invalid token, revoked key | no retry; at most one serialized refresh per credential | not eligible — another model does not fix credentials | account invalidated for the pool; `hz.error.raised` |
 | `fatal_request` | 400 / 422, schema rejection, a sampling parameter sent to a family that rejects it | no retry; a repeat is a defect, not a transient | not eligible; the offending declared field is named | `hz.error.raised{class = request}` |
 | `fatal_model_missing` | 404 model, catalogue mismatch | no retry | not eligible; `hzcode models refresh` is suggested when the snapshot lacks the model | `hz.error.raised` with the snapshot digest |
@@ -587,7 +595,7 @@ Cross-cutting: timeouts are connect 10 s, time-to-first-token 120 s, inter-token
 | Unknown tokenizer | Conservative byte estimator with `estimated_conservative = true`. | R48 |
 | Cache counters not reported | `cache_measured = false`; the cache ratio is reported as `UNKNOWN` rather than zero. | R66 |
 | Affinity changed with a warm prefix | Reported as a **cold** cache with reason `account-changed` and an advisory cost note; the run continues. | R72 |
-| Compaction thrash (a second overflow within 2 steps of a compaction) | The run stops and asks the user instead of looping. | R117 |
+| Compaction thrash (a second overflow within 2 steps of a compaction) | Thrash inside a rung fails that rung and climbs the next rung of §2.I.1(2); at the top rung the run stops and asks the user instead of looping. | R117, §2.I.1(2) |
 | Snapcompact frames below the eval gate | The strategy is disabled by rollout flag rather than shipped. | R117 |
 
 ---
@@ -605,7 +613,7 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 5. **Hygiene check.** `assertPrefixClean` scans for forbidden content and volatile patterns; any hit is a fail-closed defect and the step does not start. (R60, R64)
 6. **Digest.** `digestPrefix` computes `sha256(canonical(P0 ‖ P1 ‖ P2))`; it is stored with `compiler_version` and the model-descriptor digest, and `hashDeclaredConfig` supplies the epoch key. (R57, R61)
 7. **Cache intent.** `CacheIntentV1` is emitted with `account_affinity_required: true` and the provider's cache controls; the runtime honours it or fails closed. (R63)
-8. **Budget pre-flight.** `countTokens` sizes the prefix and the projected tail; the enclosing run's budget is checked **before** any network effect, and a call that cannot fit is refused as a receipted `DENIED` effect. (R47, R48, R54)
+8. **Budget pre-flight.** `countTokens` sizes the prefix and the projected tail; the enclosing run's budget is checked **before** any network effect, and a call that cannot fit is refused as a receipted `denied` effect (RC-7). (R47, R48, R54)
 9. **First request.** `resolveAuth` resolves the account through the kernel, affinity is recorded on the first successful request, `buildRequest` fills the declared volatile fields only, and `hz.step.llm.requested` records the snapshot digest, `prefix_digest` and cache intent. Deltas then follow as `hz.step.llm.delta`. (R16, R35, R45, R71)
 
 ### 6.2 Streaming step with a mid-stream provider failure → retry with backoff → fallback model
@@ -613,7 +621,7 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 1. **Attempt 1 starts.** One stream is opened for the step — never two. Deltas carry a monotonic index, so a mid-stream crash is replayable. (R45, R46)
 2. **Failure.** The stream ends with `error{class}` instead of `stop`; classification is structural (status code, provider error-code field) and exactly one class applies. (R36)
 3. **Partial-output decision.** If tool-call arguments had begun, those tool calls are **dropped entirely** — a partial tool call is never executed. Text already emitted is kept as an artifact, but no claim is admitted from a failed attempt. (R39, R40)
-4. **Retry decision.** `retryable_transient` and `retryable_ratelimit` retry with exponential backoff and full jitter (base 500 ms, cap 20 s), honouring `Retry-After` up to 60 s; a fourth attempt is forbidden. `fatal_*` classes never retry. `retryable_context_overflow` never truncates the request: it raises the compaction path (flow 6.3) and allows exactly one post-compaction retry. (R37, R38)
+4. **Retry decision.** `retryable_transient` and `retryable_ratelimit` retry with exponential backoff and full jitter (base 500 ms, cap 20 s), honouring `Retry-After` up to 60 s; a fourth attempt is forbidden. `fatal_*` classes never retry. `retryable_context_overflow` never truncates the request: it raises the compaction path (flow 6.3) and enters the ladder of §2.I.1(2), whose first rung is the single post-compaction retry and whose top rung is terminal. (R37, R38)
 5. **Account decision.** Affinity breaks only on two consecutive retryable failures, advertised quota exhaustion, invalid credentials, an explicit user command, or an open circuit breaker; the break emits `hz.provider.account.rotated` with a reason code and never happens while a request is in flight. Breakers are per `(provider, account)` over a rolling 60 s window, open after 5 consecutive failures or 3 rate-limit failures, half-open after 30 s, and are process-local so a replay reproduces the recorded request sequence. (R23, R24, R43)
 6. **Fallback decision.** `FallbackChainV1` may fire only for a `retryable_*` class, only if no tool call of this step was admitted, at most one hop per step and three per turn; the substitution is an event and is visible in the UI. (R41)
 7. **Stickiness.** Once a fallback model serves a step, the session continues on it for the remainder of the turn (prefix stability) unless `fallback.return = true`, in which case the return is itself an event. (R42)
@@ -623,14 +631,14 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 ### 6.3 Compaction: trigger → plan → apply → prefix-unchanged assertion → next step
 
 1. **Trigger.** Automatic: `agent.compact_ratio` (default 0.90; presets 0.70 / 0.80 / 0.90) yields `trigger_tokens = floor(context_window × ratio)` from the estimator, reconciled against provider-reported usage after each call. Explicit: the `compress` tool, `/compact`, or the single post-overflow path from flow 6.2. (R107)
-2. **Plan.** `planCompaction` selects strategies by deterministic host policy over `(model capabilities, evicted span size, observed compressibility)` — the model never chooses whether or how to compact. The **host digest** is built from events and receipts with no model involvement (goal, plan, todos, files touched with digests, terminal effect states including `UNKNOWN`, failures, open questions). (R108, R109)
+2. **Plan.** `planCompaction` selects strategies by deterministic host policy over `(model capabilities, evicted span size, observed compressibility)` — the model never chooses whether or how to compact. The **host digest** is built from events and receipts with no model involvement (goal, plan, todos, files touched with digests, terminal effect states including `unknown`, failures, open questions). (R108, R109)
 3. **Floor check.** The verbatim tail is computed: at least the last 2 user turns and at least 12 % of the context window, whichever is larger, kept byte for byte. A plan that would violate the floor is refused and reported. (R110)
 4. **Apply.** `applyCompaction` runs as its own step with its own prefix variant (`prompt_family = compaction`), its own budget label and its own receipts; planner, executor and compaction prefixes are never mixed. (R115)
-5. **Preservation assertion.** Every item of the survival list is asserted present in the post-compaction request: goal and state; plan and plan-mode gate; todos; constraints and preferences in force; open questions and blockers; the *set* of mutation receipts as `(path, post-digest, terminal state)`; unresolved `UNKNOWN` effects; pending permission asks; the active skill and its materialised instructions; remaining budgets; and the R110 floor. (R112)
+5. **Preservation assertion.** Every item of the survival list is asserted present in the post-compaction request: goal and state; plan and plan-mode gate; todos; constraints and preferences in force; open questions and blockers; the *set* of mutation receipts as `(path, post-digest, terminal state)`; unresolved `unknown` effects; pending permission asks; the active skill and its materialised instructions; remaining budgets; and the R110 floor. (R112)
 6. **Single-checkpoint assertion.** The request carries at most one provider-visible checkpoint; repeated compaction folds into the existing chain (`hz.session.checkpoint.created`) instead of adding a second narrative block. A second block is a hard defect. (R113)
 7. **Prefix assertion.** `assertPrefixUnchanged(before, after)` compares the digests before the next call; only T4's content and the checkpoint may change, and the cache-guard test asserts the same property in CI. (R65b, R114)
 8. **Record.** `hz.session.compacted` carries the `CompactionRecordV1` digest with tokens before/after, achieved ratio, wall time, model cost, strategy set and the estimated cache-invalidation cost; `hzcode session verify <id>` reconstructs the chain. (R116)
-9. **Next step.** The next step compiles against the same prefix digest and the new checkpoint. A second overflow within 2 steps is *thrash*: the run stops and asks the user instead of looping. (R117)
+9. **Next step.** The next step compiles against the same prefix digest and the new checkpoint. A second overflow within 2 steps is *thrash* inside the current ladder rung: that rung fails, the next rung of §2.I.1(2) is entered, and at the top rung the run stops and asks the user instead of looping. (R117, §2.I.1(2))
 
 ### 6.4 Memory: retain from a settled turn → indexed → recalled in a later session with provenance shown
 
@@ -719,7 +727,7 @@ These are **DESIGNED targets, not measurements**: nothing here has been benchmar
 
 ## 9. Tests
 
-Rule-level test names appear in §2; the table below is the matrix an implementation must satisfy, with its gates and ratchets. Every test is `[planned]`.
+Rule-level test names appear in §2; the table below is the matrix an implementation must satisfy, with its gates and ratchets. Every test in this matrix is `[planned]` except the provider-layer suites recorded as TESTED in §10 and `docs/28-implementation-status.md`.
 
 | Area | Tests (paths under `packages/{provider,context}/test/`) | Gate / ratchet | Rules |
 |---|---|---|---|
@@ -780,12 +788,12 @@ Harness requirements: a fake clock for every backoff and timeout test, recorded 
 - `/data/home/forge/hzcode/docs/02-decisions.md` — the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
 - `/data/home/forge/hzcode/docs/03-hld.md` — the system map this plane sits in: planes, processes, package and crate layout.
 - `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` — the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
-- `/data/home/forge/hzcode/docs/06-events-and-flows.md` — the event catalogue and rulings RC-1…RC-8 that §3.9 and §6 depend on.
+- `/data/home/forge/hzcode/docs/06-events-and-flows.md` — the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
 - `/data/home/forge/hzcode/docs/08-runtime.md` — the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
 - `/data/home/forge/hzcode/docs/09-tools.md` — tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
 - `/data/home/forge/hzcode/docs/11-authority-safety.md` — the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
 - `/data/home/forge/hzcode/docs/12-sessions-state.md` — the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
 - `/data/home/forge/hzcode/docs/14-surfaces.md` §2.2 — the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
-- `/data/home/forge/hzcode/docs/_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-8.
+- `/data/home/forge/hzcode/docs/_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
 
 > Header reconciliation (applied): §1's dependency list previously used draft doc numbers. The references above now point at the files that exist — `03-hld.md`, `05-domain-and-schemas.md`, `08-runtime.md`, `09-tools.md`, `11-authority-safety.md`, `12-sessions-state.md` — and the draft-number mapping is closed.

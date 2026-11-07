@@ -4,7 +4,7 @@
 
 HorizonCode is a terminal-first coding agent whose *reasoning* is separated from its *authority to act*: a fast TypeScript/Bun runtime runs the agent loop, context, tools and UI, while a supervised **Rust kernel** owns capability admission, policy, leases, sandbox confinement, effects and receipts. It is designed as the **superset of the state of the art** — deliberately merging the best capabilities of OpenCode, Claude Code, Codex, Grok Build, DeepSeek-Reasonix, oh-my-pi and ForgeCode — and then adding capabilities none of them have.
 
-> **Status (2026-11-06):** the design set (`docs/`) is complete and frozen; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (285 TypeScript tests + 17 Rust tests passing). Skills, subagents, Code Mode and preview servers are implemented, tested and green. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) · final audit: [`docs/29-final-audit.md`](./docs/29-final-audit.md).
+> **Status (2026-11-06, design corpus ratified through RC-15 on 2026-11-07):** the design set (`docs/`) is complete and ratified; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (285 TypeScript tests + 17 Rust tests passing). Skills, subagents, Code Mode and preview servers are implemented, tested and green. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) · audits: [`docs/29-final-audit.md`](./docs/29-final-audit.md) (2026-11-06) and [`docs/30-steal-list.md`](./docs/30-steal-list.md) (2026-11-07, adoption wave — RC-15).
 
 ## Run it now
 
@@ -17,9 +17,9 @@ printf 'list files' | ./bin/hzcode    # headless: one message per stdin line
 Real models: set `HZ_PROVIDER` + `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`), or write `~/.hzcode/config.json` with `provider`, `model` and `apiKey`. Everything is receipted: the Rust kernel hash-chains the event log and issues a receipt per admitted action (`<workspace>/.hzcode/kernel/`).
 
 What exists today (all verified end-to-end by the integrator, not just reported):
-- `kernel/` — Rust trust kernel `hz-kernel`: chained event log + receipts, guard (deny > allow > ask, leases, `policy.json`), NDJSON stdio protocol (8 methods); `cargo test` 14 integration + 3 unit green.
+- `kernel/` — Rust trust kernel `hz-kernel`: chained event log + receipts, guard (`deny > ask > allow` per [`docs/11-authority-safety.md`](./docs/11-authority-safety.md) R1; leases, `policy.json`; shipped divergence tracked in `docs/28` §4), NDJSON stdio protocol (8 methods); `cargo test` 14 integration + 3 unit green.
 - `app/src/core/` — runtime: kernel client (`trusted`) with byte-identical TS fallback (`untrusted`), SQLite sessions, Anthropic/OpenAI/mock providers, agent loop (stream → guard → approve → tool → receipt → events).
-- `app/src/tools/` — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` — guard- and approval-aware.
+- `app/src/tools/` — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` (the base seven) plus `agent` (subagent delegation), `code_mode` (JS subprocess over the NDJSON tool bridge) and `preview` (dev-server lifecycle) — all guard- and approval-aware.
 - `app/src/tui/` + `app/src/main.ts` — chat-first UI: streaming chat bar, tool cards, y/n/a approvals, history, headless mode; `bin/hzcode` launcher.
 - `app/tests/` — 285 passing tests across core (incl. skills, subagents, code mode, preview), tools, providers and TUI (incl. real PTY scenarios); run `cd app && /home/forge/.bun/bin/bun test`.
 
@@ -65,7 +65,7 @@ The model can *request* an action; only the kernel can *authorise* it. Every adm
 - **Goals, plans, todos** — state machines with plan-mode gating and an approved-plan execution window.
 - **Self-improvement loop** — human-gated (see §3.9).
 
-### 3.2 Tools — ~60 first-class tools, every one typed
+### 3.2 Tools — the catalog in [`docs/09-tools.md`](./docs/09-tools.md) §4 (authoritative), every one typed
 - **Files:** `read`, `read_many`, `write`, `edit`, `multi_edit`, `patch`, `apply_patch`, `notebook_edit`, `delete_range`, `delete_symbol`, `move`, `undo`, `attach`, `snapshot`, `rewind`.
 - **Search & navigation:** `glob`, `grep`, `find`, `ast_grep`, `ast_edit`, `symbols`, `references`, `definitions`, `repo_map`, `code_index`, `outline`.
 - **Execution:** `shell` (foreground/background/PTY), `shell_session`, `powershell`, `job`, `repl`, `run_code`, `code_mode` (confined JS/TS over namespaced tools), `container`, `ssh`.

@@ -169,7 +169,7 @@ Numbered `S-*`, each individually testable (§9). MUST unless stated. `FC` marks
 
 > Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
 
-1. **Provisional→durable retirement:** streaming slots live in a separate collection from durable events so a provisional id can never dedupe the real message away; `item_started` carries the id the durable event will have.
+1. **Provisional→durable retirement:** streaming slots live in a separate collection from durable events so a provisional id can never dedupe the real message away; the provisional `item_started` slot carries the id the durable event will have. `item_started` is a projection slot, not an event name: the durable event it becomes is not canonical yet and appears only as `[planned] hz.session.item.started` (RC-11).
 2. **Forgotten-set view reconstruction:** condensation removes events from the *view* (`forgotten_event_ids`), never from the log; any view is reconstructable from the log at any time.
 3. **Sync preamble:** a log subscription declares `from_seq/through_seq` **before** replay; the watermark is emitted as one sync marker; live-only deltas are intentionally absent from replay.
 4. **Runtime-identity cache keys:** projection caches key on runtime identity, not path alone.
@@ -207,7 +207,7 @@ Numbered `S-*`, each individually testable (§9). MUST unless stated. `FC` marks
 | `hzcode backup --to <dir>` / `hzcode restore --from <dir>` | Online backup of §6.5 / restore that refuses a live target. |
 | `hzcode blob gc [--dry-run]` | Reachability sweep (§6.8). |
 | `hzcode index rebuild [--fts] [--vectors]` | Rebuilds derived indices (§6.10). |
-| `hzcode worktree list --journal` / `prune` | Pool state and the kernel's lease journal (audit path for gap G-4 in `06`). |
+| `hzcode worktree list --journal` / `prune` | Pool state and the kernel's lease journal (per RC-3: lease transitions are kernel OwnerLog records, not session events). |
 | `hzcode state doctor` | Filesystem class, journal mode, WAL safety, free space, reserve, quota, schema versions, host-guard collisions. |
 
 ### 3.3 Types (abridged)
@@ -258,7 +258,8 @@ export interface ClaimStateV1 {
 | `<workspace>/.hz/state/hzcode.db-wal`, `-shm` | WAL and shared-memory files | Present only in WAL mode (never on network filesystems). |
 | `<workspace>/.hz/state/blobs/<aa>/<sha256>` | Content-addressed blob bodies | Two-level fan-out; atomic write-then-rename. |
 | `<workspace>/.hz/state/artifacts/` | Kernel-owned artifact store root | Not written by the TS side. |
-| `$XDG_STATE_HOME/horizon/user.db` | User-scope memory, trust records, model registry cache, price table | Rollback journal safety rules apply here too. |
+| `$XDG_STATE_HOME/horizon/user.db` | Trust records, model registry cache, price table, user-scope settings projections | Rollback journal safety rules apply here too. |
+| `$XDG_STATE_HOME/horizon/memory/<workspace_digest>.db` (+ a `.vec` sidecar) | Per-workspace user-scope memory store (`memory.read` / `memory.write`) | This is the path scheme `10-cognition.md` §4.2 cites; the same rollback-journal rules apply, and doc 11 §7.3.1 step 7 admits this root for `memory.*` and `artifact.write`. |
 | `<workspace>/.hz/state/snapshots/<checkpointId>/` | Snapshot artifacts (when enabled) | Bounded per §2.7 S-47. |
 | `<workspace>/.hz/state/host.json` | Host guard: host id, mount class, last heartbeat | Read before any write on shared-media mounts (§2.10 S-76). |
 | `<workspace>/.hz/state/exports/` | Default output directory for `.hzs` archives | Excluded from quota accounting once written. |
@@ -286,6 +287,7 @@ The schema below is the design; `06` §4.1 owns the log tables' semantics, this 
 | `session_claim` | `session_id PK`, `claim_id`, `owner_incarnation`, `owner_epoch`, `pid`, `acquired_seq`, `acquired_at`, `heartbeat_at`, `ttl_ms`, `attempts`, `reason` | `(heartbeat_at)`; `(owner_epoch)` |
 | `session_usage` | `session_id`, `scope`, `model_ref`, `tokens_*`, `cost_micro_usd`, `currency`, `price_table_revision`, `attribution`, `time_created` | `(session_id, time_created)`; `(scope)` |
 | `session_checkpoint` | `checkpoint_id PK`, `session_id`, `turn_index`, `at_message_id`, `at_seq`, `kind`, `workspace_revision`, `dirty_json`, `untracked_json`, `artifact_ref`, `bytes`, `retention` | `(session_id, turn_index)` |
+| `session_compaction` | `compaction_id PK`, `session_id`, `step_id`, `at_seq`, `tokens_before`, `tokens_after`, `ratio`, `strategy_set`, `cache_invalidation_estimate`, `digest` | `(session_id, at_seq)` |
 | `session_effect` | `effect_id PK`, `session_id`, `step_id`, `call_id`, `capability_id`, `effect_class`, `origin_kind`, `decision`, `reason_code`, `intent_digest`, `policy_revision`, `posture_digest`, `lease_id`, `fencing_epoch`, `terminal`, `observation_digest`, `receipt_id`, `receipt_digest`, `started_at`, `settled_at` | `(session_id, settled_at)`; `(terminal)`; `(lease_id)` |
 | `session_goal` / `session_plan` / `session_todo` | Current state per session | `(session_id)` |
 | `blob` | `hash PK`, `mime`, `bytes`, `width`, `height`, `data`, `time_created` | `(time_created)` |
@@ -293,6 +295,8 @@ The schema below is the design; `06` §4.1 owns the log tables' semantics, this 
 | `blob_pin` | `pin_id PK`, `kind`, `ref_id`, `hash`, `created_at`, `expires_at` | `(hash)`; `(kind, ref_id)` |
 | `index_meta` | `index_kind PK`, `fingerprint`, `built_at`, `watermark_seq`, `chunk_count`, `dirty` | — |
 | `quota` | `scope PK`, `log_bytes`, `blob_bytes`, `artifact_bytes`, `snapshot_bytes`, `index_bytes`, `updated_at` | — |
+
+`session_compaction` is where `CompactionRecordV1` is persisted: `10-cognition.md` §3.7 writes it through `applyCompaction`, and `hzcode session verify` walks the compaction chain (doc 10 R116).
 
 `session_message.seq` mirrors the log seq of the event that created it, which is what makes fork, rewind and rebuild exact rather than approximate. It is a projection column, not a second source of truth.
 
@@ -466,7 +470,7 @@ Rationale for keeping clients off the database: the protocol is the only support
 
 ## 5. Errors & failure modes
 
-`FC` = fail-closed: the operation is refused rather than attempted in a degraded mode. Codes appear in `hz.error.raised.payload.code` and in CLI diagnostics.
+`FC` = fail-closed: the operation is refused rather than attempted in a degraded mode. Codes appear in `hz.error.raised.payload.code` (the error class rides in `payload.class` — `06` row 40 and RC-2) and in CLI diagnostics.
 
 | Code | Raised when | Behaviour | FC |
 |---|---|---|---|
@@ -521,7 +525,7 @@ Three behaviours deserve emphasis because they are the ones a reader might assum
 1. `CREATED`: `hz.session.created` is appended with posture, policy revision and model ref. The session row appears.
 2. `ADMITTED`: the first `hz.session.prompt.admitted`. The session is now allowed to run.
 3. `BUSY`: `hz.session.claim.acquired` followed by `hz.session.busy.entered`. Steps run (`06` flows 6.1–6.6).
-4. `COMPACTING` / `REVERTING`: transient, orthogonal to busy; entered by `hz.session.compacted` and `hz.session.rewound` respectively, and always completed before the next turn.
+4. `COMPACTING` / `REVERTING`: transient, orthogonal to busy. Both are *in-progress* states, so they are entered by the **start** of the work — `hz.step.started` carrying the compaction/rewind prefix variant, or the rewind command's admission — and exited by `hz.session.compacted` and `hz.session.rewound`. Those two events are past-tense completion facts (doc 10 R116 carries the finished `CompactionRecordV1`), so deriving an in-progress state from them would make it unobservable.
 5. `IDLE`: `hz.session.busy.left` plus `hz.session.claim.released`. The session is quiescent; the projection's `time_idle` and `idleOutcome` are set.
 6. `ARCHIVED`: archived by a user action; queued items are preserved, no new execution starts, reads continue.
 7. `DELETED`: a tombstone event plus cascade. Refused while a claim is live (S-4). Blob refs are released; pinned blobs survive.
@@ -620,7 +624,7 @@ Three behaviours deserve emphasis because they are the ones a reader might assum
 **Failure branches.**
 - Chain broken, version unsupported, or blob missing ⇒ refuse; nothing is applied.
 - `integrity_check` fails ⇒ the restore is refused and the original database is untouched.
-- Restore into a workspace with a different absolute path ⇒ allowed, but recorded: the session's `directory` is re-resolved and a re-home record is required (`06` gap G-1) before the session may execute.
+- Restore into a workspace with a different absolute path ⇒ allowed, but recorded: the session's `directory` is re-resolved and a re-home is emitted as `hz.session.moved` with `movedFrom` (RC-1) before the session may execute.
 - Import of a session that already exists with `--keep-id` ⇒ refused (`SESSION_ID_TAKEN`); the operator picks a new id.
 
 ### 6.7 Export (session archive)
@@ -716,17 +720,19 @@ Three behaviours deserve emphasis because they are the ones a reader might assum
 
 | Operation | Capability ID | Narrowing |
 |---|---|---|
-| Read the log, projections, archives, indices | `session.manage` (read scope) | Workspace-scoped; scope filtering for memory; exports redact by policy. |
-| Write the log (append) | `session.manage` | Only the session owner; epoch-fenced; append-only by trigger. |
-| Fork, rewind, archive, delete | `session.manage` | User action only (S-49 for rewind); fork narrows posture (S-46). |
-| Export / import | `session.manage` | Redaction before write (S-80); import is additive only. |
-| Backup / restore | `session.manage` | Maintenance lease; restore refuses a live target. |
+| Read the log, projections, archives, indices | `session.manage` (read-only) | Workspace-scoped; scope filtering for memory; exports redact by policy. |
+| Write the log (append) | **no Guard capability** — the storage layer's single writer (S-7, S-8) | Only the session owner; epoch-fenced; append-only by trigger. A log append is not a model-requestable effect. |
+| Fork, rewind, archive, delete, share | **UNKNOWN** — the write-scoped session capability is not named in `_conventions.md` §5 (queued; doc 11 §4.1 records the same UNKNOWN) | Controller commands; user action only (S-49 for rewind); fork narrows posture (S-46). |
+| Export / import | **UNKNOWN** — same queued write-scoped capability; the redaction policy itself is read-scoped | Redaction before write (S-80); import is additive only. |
+| Backup / restore | **UNKNOWN** — same queued write-scoped capability | Maintenance lease; restore refuses a live target. |
 | Blob write / GC | `files.write` for the ref-recording effect; GC runs under the maintenance lease | Blobs are content-addressed and never authority; pinned blobs are outside GC's reach. |
 | Artifact write (snapshots, verifier output) | `artifact.write` | Kernel-owned store, access-class checks, quota refusal before bytes are written. |
 | Worktree lease | `worktree.manage` | Bounded, expiring, revision-pinned; the lease is a scope, not an authorization. |
 | Index build (embeddings) | `providers.infer` (remote) or a local model | Receipted; scope-narrowed; the index is derived and disposable. |
 | Memory read/write | `memory.read`, `memory.write` | Tier and scope checks at query time and at write time; team scope is opt-in. |
-| Migration | `session.manage` | Maintenance lease; add-only (S-67); validated by rebuild (S-68). |
+| Migration | **UNKNOWN** — same queued write-scoped capability | Maintenance lease; add-only (S-67); validated by rebuild (S-68). |
+
+The `UNKNOWN` rows are deliberate. `session.manage` is `read-only` in doc 11 §4.1 (an effect class is singular and immutable), so it cannot authorise a log write, an import or a restore; and neither this document nor doc 11 may invent a capability ID (`_conventions.md` §1). The write-scoped session ID is therefore queued for `_conventions.md` §5's reserved block with an RC-11 `[planned]` marker. Until it lands, these operations are Controller commands gated by the user action and the session claim — not model-requestable capabilities.
 
 ### 7.2 What the store must never contain
 
@@ -771,48 +777,50 @@ Budgets, not measurements. Measured on a developer workstation with a local SSD,
 
 ## 9. Tests
 
+Every path below is `[planned]`: the workspace today holds `kernel/tests/integration.rs` and four `app/tests/` suites (core 8 files, tools 9, providers 6, TUI 8) and no `packages/` tree. The planned package names follow `_conventions.md` §3 — `@horizoncode/core` → `packages/core`, `@horizoncode/context` → `packages/context`, `@horizoncode/testing` → `packages/testing`.
+
 | Test | Proves | Where |
 |---|---|---|
-| `schema.invariants.spec` | S-9, S-10: append-only triggers raise; pragmas applied in order; file modes enforced | `packages/horizoncode-core/test` |
-| `claim.crash.matrix.spec` | S-29…S-37: kill at every phase between claim and terminal; exactly one terminal; resume within the attempt bound | `packages/horizoncode-testing/test` (fault injection) |
-| `claim.fencing.spec` | S-32, S-33: a stale epoch cannot write; a stale heartbeat is resumable, never “done” | `packages/horizoncode-testing/test` |
-| `inbox.ordering.spec` | S-22…S-28: steer versus queue boundaries, dedup, bounds, crash between promotion and part | `packages/horizoncode-core/test` |
-| `projection.rebuild.spec` | S-15…S-20: shadow rebuild equality, divergence retention, rebuild under a live session | `packages/horizoncode-core/test` |
-| `message.parts.spec` | S-38…S-44: settled messages immutable, ordinal monotonicity, coalescing, externalisation threshold | `packages/horizoncode-core/test` |
-| `fork.rewind.spec` | S-45…S-49: settled-only copies, deterministic id remap, monotonic head, projection rewind without log delete | `packages/horizoncode-core/test` |
-| `snapshot.disabled.spec` | S-50…S-53: capture and restore refuse with the documented code while disabled; message-scope rewind still works | `packages/horizoncode-core/test` |
-| `blob.cas.spec` | S-54…S-60: dedup, refs, pins, hash mismatch, missing blob rendering, atomic write | `packages/horizoncode-core/test` |
-| `index.fingerprint.spec` | S-61…S-66: fingerprint gate, scope filtering, rebuild after corruption, watermark reporting | `packages/horizoncode-context/test` |
-| `migration.compat.spec` | S-67…S-69: add-only migrations, fixture-log application, rebuild equivalence, newer-schema read-only | `packages/horizoncode-core/test` (gate) |
-| `quota.reserve.spec` | S-70…S-73: per-class quota refusal, eviction order, reserve preserved on a small loopback filesystem | `packages/horizoncode-testing/test` (small FS fixture) |
-| `nfs.detection.spec` | S-74…S-77: magic-number table including 32-bit sign extension, mount-name fallback, rollback selection, per-host path | `packages/horizoncode-core/test` (fake `statfs`) |
-| `multihost.guard.spec` | S-76, S-78: second host becomes read-only; clients have no database handle | `packages/horizoncode-testing/test` (multi-process) |
-| `archive.roundtrip.spec` | §4.7, S-80: export/import round-trip, chain verification, version refusal, redaction enforced, missing-blob behaviour | `packages/horizoncode-core/test` |
-| `backup.restore.spec` | §6.5, §6.6: online backup under load, incomplete-marker refusal, restore integrity check, orphaned claims after restore | `packages/horizoncode-testing/test` |
-| `diskfull.sequence.spec` | §6.11, S-73: writes fail, reserve is used for the terminal records, nothing is truncated | `packages/horizoncode-testing/test` (small FS fixture) |
-| `durability.matrix.spec` | §4.8 rows (a)–(f): the stated guarantee for each failure, per durability mode | `packages/horizoncode-testing/test` (fault injection) |
-| `worktree.lease.spec` | §6.9: pool limits, revision pinning, TTL expiry, quarantine, stale pool revision refusal | `packages/horizoncode-testing/test` |
+| `schema.invariants.spec` | S-9, S-10: append-only triggers raise; pragmas applied in order; file modes enforced | `[planned]` `packages/core/test` |
+| `claim.crash.matrix.spec` | S-29…S-37: kill at every phase between claim and terminal; exactly one terminal; resume within the attempt bound | `[planned]` `packages/testing/test` (fault injection) |
+| `claim.fencing.spec` | S-32, S-33: a stale epoch cannot write; a stale heartbeat is resumable, never “done” | `[planned]` `packages/testing/test` |
+| `inbox.ordering.spec` | S-22…S-28: steer versus queue boundaries, dedup, bounds, crash between promotion and part | `[planned]` `packages/core/test` |
+| `projection.rebuild.spec` | S-15…S-20: shadow rebuild equality, divergence retention, rebuild under a live session | `[planned]` `packages/core/test` |
+| `message.parts.spec` | S-38…S-44: settled messages immutable, ordinal monotonicity, coalescing, externalisation threshold | `[planned]` `packages/core/test` |
+| `fork.rewind.spec` | S-45…S-49: settled-only copies, deterministic id remap, monotonic head, projection rewind without log delete | `[planned]` `packages/core/test` |
+| `snapshot.disabled.spec` | S-50…S-53: capture and restore refuse with the documented code while disabled; message-scope rewind still works | `[planned]` `packages/core/test` |
+| `blob.cas.spec` | S-54…S-60: dedup, refs, pins, hash mismatch, missing blob rendering, atomic write | `[planned]` `packages/core/test` |
+| `index.fingerprint.spec` | S-61…S-66: fingerprint gate, scope filtering, rebuild after corruption, watermark reporting | `[planned]` `packages/context/test` |
+| `migration.compat.spec` | S-67…S-69: add-only migrations, fixture-log application, rebuild equivalence, newer-schema read-only | `[planned]` `packages/core/test` (gate) |
+| `quota.reserve.spec` | S-70…S-73: per-class quota refusal, eviction order, reserve preserved on a small loopback filesystem | `[planned]` `packages/testing/test` (small FS fixture) |
+| `nfs.detection.spec` | S-74…S-77: magic-number table including 32-bit sign extension, mount-name fallback, rollback selection, per-host path | `[planned]` `packages/core/test` (fake `statfs`) |
+| `multihost.guard.spec` | S-76, S-78: second host becomes read-only; clients have no database handle | `[planned]` `packages/testing/test` (multi-process) |
+| `archive.roundtrip.spec` | §4.7, S-80: export/import round-trip, chain verification, version refusal, redaction enforced, missing-blob behaviour | `[planned]` `packages/core/test` |
+| `backup.restore.spec` | §6.5, §6.6: online backup under load, incomplete-marker refusal, restore integrity check, orphaned claims after restore | `[planned]` `packages/testing/test` |
+| `diskfull.sequence.spec` | §6.11, S-73: writes fail, reserve is used for the terminal records, nothing is truncated | `[planned]` `packages/testing/test` (small FS fixture) |
+| `durability.matrix.spec` | §4.8 rows (a)–(f): the stated guarantee for each failure, per durability mode | `[planned]` `packages/testing/test` (fault injection) |
+| `worktree.lease.spec` | §6.9: pool limits, revision pinning, TTL expiry, quarantine, stale pool revision refusal | `[planned]` `packages/testing/test` |
 
 ---
 
 ## 10. Status
 
-**Every row is `DESIGNED` or below.** The HorizonCode directory contains a specification, not an implementation (`file:///data/home/forge/hzcode/README.md#L7`). Reference repositories are design inputs, not evidence about this project. One row is deliberately marked `UNKNOWN` because the evidence required to design it is genuinely missing.
+**Levels are owned by `docs/28-implementation-status.md`** (RC-13). The rows below record only the v0.1 slice this document's storage layer actually has — SQLite sessions with a single writer, the sessions and config suites, the kernel's 4-process concurrent-append lock test — and everything else stays `DESIGNED`. Reference repositories are design inputs, not evidence about this project. One row is deliberately marked `UNKNOWN` because the evidence required to design it is genuinely missing.
 
 | Area | Capability ID(s) | Level | Evidence and caveats |
 |---|---|---|---|
-| Lifecycle, flags, derived state | `session.manage` | DESIGNED | §2.1, §6.1; S-1…S-6. |
-| Log schema, indices, pragmas, write path | `session.manage` | DESIGNED | §2.2, §4.2, §4.3; S-7…S-14. Index list mirrors a proven reference structure (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/sql.ts#L86-L215`); none of it exists here. |
+| Lifecycle, flags, derived state | `session.manage` | TESTED + VERIFIED (v0.1 subset) | §2.1, §6.1; S-1…S-6. The v0.1 store derives lifecycle and flags in `app/tests/core/session.test.ts`; the compaction/rewind states are design (`docs/28` §1). |
+| Log schema, indices, pragmas, write path | `session.manage` | CODE_PRESENT | §2.2, §4.2, §4.3; S-7…S-14. A SQLite store with one writer exists (`app/tests/core/session.test.ts`, `kernel/tests/integration.rs`); the pragma set and index list are the design target. The index list mirrors a proven reference structure (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/sql.ts#L86-L215`). |
 | Projections and rebuild | `session.manage` | DESIGNED | §2.3, §6.3; S-15…S-20. |
 | Inbox and admission | `session.manage` | DESIGNED | §2.4, §6.2; S-21…S-28. The durable-inbox pattern is inherited from a reference implementation and its ordering semantics are adopted as a rule, not as delivered behaviour. |
-| Claims and crash semantics | `session.manage` | DESIGNED | §2.5, §4.8; S-29…S-37. The write-ahead claim and its preserved-on-shutdown nuance come from a reference implementation (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/execution.ts#L73-L83`). |
-| Message and part storage | `session.manage` | DESIGNED | §2.6, §4.2; S-38…S-44. |
-| Fork, checkpoint, rewind (message scope) | `session.manage` | DESIGNED | §2.7; S-45…S-49, S-53. |
+| Claims and crash semantics | `session.manage` | TESTED + VERIFIED (v0.1 subset) | §2.5, §4.8; S-29…S-37. The kernel's 4-process concurrent-append lock test and the TS sessions suite cover the single-writer and resume paths (`kernel/tests/integration.rs`, `app/tests/core/session.test.ts`); epoch fencing at every rule is design. The write-ahead claim and its preserved-on-shutdown nuance come from a reference implementation (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/execution.ts#L73-L83`). |
+| Message and part storage | `session.manage` | TESTED + VERIFIED (v0.1 subset) | §2.6, §4.2; S-38…S-44. Message and part rows are written and read in v0.1 (`app/tests/core/session.test.ts`); coalescing and the externalisation threshold are design. |
+| Fork, checkpoint, rewind (message scope) | **UNKNOWN** (write-scoped session ID, §7.1) | DESIGNED | §2.7; S-45…S-49, S-53. |
 | Workspace snapshot capture and restore | `files.write`, `artifact.write` | **UNKNOWN** | S-50, S-51. The design is written and the bounds are fixed, but the reference implementation ships capture **disabled** and restore **not implemented** (`file:///data/home/forge/repo-tour/horizoncode/kernel/src/checkpoint.rs#L36-L58`), and no verified Guard-and-EffectHost restore path exists to design against. HorizonCode therefore refuses the workspace scope and says so; marking this higher would be a false claim. |
 | Blob and artifact storage, dedup, GC, pinning | `artifact.write`, `files.write` | DESIGNED | §2.8, §4.5, §6.8; S-54…S-60. The artifact store's quotas and access classes are read from the reference implementation (`file:///data/home/forge/repo-tour/horizoncode/kernel/src/artifact_store.rs`), whose general artifact routes are themselves still marked unavailable upstream. |
 | FTS and vector retrieval indices | `memory.read`, `providers.infer` | DESIGNED | §2.9, §4.6, §6.10; S-61…S-66. |
-| Migration policy | `session.manage` | DESIGNED | §2.10; S-67…S-69. Transactional constraint handling follows the reference (`file:///data/home/forge/repo-tour/opencode/packages/core/src/database/migration.ts#L130-L133`). |
-| Backup, restore, export, import | `session.manage` | DESIGNED | §4.7, §6.5–§6.7; S-80. |
+| Migration policy | **UNKNOWN** (write-scoped session ID, §7.1) | DESIGNED | §2.10; S-67…S-69. Transactional constraint handling follows the reference (`file:///data/home/forge/repo-tour/opencode/packages/core/src/database/migration.ts#L130-L133`). |
+| Backup, restore, export, import | **UNKNOWN** (write-scoped session ID, §7.1) | DESIGNED | §4.7, §6.5–§6.7; S-80. |
 | Quota and eviction | `session.manage` | DESIGNED | §2.10, §4.9; S-70…S-73. |
 | Network-filesystem behaviour | `session.manage` | DESIGNED | §4.10; S-74…S-77. Detection table and rationale are drawn from a working reference (`file:///data/home/forge/repo-tour/grok-build/crates/codegen/xai-sqlite-journal/src/lib.rs#L1-L13`). |
 | Multi-process access | `session.manage` | DESIGNED | §4.11; S-78, S-79. |
@@ -827,6 +835,6 @@ Budgets, not measurements. Measured on a developer workstation with a local SSD,
 4. **Index portability**: decide whether vectors are included in archives (size) or always rebuilt (cost), and record the choice in §4.7's manifest fields.
 5. **Claim TTL defaults**: ratify 2 s heartbeat and 30 s TTL against real crash-detection latency on laptops that suspend, where a suspended process is neither alive nor gone.
 6. **`session delete` evidence reference**: define the shape of the evidence reference that carries unresolved `UNKNOWN` effects into a delete record (§6.1).
-7. **Re-home record**: resolve `06` gap G-1 before restore-into-a-different-path can allow execution (§6.6).
+7. **Re-home upcaster**: the re-home event is `hz.session.moved` (RC-1, `06` §4.6 G-1); what remains is the upcaster for the superseded `created` + `reattachedFrom` encoding at implementation time (`06` §10 item 1).
 
 

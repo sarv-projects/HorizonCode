@@ -17,7 +17,7 @@ This document decides:
 7. The diff viewer and approval prompts, including the *show the exact effect* rule and apply-through-kernel semantics.
 8. Transcript features, theming, accessibility, performance budgets, session-management UI, status surfaces, error/`UNKNOWN` display, notifications and the non-interactive output modes that share this renderer's data model.
 
-Everything here is **DESIGNED** (§10). Nothing in this document is a claim that code exists.
+Design-only except the v0.1 slice enumerated in §10: the chat TUI (chat bar, streaming, tool cards, y/n/a approvals, history, slash sugar) and headless mode are implemented and tested — `bun test tests/tui` → 48 pass, per `docs/28-implementation-status.md`. Every other claim here is a design claim.
 
 Sources this document is derived from:
 
@@ -48,7 +48,7 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 | R9 | Escape sequences MUST be serialized through a single escape writer queue. No component may write to stdout directly. |
 | R10 | Every byte the TUI writes MUST be a full escape sequence or a complete grapheme cluster; the renderer MUST NOT emit a partial sequence from a frame that is interrupted by resize or mode switch. |
 | R11 | A resize MUST invalidate the layout version, invalidate all cached hit-test rectangles (R25), re-layout, and repaint the full frame. Sequences arriving mid-resize MUST be dropped, not queued. |
-| R12 | The renderer MUST be usable headless: a `--render-probe` mode renders one frame of a captured session to a text grid and exits, for golden-frame tests (R186). |
+| R12 | The renderer MUST be usable headless: a `--render-probe` mode renders one frame of a captured session to a text grid and exits, for golden-frame tests (§9, `tui/render-probe.golden`). |
 
 ### 2.2 Component tree
 
@@ -117,7 +117,7 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 | R45 | `Ctrl+C` semantics MUST be explicit and graded: once = interrupt the current turn (receipted as a cancel decision), twice within 2 s = cancel the batch and return to idle, three times = exit with code 130 after terminal restore. While a turn is at risk of an unknown effect the TUI MUST show the cancel panel listing what will be interrupted. |
 | R46 | Presets: `vim` MUST provide `j/k` navigate, `h/l` fold, `g/G` first/last, `/[n]` search, `y` copy, `e` expand, `i`/`Tab` focus composer, `Ctrl+W` window commands via leader; `emacs` MUST provide `Ctrl+A/E` line ends, `Ctrl+K/U` kill, `Ctrl+Y` yank, `Alt+B/F` word motion, `Ctrl+S` search, and MUST NOT shadow `Ctrl+C` (R45). |
 | R47 | A user keybindings file MUST load from `~/.config/horizon/keybindings.toml` and MAY be narrowed (never widened) by `.hz/keybindings.toml` in the workspace (ADR-008). Workspace bindings that would shadow `Ctrl+C` interrupt or the approval card's keys MUST be refused with a diagnostic. |
-| R48 | The keybindings file MUST be validated against the action registry; unknown action ids, unknown keys and duplicate bindings MUST fail loudly at startup (`hzcode keybind check`) and MUST NOT be silently ignored. |
+| R48 | The keybindings file MUST be validated against the action registry; unknown action ids, unknown keys and duplicate bindings MUST fail loudly at startup (`hzcode keybind check`) and MUST NOT be silently ignored. **Graded repeat bindings are not duplicates:** the schema's `repeat: 1 \| 2 \| 3` field makes the same key express a graded action (R45), so `Ctrl+C` ×1 = `turn.interrupt` and ×3 = `app.quit` is one graded binding, valid in a user file and validated as such. |
 | R49 | `/help` MUST open `ModalHost`'s help page generated from three live registries: the keymap, the slash registry, and the available commands/tools for the current session. It MUST be searchable and MUST show only bindings effective in the current context first. |
 | R50 | Any key that reaches the composer with no binding MUST be inserted as text, never swallowed. Any key in `navigate` with no binding MUST be ignored (and counted in the debug HUD). |
 | R51 | The TUI MUST expose a debug HUD (toggle `F12` by default) showing: last input latency, frame time, dropped frames, event queue depth, layout version, hit-test rect count, and keyboard layers active. |
@@ -127,8 +127,8 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 
 | Action id | Default | Context | Description |
 |---|---|---|---|
-| `app.quit` | `Ctrl+C` ×3 | global | Exit, restoring terminal state |
-| `turn.interrupt` | `Ctrl+C` | global | Interrupt the current turn (receipted) |
+| `turn.interrupt` | `Ctrl+C` (repeat 1) | global | Interrupt the current turn (receipted) |
+| `app.quit` | `Ctrl+C` (repeat 3 — the same key, graded per R45) | global | Exit, restoring terminal state |
 | `composer.submit` | `Enter` | insert | Send the draft |
 | `composer.newline` | `Alt+Enter` / `\`+`Enter` | insert | Insert a newline |
 | `palette.show` | `Ctrl+P` | global | Command palette |
@@ -347,10 +347,10 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 | R169 | `UNKNOWN` MUST be a first-class visual state, never styled as an error and never auto-retried: it renders as a distinct chip (`UNKNOWN` + receipt id + effect class) with three actions: `Inspect receipt`, `Reconcile now`, `Export evidence bundle`. |
 | R170 | The `UNKNOWN` chip MUST persist in the status bar until reconciliation completes (`hz.effect.reconciled`), and MUST block any new effect that would depend on the same resource, with an explanation of which resource and why. |
 | R171 | `UNKNOWN` MUST NOT be summarized away by a generated completion message: if the session contains an unreconciled `UNKNOWN`, the completion banner MUST say so and `verify` MUST be runnable from the banner. |
-| R172 | The receipt inspector MUST render a receipt's full structure: `receipt id`, capability ID, origin kind, intent digest, policy revision, lease id, timestamps, observation (stdout/stderr digests, exit code, file digests), terminal state (`SUCCEEDED`/`FAILED`/`DENIED`/`UNKNOWN`), reconciliation attempts, and links to the parent session, the tool call, the artifacts and the child receipts. |
+| R172 | The receipt inspector MUST render a receipt's full structure: `receipt id`, capability ID, origin kind, intent digest, policy revision, lease id, timestamps, observation (stdout/stderr digests, exit code, file digests), terminal state rendered as the RC-7 value verbatim (`succeeded`, `failed`, `denied`, `cancelled`, `unknown`, `budget_exhausted`, `timeout`, `interrupted` — a `cancelled` or `timeout` receipt MUST NOT display as `failed` or `unknown`), reconciliation attempts, and links to the parent session, the tool call, the artifacts and the child receipts. |
 | R173 | The inspector MUST be reachable from: the `ToolCallCard` (`Ctrl+I`), the `UNKNOWN` chip, the palette (`hz://receipt/<id>`), the CLI (`hzcode receipt show <id>`), and any surface that displays a receipt id (doc `14-surfaces.md`). |
 | R174 | The inspector MUST offer `verify receipt chain` for the session, rendering the independent-evidence gate result (claims that were lowered, with the contradicting receipt). |
-| R175 | The TUI MUST NOT render a tool result as success when the terminal state is not `SUCCEEDED`; a `DENIED` effect renders as denied with the reason code, and a tool that returned data while the effect was denied MUST render both facts. |
+| R175 | The TUI MUST NOT render a tool result as success when the terminal state is not `succeeded`; a `denied` effect renders as denied with the reason code, and a tool that returned data while the effect was denied MUST render both facts. |
 | R176 | Truncated content MUST be labelled with what was truncated, the original size, and where the full content lives (`hz://session/<id>/part/<id>` or `hz://artifact/<sha256>`). Silent truncation is a bug. |
 
 ### 2.16 Notifications
@@ -381,7 +381,7 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 | R193 | The non-interactive JSON MUST include `sessionId` and `hz://session/<id>`, so a caller can resume, inspect receipts or open the web app on the same session. |
 | R194 | Tool approval in non-interactive modes MUST be explicit policy, never an interactive prompt: `--posture allow|ask|deny`, `--allow <rule>`/`--deny <rule>`, or a config posture. An `ask` decision in a non-interactive mode MUST resolve to `deny` (fail closed) and MUST be reported in the result as a denial with its reason code. |
 | R195 | Exit codes are canonical (`docs/14-surfaces.md` §3.2): `0` success; `1` error; `2` usage, configuration or environment error (bad flags, invalid keybindings/theme, terminal too small, unusable workspace); `3` fail-closed — an outcome that cannot be proven or guaranteed (kernel absent or mismatched, an `ask` with no answerer, an unreconciled `UNKNOWN`); `4` policy denial (`Guard` returned `DENY` and the run stopped); `5` budget exhaustion; `130` SIGINT; `143` SIGTERM. |
-| R196 | The parity ratchet (doc `14-surfaces.md` §2.10) MUST treat "renders in the TUI" and "is emitted in `--output jsonl`" as one capability with two projections: adding a UI-only state fails the build. |
+| R196 | The parity ratchet (doc `14-surfaces.md` §2.11 (j)) MUST treat "renders in the TUI" and "is emitted in `--output jsonl`" as one capability with two projections: adding a UI-only state fails the build. |
 
 ### 2.18 Composer queue, rich input, and completion surfaces
 
@@ -411,7 +411,7 @@ All are `[planned]` in `packages/tui/src/types.ts` and generated from schemas wh
 | `TerminalCaps` | see R131 field list | Produced by `detectTerminalCaps()`; serializable for `hzcode doctor --json`. |
 | `ThemeToken` | union of the R113 token names | A literal color fails lint (R114). |
 | `ColorLevel` | `"truecolor" \| "256" \| "16" \| "none"` | Quantization pipeline input. |
-| `KeyBinding` | `{ id: KeymapActionId; keys: KeyStroke[]; contexts: Context[]; description: string; source: "default" \| "preset" \| "user" \| "workspace" }` | R37, R44. |
+| `KeyBinding` | `{ id: KeymapActionId; keys: KeyStroke[]; repeat?: 1 \| 2 \| 3; contexts: Context[]; description: string; source: "default" \| "preset" \| "user" \| "workspace" }` | R37, R44, R48 (graded repeats). |
 | `KeyStroke` | `{ name: string; ctrl?: boolean; shift?: boolean; meta?: boolean; alt?: boolean; super?: boolean }` | Order-insensitive, canonicalized for display. |
 | `SlashEntry` | `{ name; aliases; description; argumentSchema; executionKind; surfaces: SurfaceId[]; requiresApproval: boolean; receiptClass; source }` | R54. |
 | `BlockView` | `{ id; kind: BlockKind; foldState: "expanded" \| "collapsed" \| "pinned"; streamState: "idle" \| "streaming" \| "interrupted" \| "complete"; coarse: boolean; provenance: ProvenanceKey }` | R99–R103, R68, R163. |
@@ -420,7 +420,7 @@ All are `[planned]` in `packages/tui/src/types.ts` and generated from schemas wh
 | `EffectBody` | tagged union: `Shell \| FilePatch \| Network \| Credential \| Remote \| Unrenderable` | R88–R89; `Unrenderable` disables allows. |
 | `UnknownChip` | `{ receiptId; capabilityId; effectClass; resourceKey; since; reconcileAttempts }` | R169–R171. |
 | `StatusSegment` | `{ id; priority; render(props): Cells; provenance: ProvenanceKey }` | R157–R166. |
-| `UiEvent` | envelope adopted from `UiStreamEventV2` (`eventId`, `cursor`, `lane: "durable" \| "ephemeral"`, `kind`, `timestamp`, `payload`) | source: `/data/home/forge/repo-tour/horizoncode/arch_V1/contracts-v2/ui-stream-event-v2.schema.json`. |
+| `UiEventV1` | envelope (`eventId`, `cursor`, `lane: "durable" \| "ephemeral"`, `kind`, `timestamp`, `payload`) | Local TUI type, named per `_conventions.md` §7; the lane split is adopted from `source: /data/home/forge/repo-tour/horizoncode/arch_V1/contracts-v2/ui-stream-event-v2.schema.json`, which is a reference schema and is not declared in `docs/05` |
 | `HeadlessResultV1` | see §3.5 | Output contract R189. |
 
 ### 3.2 Event → render table (every TUI-relevant event)
@@ -461,7 +461,7 @@ Lane: `D` = durable (from the log, replayable), `E` = ephemeral (UI only, droppa
 | `hz.memory.retained` | D | memory trace block; memory browser badge count | collapsed | R100 |
 | `hz.memory.recalled` | D | `RecalledBlock` listing facts with provenance | collapsed | R100 |
 | `hz.skill.invoked` | D | skill card (name, source, arguments digest) | visible | R53 |
-| `hz.skill.installed` | D | toast + `/skills` list update | visible | R117 |
+| `hz.skill.installed` | D | toast + `/skills` list update | visible | R53; `15-extensibility.md` §4.2 |
 | `hz.learn.trajectory.recorded` | D | debug HUD counter; learn panel row | hidden | R51 |
 | `hz.learn.proposal.created` | D | proposal card with `review` action (never auto-applied) | visible | R162 |
 | `hz.learn.eval.completed` | D | eval panel row (pass/fail counts, regression flag) | collapsed | R100 |
@@ -470,15 +470,20 @@ Lane: `D` = durable (from the log, replayable), `E` = ephemeral (UI only, droppa
 | `hz.policy.revision.changed` | D | posture chip flashes; policy modal diff view | visible | R158 |
 | `hz.error.raised` | D | inline error cell (capability, reason code, retryable) + `/errors` | visible | R167 |
 | `hz.usage.recorded` | D | token/cost segments with provenance; context bar | visible | R73, R163 |
-| `ui.present` (capability) | E | requested UI affordance (toast, panel, modal) from a tool/plugin | visible if permitted | R14, R21 |
-| `ui.toast` | E | toast stack in `ModalHost` | visible | R183 |
-| `ui.focus.changed` | E | focus indicator; mouse capture re-assertion check | visible | R27, R34 |
-| `ui.resize` | E | full repaint; layout version bump; hit-rect invalidation | visible | R11, R25 |
-| `ui.caps.changed` | E | re-detect caps; requantize theme; may downgrade graphics | visible | R115, R131 |
-| `ui.mode.switch.requested` | E | relaunch handshake (draft + cursor preserved) | visible | R4 |
-| `ui.degradation.changed` | E | `coarse` badge with counts | visible | R68 |
-| `ui.input.latency` | E | debug HUD only | hidden | R51 |
-| `ui.render.frame` | E | debug HUD only (frame time, dropped frames) | hidden | R51 |
+| `ui.present` (**capability, not an event**) | — | the affordance a tool or plugin asks the TUI to show; it arrives as the tool-call result, not as a log event | visible if permitted | R14, R21 |
+
+**Client-local UI frames (`[planned]`, lane `U`).** The rows below are frames of the front-end, not facts of record: they never enter the log, they are not in `_conventions.md` §6's 44-event catalogue, and their names are `[planned]` until a UI lane is registered there (RC-11). A front-end that dies mid-frame loses nothing durable.
+
+| Event | Lane | Renders as | Default | Rule |
+|---|---|---|---|---|
+| `[planned]` `ui.toast` | U | toast stack in `ModalHost` | visible | R183 |
+| `[planned]` `ui.focus.changed` | U | focus indicator; mouse capture re-assertion check | visible | R27, R34 |
+| `[planned]` `ui.resize` | U | full repaint; layout version bump; hit-rect invalidation | visible | R11, R25 |
+| `[planned]` `ui.caps.changed` | U | re-detect caps; requantize theme; may downgrade graphics | visible | R115, R131 |
+| `[planned]` `ui.mode.switch.requested` | U | relaunch handshake (draft + cursor preserved) | visible | R4 |
+| `[planned]` `ui.degradation.changed` | U | `coarse` badge with counts | visible | R68 |
+| `[planned]` `ui.input.latency` | U | debug HUD only | hidden | R51 |
+| `[planned]` `ui.render.frame` | U | debug HUD only (frame time, dropped frames) | hidden | R51 |
 
 Rule: a new event kind MUST add a row to this table in the same change; an event with no renderer MUST fail the ratchet (R22, R196).
 
@@ -513,7 +518,7 @@ Column ruler (`1`–`120` in tens) is not part of the frame; it is shown to make
 │     │   }                                                                                                             │
 │     │                   1 of 3 hunks accepted · 2 pending · rail ▮▮▯                                                   │
 │                                                                                                                       │
-│ ┌─ ASK · Shell ────────────────────────────── policy r12.3f9c · reason shell_prefix_unknown ────────────────────────┐│
+│ ┌─ ASK · Shell ────────────────────────────── policy r12.3f9c · reason rule_ask ─────────────────────────────────────┐│
 │ │ capability  terminal.run      effect class  process        origin  SessionBatch (model)   sandbox  workspace-write ││
 │ │ cwd         /data/home/forge/repo-tour/repo        ask expires in 108s                                             ││
 │ │ exact effect                                                                                                       ││
@@ -577,7 +582,7 @@ Validation (`hzcode keybind check`) MUST report, per binding: `id`, `keys`, `con
 | Field | Type | Notes |
 |---|---|---|
 | `text` | string | Final assistant text. |
-| `stopReason` | string | `end_turn`, `max_tokens`, `budget_exhausted`, `denied`, `cancelled`, `error`. |
+| `stopReason` | string | `end_turn`, `max_tokens`, `budget_exhausted`, `denied`, `cancelled`, `incomplete`, `error`. `incomplete` is the step outcome of `06` and `12` §4.8(f) (a provider failure never silently resumed); `error` is a run-level failure and carries the doc 11 error class (`provider`, `tool`, `kernel`, `sandbox`, `policy`, `storage`, `protocol`) rather than inventing a second taxonomy. |
 | `sessionId` | string | Also `hz://session/<id>` in `sessionUri`. |
 | `sessionUri` | string | R193. |
 | `requestId` | string | Correlates with OTel traces and the receipt chain. |
@@ -656,7 +661,7 @@ Every fail-closed path MUST produce: a `reason_code`, a receipt when an effect w
 5. The user submits a prompt: the TUI dispatches `session.prompt` with `steer`/`queue`; admission is durable before any model work (ADR-011 companion rule in `docs/02-decisions.md`); the block renders on `hz.session.prompt.admitted`.
 6. Stream: `hz.step.llm.delta` accumulates; frames are coalesced at ≤16 ms; under load the degradation ladder engages and the `coarse` badge appears (R63–R67).
 7. A tool requests an effect needing approval: `hz.permission.asked` opens the card (R87). The card shows the exact effect; `[1]` allows once. The decision is recorded as `hz.permission.answered`, the posture chip updates, and the lease is issued (R95).
-8. The tool edits two files: `DiffView` shows pending hunks; the user presses `a` on hunk 1 of 3; the TUI submits `files.patch` with that preimage digest; the receipt settles `SUCCEEDED`; the hunk goes `applied` and shows its receipt (R79–R80). Hunk 2 shows a stale-preimage conflict after another writer touched the file and offers re-diff (R82).
+8. The tool edits two files: `DiffView` shows pending hunks; the user presses `a` on hunk 1 of 3; the TUI submits `files.patch` with that preimage digest; the receipt settles `succeeded`; the hunk goes `applied` and shows its receipt (R79–R80). Hunk 2 shows a stale-preimage conflict after another writer touched the file and offers re-diff (R82).
 9. Turn ends; the completion banner shows cost with provenance, the turn's traces, and any `UNKNOWN` barrier (R171).
 10. Exit: terminal restored on every path; session remains durably resumable (`hz://session/<id>`).
 
@@ -717,6 +722,8 @@ Every fail-closed path MUST produce: a `reason_code`, a receipt when an effect w
 
 ## 9. Tests
 
+Paths use the single planned convention `packages/<pkg>/test/<file>` (`_conventions.md` §10): the short form `tui/x` below means `[planned]` `packages/tui/test/x`. The suite that exists today is `app/tests/tui/` (8 files, 48 tests, real PTY scenarios) plus `app/tests/core`, `app/tests/tools` and `app/tests/providers`.
+
 | Gate | Proves | Kind |
 |---|---|---|
 | `tui/render-probe.golden` | First-frame golden images at 120×36, 100×24, 72×20, 40×10 for fullscreen and inline, and for each of `truecolor/256/16/none` | golden (R12, R17, R115) |
@@ -741,7 +748,7 @@ Every fail-closed path MUST produce: a `reason_code`, a receipt when an effect w
 
 ## 10. Status
 
-Every capability in this document starts at **DESIGNED**. No level above `DESIGNED` may be claimed until the named evidence exists (`_conventions.md` §8).
+**Levels are owned by `docs/28-implementation-status.md`** (RC-13). Four rows below record the v0.1 slice that exists and is tested; every other row starts at `DESIGNED` and claims nothing above it until the named evidence exists (`_conventions.md` §8).
 
 | Capability | Level | Evidence required to advance |
 |---|---|---|
@@ -751,10 +758,10 @@ Every capability in this document starts at **DESIGNED**. No level above `DESIGN
 | Mouse (focus, wheel, scrollbar, drag-select) | DESIGNED | `tui/hit-test.spec`, `tui/mouse-reassert.spec`, `tui/x10-reassembly.spec` |
 | Keyboard model, presets, custom keybindings | DESIGNED | `tui/keymap.spec` |
 | Slash registry and palette | DESIGNED | `tui/slash-registry.spec` |
-| Streaming renderer with backpressure | DESIGNED | `tui/streaming-backpressure.spec` |
+| Streaming renderer with backpressure | TESTED + VERIFIED (v0.1 subset) | v0.1 streams and coalesces (`app/tests/tui/render.test.ts`, `pty.test.ts`; `docs/28` §1); the degradation ladder still needs `tui/streaming-backpressure.spec` |
 | Diff viewer with per-hunk accept through the kernel | DESIGNED | `tui/diff-apply.spec` against a real `hzk` build |
-| Approval prompts with exact-effect rendering | DESIGNED | `tui/approval-exactness.spec`, `tui/permission-persistence.spec` |
-| Transcript (folds, search, copy/paste, links, media) | DESIGNED | transcript spec + media fallback goldens |
+| Approval prompts with exact-effect rendering | TESTED + VERIFIED (v0.1 subset) | y/n/a approvals and fail-closed headless approvals (`app/tests/tui/approval.test.ts`, `headless.test.ts`); exact-effect rendering still needs `tui/approval-exactness.spec` |
+| Transcript (folds, search, copy/paste, links, media) | TESTED + VERIFIED (v0.1 subset) | transcript basics and history (`app/tests/tui/render.test.ts`, `cli.test.ts`); folds, search and media still need the transcript spec + media fallback goldens |
 | Theming (tokens, quantization, high contrast, no-color) | DESIGNED | `tui/theme-tokens.lint`, `tui/no-color.spec` |
 | Accessibility (screen reader, reduced motion, IME, breakpoints, min size) | DESIGNED | `tui/screen-reader.spec`, `tui/ime.spec` |
 | Performance budgets | DESIGNED | `tui/perf.gate` in CI on the reference machine |
@@ -762,7 +769,7 @@ Every capability in this document starts at **DESIGNED**. No level above `DESIGN
 | Status surfaces | DESIGNED | status golden per breakpoint + provenance lint |
 | Error and `UNKNOWN` display + receipt inspector | DESIGNED | `tui/unknown-display.spec` |
 | Notifications (bell, desktop, webhook) | DESIGNED | delivery tests + egress visibility test |
-| Non-interactive output modes | DESIGNED | schema conformance + `tui/headless-parity.spec` |
+| Non-interactive output modes | TESTED + VERIFIED (v0.1 subset) | `--print` and headless paths (`app/tests/tui/headless.test.ts`, `cli.test.ts`); JSONL parity still needs `tui/headless-parity.spec` |
 | Parity ratchet participation | DESIGNED | `tui/parity.ratchet` wired into CI |
 
 Known inherited limitation that this document MUST NOT paper over: the ancestor kernel refuses two edits to the same file inside one message (`stale_preimage`), which is why R83 mandates sequential application with explicit preimage recomputation rather than a silent bulk apply (source: `/data/home/forge/repo-tour/horizoncode/HANDOFF.md`).

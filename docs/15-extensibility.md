@@ -13,13 +13,13 @@ This document decides how HorizonCode is extended:
 3. **Commands** — prompt/local/rich variants, arguments, namespacing, discovery, and the built-in set.
 4. **Hooks** — lifecycle points, ordering, failure semantics, and how a hook is sandboxed.
 5. **The workflow engine (Rhai)** — script shape, host channel, cancellation, determinism, examples.
-6. **Agent profiles** — act/plan/research/custom, tool allow-lists, prompt files, registration.
-7. **MCP** — client (transports, OAuth, discovery, deferred tool loading, sampling) and server (exposed tools/resources/prompts, posture defaults, auth).
+6. **Agent profiles** — the profile *contract* (capability presets, partition/owns rules, result schemas, tier policy) over the `kind` enum owned by `05-domain-and-schemas.md` §4.9, tool allow-lists, prompt files, registration.
+7. **MCP** — client (transports, OAuth, discovery, deferred tool loading, sampling) and server (authority rules only; the exposure catalogue is `14-surfaces.md` §3.5).
 8. **ACP and the IDE bridge** — methods, capability negotiation, session lifecycle, permission proxying, editor feature mapping, JWT auth, trusted device, attachments, diffs, and replay after a crash.
 9. **Self-hosting config** — `.hz/` in a repository.
 10. **The extension security model** — what a plugin can never do, how capability narrowing applies, and the boundary tests that keep it true.
 
-Everything here is **DESIGNED** (§10). Nothing is a claim of working code.
+Everything here is **DESIGNED** (§10) except the two v0.1 slices `28-implementation-status.md` records as VERIFIED — the skills loader and the subagent primitive — and that file owns every implementation level (RC-13). Nothing else here is a claim of working code.
 
 ### 1.1 The five extension surfaces and who owns them
 
@@ -168,8 +168,8 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 
 ### 2.6 Agent profiles (A)
 
-- **A1** Four modes **MUST** exist: `act`, `plan`, `research`, `custom`. *(T-A1)*
-- **A2** A profile **MUST** declare `promptFile`, `toolAllow`, `capabilityCeiling`, budget, and subagent policy. *(T-A2)*
+- **A1** The profile `kind` enum is owned by `05-domain-and-schemas.md` §4.9 and **MUST** be exactly `act`, `plan`, `research`, `verify`, `team_lead`, `custom`. This document adds no mode of its own; the four-mode list (`act`, `plan`, `research`, `custom`) is stale. *(T-A1)*
+- **A2** A profile **MUST** declare a prompt source, a tool allow-list, `capabilityCeiling`, budgets and a subagent policy; the field names are `05-domain-and-schemas.md` §4.9's (`systemPrompt`, `toolAllowlist`/`toolDenylist`, `capabilityCeiling`, `budgetDefaults`, `canSpawn`/`spawnCeiling`). *(T-A2)*
 - **A3** A profile's `capabilityCeiling` **MUST** only narrow relative to the session's grant; a profile **MUST NOT** widen. *(T-A3)*
 - **A4** A `plan` profile **MUST** be read-only by construction: no `workspace-write`, no `process`, no `network` capability is granted. *(T-A4)*
 - **A5** A `research` profile **MUST** be read-only plus `net.search` (and `net.fetch` only where policy permits). *(T-A5)*
@@ -205,7 +205,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 - **I6** The IDE bridge **MUST** authenticate with a short-lived JWT presented by a previously trusted device; the token **MUST** carry `session_id`, `workspace_root_digest`, `aud` and `jti`, and a token for one session **MUST NOT** act on another. *(T-I6)*
 - **I7** Editor-supplied content (attachments, selections, diagnostics) **MUST** be bounded (default ≤ 4 MB per item, ≤ 8 items per prompt), hashed into the receipt, and framed as untrusted. *(T-I7)*
 - **I8** A diff shown in an editor **MUST** be applied by a `files.patch` effect from a host-computed base digest; accepting a diff **MUST NOT** be an editor-side file write. *(T-I8)*
-- **I9** After a bridge or leader crash, the bridge **MUST** replay `initialize` and each cached `session/load`/`session/new`, forwarding notifications and swallowing only the responses to the replayed requests, then emit a `hzcode/bridge_reconnected` notice. *(T-I9)*
+- **I9** After a bridge or leader crash, the bridge **MUST** replay `initialize` and each cached `session/load`/`session/new`, forwarding notifications and swallowing only the responses to the replayed requests, then emit the ACP extension notification `hz/reconnected` (the single name, declared in `14-surfaces.md` S97). *(T-I9)*
 - **I10** An editor that has been disconnected longer than the replay window **MUST** be told to do a full `session/load`, never silently shown a partial history. *(T-I10)*
 - **R1** `.hz/` **MUST** be able to declare agents, commands, skills, hooks, plugins, workflows, MCP servers and repo tests; the layout **MUST** be documented and stable. *(T-R1)*
 - **R2** `.hz/` **MUST** be content, not authority: it may narrow policy and name programs, and nothing more (ADR-008, `11-authority-safety.md` §7.6). *(T-R2)*
@@ -371,7 +371,7 @@ Exit-code contract for deciding points:
 
 | Exit | Meaning |
 |---|---|
-| `0` | allow-with-notes; stdout is attached as a bounded note |
+| `0` | pass-with-notes: the hook raises no objection (**it never allows anything** — H2); stdout is attached as a bounded note |
 | `10` | ask: escalate to a human challenge |
 | `20` | deny: refuse the tool call with `reason_code = hook_denied` |
 | any other, a signal, a crash, or a timeout | **deny** at `tool.pre` and `commit.pre`; recorded-but-ignored at observation points (H3, H4) |
@@ -398,7 +398,7 @@ Host channel functions (`ctx.*`) — the **only** ambient interface (W2):
 | `ctx.cancel(handle)` | `()` | propagates through the subagent primitive |
 | `ctx.tool(name, args)` | `ToolResult` | a real Guarded effect; may deny |
 | `ctx.ask_user(question, options)` | answer | journaled; in a non-interactive run it denies |
-| `ctx.emit(kind, payload)` | `()` | a declared event kind only |
+| `ctx.emit(kind, payload)` | `()` | a declared event kind only — canonical (`_conventions.md` §6) or a reserved `[planned]` name; an invented `hz.*` name is a load-time refusal |
 | `ctx.budget()` / `ctx.remaining()` | `BudgetView` | read-only |
 | `ctx.checkpoint(name)` | `()` | durable |
 | `ctx.log(msg)` | `()` | bounded, redacted |
@@ -410,29 +410,15 @@ Absent by design: `time`, `rand`, filesystem, network, process, environment. A w
 
 ### 3.6 `AgentProfileV1`
 
-```jsonc
-{
-  "id": "reviewer@project",
-  "name": "reviewer",
-  "mode": "custom",                       // act | plan | research | custom
-  "promptFile": ".hz/agents/reviewer.md",
-  "toolAllow": ["read", "read_many", "grep", "glob", "git_diff", "verify"],
-  "capabilityCeiling": ["files.read", "language.symbols", "vcs.read"],   // narrow only (A3)
-  "model": { "policy": "inherit" },
-  "budgets": { "tokens": 120000, "steps": 60, "wallClockMs": 600000 },
-  "subagentPolicy": { "canSpawn": false, "maxDepth": 0, "maxChildren": 0 },
-  "requiresHumanApprovalFor": ["vcs.write"],
-  "isolation": "shared",                  // shared | worktree
-  "skills": ["user:verify"],
-  "ownerBinding": { "kind": "user", "principal": "server_auth:alice" }
-}
-```
+**Schema fields: owner `05-domain-and-schemas.md` §4.9** — the field list, the `kind` enum, `capabilityCeiling`, `budgetDefaults`, `provenance` and the pinning invariant are declared there and MUST NOT be restated here. This section owns the *profile contract*: what a profile must mean, and what an extension may add to it.
 
 Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, definition digest, owner-binding digest, permission-ceiling digest) so an accepted task can pin exactly what it ran under (`source: /data/home/forge/repo-tour/horizoncode/kernel/src/agent_profile.rs`).
 
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15) — the duplicate `AgentProfileV1` field set that stood here is merged into `05-domain-and-schemas.md` §4.9, which owns every `*V1` schema (`_conventions.md` §7).
+>
 > Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
 
-**Profile contract additions (wshobson P1–P10):** every profile declares `resultSchema` (typed output; `kind=verify` MUST be three-valued + typed findings), `requiresInputs[]`, `refusesWhen[]` (evaluated before budget reservation; structured `precondition_unmet`), `partitionBy` (sibling nodes with one profile MUST carry distinct partition keys), `ownsPaths` (kernel refuses cross-session writes to an owned path), and a prompt skeleton (Mission / Invariants / Protocol / Inputs / Output contract / Never). Capability presets compose downward only: `observe ⊂ execute ⊂ mutate`, plus `coordinate`/`verify`/`publish`; `kind=relay` is a single-tool profile; tier policy maps kind → model tier (verify/plan → strongest; act → mid; research → cheapest unless `requiresReasoning`). Canonical id + revision + digest per profile, with `@provenance`. **Bundling decision: 15 profiles, one per capability class** — plugins may add profiles only by narrowing; "python-expert" is a skill over `worker`, not a 20th agent.
+**Profile contract (wshobson P1–P10, normative):** every profile declares `resultSchema` (typed output; `kind=verify` MUST be three-valued + typed findings), `requiresInputs[]`, `refusesWhen[]` (evaluated before budget reservation; structured `precondition_unmet`), `partitionBy` (sibling nodes with one profile MUST carry distinct partition keys), `ownsPaths` (kernel refuses cross-session writes to an owned path), and a prompt skeleton (Mission / Invariants / Protocol / Inputs / Output contract / Never). Capability presets compose downward only: `observe ⊂ execute ⊂ mutate`, plus `coordinate`/`verify`/`publish`. Tier policy maps kind → model tier (verify/plan → strongest; act → mid; research → cheapest unless `requiresReasoning`). Every profile has a canonical id + revision + digest with `@provenance`, and a task pins that triple (A7). A **single-tool** profile is a `relay`: it is expressed today as `kind=act` with a one-entry tool allow-list, because doc 05 §4.9's `kind` enum has no `relay` member — adding one is an additive-gated enum change there (doc 05 §4.9, versioning rule), not a change here. **Bundling decision: 15 profiles, one per capability class** — plugins may add profiles only by narrowing; "python-expert" is a skill over `worker`, not a 20th agent.
 
 ### 3.7 MCP
 
@@ -446,16 +432,11 @@ Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, d
 | change notifications | `notifications/tools/list_changed`, `notifications/resources/list_changed`, `notifications/prompts/list_changed` |
 | invocation | `tools/call`, `resources/read`, `prompts/get` |
 | server requests | `roots/list`, `elicitation/create`, `sampling/createMessage` (M10, M11) |
-| local tool | `tool_search(query, kind?)` → ranked `ToolSearchResultV1[]` with `{name, description, schemaDigest, loadRef}` |
+| local tool | `tool_search(query, kind?)` → ranked `ToolSearchResultV1[]` with `{name, description, schemaDigest, loadRef}`; capability `tool.discover` `[planned]` (reserved in `_conventions.md` §5, RC-11 — promoted when deferred loading is implemented) |
 
-**Server surface (HorizonCode as an MCP server).**
+**Server surface (HorizonCode as an MCP server).** The exposed tool, resource and prompt catalogue is owned by `14-surfaces.md` §3.5 (*MCP exposure*) — the `hz_*` alias set, the gated mutating tools and the resources it lists — and MUST NOT be restated here. This document keeps only the client-side interface above, plus the authority rules: read-only default (M13), audience-bound OAuth tokens with a receipt per call (M14), the posture defaults of `14-surfaces.md` S112, and admission of every call as a session-scoped batch with a non-human origin (`14-surfaces.md` S116).
 
-| Kind | Exposed | Posture default |
-|---|---|---|
-| tools | `hzcode_run`, `hzcode_read`, `hzcode_grep`, `hzcode_diff`, `hzcode_verify`, `hzcode_receipts`, plus any explicitly granted first-party tool | read-only; each additional tool must be granted by name |
-| resources | `hz://session/<id>`, `hz://receipt/<id>`, `hz://artifact/<sha256>`, `hz://policy/<digest>`, `hz://skill/<name>` | read-only |
-| prompts | built-in commands and user commands as MCP prompts | read-only |
-| auth | stdio ⇒ process identity; HTTP ⇒ OAuth 2.1 resource server with audience binding to the server URI | — |
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15) — the rival `hzcode_*` catalogue that stood here is merged into `14-surfaces.md` §3.5, which owns the surface contract (`_conventions.md` §1.3).
 
 ### 3.8 ACP and the IDE bridge
 
@@ -486,7 +467,7 @@ Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, d
 | events | the same protocol events the TUI consumes, with a monotonic `seq` cursor per client |
 | attachments | images, selections, diagnostics, file content — bounded and hashed (I7) |
 | diffs | `DiffViewV1 {path, baseDigest, hunks[], applyPreview}`; accept ⇒ `files.patch` effect (I8) |
-| replay | cached `initialize` + `session/load`/`session/new` replayed after a reconnect, then `hzcode/bridge_reconnected` (I9) |
+| replay | cached `initialize` + `session/load`/`session/new` replayed after a reconnect, then `hz/reconnected` (I9; the name is owned by `14-surfaces.md` S97) |
 | replay window | a per-session ring buffer (default 10k events / 30 min); a client beyond it must reload (I10) |
 
 ### 3.9 Repository layout `.hz/`
@@ -516,12 +497,14 @@ Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, d
 ├── tests/
 │   ├── catalog.yaml       # repo-defined tasks
 │   └── assertions/*.yaml
-└── (no trust records, ever — §2.7 of 11-authority-safety.md)
+└── (no trust records, ever — §7.7 of 11-authority-safety.md, trust on first use)
 ```
 
 ### 3.10 Types owned by this document
 
-`PluginManifestV1` · `ToolContributionV1` · `CommandV1` · `HookV1` · `HookMatcherV1` · `SkillV1` · `WorkflowV1` · `WorkflowJournalV1` · `AgentProfileV1` · `RegisteredAgentProfileProofV1` · `MarketplaceV1` · `PluginInstallRecordV1` · `PluginGrantV1` · `McpServerV1` · `McpToolCatalogV1` · `ToolSearchResultV1` · `AcpSessionV1` · `BridgeTokenV1` · `BridgeAttachmentV1` · `DiffViewV1` · `RepoTestCatalogV1`.
+`PluginManifestV1` · `ToolContributionV1` · `CommandV1` · `HookV1` · `HookMatcherV1` · `SkillV1` · `WorkflowV1` · `WorkflowJournalV1` · `RegisteredAgentProfileProofV1` · `MarketplaceV1` · `PluginInstallRecordV1` · `PluginGrantV1` · `McpServerV1` · `McpToolCatalogV1` · `ToolSearchResultV1` · `AcpSessionV1` · `BridgeTokenV1` · `BridgeAttachmentV1` · `DiffViewV1` · `RepoTestCatalogV1`.
+
+`AgentProfileV1` is **not** owned here: the schema is `05-domain-and-schemas.md` §4.9 and this document owns only its contract (§3.6).
 
 ---
 
@@ -552,7 +535,7 @@ Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, d
 ├── installed_plugins.json                   # PluginInstallRecordV1[] per scope
 ├── plugin_grants.json                       # PluginGrantV1[] (bounded, digest-bound)
 ├── trust/<workspace-root-digest>.json       # WorkspaceTrustRecordV1[] (never in a repo)
-├── ths/<workspace-root-digest>.jsonl        # Trusted Host State chain
+├── ths/<workspace-root-digest>.jsonl     # Trusted Host State **export/anchor** — the chain itself is the kernel table `ths_records` (`11-authority-safety.md` §4.7)
 ├── skill_locks/<skill-id>.json              # resolved skill digests
 └── bridges/<session-id>/replay.jsonl        # bridge replay ring buffer
 
@@ -569,7 +552,7 @@ Two placement rules that exist for safety rather than tidiness:
 | Artifact | Discovery order (first match wins per name) | Namespacing | Trust gate |
 |---|---|---|---|
 | Plugins | session `--plugin-dir` → workspace `.hz/plugins/plugin.lock` → user `installed_plugins.json` → managed policy | none (id is unique) | install + enable require consent |
-| Skills | workspace `.hz/skills/` → user `~/.config/horizon/skills/` → plugin `skills/` → bundled → MCP-derived | `project:`, `user:`, `plugin:<id>:`, `builtin:`, `mcp:<server>:` | workspace skills require a trust record |
+| Skills | workspace `.hz/skills/` → user `~/.config/horizon/skills/` → plugin `skills/` → bundled → MCP-derived — first match wins **within one namespace**; across namespaces the full namespaced id decides, so a workspace skill never shadows a user skill by bare name (`S7`) | `project:`, `user:`, `plugin:<id>:`, `builtin:`, `mcp:<server>:` | workspace skills require a trust record |
 | Commands | built-ins → user → plugin → workspace → MCP prompts | `builtin`(bare), `user:`, `plugin:<id>:`, `project:`, `mcp:<server>:` | workspace commands require trust for any capability they name |
 | Agents | workspace `.hz/agents/` → user → plugin → built-in modes | `project:`, `user:`, `plugin:<id>:` | workspace profiles require trust |
 | Hooks | managed → user → plugin → workspace (all merged, §4.6 ordering rules) | n/a | every hook program requires a trust record |
@@ -778,7 +761,7 @@ Marketplace rules:
 }
 ```
 
-`tool_search` indexes the union of plugin, MCP and deferred first-party tools with BM25 over `(name, description, server, tags)` plus embeddings, and returns ≤ 25 ranked results, of which at most K (default 8) may be resident (`M8`). Residency is per session, LRU-evicted, and the resident set is sorted by name so the prompt prefix stays byte-stable (ADR-009).
+`tool_search` indexes the union of plugin, MCP and deferred first-party tools with BM25 over `(name, description, server, tags)` plus embeddings, and returns ≤ 25 ranked results, of which at most K (default 8) may be resident (`M8`). Residency is per session, LRU-evicted, and the resident set is sorted by name so the prompt prefix stays byte-stable (ADR-009). Its capability is the reserved `tool.discover` `[planned]` (`_conventions.md` §5, RC-11): a search of the discovery index, never a read of the tools it names.
 
 ### 4.9 Skill eval catalogs and repo tests
 
@@ -872,6 +855,8 @@ A resume replays entries 1..n and continues from the last completed step; every 
 | Bridge | attachment over the cap | `bridge_attachment_too_large` | refuse that attachment; keep the prompt |
 | Bridge | replay beyond the window | `bridge_replay_exhausted` | instruct a full `session/load` |
 | Config | `.hz/` widening attempt | `workspace_layer_widening_refused` | refuse the field, keep running with the narrowed effective policy |
+
+Two namespaces meet here and MUST NOT be conflated. The codes above are **load/admission error codes** (owned by the error catalogue of `07-apis-and-contracts.md`); the Guard-facing subset that can end an effect or a decision — `hook_denied`, `skill_capability_not_granted`, `workspace_layer_widening_refused`, `executable_untrusted_workspace` — MUST also be registered in the closed `reason_code` set of `11-authority-safety.md` §5.1, which is the only place a decision reason code is defined.
 
 ### 5.2 Failure isolation
 
@@ -967,7 +952,7 @@ point fires
   ├─ deciding points gather exit codes in order:
   │    20 → deny immediately (short-circuit; remaining hooks do not run)
   │    10 → escalate to ask (a later 20 still wins)
-  │     0 → allow-with-notes
+  │     0 → pass-with-notes
   │    anything else / crash / timeout → deny                          (H3)
   └─ observation points run in parallel, never block; failures are notes (H4)
 ```
@@ -1002,7 +987,7 @@ fn main(ctx) {
     let outcomes = ctx.wait(audits);
     let failed = outcomes.filter(|o| o.status != "SUCCEEDED");
     if failed.len() > 0 {
-        ctx.emit("hz.workflow.audit_failed", #{ count: failed.len() });
+        ctx.log("audit_failed: " + failed.len() + " area(s)");
         ctx.fail("audit failed for " + failed.len() + " area(s)");
     }
 
@@ -1026,7 +1011,7 @@ fn main(ctx) {
             ctx.fail("test command denied: " + r.reasonCode);
         }
         if r.exitCode == 0 {
-            ctx.emit("hz.workflow.green", #{ attempt: attempt });
+            ctx.emit("hz.workflow.completed", #{ attempt: attempt });   // [planned] reserved name, _conventions.md §6
             return;
         }
         ctx.step("fix_" + attempt, || {
@@ -1129,7 +1114,7 @@ crash:   connection drops
   ├─ bridge replays: initialize, then each cached session/load | session/new
   │     · responses to REPLAYED requests are swallowed
   │     · notifications are forwarded normally
-  ├─ bridge emits hzcode/bridge_reconnected { sessionIds, replayedAt }
+  ├─ bridge emits hz/reconnected { sessionIds, replayedAt }
   └─ events since the client's cursor are re-sent within the window; beyond
      the window the client is told to session/load                            (I10)
 ```
@@ -1369,7 +1354,7 @@ Two rules with teeth:
 
 ## 9. Tests
 
-Every guarantee in §2 maps to a test. All paths are `[planned]`.
+Every guarantee in §2 maps to a test. All paths are `[planned]` except the skills/subagent suite `28-implementation-status.md` records as green (`bun test tests/core/skills-agents.test.ts`, 10 pass); where a path below conflicts with an implemented shape, `docs/28` is the truth.
 
 ### 9.1 Guarantee → test matrix
 
@@ -1520,7 +1505,7 @@ Every guarantee in §2 maps to a test. All paths are `[planned]`.
 
 ## 10. Status
 
-Every capability below is **DESIGNED**. Evidence for each is this document. Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8. Nothing here is a claim of working code.
+Every capability below is **DESIGNED** except the two rows `28-implementation-status.md` records above it — that file owns implementation levels (RC-13) and is the only place a level above `DESIGNED` may be claimed. Evidence for every other row is this document. Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8; nothing else here is a claim of working code.
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|
@@ -1531,8 +1516,8 @@ Every capability below is **DESIGNED**. Evidence for each is this document. Leve
 | Plugin tools → `ToolDeclarationV1` | DESIGNED | §3.2; `/data/home/forge/hzcode/docs/02-decisions.md` ADR-015 | `packages/plugin/src/compile.ts` + exhaustive test |
 | Lifecycle (discovery/install/load/update/uninstall) | DESIGNED | §6.1 | `lifecycle.test.ts`, `update.test.ts` |
 | Marketplace model | DESIGNED | §4.7; `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-plugin-marketplace/src/` | `marketplace.test.ts` |
-| Skills (`SKILL.md`, discovery, precedence) | DESIGNED | §4.2, §4.3; `source: /data/home/forge/repo-tour/claude-code/src/skills/loadSkillsDir.ts` | `packages/skills` load suite |
-| `run-as: subagent` | DESIGNED | §6.2; ADR-016 | `subagent.test.ts` + boundary test |
+| Skills (`SKILL.md`, discovery, precedence) | VERIFIED for the v0.1 flat-file slice; DESIGNED for the directory form | `28-implementation-status.md` §1 — `.hzcode/skills/*.md` discovery with workspace shadowing, prompt directory capped at 12, `/skill` activation (`bun test tests/core/skills-agents.test.ts` → 10 pass); §4.2, §4.3 for the designed form. **Shape difference, stated not hidden:** v0.1 reads flat `.hzcode/skills/*.md`, while S1 specifies a directory containing `SKILL.md` — the flat file is the compatibility form, the directory form is `[planned]` | directory discovery + `packages/skills` load suite |
+| `run-as: subagent` | VERIFIED for the `agent`-tool slice; DESIGNED for the `run-as:` front-matter form | `28-implementation-status.md` §1 — `agent` tool, child session, base-seven tools only, steps 12 default / 20 cap, own receipts (same suite, 10 pass); §6.2 and ADR-016 for the skill-triggered form | `subagent.test.ts` + boundary test |
 | Skill lock/update + evals | DESIGNED | §4.9, §6.9 | `packages/skills` eval harness |
 | Bundled skills | DESIGNED | §4.4; `source: /data/home/forge/repo-tour/claude-code/src/skills/bundled/` | one bundled skill wired + evaluated |
 | Commands (prompt/local/rich) | DESIGNED | §3.3, §4.5, §6.3; `source: /data/home/forge/repo-tour/claude-code/src/types/command.ts` | `packages/cli` command suite |
@@ -1553,7 +1538,7 @@ Every capability below is **DESIGNED**. Evidence for each is this document. Leve
 
 ### 10.1 Known gaps carried forward
 
-1. **Nothing in this document is implemented.** There is no plugin host, skill loader, hook dispatcher, workflow engine, MCP client or ACP agent in this repository yet (`/data/home/forge/hzcode/README.md` §7).
+1. **Only the v0.1 slices exist.** There is no plugin host, hook dispatcher, workflow engine, MCP client or ACP agent in this repository yet. The skills loader and the subagent primitive **do** exist and are VERIFIED (`28-implementation-status.md` §1); implementation levels are owned by `docs/28` (RC-13), including the shape difference in §4.3 noted at the §10 row.
 2. **The reference implementations disagree on OAuth surface details.** The MCP auth flow here is specified to OAuth 2.1 + PKCE against published metadata; the concrete authorization-server behaviours of real servers vary, and interoperating with them is a test-time obligation, not a design assumption.
 3. **The ACP extension namespace (`_hzcode/*`) is ours.** It is not part of the standard ACP surface, so an editor that does not know it sees a conformant agent with fewer features, never a broken one.
 4. **Windows and macOS hook sandboxing inherits the platform residuals** of `11-authority-safety.md` §7.12.2; a hook profile on those platforms reports the same named residuals rather than claiming parity with Linux.
