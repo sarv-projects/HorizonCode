@@ -9,6 +9,8 @@
  *  - objects: keys sorted lexicographically by UTF-8 bytes, compact, no whitespace
  *  - arrays: order preserved; numbers/strings/bools/null as native JSON
  *  - undefined is serialized as null (defensive; callers should omit undefined fields)
+ *  - numbers are exact for integers; non-integer formatting is not part of the v0.1
+ *    interop contract (the Rust kernel notes the same in kernel/src/canon.rs)
  *  - resulting string is UTF-8 encoded, SHA-256 hashed, hex lowercase
  *
  * Event hash input = canonical JSON of ALL envelope fields EXCEPT `hash`
@@ -81,7 +83,7 @@ export interface GuardDecision {
 export interface Lease {
   leaseId: string;
   kind: GuardKind;
-  pattern: string; // exact or prefix match, "*" wildcard suffix allowed
+  pattern: string; // exact match, or a trailing "*" wildcard prefix (guard.rs rules)
   expiry: string; // ISO-8601
 }
 
@@ -282,12 +284,32 @@ export const KERNEL_METHODS: KernelMethod[] = [
 
 /* ------------------------------ Hashing ------------------------------ */
 
+const textEncoder = new TextEncoder();
+
+/**
+ * Compare object keys by UTF-8 bytes, exactly as the Rust kernel sorts them.
+ *
+ * Array.prototype.sort() compares UTF-16 code units: an astral key (U+10000…)
+ * begins with a surrogate in 0xD800–0xDBFF and would sort before U+E000–U+FFFF,
+ * while byte order places it after. The interop tests pin both orders.
+ */
+function compareUtf8(a: string, b: string): number {
+  const left = textEncoder.encode(a);
+  const right = textEncoder.encode(b);
+  const shared = Math.min(left.length, right.length);
+  for (let index = 0; index < shared; index += 1) {
+    const diff = (left[index] as number) - (right[index] as number);
+    if (diff !== 0) return diff;
+  }
+  return left.length - right.length;
+}
+
 export function canonicalJson(v: unknown): string {
   if (v === null || v === undefined) return "null";
   if (typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return "[" + v.map(canonicalJson).join(",") + "]";
   const obj = v as Record<string, unknown>;
-  const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
+  const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort(compareUtf8);
   return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalJson(obj[k])).join(",") + "}";
 }
 

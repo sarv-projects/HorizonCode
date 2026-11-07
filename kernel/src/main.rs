@@ -10,6 +10,7 @@
 mod canon;
 mod eventlog;
 mod guard;
+mod permm;
 mod protocol;
 mod receipts;
 mod time;
@@ -71,6 +72,8 @@ fn run() -> i32 {
         eprintln!("error: cannot create state dir {}: {}", dir.display(), e);
         return 2;
     }
+    // Event payloads and receipts are not world-readable material.
+    permm::private_dir(&dir);
 
     if selftest {
         return selftest_run(&dir);

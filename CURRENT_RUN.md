@@ -2,7 +2,7 @@
 
 > **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-06, ~17:40 UTC** (product state) · **2026-11-07** (design corpus: RC-15 adoption wave, `docs/30`). Workspace: `/data/home/forge/hzcode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
 >
-> **TL;DR — the V1 product mission is complete; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 285 pass / 0 fail (27 files)** and **`cargo test` 14 integration + 3 unit**. Nothing is in flight in the product. A deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md`; the 2026-11-07 adoption wave (RC-15, [`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into docs 03/08/09/24 but not yet into code — see `docs/28` §4. RC-13 makes `docs/28` the single source of truth for implementation status.
+> **TL;DR — the V1 product mission is complete; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. Final green run: **`bun test` 297 pass / 0 fail (28 files)** and **`cargo test` 17 integration + 3 unit**. Nothing is in flight in the product. A deep audit of all twelve reference clones — completeness pass, merged/unique findings, optimization analysis, and a docs-staleness reconciliation across the whole spec set — is recorded in `docs/29-final-audit.md`; the 2026-11-07 adoption wave (RC-15, [`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into docs 03/08/09/24 but not yet into code — see `docs/28` §4. RC-13 makes `docs/28` the single source of truth for implementation status.
 
 ---
 
@@ -38,15 +38,15 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 
 | Area | Status | Evidence |
 |---|---|---|
-| Rust trust kernel + protocol | **VERIFIED** | `cd kernel && cargo test` (17 green) + `--selftest` → `SELFTEST OK (14 checks)` |
+| Rust trust kernel + protocol | **VERIFIED** | `cd kernel && cargo test` (20 green) + `--selftest` → `SELFTEST OK (14 checks)` |
 | Contracts / Rust<->TS hash interop | **VERIFIED** | both directions verify each other's files (`log.verify`/`receipt.verify` → ok) |
-| Runtime core (loop, guard gate, sessions, providers) | **VERIFIED** | `bun test tests/core` (63 tests); live e2e `printf 'list files' \| ./bin/hzcode` → tool card + receipt; `kernelMode=trusted` |
+| Runtime core (loop, guard gate, sessions, providers) | **VERIFIED** | `bun test tests/core` (75 tests); live e2e `printf 'list files' \| ./bin/hzcode` → tool card + receipt; `kernelMode=trusted` |
 | Providers (Anthropic/OpenAI SSE + mock) | **VERIFIED** | `bun test tests/providers` → 72 pass; two fixes (empty `arguments`) |
 | Tools (7 base) | **VERIFIED** | `bun test tests/tools`; `shell.ts` detached process-group + drain fix |
 | Chat TUI (interactive + headless) | **VERIFIED** | `bun test tests/tui` → 48 pass incl. real PTY scenarios |
 | **Skills** (discovery, /activation, prompt injection) | **VERIFIED** | `bun test tests/core/skills-agents.test.ts`; live chat `/demo …` → `skill active: demo` |
 | **Subagents** (`agent` tool, child session, no recursion) | **VERIFIED** | same suite: nested run through the real kernel, receipts + child stream verify |
-| **Code Mode** (Bun JS subprocess, tool bridge) | **VERIFIED** | `bun test tests/core/codemode-preview.test.ts` (12 pass: deny/ask, receipts, timeout, abort) |
+| **Code Mode** (Bun JS subprocess, tool bridge) | **VERIFIED** | `bun test tests/core/codemode-preview.test.ts` (14 pass: deny/ask, receipts, log-forgery regression, timeout, abort) |
 | **Preview servers** (start/stop/status) | **VERIFIED** | same suite: live URL capture, process-group kill (pid gone) |
 | Everything else in docs 00–30 (the tool catalog in `docs/09-tools.md` §4 — authoritative — memory tiers, compaction, sandbox matrix, surfaces, governance, self-improvement, the RC-15 adoption wave) | **DESIGNED ONLY** | sequenced in docs/27 (V0–V7); adoption tracked in `docs/28` §4 |
 
@@ -74,10 +74,10 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 ```bash
 cd /data/home/forge/hzcode
 
-# TypeScript suite (285 tests / 27 files)
+# TypeScript suite (297 tests / 28 files)
 cd app && /home/forge/.bun/bin/bun test && cd ..
 
-# Rust suite (17 tests) + kernel selftest
+# Rust suite (20 tests) + kernel selftest
 cd kernel && cargo test && ./target/release/hz-kernel --selftest --state-dir /tmp/hz-k && cd ..
 
 # Human path: chat works zero-config (mock provider)

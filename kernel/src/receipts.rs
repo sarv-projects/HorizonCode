@@ -11,7 +11,8 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::canon::hash_receipt;
-use crate::eventlog::{verify_chain, ChainKind, LockFile, VerifyReport};
+use crate::eventlog::{read_head, verify_chain, write_head, ChainKind, LockFile, VerifyReport};
+use crate::permm;
 use crate::time::now_iso;
 
 pub struct Receipts {
@@ -54,9 +55,11 @@ impl Receipts {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {}", parent.display(), e))?;
+            permm::private_dir(parent);
         }
         let _lock = LockFile::acquire(&self.path)?;
         let (last_seq, prev_hash) = tail_of(&self.path)?;
+        crate::eventlog::ensure_anchor_matches(&self.path, last_seq, prev_hash.as_deref())?;
 
         let mut receipt = Map::new();
         receipt.insert("id".to_string(), json!(Uuid::new_v4().to_string()));
@@ -84,12 +87,18 @@ impl Receipts {
         }
 
         append_line(&self.path, &receipt)?;
+        let hash_written = receipt
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        write_head(&self.path, last_seq + 1, &hash_written)?;
         Ok(receipt)
     }
 
     pub fn verify(&self) -> Result<VerifyReport, String> {
         let lines = crate::eventlog::read_lines(&self.path)?;
-        verify_chain(lines, ChainKind::Receipt)
+        verify_chain(lines, ChainKind::Receipt, read_head(&self.path))
     }
 }
 
@@ -116,9 +125,7 @@ fn tail_of(path: &Path) -> Result<(u64, Option<String>), String> {
 fn append_line(path: &Path, value: &Value) -> Result<(), String> {
     let line = serde_json::to_string(value).map_err(|e| format!("cannot serialize: {}", e))?;
     use std::io::Write;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut file = permm::append_options()
         .open(path)
         .map_err(|e| format!("cannot open {}: {}", path.display(), e))?;
     file.write_all(line.as_bytes())

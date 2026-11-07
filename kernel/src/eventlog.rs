@@ -7,6 +7,12 @@
 //! Concurrent appends are serialized with an exclusive lockfile
 //! (`<stream>.jsonl.lock`, `create_new`), with stale-lock takeover after 30s so a
 //! crashed process cannot wedge the log.
+//!
+//! Every append also refreshes `<stream>.jsonl.head`: the seq and hash of the
+//! last record, written atomically (temp file + rename). `verify` compares the
+//! chain against that anchor, so tail truncation — invisible to a bare chain
+//! walk — is detected. The residual (an attacker who can rewrite the log can
+//! also delete or rewrite the anchor) is recorded in docs/28 §4.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -18,6 +24,7 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::canon::{hash_envelope, is_hash};
+use crate::permm;
 use crate::time::now_iso;
 
 pub const STREAM_FILE_SUFFIX: &str = ".jsonl";
@@ -134,10 +141,12 @@ impl EventLog {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {}", parent.display(), e))?;
+            permm::private_dir(parent);
         }
         let _lock = LockFile::acquire(&path)?;
 
         let (last_seq, prev_hash) = tail_of(&path)?;
+        ensure_anchor_matches(&path, last_seq, prev_hash.as_deref())?;
         let mut envelope = Map::new();
         envelope.insert("id".to_string(), Value::String(id));
         envelope.insert("seq".to_string(), json!(last_seq + 1));
@@ -161,6 +170,12 @@ impl EventLog {
         }
 
         append_line(&path, &envelope)?;
+        let hash_written = envelope
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        write_head(&path, last_seq + 1, &hash_written)?;
         Ok(envelope)
     }
 
@@ -196,7 +211,7 @@ impl EventLog {
     /// Walk the chain, checking seq continuity, prevHash links and recomputed hashes.
     pub fn verify(&self, stream: &str) -> Result<VerifyReport, String> {
         let path = self.stream_path(stream)?;
-        verify_chain(read_lines(&path)?, ChainKind::Event)
+        verify_chain(read_lines(&path)?, ChainKind::Event, read_head(&path))
     }
 }
 
@@ -207,7 +222,7 @@ pub enum ChainKind {
     Receipt,
 }
 
-pub fn verify_chain(lines: Vec<String>, kind: ChainKind) -> Result<VerifyReport, String> {
+pub fn verify_chain(lines: Vec<String>, kind: ChainKind, head: HeadState) -> Result<VerifyReport, String> {
     let mut expected_seq: u64 = 1;
     let mut prev_hash: Option<String> = None;
     let mut count: u64 = 0;
@@ -265,11 +280,110 @@ pub fn verify_chain(lines: Vec<String>, kind: ChainKind) -> Result<VerifyReport,
         expected_seq += 1;
     }
 
+    // The chain is internally consistent; now compare it against its anchor.
+    if let Some(broken_at) = anchor_breach(&head, count, prev_hash.as_deref()) {
+        return Ok(VerifyReport {
+            ok: false,
+            count,
+            broken_at: Some(broken_at),
+        });
+    }
+
     Ok(VerifyReport {
         ok: true,
         count,
         broken_at: None,
     })
+}
+
+/// Integrity anchor state for a chain file.
+pub enum HeadState {
+    /// No `.head` file: a chain written before anchors existed.
+    Absent,
+    /// The `.head` file exists but cannot be read or parsed.
+    Invalid,
+    /// The anchor: seq and hash of the last record.
+    Present(u64, String),
+}
+
+/// Where a chain file's anchor lives: `<file>.head`.
+pub fn head_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.head", path.display()))
+}
+
+/// Persist the anchor after each append (write + rename, so it is never torn).
+pub fn write_head(path: &Path, seq: u64, hash: &str) -> Result<(), String> {
+    let head = head_path(path);
+    let tmp = PathBuf::from(format!("{}.tmp", head.display()));
+    let body = serde_json::to_string(&json!({ "hash": hash, "seq": seq }))
+        .map_err(|e| format!("cannot serialize anchor: {}", e))?;
+    permm::write_new(&tmp, format!("{}\n", body).as_bytes())
+        .map_err(|e| format!("cannot write {}: {}", tmp.display(), e))?;
+    fs::rename(&tmp, &head).map_err(|e| format!("cannot move {}: {}", head.display(), e))
+}
+
+/// Read a chain file's anchor.
+pub fn read_head(path: &Path) -> HeadState {
+    let head = head_path(path);
+    if !head.exists() {
+        return HeadState::Absent;
+    }
+    let Ok(text) = fs::read_to_string(&head) else {
+        return HeadState::Invalid;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(text.trim()) else {
+        return HeadState::Invalid;
+    };
+    match (
+        value.get("seq").and_then(|v| v.as_u64()),
+        value.get("hash").and_then(|v| v.as_str()),
+    ) {
+        (Some(seq), Some(hash)) => HeadState::Present(seq, hash.to_string()),
+        _ => HeadState::Invalid,
+    }
+}
+
+/// Refuse to extend a chain whose tail disagrees with its anchor: appending
+/// onto a truncated or rewritten tail would silently bless the edit.
+pub fn ensure_anchor_matches(path: &Path, tail_seq: u64, tail_hash: Option<&str>) -> Result<(), String> {
+    match read_head(path) {
+        HeadState::Absent => Ok(()),
+        HeadState::Invalid => Err(format!(
+            "chain anchor for {} is unreadable; refusing to append",
+            path.display()
+        )),
+        HeadState::Present(seq, hash) => {
+            let aligned = seq == tail_seq && (tail_seq == 0 || tail_hash == Some(hash.as_str()));
+            if aligned {
+                Ok(())
+            } else {
+                Err(format!(
+                    "chain tail (seq {}, hash {:?}) disagrees with its anchor (seq {}, hash {}); refusing to append",
+                    tail_seq, tail_hash, seq, hash
+                ))
+            }
+        }
+    }
+}
+
+/// Compare a completed, internally consistent walk of `count` records against
+/// its anchor; returns the seq to report as broken, or None.
+fn anchor_breach(head: &HeadState, count: u64, last_hash: Option<&str>) -> Option<u64> {
+    match head {
+        HeadState::Absent => None,
+        HeadState::Invalid => Some(count + 1),
+        HeadState::Present(seq, hash) => {
+            if *seq > count {
+                Some(count + 1) // records were removed from the tail
+            } else if *seq < count {
+                Some(seq + 1) // records exist the anchor never saw
+            } else if count > 0 && last_hash != Some(hash.as_str()) {
+                Some(count) // the tail record was rewritten
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// (seq, hash) of the last well-formed line, or (0, None) for an empty/absent file.
@@ -311,9 +425,7 @@ pub fn read_lines(path: &Path) -> Result<Vec<String>, String> {
 
 fn append_line(path: &Path, value: &Value) -> Result<(), String> {
     let line = serde_json::to_string(value).map_err(|e| format!("cannot serialize: {}", e))?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut file = permm::append_options()
         .open(path)
         .map_err(|e| format!("cannot open {}: {}", path.display(), e))?;
     file.write_all(line.as_bytes())
@@ -333,11 +445,16 @@ impl LockFile {
         let lock_path = PathBuf::from(format!("{}.lock", target.display()));
         let started = SystemTime::now();
         loop {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-            {
+            match {
+                let mut options = OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                options.open(&lock_path)
+            } {
                 Ok(mut file) => {
                     let _ = write!(file, "{}", std::process::id());
                     let _ = file.flush();

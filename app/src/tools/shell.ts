@@ -1,15 +1,13 @@
 /** `shell` — run one bash command in the workspace. */
 
 import type { Tool, ToolContext, ToolResult } from "../contracts";
-import { resolvePath, truncate } from "./helpers";
+import { resolvePath, scrubEnv, truncate } from "./helpers";
 
 const MAX_OUTPUT = 30_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 /** How long to keep draining output pipes after the direct child has exited. */
 const DRAIN_GRACE_MS = 500;
-/** Environment names that must never reach a child process. */
-const SECRET_ENV = /(key|token|secret|password)$/i;
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -34,16 +32,6 @@ function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
 function numberOr(value: unknown, fallback: number): number {
   const n = typeof value === "string" ? Number(value) : value;
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-/** Inherit the environment, minus anything that looks like a credential. */
-function scrubEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined || SECRET_ENV.test(k)) continue;
-    env[k] = v;
-  }
-  return env;
 }
 
 export const shellTool: Tool = {

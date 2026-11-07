@@ -5,9 +5,15 @@
  *   parent -> child   {"init":{"code":"..."}}                 once, first
  *   child  -> parent  {"rpc":"tool.call","rpcId":N,"name":..,"args":{..}}
  *   parent -> child   {"rpcId":N,"result":{"ok":..,"output":..,"error":..}}
- *   child  -> parent  plain lines                               console output
+ *   child  -> parent  {"log":"..."}                            console output
  *   child  -> parent  {"done":true,"result":<json>}            exactly once, last
  *   child  -> parent  {"done":false,"error":"..."}             on a program error
+ *
+ * Console output is tagged ({"log": ...}) rather than sent as bare lines: a
+ * program that logs a JSON object shaped like a control frame must not be able
+ * to end itself early or invent a result. (A program that writes to stdout
+ * directly can still emit anything — that channel is the program's own — but
+ * the ordinary console path can no longer produce false frames.)
  *
  * The user program is one async function body: `tools.call(name, args)` is the
  * bridge back to the parent (which enforces the guard, approvals and receipts),
@@ -83,13 +89,13 @@ function fmt(value: unknown): string {
   }
 }
 
-/** A console line is a plain stdout line to the parent; capped in total. */
+/** A console line is a tagged stdout line to the parent; capped in total. */
 function logLine(parts: unknown[]): void {
   if (logBytes >= LOG_CAP) return;
   const text = parts.map(fmt).join(" ");
   const slice = text.slice(0, LOG_CAP - logBytes);
   logBytes += slice.length + 1;
-  writeLine(slice);
+  writeLine(JSON.stringify({ log: slice }));
 }
 
 const captureConsole = {

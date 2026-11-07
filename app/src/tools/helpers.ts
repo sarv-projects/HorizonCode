@@ -23,5 +23,24 @@ export function isBinary(buf: Uint8Array): boolean {
 export function relPath(base: string, p: string): string {
   const rel = path.relative(base, p);
   if (rel === "") return path.basename(p) || ".";
-  return rel.startsWith("..") || path.isAbsolute(rel) ? p : rel;
+  // `..notes.md` is a normal file name; only a real `..` step (or another
+  // absolute path) means the target is outside the base.
+  return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) ? p : rel;
+}
+
+/** Environment names that must never reach a child process. */
+const SECRET_ENV = /(key|token|secret|password)$/i;
+
+/**
+ * Inherit the environment, minus anything that looks like a credential.
+ * Every tool that spawns a child process (shell, code_mode, preview) must use
+ * this, so one code path cannot silently leak what another one scrubs.
+ */
+export function scrubEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined || SECRET_ENV.test(k)) continue;
+    env[k] = v;
+  }
+  return env;
 }

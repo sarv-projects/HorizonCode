@@ -5,7 +5,8 @@
  * it can be started. When the binary is missing, crashes, times out or breaks the
  * protocol, the client transparently falls back to LocalKernel: a TypeScript
  * implementation of the same methods that writes byte-identical files
- * (events/<stream>.jsonl, receipts.jsonl) and evaluates the same DEFAULT_POLICY.
+ * (events/<stream>.jsonl and their .head anchors, receipts.jsonl and its anchor)
+ * and evaluates the same DEFAULT_POLICY.
  *
  * The only visible difference is `kernelMode`: 'trusted' for the sandboxed Rust
  * kernel, 'untrusted' for the in-process fallback.
@@ -13,7 +14,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type {
   EventEnvelope,
@@ -35,6 +36,26 @@ import { canonicalJson } from "./canon";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+/** A chain's last-record anchor; "corrupt" when present but unreadable. */
+type ChainHead = { seq: number; hash: string } | "corrupt";
+
+/**
+ * Compare a completed, internally consistent walk of `count` records against the
+ * chain's `.head` anchor. Returns the seq to report as broken, or undefined.
+ *
+ * An absent anchor is a legacy file (written before anchors existed) and is
+ * accepted; the residual — an attacker who can rewrite the chain can also
+ * delete its anchor — is recorded in docs/28 §4.
+ */
+function anchorBreach(head: ChainHead | undefined, count: number, lastHash: string | null): number | undefined {
+  if (head === undefined) return undefined;
+  if (head === "corrupt") return count + 1;
+  if (head.seq > count) return count + 1; // records were removed from the tail
+  if (head.seq < count) return head.seq + 1; // records exist the anchor never saw
+  if (count > 0 && head.hash !== lastHash) return count; // the tail record was rewritten
+  return undefined;
+}
+
 /**
  * Stream name "session:abc" -> file "session__abc.jsonl".
  *
@@ -52,14 +73,18 @@ export function sanitizeStream(stream: string): string {
   return name;
 }
 
-/** Lease patterns are exact, path-prefixed, or a trailing `*` wildcard. */
+/**
+ * Lease patterns are exact, or a trailing `*` wildcard prefix.
+ *
+ * Byte-for-byte the Rust kernel's rule (guard.rs::pattern_matches). The fallback
+ * must not be more permissive than the kernel, or one approval would mean two
+ * different things depending on which transport happened to be running.
+ */
 export function patternMatches(pattern: string, target: string): boolean {
   const p = typeof pattern === "string" ? pattern : "";
   const t = typeof target === "string" ? target : "";
-  if (p === "" || p === "*") return true;
   if (p.endsWith("*")) return t.startsWith(p.slice(0, -1));
-  if (t === p) return true;
-  return t.startsWith(p.endsWith("/") ? p : p + "/");
+  return t === p;
 }
 
 function isPolicyRule(value: unknown): value is PolicyRule {
@@ -176,6 +201,56 @@ export class LocalKernel {
     }
   }
 
+  private headPath(file: string): string {
+    return `${file}.head`;
+  }
+
+  /**
+   * The integrity anchor written beside every chain file: seq and hash of the
+   * last record. `verify` compares the chain against it, so tail truncation
+   * (deleting whole trailing records) can no longer pass silently.
+   */
+  private async writeHead(file: string, seq: number, hash: string): Promise<void> {
+    const tmp = `${file}.head.tmp`;
+    await writeFile(tmp, canonicalJson({ hash, seq }) + "\n", "utf8");
+    await rename(tmp, this.headPath(file));
+  }
+
+  /** The anchor of `file`, "corrupt" when present but unreadable, undefined when absent. */
+  private async readHead(file: string): Promise<ChainHead | undefined> {
+    let text: string;
+    try {
+      text = await readFile(this.headPath(file), "utf8");
+    } catch {
+      return undefined; // no anchor: a chain written before anchors existed
+    }
+    try {
+      const parsed = JSON.parse(text.trim()) as { seq?: unknown; hash?: unknown };
+      if (parsed !== null && typeof parsed === "object" && typeof parsed.seq === "number" && typeof parsed.hash === "string") {
+        return { seq: parsed.seq, hash: parsed.hash };
+      }
+    } catch {
+      /* a corrupt anchor is a finding, not an absence */
+    }
+    return "corrupt";
+  }
+
+  /**
+   * Refuse to extend a chain whose tail disagrees with its anchor: appending
+   * onto a truncated or rewritten tail would silently bless the edit. Mirrors
+   * eventlog.rs::ensure_anchor_matches.
+   */
+  private async ensureAnchorAligned(file: string, tail: { seq: number; hash: string } | undefined): Promise<void> {
+    const head = await this.readHead(file);
+    if (head === undefined) return; // legacy file without an anchor
+    if (head === "corrupt") throw new Error(`chain anchor for ${file} is unreadable; refusing to append`);
+    const tailSeq = tail?.seq ?? 0;
+    const aligned = head.seq === tailSeq && (tailSeq === 0 || head.hash === tail?.hash);
+    if (!aligned) {
+      throw new Error(`chain tail (seq ${tailSeq}) disagrees with its anchor (seq ${head.seq}) for ${file}; refusing to append`);
+    }
+  }
+
   private async readEnvelopes(stream: string): Promise<EventEnvelope[]> {
     const out: EventEnvelope[] = [];
     for (const line of await this.lines(this.streamPath(stream))) {
@@ -238,6 +313,7 @@ export class LocalKernel {
       const file = this.streamPath(stream);
       await mkdir(this.eventsDir(), { recursive: true });
       const tail = await this.tailOf(`events:${stream}`, file, () => this.readEnvelopes(stream));
+      await this.ensureAnchorAligned(file, tail);
       const base: Omit<EventEnvelope, "hash"> = {
         id: seed?.id || newId(),
         seq: (tail?.seq ?? 0) + 1,
@@ -250,6 +326,7 @@ export class LocalKernel {
       };
       const envelope: EventEnvelope = { ...base, hash: hashEnvelope(base) };
       await appendFile(file, canonicalJson(envelope) + "\n", "utf8");
+      await this.writeHead(file, envelope.seq, envelope.hash);
       this.tails.set(`events:${stream}`, { seq: envelope.seq, hash: envelope.hash, stamp: fileStamp(file) });
       return envelope;
     });
@@ -288,6 +365,8 @@ export class LocalKernel {
       prevHash = hash;
       count = expected;
     }
+    const breach = anchorBreach(await this.readHead(this.streamPath(stream)), count, prevHash);
+    if (breach !== undefined) return { ok: false, count, brokenAt: breach };
     return { ok: true, count };
   }
 
@@ -296,6 +375,7 @@ export class LocalKernel {
       const file = this.receiptsPath();
       await mkdir(this.stateDir, { recursive: true });
       const tail = await this.tailOf("receipts", file, () => this.readReceipts());
+      await this.ensureAnchorAligned(file, tail);
       const base: Omit<Receipt, "hash"> = {
         id: newId(),
         seq: (tail?.seq ?? 0) + 1,
@@ -309,6 +389,7 @@ export class LocalKernel {
       };
       const receipt: Receipt = { ...base, hash: hashReceipt(base) };
       await appendFile(file, canonicalJson(receipt) + "\n", "utf8");
+      await this.writeHead(file, receipt.seq, receipt.hash);
       this.tails.set("receipts", { seq: receipt.seq, hash: receipt.hash, stamp: fileStamp(file) });
       return receipt;
     });
@@ -337,6 +418,8 @@ export class LocalKernel {
       prevHash = hash;
       count = expected;
     }
+    const breach = anchorBreach(await this.readHead(this.receiptsPath()), count, prevHash);
+    if (breach !== undefined) return { ok: false, count, brokenAt: breach };
     return { ok: true, count };
   }
 
@@ -348,12 +431,11 @@ export class LocalKernel {
     // A `*` scope matches only `*` rules, so this default is the stricter one.
     const effective: PolicyScope = scope === undefined || (scope as string) === "" ? "*" : scope;
 
-    // deny > allow > ask, then active leases grant allow unless a deny matched.
+    // deny > lease > allow > ask — the exact order guard.rs::check uses, so a
+    // decision can never widen or narrow when the transport changes.
     const matching = this.policy.filter((rule) => ruleMatches(rule, action.kind, effective));
     const deny = matching.find((rule) => rule.decision === "deny");
     if (deny) return { decision: "deny", reason: `policy denies ${action.kind} for ${effective} targets` };
-    const allow = matching.find((rule) => rule.decision === "allow");
-    if (allow) return { decision: "allow" };
 
     const now = Date.now();
     const active = [...leases, ...this.leases.values()].filter(
@@ -361,6 +443,9 @@ export class LocalKernel {
     );
     const best = active[0];
     if (best) return { decision: "allow", leaseId: best.leaseId };
+
+    const allow = matching.find((rule) => rule.decision === "allow");
+    if (allow) return { decision: "allow" };
 
     const ask = matching.find((rule) => rule.decision === "ask");
     return {
@@ -370,11 +455,14 @@ export class LocalKernel {
   }
 
   async makeLease(kind: GuardKind, pattern: string, ttlMs: number): Promise<Lease> {
+    // The Rust kernel refuses an empty pattern (string_param); mirror that here
+    // instead of widening it to `*`, or one approval would mean two things.
+    if (typeof pattern !== "string" || pattern === "") throw new Error("lease pattern must be a non-empty string");
     const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? Math.floor(ttlMs) : 15 * 60_000;
     const lease: Lease = {
       leaseId: newId(),
       kind,
-      pattern: typeof pattern === "string" && pattern !== "" ? pattern : "*",
+      pattern,
       expiry: new Date(Date.now() + ttl).toISOString(),
     };
     this.leases.set(lease.leaseId, lease);
@@ -417,6 +505,15 @@ export function resolveKernelBinary(env: Record<string, string | undefined> = pr
   ];
   return candidates.find((candidate) => existsSync(candidate));
 }
+
+/**
+ * A structured refusal from the kernel: the request reached it and it answered
+ * with an error. Such a call must never be routed around: the kernel said no,
+ * and a local retry would be the client overruling its own authority. Transport
+ * and lifecycle failures (exit, timeout, malformed output) stay plain Error and
+ * are the only ones that trigger the fallback.
+ */
+class KernelRefusal extends Error {}
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -587,7 +684,7 @@ export class KernelClient {
     clearTimeout(pending.timer);
     if (message.error !== undefined && message.error !== null) {
       const text = typeof message.error.message === "string" ? message.error.message : JSON.stringify(message.error);
-      pending.reject(new Error(`kernel ${pending.method}: ${text}`));
+      pending.reject(new KernelRefusal(`kernel ${pending.method}: ${text}`));
       return;
     }
     pending.resolve(message.result);
@@ -721,6 +818,9 @@ export class KernelClient {
       try {
         return await this.callRemote(method, params);
       } catch (err) {
+        // A refusal is an answer, not a transport failure: surface it and leave
+        // the mode alone. Everything else may fall back to the local kernel.
+        if (err instanceof KernelRefusal) throw err;
         this.fallBack(`kernel call ${method} failed: ${errorMessage(err)}`);
         this.capture(`${method}: ${errorMessage(err)}`);
       }
