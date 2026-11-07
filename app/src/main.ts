@@ -13,7 +13,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Runtime, RuntimeOptions } from "./contracts";
+import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
 import { createApprovalUi, installApprovalHandler, runHeadless, runInteractive } from "./tui";
 import { errorMessage } from "./tui/style";
@@ -27,6 +27,8 @@ const HELP = [
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
   "  --mock               offline demo, no key   --version    print the version",
+  "  --max-steps <n>      cap model steps per turn (0 = unlimited)",
+  "  --max-tokens <n>     cap tokens per turn    --max-wall-ms <n>  cap wall clock per turn",
 ].join("\n");
 
 interface CliOptions {
@@ -37,6 +39,7 @@ interface CliOptions {
   help: boolean;
   version: boolean;
   initialMessage?: string;
+  budget?: RunBudget;
   errors: string[];
 }
 
@@ -107,6 +110,23 @@ function parseArgs(argv: string[]): CliOptions {
         else opts.model = value;
         break;
       }
+      // NF-073: run budgets; 0 = unlimited, the one convention everywhere.
+      case "--max-steps":
+      case "--max-tokens":
+      case "--max-wall-ms": {
+        const value = nextValue();
+        const n = value === undefined || value.trim() === "" ? Number.NaN : Number(value);
+        if (!Number.isFinite(n) || n < 0) {
+          opts.errors.push(`${name} needs a number (0 = unlimited)`);
+          break;
+        }
+        const amount = Math.floor(n);
+        opts.budget = opts.budget ?? {};
+        if (name === "--max-steps") opts.budget.maxSteps = amount;
+        else if (name === "--max-tokens") opts.budget.maxTokens = amount;
+        else opts.budget.maxWallMs = amount;
+        break;
+      }
       default:
         if (name.startsWith("-") && name !== "-") opts.errors.push(`unknown option ${name}`);
         else rest.push(arg);
@@ -163,7 +183,13 @@ async function main(): Promise<number> {
 
   let runtime: Runtime;
   try {
-    runtime = await createRuntime({ workspace, model: opts.model, continueSession: opts.continueSession, mock: opts.mock });
+    runtime = await createRuntime({
+      workspace,
+      model: opts.model,
+      continueSession: opts.continueSession,
+      mock: opts.mock,
+      budget: opts.budget,
+    });
   } catch (err) {
     process.stderr.write(`\u26a0 could not start a session: ${errorMessage(err)}\n`);
     process.stderr.write("  (the runtime lives in app/src/core \u2014 nothing else is needed to start chatting)\n");

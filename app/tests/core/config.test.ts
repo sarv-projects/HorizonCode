@@ -185,3 +185,18 @@ test("the config path follows HOME (temp HOME installed, real one restored)", ()
   expect(config.model).toBe("gpt-from-home");
   expect(config.sources.provider).toBe("file");
 });
+
+test("HZ_MAX_* budget variables parse; 0 means unlimited and junk is ignored", () => {
+  const { file } = homeWithConfig();
+  expect(loadConfig({}, file).budget).toBeUndefined();
+
+  const parsed = loadConfig({ HZ_MAX_STEPS: "7", HZ_MAX_TOKENS: "1200", HZ_MAX_WALL_MS: "30000" }, file);
+  expect(parsed.budget).toEqual({ maxSteps: 7, maxTokens: 1200, maxWallMs: 30000 });
+
+  // 0 is not "no budget written", it is the explicit unlimited ceiling.
+  expect(loadConfig({ HZ_MAX_STEPS: "0" }, file).budget).toEqual({ maxSteps: 0 });
+
+  // Nonsense and negatives are ignored, never widened or crashed on.
+  expect(loadConfig({ HZ_MAX_STEPS: "nonsense" }, file).budget).toBeUndefined();
+  expect(loadConfig({ HZ_MAX_STEPS: "-3" }, file).budget).toBeUndefined();
+});

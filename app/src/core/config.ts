@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
+import type { RunBudget } from "../contracts";
 
 export type ProviderName = "anthropic" | "openai" | "mock";
 
@@ -35,6 +36,8 @@ export interface HzConfig {
   model: string;
   baseUrl?: string;
   apiKey?: string;
+  /** NF-073 run budgets from the environment; absent keys stay unlimited. */
+  budget?: RunBudget;
   /** Where the values came from, for the banner and for debugging. */
   sources: {
     provider: "env" | "file" | "detected" | "default";
@@ -60,6 +63,13 @@ export function defaultConfigPath(home: string = homedir()): string {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+/** Environment budget fields: a non-negative number, else absent. 0 = unlimited. */
+function envNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
 }
 
 function normalizeProvider(value: string | undefined): ProviderName | undefined {
@@ -133,11 +143,21 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   const detectedKey = providerKey(provider, env);
   const apiKey = envKey ?? fileKey ?? detectedKey;
 
+  // NF-073: HZ_MAX_STEPS / HZ_MAX_TOKENS / HZ_MAX_WALL_MS, 0 = unlimited.
+  const budget: RunBudget = {};
+  const envSteps = envNumber(str(env.HZ_MAX_STEPS));
+  const envTokens = envNumber(str(env.HZ_MAX_TOKENS));
+  const envWall = envNumber(str(env.HZ_MAX_WALL_MS));
+  if (envSteps !== undefined) budget.maxSteps = envSteps;
+  if (envTokens !== undefined) budget.maxTokens = envTokens;
+  if (envWall !== undefined) budget.maxWallMs = envWall;
+
   return {
     provider,
     model,
     baseUrl,
     apiKey,
+    budget: Object.keys(budget).length > 0 ? budget : undefined,
     sources: {
       provider: providerSource,
       model: envModel ? "env" : fileModel ? "file" : "default",

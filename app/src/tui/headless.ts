@@ -8,7 +8,7 @@
  */
 
 import readline from "node:readline";
-import type { Runtime } from "../contracts";
+import type { RunExit, Runtime } from "../contracts";
 import { createRenderer } from "./render";
 import { bold, cyan, errorMessage, sanitizeText, setColorEnabled } from "./style";
 
@@ -18,6 +18,18 @@ export interface HeadlessOptions {
   runtime: Runtime;
   /** a message typed on the command line, sent before stdin is read */
   initialMessage?: string;
+}
+
+/**
+ * NF-073: budget stops are exit 5, a format-error cap is exit 1 (docs/14 §3.2,
+ * the canonical table). Everything else keeps the historical exit-0 behaviour
+ * until the wider headless exit contract lands.
+ */
+function exitCodeForRun(exit: RunExit | undefined): number {
+  if (!exit) return 0;
+  if (exit.terminal === "budget_exhausted" || exit.terminal === "timeout") return 5;
+  if (exit.terminal === "failed" && exit.detail === "format_errors") return 1;
+  return 0;
 }
 
 export async function runHeadless(opts: HeadlessOptions): Promise<number> {
@@ -51,6 +63,8 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
   });
 
   // There is no one to prompt here: an interrupted run must still leave cleanly.
+  let lastExit: RunExit | undefined;
+  let interruptSignal: "SIGINT" | null = null;
   const stop = (): void => {
     try {
       opts.runtime.abort();
@@ -65,7 +79,11 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
       /* already closed */
     }
   };
-  process.on("SIGINT", stop);
+  const onSigint = (): void => {
+    interruptSignal = "SIGINT";
+    stop();
+  };
+  process.on("SIGINT", onSigint);
   process.on("SIGTERM", stop);
 
   const answer = async (raw: string): Promise<void> => {
@@ -73,7 +91,8 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
     if (text === "") return;
     renderer.line(bold(cyan(PROMPT)) + text);
     try {
-      await opts.runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
+      const result = await opts.runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
+      lastExit = result.exit ?? lastExit;
     } catch (err) {
       renderer.error(`request failed: ${errorMessage(err)}`);
     }
@@ -95,7 +114,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
       wake = null;
     }
   } finally {
-    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", stop);
     try {
       rl.close();
@@ -104,5 +123,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
     }
     renderer.ensureLineStart();
   }
-  return 0;
+  if (interruptSignal === "SIGINT") return 130;
+  return exitCodeForRun(lastExit);
 }

@@ -20,6 +20,7 @@ import type {
   KernelMode,
   Lease,
   Provider,
+  RunBudget,
   Runtime,
   RuntimeCallbacks,
   RuntimeEvent,
@@ -29,8 +30,10 @@ import { EventTypes, newId, nowIso } from "../contracts";
 import { loadConfig, type HzConfig } from "./config";
 import { KernelClient } from "./kernel";
 import {
+  BudgetLedger,
   errorMessage,
   getApprovalHandler,
+  MAX_PROVIDER_CALLS,
   runTurn,
   SESSION_LEASE_TTL_MS,
   setApprovalHandler as setProcessApprovalHandler,
@@ -79,6 +82,8 @@ class HzRuntimeImpl implements HzRuntime {
   private readonly queued: string[] = [];
   private sendQueue: Promise<unknown> = Promise.resolve();
   private closed = false;
+  /** NF-073: the resolved budget every turn tree draws from (0 = unlimited). */
+  private readonly budget: RunBudget;
 
   constructor(args: {
     workspace: string;
@@ -88,6 +93,7 @@ class HzRuntimeImpl implements HzRuntime {
     store: SessionStore;
     session: SessionInfo;
     kernel: KernelClient;
+    budget: RunBudget;
   }) {
     this.workspace = args.workspace;
     this.config = args.config;
@@ -96,6 +102,7 @@ class HzRuntimeImpl implements HzRuntime {
     this.store = args.store;
     this.session = args.session;
     this.kernel = args.kernel;
+    this.budget = args.budget;
   }
 
   get sessionId(): string {
@@ -226,6 +233,9 @@ class HzRuntimeImpl implements HzRuntime {
         userContent = activated.action !== "" ? activated.action : `Apply the ${activated.skill.name} skill.`;
         emit(cb, { type: "notice", message: `skill active: ${activated.skill.name}` });
       }
+      // NF-073: one ledger per turn tree — the main turn and every subagent it
+      // spawns share this ceiling; a fresh one starts with each send().
+      const ledger = new BudgetLedger(this.budget);
       return await runTurn(
         {
           workspace: this.workspace,
@@ -239,6 +249,7 @@ class HzRuntimeImpl implements HzRuntime {
           sessionLeases: this.leases,
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
+          ledger,
           delegate: (task, maxSteps) =>
             runNested({
               workspace: this.workspace,
@@ -251,6 +262,7 @@ class HzRuntimeImpl implements HzRuntime {
               signal: controller.signal,
               sessionLeases: this.leases,
               approve: this.instanceApproval ?? getApprovalHandler(),
+              ledger,
             }),
         },
         userContent,
@@ -307,7 +319,24 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   });
   await kernel.start();
 
-  impl = new HzRuntimeImpl({ workspace, config, model, provider, store, session, kernel });
+  const rawBudget: RunBudget = { ...(config.budget ?? {}), ...(opts?.budget ?? {}) };
+
+  impl = new HzRuntimeImpl({
+    workspace,
+    config,
+    model,
+    provider,
+    store,
+    session,
+    kernel,
+    // NF-073: steps stay capped at MAX_PROVIDER_CALLS unless the environment or
+    // the caller set a budget; 0 (explicit) = unlimited, per dimension.
+    budget: {
+      maxSteps: rawBudget.maxSteps !== undefined ? rawBudget.maxSteps : MAX_PROVIDER_CALLS,
+      maxTokens: rawBudget.maxTokens ?? 0,
+      maxWallMs: rawBudget.maxWallMs ?? 0,
+    },
+  });
   await impl.logSessionStart();
   return impl;
 }
@@ -323,7 +352,9 @@ export type { HzConfig, ProviderName } from "./config";
 export { KernelClient, LocalKernel, resolveKernelBinary } from "./kernel";
 export { SessionStore, type SessionInfo } from "./session";
 export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider } from "./providers";
-export { systemPrompt, MAX_PROVIDER_CALLS, HISTORY_LIMIT } from "./loop";
+export { systemPrompt, MAX_PROVIDER_CALLS, HISTORY_LIMIT, MAX_CONSECUTIVE_FORMAT_ERRORS } from "./loop";
+export { BudgetLedger, budgetCountdownLine, exitCodeFor } from "./loop";
+export type { BudgetStop, BudgetCountdown } from "./loop";
 export { listSkills, getSkill, skillsPromptSection, resolveSkillForMessage, activeSkillSection } from "./skills";
 export { runNested, SUBAGENT_SYSTEM_PROMPT, clampSteps } from "./subagent";
 export type { Skill } from "./skills";

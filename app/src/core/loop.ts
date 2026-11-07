@@ -24,6 +24,8 @@ import type {
   Provider,
   ProviderRequest,
   ReceiptInput,
+  RunBudget,
+  RunExit,
   RuntimeCallbacks,
   RuntimeEvent,
   ToolCall,
@@ -42,6 +44,9 @@ export const MAX_PROVIDER_CALLS = 25;
 /** Messages replayed to the provider, newest last. */
 export const HISTORY_LIMIT = 80;
 export const SESSION_LEASE_TTL_MS = 15 * 60 * 1000;
+
+/** NF-073: consecutive invalid-JSON batches before the run is failed. */
+export const MAX_CONSECUTIVE_FORMAT_ERRORS = 3;
 
 /* --------------------------- approval registry --------------------------- */
 
@@ -381,6 +386,141 @@ export class GuardGate {
   }
 }
 
+/* --------------------- NF-073: the budget ceiling --------------------- */
+
+export type BudgetStop = "steps" | "tokens" | "wall_clock";
+
+export interface BudgetCountdown {
+  steps?: number; // remaining steps, omitted when unlimited
+  tokens?: number; // remaining tokens, omitted when unlimited
+  wallMs?: number; // remaining wall clock, omitted when unlimited
+}
+
+/**
+ * The spend ceiling for one run tree (NF-073). The main turn and every subagent
+ * it spawns draw from the same ledger — a child gets its own slice via child()
+ * but still checks and charges its parent — so a batch of children can never
+ * spend past the ceiling the human set. Every mutation is serialized on a
+ * promise-chain mutex: two concurrent children cannot both pass the last slot.
+ */
+export class BudgetLedger {
+  private stepsUsed = 0;
+  private tokensUsed = 0;
+  private readonly startedAt: number;
+  private mutex: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    private readonly limits: RunBudget,
+    private readonly parent?: BudgetLedger,
+    private readonly clock: () => number = () => performance.now(),
+  ) {
+    this.startedAt = this.clock();
+  }
+
+  private serialize<T>(task: () => T): Promise<T> {
+    const run = this.mutex.then(task, task);
+    this.mutex = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /** One child slice: checks the parent first, charges both. */
+  child(limits: RunBudget): BudgetLedger {
+    return new BudgetLedger(limits, this, this.clock);
+  }
+
+  private checkSync(): BudgetStop | undefined {
+    if (this.parent) {
+      const fromParent = this.parent.checkSync();
+      if (fromParent) return fromParent;
+    }
+    const maxSteps = this.limits.maxSteps ?? 0;
+    const maxTokens = this.limits.maxTokens ?? 0;
+    const maxWallMs = this.limits.maxWallMs ?? 0;
+    if (maxSteps > 0 && this.stepsUsed >= maxSteps) return "steps";
+    if (maxTokens > 0 && this.tokensUsed >= maxTokens) return "tokens";
+    if (maxWallMs > 0 && this.clock() - this.startedAt >= maxWallMs) return "wall_clock";
+    return undefined;
+  }
+
+  /** The single sentinel check: consulted before every provider dispatch. */
+  check(): Promise<BudgetStop | undefined> {
+    return this.serialize(() => this.checkSync());
+  }
+
+  /** Charge one dispatch; a billed-but-failed turn is still charged. */
+  async chargeStep(): Promise<void> {
+    await this.serialize(() => {
+      this.stepsUsed += 1;
+    });
+    if (this.parent) await this.parent.chargeStep();
+  }
+
+  /** Charge reported usage; zero/absent usage adds nothing extra. */
+  async chargeTokens(n: number): Promise<void> {
+    const amount = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    if (amount === 0) return;
+    await this.serialize(() => {
+      this.tokensUsed += amount;
+    });
+    if (this.parent) await this.parent.chargeTokens(amount);
+  }
+
+  consumed(): { steps: number; tokens: number; wallMs: number } {
+    return {
+      steps: this.stepsUsed,
+      tokens: this.tokensUsed,
+      wallMs: Math.max(0, this.clock() - this.startedAt),
+    };
+  }
+
+  /** What remains, limited dimensions only (rendered into the step prompt). */
+  countdown(): BudgetCountdown {
+    const out: BudgetCountdown = {};
+    const remaining = (max: number | undefined, used: number): number | undefined =>
+      max !== undefined && max > 0 ? Math.max(0, max - used) : undefined;
+    const steps = remaining(this.limits.maxSteps, this.stepsUsed);
+    const tokens = remaining(this.limits.maxTokens, this.tokensUsed);
+    const wall = remaining(this.limits.maxWallMs, this.clock() - this.startedAt);
+    if (steps !== undefined) out.steps = steps;
+    if (tokens !== undefined) out.tokens = tokens;
+    if (wall !== undefined) out.wallMs = wall;
+    return out;
+  }
+}
+
+/** "Budget remaining: 12 steps, ~8m30s." — only the limited dimensions. */
+export function budgetCountdownLine(countdown: BudgetCountdown): string {
+  const parts: string[] = [];
+  if (countdown.steps !== undefined) parts.push(`${countdown.steps} step${countdown.steps === 1 ? "" : "s"}`);
+  if (countdown.tokens !== undefined) parts.push(`${countdown.tokens.toLocaleString("en-US")} tokens`);
+  if (countdown.wallMs !== undefined) {
+    const seconds = Math.ceil(countdown.wallMs / 1000);
+    const minutes = Math.floor(seconds / 60);
+    parts.push(minutes > 0 ? `~${minutes}m${String(seconds % 60).padStart(2, "0")}s` : `~${seconds}s`);
+  }
+  return parts.length === 0 ? "" : `Budget remaining: ${parts.join(", ")}.`;
+}
+
+/** Canonical exit code for a run outcome (docs/14 §3.2): budgets are 5, errors 1. */
+export function exitCodeFor(exit: RunExit | undefined): number {
+  if (!exit) return 0;
+  switch (exit.terminal) {
+    case "succeeded":
+      return 0;
+    case "budget_exhausted":
+    case "timeout":
+      return 5;
+    case "cancelled":
+    case "interrupted":
+      return 130;
+    default:
+      return 1;
+  }
+}
+
 /* ------------------------------ the turn ------------------------------ */
 
 export interface LoopDeps {
@@ -404,6 +544,10 @@ export interface LoopDeps {
   toolFilter?: (name: string) => boolean;
   /** Provider-call ceiling for this run; defaults to MAX_PROVIDER_CALLS. */
   maxProviderCalls?: number;
+  /** NF-073 run budget (0 or absent per dimension = unlimited); used when `ledger` is absent. */
+  budget?: RunBudget;
+  /** NF-073 shared spend ceiling for a run tree; a passed ledger wins over `budget`. */
+  ledger?: BudgetLedger;
   /** Nested delegation runner (the `agent` tool); absent in child runs. */
   delegate?: DelegateRunner;
 }
@@ -435,17 +579,27 @@ async function beginUserTurn(deps: LoopDeps, prompt: string): Promise<void> {
   if (first) deps.store.touchSession(deps.sessionId, titleFromText(prompt));
 }
 
-async function collectAssistant(deps: LoopDeps, history: ChatMsg[]): Promise<AssistantTurn> {
+async function collectAssistant(
+  deps: LoopDeps,
+  history: ChatMsg[],
+  rails?: { budgetLine?: string; corrective?: string },
+): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
   const basePrompt =
     deps.systemOverride !== undefined && deps.systemOverride !== ""
       ? deps.systemOverride
       : systemPrompt(deps.workspace);
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
+  // NF-073(b): the live budget countdown and the format corrective ride the
+  // system rail — in context on every step, never a history rewrite.
+  const railParts: string[] = [];
+  if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
+  if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
+  const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
   const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   const request: ProviderRequest = {
     model: deps.model,
-    system: basePrompt + extra,
+    system: basePrompt + extra + rail,
     messages: history,
     tools: specs,
     signal: deps.signal,
@@ -605,32 +759,66 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
  * Run one conversation turn to completion. The promise never rejects: failures
  * arrive as error events and the caller gets whatever text was produced.
  */
-export async function runTurn(deps: LoopDeps, userText: string): Promise<{ text: string; aborted: boolean }> {
+export async function runTurn(
+  deps: LoopDeps,
+  userText: string,
+): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
   let text = "";
   let aborted = false;
+  // NF-073: one terminal outcome per run, in the RC-7 vocabulary.
+  let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
   try {
     const prompt = typeof userText === "string" ? userText.trim() : "";
     await beginUserTurn(deps, prompt);
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler());
+    // NF-073: one ledger for the run tree (the main turn and every subagent it
+    // spawns); a caller that passes its own ledger shares one ceiling.
+    const ledger =
+      deps.ledger ??
+      new BudgetLedger(
+        deps.budget ??
+          {
+            maxSteps:
+              deps.maxProviderCalls !== undefined && deps.maxProviderCalls > 0
+                ? deps.maxProviderCalls
+                : MAX_PROVIDER_CALLS,
+          },
+      );
     let calls = 0;
-    const maxCalls =
-      deps.maxProviderCalls !== undefined && deps.maxProviderCalls > 0 ? deps.maxProviderCalls : MAX_PROVIDER_CALLS;
+    let consecutiveFormatErrors = 0;
+    let corrective: string | undefined;
 
     for (;;) {
+      // The single sentinel: budgets are checked before every dispatch, under
+      // one convention — 0 (or absent) is unlimited. Wall clock is never reset.
       if (deps.signal.aborted) {
         aborted = true;
+        exit = { terminal: "interrupted", detail: "aborted" };
         break;
       }
-      if (calls >= maxCalls) {
-        emit(deps.callbacks, { type: "notice", message: `stopped after ${maxCalls} model turns in one request` });
+      const stop = await ledger.check();
+      if (stop) {
+        exit = { terminal: stop === "wall_clock" ? "timeout" : "budget_exhausted", detail: stop };
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `budget: ${stop === "wall_clock" ? "wall clock" : stop} exhausted — stopping at a clean boundary`,
+        });
         break;
       }
       calls += 1;
+      // Charged before the call: a billed-but-failed turn still spends its step.
+      await ledger.chargeStep();
 
       const history = trimHistory(deps.store.history(deps.sessionId));
       await logEvent(deps, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
-      const turn = await collectAssistant(deps, history);
+      const turn = await collectAssistant(deps, history, {
+        budgetLine: budgetCountdownLine(ledger.countdown()),
+        corrective,
+      });
+      if (turn.usage) {
+        await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
+      }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;
       if (turn.text !== "" || turn.toolCalls.length > 0) {
@@ -652,10 +840,12 @@ export async function runTurn(deps: LoopDeps, userText: string): Promise<{ text:
       if (turn.error) {
         emit(deps.callbacks, { type: "error", message: turn.error });
         await logEvent(deps, EventTypes.error, { message: turn.error });
+        exit = { terminal: "failed", detail: "provider_error" };
         break;
       }
       if (deps.signal.aborted || turn.stopReason === "abort") {
         aborted = true;
+        exit = { terminal: "interrupted", detail: "aborted" };
         break;
       }
       if (turn.stopReason === "max_tokens") {
@@ -679,11 +869,43 @@ export async function runTurn(deps: LoopDeps, userText: string): Promise<{ text:
         );
       }
       if (aborted) break;
+
+      // NF-073(c): a batch in which no call carried parseable JSON is a
+      // format-error step; any clean call resets the streak. The corrective
+      // note rides the next step's system rail (mid-history system roles are
+      // dropped by some providers, so it cannot be a history message).
+      let parseErrors = 0;
+      let cleanCalls = 0;
+      for (const call of turn.toolCalls) {
+        if (parseArguments(call.arguments).error !== undefined) parseErrors += 1;
+        else cleanCalls += 1;
+      }
+      if (parseErrors > 0 && cleanCalls === 0) {
+        consecutiveFormatErrors += 1;
+        corrective = `Runtime note: your previous tool call(s) had invalid JSON arguments. Reissue them with valid JSON only (consecutive format errors: ${consecutiveFormatErrors}/${MAX_CONSECUTIVE_FORMAT_ERRORS}).`;
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `the model sent invalid tool arguments (${consecutiveFormatErrors}/${MAX_CONSECUTIVE_FORMAT_ERRORS})`,
+        });
+        if (consecutiveFormatErrors >= MAX_CONSECUTIVE_FORMAT_ERRORS) {
+          exit = { terminal: "failed", detail: "format_errors" };
+          emit(deps.callbacks, {
+            type: "error",
+            message: `stopping: ${MAX_CONSECUTIVE_FORMAT_ERRORS} consecutive turns of invalid tool arguments`,
+          });
+          await logEvent(deps, EventTypes.error, { message: "format_error_cap", count: consecutiveFormatErrors });
+          break;
+        }
+      } else if (cleanCalls > 0) {
+        consecutiveFormatErrors = 0;
+        corrective = undefined;
+      }
     }
   } catch (err) {
     emit(deps.callbacks, { type: "error", message: `runtime error: ${errorMessage(err)}` });
     await logEvent(deps, EventTypes.error, { message: errorMessage(err) });
+    exit = { terminal: "failed", detail: "internal_error" };
   }
   emit(deps.callbacks, { type: "turn.done" });
-  return { text, aborted: aborted || deps.signal.aborted };
+  return { text, aborted: aborted || deps.signal.aborted, exit };
 }
