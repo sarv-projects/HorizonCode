@@ -8,8 +8,10 @@
  *    and an absolute headway margin.
  *  - (b) the R-tools-42 model-facing cap (≤ 16 KiB and ≤ 4,000 tokens per
  *    tool result) with an explicit truncation marker. Over-cap output spills
- *    to `<workspace>/.hzcode/spills/<sha256>.txt` — the reduced v0.1 stand-in
- *    for the `hz://artifact/...` pointer (no artifact store exists yet).
+ *    to `<workspace>/.hz/state/spills/<sha256>.txt` (canonical) or
+ *    `<workspace>/.hzcode/spills/<sha256>.txt` (legacy, in place) — the reduced
+ *    v0.1 stand-in for the `hz://artifact/...` pointer (no artifact store exists
+ *    yet); the caller resolves the directory (paths.ts).
  *  - Truncation is lossless-resumable in shape: `nextOffset` names the byte
  *    offset of the kept prefix, so the following slice can start there.
  *
@@ -79,7 +81,7 @@ export interface ToolOutputCapOptions {
   maxTokens?: number;
   /** Absolute directory that receives spilled full outputs; absent = no spill. */
   spillDir?: string;
-  /** Path text shown in the marker (e.g. `.hzcode/spills`). Defaults to spillDir. */
+  /** Path text shown in the marker (e.g. `.hz/state/spills`). Defaults to spillDir. */
   displaySpillDir?: string;
   /** Overridable only for tests; production uses the R-tools-42 constant. */
   maxStreamBytes?: number;

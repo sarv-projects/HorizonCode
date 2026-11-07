@@ -1,5 +1,7 @@
 /**
- * session.test.ts — the durable transcript: <workspace>/.hzcode/db.sqlite.
+ * session.test.ts — the durable transcript: <workspace>/.hz/state/hzcode.db
+ * (canonical; a legacy workspace keeps <workspace>/.hzcode/db.sqlite in place —
+ * see paths.ts and state-paths.test.ts).
  *
  * Every case works inside a temp workspace, so the real home and the repository
  * are never touched. Rows are also read with a second SQLite connection to prove
@@ -29,8 +31,8 @@ afterAll(() => {
   cleanupTemps();
 });
 
-test("the database lives under <workspace>/.hzcode/db.sqlite", () => {
-  expect(store.dbPath).toBe(path.join(workspace, ".hzcode", "db.sqlite"));
+test("the database lives under <workspace>/.hz/state/hzcode.db (canonical)", () => {
+  expect(store.dbPath).toBe(path.join(workspace, ".hz", "state", "hzcode.db"));
   expect(existsSync(store.dbPath)).toBe(true);
 });
 

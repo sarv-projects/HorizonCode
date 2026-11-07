@@ -175,8 +175,8 @@ gate_ts_suite() {
 # --------------------------------------------------------------- e2e helpers ---
 
 # A fresh workspace and a throwaway HOME for one headless run. The HOME is not
-# cosmetic: it keeps a developer's ~/.hzcode/config.json — and any real provider
-# key inside it — out of the gate, so the exit code is the only variable left.
+# cosmetic: it keeps a developer's user config (~/.config/horizon/config.json, or a
+# legacy ~/.hzcode/config.json) — and any real provider key inside it — out of the gate, so the exit code is the only variable left.
 # E2E_EXPECT_TEXT is reset here so every gate declares its own evidence below.
 e2e_begin() {
   E2E_WS="$(mktemp -d "$WORK_DIR/e2e-ws.XXXXXX")"

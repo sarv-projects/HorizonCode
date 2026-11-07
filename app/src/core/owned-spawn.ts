@@ -24,6 +24,7 @@
 
 import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
 import * as path from "node:path";
+import { kernelStateDir as resolveKernelStateDir } from "./paths";
 import { birthIdentityOf, readProcessFacts, type ProcessIdentity } from "./worker-identity";
 import { startOwnerDeathSupervisor } from "./supervisor";
 
@@ -83,9 +84,13 @@ export interface SpawnLedgerRead {
   reason?: string;
 }
 
-/** `<workspace>/.hzcode/kernel` — the same default KernelClient resolves. */
+/**
+ * `<workspace>/.hz/state/kernel` (canonical) or `<workspace>/.hzcode/kernel`
+ * (legacy, honoured in place) — the same default KernelClient resolves.
+ * paths.ts owns the rule.
+ */
 export function kernelStateDir(workspace: string): string {
-  return path.join(workspace, ".hzcode", "kernel");
+  return resolveKernelStateDir(workspace);
 }
 
 /** The absolute ledger path for a state directory. */

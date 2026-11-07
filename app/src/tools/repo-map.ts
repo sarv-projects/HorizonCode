@@ -30,12 +30,13 @@ const ITERATIONS = 30;
 const FOCUS_EDGE_MULTIPLIER = 10;
 const FOCUS_IDENT_MULTIPLIER = 50;
 
-/** Directory names never walked. `.hzcode` holds runtime state, not source. */
+/** Directory names never walked. `.hz` (canonical) and `.hzcode` (legacy) hold runtime state, not source. */
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
   "target",
   "dist",
+  ".hz",
   ".hzcode",
   "__pycache__",
   ".venv",

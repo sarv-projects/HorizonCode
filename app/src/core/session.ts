@@ -1,10 +1,11 @@
 /**
  * session.ts — the durable conversation.
  *
- * One SQLite database per workspace at <workspace>/.hzcode/db.sqlite holds the
- * sessions and the messages that make up their history. The event log in the
- * kernel state directory is the audit trail; this database is the readable
- * transcript the agent loop rebuilds its context from.
+ * One SQLite database per workspace at `<workspace>/.hz/state/hzcode.db`
+ * (canonical, docs/12 §4.1) or `<workspace>/.hzcode/db.sqlite` (legacy, honoured
+ * in place — see paths.ts) holds the sessions and the messages that make up their
+ * history. The event log in the kernel state directory is the audit trail; this
+ * database is the readable transcript the agent loop rebuilds its context from.
  */
 
 import { Database } from "bun:sqlite";
@@ -12,6 +13,7 @@ import { mkdirSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ToolCall } from "../contracts";
 import { newId, nowIso } from "../contracts";
+import { sessionDbPath } from "./paths";
 
 export interface SessionInfo {
   id: string;
@@ -120,9 +122,10 @@ export class SessionStore {
   readonly db: Database;
 
   constructor(workspace: string) {
-    const dir = path.join(workspace, ".hzcode");
-    mkdirSync(dir, { recursive: true });
-    this.dbPath = path.join(dir, "db.sqlite");
+    // Canonical `<workspace>/.hz/state/hzcode.db`, or the legacy
+    // `<workspace>/.hzcode/db.sqlite` in place (paths.ts owns the rule).
+    this.dbPath = sessionDbPath(workspace);
+    mkdirSync(path.dirname(this.dbPath), { recursive: true });
     this.db = new Database(this.dbPath, { create: true });
     // Two hzcode windows may share a workspace: wait instead of failing.
     try {
