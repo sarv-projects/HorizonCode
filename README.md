@@ -22,6 +22,7 @@ What exists today (all verified end-to-end by the integrator, not just reported)
 - `app/src/tools/` — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` (the base seven) plus `agent` (subagent delegation), `code_mode` (JS subprocess over the NDJSON tool bridge) and `preview` (dev-server lifecycle) — all guard- and approval-aware.
 - `app/src/tui/` + `app/src/main.ts` — chat-first UI: streaming chat bar, tool cards, y/n/a approvals, history, headless mode; `bin/hzcode` launcher.
 - `app/tests/` — 327 passing tests across core (incl. skills, subagents, code mode, preview, tool batches, loop rails), tools (incl. the NF-069 edit ladder), providers and TUI (incl. real PTY scenarios); run `cd app && /home/forge/.bun/bin/bun test`.
+- `ops/` — the CI gate runner (`gates.sh`, six real gates ~13 s) and its honest gate catalogue (`gate-catalogue.md`: all 18 `docs/24` §3.5 gates `declared-gap` with reasons), wired in `.github/workflows/ci.yml`.
 
 Architecture note: [`app/src/contracts.ts`](./app/src/contracts.ts) is the frozen interface both implementations compile against — event and receipt hashes interop between Rust and TypeScript byte-for-byte.
 
