@@ -27,7 +27,7 @@ Sources this document is derived from:
 - `source: codex /data/home/forge/repo-tour/codex/codex-rs/tui/src` (chat widget, transcript view, status indicator widgets, diff render, theme picker, keymap config in `codex-config/src/tui_keymap.rs`).
 - `source: oh-my-pi /data/home/forge/repo-tour/oh-my-pi/packages/tui/src` (differential rendering library, tool renderers, overlays, composer).
 - `source: horizoncode /data/home/forge/repo-tour/horizoncode/arch_V1/contracts-v2/ui-stream-event-v2.schema.json` (the `durable`/`ephemeral` UI event lane split this design adopts).
-- In-repo decisions: `/data/home/forge/hzcode/README.md`, `/data/home/forge/hzcode/docs/02-decisions.md`, `/data/home/forge/hzcode/docs/_conventions.md`.
+- In-repo decisions: `/data/home/forge/HorizonCode/README.md`, `/data/home/forge/HorizonCode/docs/02-decisions.md`, `/data/home/forge/HorizonCode/docs/_conventions.md`.
 
 ## 2. Rules
 

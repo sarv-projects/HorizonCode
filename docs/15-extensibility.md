@@ -56,11 +56,11 @@ Two invariants cut across all five:
 ### 1.3 Sources
 
 ```
-source: /data/home/forge/hzcode/README.md
-source: /data/home/forge/hzcode/docs/01-vision-and-superset.md
-source: /data/home/forge/hzcode/docs/02-decisions.md
-source: /data/home/forge/hzcode/docs/_conventions.md
-source: /data/home/forge/hzcode/docs/11-authority-safety.md
+source: /data/home/forge/HorizonCode/README.md
+source: /data/home/forge/HorizonCode/docs/01-vision-and-superset.md
+source: /data/home/forge/HorizonCode/docs/02-decisions.md
+source: /data/home/forge/HorizonCode/docs/_conventions.md
+source: /data/home/forge/HorizonCode/docs/11-authority-safety.md
 source: /data/home/forge/repo-tour/claude-code/src/utils/plugins/schemas.ts
 source: /data/home/forge/repo-tour/claude-code/src/types/plugin.ts
 source: /data/home/forge/repo-tour/claude-code/src/types/command.ts
@@ -1271,7 +1271,7 @@ A repository therefore cannot use a hook to gain an unconfined process, a creden
 
 ### 7.6 Boundary tests
 
-The "one primitive, one boundary test" discipline (ADR-016; `/data/home/forge/hzcode/docs/01-vision-and-superset.md` §3.3) applied to extensibility:
+The "one primitive, one boundary test" discipline (ADR-016; `/data/home/forge/HorizonCode/docs/01-vision-and-superset.md` §3.3) applied to extensibility:
 
 | Boundary | What the test asserts |
 |---|---|
@@ -1496,7 +1496,7 @@ Every guarantee in §2 maps to a test. All paths are `[planned]` except the skil
 | `cache-prefix-guard` | extension text entering the prompt prefix outside the resident set (ADR-009) |
 | `capability-registry-parity` | a plugin-contributed `capabilityId` the kernel does not classify |
 | `no-postinstall` | a dependency requiring a lifecycle script (`11-authority-safety.md` §7.15) |
-| `doc-claim-ratchet` | a doc claiming a status above its evidence (`/data/home/forge/hzcode/docs/_conventions.md` §8) |
+| `doc-claim-ratchet` | a doc claiming a status above its evidence (`/data/home/forge/HorizonCode/docs/_conventions.md` §8) |
 | `skill-eval-ratchet` | a bundled or shared skill whose evals do not pass |
 | `trust-gate-coverage` | a workspace-named program kind without a TOFU gate |
 | `hook-point-closure` | a hook point added without updating §4.6 and the exhaustive test |
@@ -1505,7 +1505,7 @@ Every guarantee in §2 maps to a test. All paths are `[planned]` except the skil
 
 ## 10. Status
 
-Every capability below is **DESIGNED** except the two rows `28-implementation-status.md` records above it — that file owns implementation levels (RC-13) and is the only place a level above `DESIGNED` may be claimed. Evidence for every other row is this document. Levels per `/data/home/forge/hzcode/docs/_conventions.md` §8; nothing else here is a claim of working code.
+Every capability below is **DESIGNED** except the two rows `28-implementation-status.md` records above it — that file owns implementation levels (RC-13) and is the only place a level above `DESIGNED` may be claimed. Evidence for every other row is this document. Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8; nothing else here is a claim of working code.
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|
@@ -1513,7 +1513,7 @@ Every capability below is **DESIGNED** except the two rows `28-implementation-st
 | Plugin signatures + file closure | DESIGNED | §3.1, `11-authority-safety.md` §7.15 | `manifest.test.ts::drifted_file_refuses_load` |
 | Sandboxed plugin host | DESIGNED | §6.1, §7.1, §7.4 | `packages/plugin/src/host.ts` + isolation suite |
 | Capability declarations + grants | DESIGNED | §7.2, §7.3 | `grants.test.ts` + `boundary_extension_declaration` |
-| Plugin tools → `ToolDeclarationV1` | DESIGNED | §3.2; `/data/home/forge/hzcode/docs/02-decisions.md` ADR-015 | `packages/plugin/src/compile.ts` + exhaustive test |
+| Plugin tools → `ToolDeclarationV1` | DESIGNED | §3.2; `/data/home/forge/HorizonCode/docs/02-decisions.md` ADR-015 | `packages/plugin/src/compile.ts` + exhaustive test |
 | Lifecycle (discovery/install/load/update/uninstall) | DESIGNED | §6.1 | `lifecycle.test.ts`, `update.test.ts` |
 | Marketplace model | DESIGNED | §4.7; `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-plugin-marketplace/src/` | `marketplace.test.ts` |
 | Skills (`SKILL.md`, discovery, precedence) | VERIFIED for the v0.1 flat-file slice; DESIGNED for the directory form | `28-implementation-status.md` §1 — `.hzcode/skills/*.md` discovery with workspace shadowing, prompt directory capped at 12, `/skill` activation (`bun test tests/core/skills-agents.test.ts` → 10 pass); §4.2, §4.3 for the designed form. **Shape difference, stated not hidden:** v0.1 reads flat `.hzcode/skills/*.md`, while S1 specifies a directory containing `SKILL.md` — the flat file is the compatibility form, the directory form is `[planned]` | directory discovery + `packages/skills` load suite |

@@ -2,7 +2,7 @@
 
 > **Scope.** This document decides the *shape* of HorizonCode: which planes exist, which processes run, which components own which behaviour, what the interfaces between them are, how the whole thing is deployed, and what happens when each piece dies. It does not decide schemas, function bodies or tool semantics — those live in [`04-lld.md`](./04-lld.md) and the topical documents.
 >
-> Nothing in this document is a claim of working code for the capabilities it designs. `/data/home/forge/hzcode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` — the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
+> Nothing in this document is a claim of working code for the capabilities it designs. `/data/home/forge/HorizonCode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` — the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
 
 **Derived from** (all paths absolute; repos live under `/data/home/forge/repo-tour/`):
 
@@ -589,7 +589,7 @@ A harness in `@horizoncode/testing` measures PB-1…PB-15 on pinned hardware pro
 
 > **Implementation status (final audit, 2026-11-06).** The paragraph below was written when this set was design-only. It is superseded where the implementation exists: the built subset (trust kernel, runtime core, base tools, chat TUI, skills, subagents, code mode, preview) carries evidence-backed levels in `docs/28-implementation-status.md`, which is the single source of truth for implementation status. Read the sentence "Nothing in this repository is built" as historical.
 
-Nothing in this repository is built. `/data/home/forge/hzcode` contains `README.md` and `docs/` only; therefore every capability below is **`DESIGNED`**, and the *Evidence* column says so. The *Ancestor* column records what the ancestor repository (`sarv-projects/horizoncode`, `source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) measured for the corresponding capability, so the reader can see which parts are inherited work in progress and which are new and unproven. Those ancestor statuses are **not** this project's status.
+Nothing in this repository is built. `/data/home/forge/HorizonCode` contains `README.md` and `docs/` only; therefore every capability below is **`DESIGNED`**, and the *Evidence* column says so. The *Ancestor* column records what the ancestor repository (`sarv-projects/horizoncode`, `source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) measured for the corresponding capability, so the reader can see which parts are inherited work in progress and which are new and unproven. Those ancestor statuses are **not** this project's status.
 
 | Capability | Level here | Evidence | Ancestor (measured) |
 |---|---|---|---|

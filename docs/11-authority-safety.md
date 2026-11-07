@@ -23,7 +23,7 @@ Design-only except the v0.1 slice enumerated in §10: the Guard decision path, i
 
 | In scope | Out of scope (owned elsewhere) |
 |---|---|
-| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics — `/data/home/forge/hzcode/docs/12-sessions-state.md`, with event meaning and ordering in `/data/home/forge/hzcode/docs/06-events-and-flows.md`; TUI presentation — `/data/home/forge/hzcode/docs/13-tui.md`; provider wire codecs — `/data/home/forge/hzcode/docs/10-cognition.md`; tool argument schemas — `/data/home/forge/hzcode/docs/09-tools.md` |
+| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics — `/data/home/forge/HorizonCode/docs/12-sessions-state.md`, with event meaning and ordering in `/data/home/forge/HorizonCode/docs/06-events-and-flows.md`; TUI presentation — `/data/home/forge/HorizonCode/docs/13-tui.md`; provider wire codecs — `/data/home/forge/HorizonCode/docs/10-cognition.md`; tool argument schemas — `/data/home/forge/HorizonCode/docs/09-tools.md` |
 | The kernel (`hzk`) boundary and its protocol | The native capability crates' internals (`hz_shell`, `hz_edit`, `hz_diff`, …) beyond what they must guarantee to Guard |
 | Config **authority** semantics (who may widen) | Config **surface** (flags, env, file names) beyond the authority-relevant fields |
 
@@ -90,10 +90,10 @@ Design-only except the v0.1 slice enumerated in §10: the Guard decision path, i
 Source material for this design (all read-only):
 
 ```
-source: /data/home/forge/hzcode/README.md
-source: /data/home/forge/hzcode/docs/01-vision-and-superset.md
-source: /data/home/forge/hzcode/docs/02-decisions.md
-source: /data/home/forge/hzcode/docs/_conventions.md
+source: /data/home/forge/HorizonCode/README.md
+source: /data/home/forge/HorizonCode/docs/01-vision-and-superset.md
+source: /data/home/forge/HorizonCode/docs/02-decisions.md
+source: /data/home/forge/HorizonCode/docs/_conventions.md
 source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs
 source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs
 source: /data/home/forge/repo-tour/horizoncode/kernel/src/direct_session_grant.rs
@@ -135,7 +135,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 ### 2.1 Authority (A)
 
 - **A1** Every effect that can change state outside the agent's own memory **MUST** be admitted by `hzk::Guard::authorize()` before it executes. There is no fast path. *(T-A1)*
-- **A2** The capability ID **MUST** be a member of the canonical registry in `/data/home/forge/hzcode/docs/_conventions.md` §5 **or** of the internal, non-model-visible block of §4.1 of this document (an ID that is registered here and queued for the §5 internal block; RC-11). An unknown ID **MUST** deny with `unsupported_action`. *(T-A2)*
+- **A2** The capability ID **MUST** be a member of the canonical registry in `/data/home/forge/HorizonCode/docs/_conventions.md` §5 **or** of the internal, non-model-visible block of §4.1 of this document (an ID that is registered here and queued for the §5 internal block; RC-11). An unknown ID **MUST** deny with `unsupported_action`. *(T-A2)*
 - **A3** An alias **MUST NOT** change an effect class. Aliases are dispatch names only. *(T-A3)*
 - **A4** The origin kind **MUST** be fixed by the canonical operation that admitted the effect and **MUST NOT** be readable from any request body, tool argument, or model output. *(T-A4)*
 - **A5** A `SessionBatch` origin **MUST** carry a session id and a `turn_context_digest`; it **MUST NOT** carry an `approval_token` field at all (not merely be ignored). *(T-A5)*
@@ -318,7 +318,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 
 Transport: Unix domain socket (Windows: named pipe); framed, length-prefixed, schema-generated from `packages/protocol` → `crates/hz_abi`.
 
-The protocol method catalogue is owned by `/data/home/forge/hzcode/docs/07-apis-and-contracts.md` §4.1–§4.2. The table below is a reading aid restricted to the methods that carry an authority obligation; where the two documents disagree, doc 07 governs the method and this document governs the obligation. Method names live in the method namespace: `secret.use` below is a method, while `secrets.use` (§4.1) is the capability.
+The protocol method catalogue is owned by `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` §4.1–§4.2. The table below is a reading aid restricted to the methods that carry an authority obligation; where the two documents disagree, doc 07 governs the method and this document governs the obligation. Method names live in the method namespace: `secret.use` below is a method, while `secrets.use` (§4.1) is the capability.
 
 | Method | Input | Output | Notes |
 |---|---|---|---|
@@ -442,7 +442,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 3.4 Events owned by this document
 
-`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class — `plugin`, `mcp`, `sandbox`, … — and `code` carries the closed reason code; payload shape owned by `/data/home/forge/hzcode/docs/06-events-and-flows.md` row 40, RC-2).
+`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class — `plugin`, `mcp`, `sandbox`, … — and `code` carries the closed reason code; payload shape owned by `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` row 40, RC-2).
 
 ### 3.5 Types owned by this document
 
@@ -458,7 +458,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 4.1 Capability inventory
 
-Every capability ID is stable; an alias never changes an effect class (A3). Model-visible IDs are the canonical set from `/data/home/forge/hzcode/docs/_conventions.md` §5. The internal IDs below are **never projected as model tools** unless the row says otherwise; they are registered here (A2) and `_conventions.md` §5 is to carry them as an internal, non-model-visible block, so the `capability_registry_parity` and `exhaustive_reason_codes` gates (§9.3) see one registry.
+Every capability ID is stable; an alias never changes an effect class (A3). Model-visible IDs are the canonical set from `/data/home/forge/HorizonCode/docs/_conventions.md` §5. The internal IDs below are **never projected as model tools** unless the row says otherwise; they are registered here (A2) and `_conventions.md` §5 is to carry them as an internal, non-model-visible block, so the `capability_registry_parity` and `exhaustive_reason_codes` gates (§9.3) see one registry.
 
 | Capability ID | Effect classes | Default posture `allow`/`ask`/`deny` | Observing required | Model-visible |
 |---|---|---|---|---|
@@ -710,7 +710,7 @@ Two receipt kinds exist and only two (V4, V5):
 | `ths_records` | `seq, kind, payload_digest, payload_ref, prev_digest, digest, recorded_at_ms` | Trusted Host State |
 | `redaction_manifest` | `artifact_digest, field, reason, count` | what an export removed |
 
-**THS storage.** `ths_records` is Trusted Host State's single durable store: SQLite is the one durable store for kernel state, and `/data/home/forge/hzcode/docs/12-sessions-state.md` owns the storage layout (§4.1–§4.2). A `ths/*.jsonl` file is only an **exported anchor** (§7.11.3 step 6) and never the store, so `15-extensibility.md` §4.1's JSONL path names the anchor, not a second chain.
+**THS storage.** `ths_records` is Trusted Host State's single durable store: SQLite is the one durable store for kernel state, and `/data/home/forge/HorizonCode/docs/12-sessions-state.md` owns the storage layout (§4.1–§4.2). A `ths/*.jsonl` file is only an **exported anchor** (§7.11.3 step 6) and never the store, so `15-extensibility.md` §4.1's JSONL path names the anchor, not a second chain.
 
 A reopen of the kernel **MUST** reconcile every `PREPARED`/`RUNNING`/`DISPATCHING`/`TOKEN_ISSUED` row to `UNKNOWN` before accepting new work, exactly as the inherited design does (`UPDATE ... SET status='UNKNOWN'` on open).
 
@@ -965,7 +965,7 @@ The example list is validated at load time; the rule matches with severity `forb
 
 **Step 11 — counterfactual B: the kernel dies after dispatch.** The `executions` row is `DISPATCHING` with no settled observation. On reopen, the row is reconciled to `UNKNOWN`, `hz.effect.unknown` is emitted, the resolved resource is frozen, and **no second `rm` is ever issued** (E7). A probe reads the process table and the cgroup: no descendant survives, and the target path's identity is unchanged from the preimage ⇒ a follow-up reconciliation mints `FAILED` with `reason=not_executed`, the freeze lifts, and a fresh Guard request may be made. If the probe cannot decide, the run stops and a human reconciles.
 
-**Step 12 — counterfactual C: the workspace were trusted and had declared a hook.** The hook is still a separate receipted `terminal.run` effect under its own hook profile (read-only unless it declared `files.write`), with a cleared environment and no network. A repo cannot gain an unconfined process by shipping a hook (C5; hook sandboxing is specified in `/data/home/forge/hzcode/docs/15-extensibility.md` §7.4).
+**Step 12 — counterfactual C: the workspace were trusted and had declared a hook.** The hook is still a separate receipted `terminal.run` effect under its own hook profile (read-only unless it declared `files.write`), with a cleared environment and no network. A repo cannot gain an unconfined process by shipping a hook (C5; hook sandboxing is specified in `/data/home/forge/HorizonCode/docs/15-extensibility.md` §7.4).
 
 ---
 
@@ -1010,10 +1010,10 @@ The boundary is a **process boundary**, and it is load-bearing (ADR-003):
 
 A capability ID is a stable public name for **one authorisable effect class**, e.g. `files.write`, `terminal.run`, `net.fetch`, `providers.infer`, `mcp.invoke`. Rules that govern IDs:
 
-1. The canonical registry lives in `/data/home/forge/hzcode/docs/_conventions.md` §5, plus the internal IDs registered in §4.1 of this document (never model-visible; queued for the §5 internal block per RC-11, so A2 has one answer).
+1. The canonical registry lives in `/data/home/forge/HorizonCode/docs/_conventions.md` §5, plus the internal IDs registered in §4.1 of this document (never model-visible; queued for the §5 internal block per RC-11, so A2 has one answer).
 2. An ID's **effect class** is immutable. `terminal.run` is `process` + `workspace-write` forever. A future need for a different class gets a different ID, never a reinterpretation of an existing one (A3).
 3. Each ID declares: effect class(es), a default posture vector, an observation strategy, an idempotency class, whether it is model-visible, and which origins may request it.
-4. The registry is **narrower than the tool catalog**: a tool may exist that has no capability of its own because it composes already-authorised tools (Code Mode, ADR-015 and the “new capability means new composition, not new authority” lesson from `/data/home/forge/hzcode/docs/01-vision-and-superset.md` §3.3).
+4. The registry is **narrower than the tool catalog**: a tool may exist that has no capability of its own because it composes already-authorised tools (Code Mode, ADR-015 and the “new capability means new composition, not new authority” lesson from `/data/home/forge/HorizonCode/docs/01-vision-and-superset.md` §3.3).
 5. Adding an ID requires a dispatch path plus a complete positive/denial/recovery acceptance journey — the inherited discipline is to keep the Guard-supported set strictly smaller than the public registry (`guard_supported_managed_capabilities` in the source kernel).
 
 #### 7.2.2 Effect classes
@@ -1060,7 +1060,7 @@ MCP servers, plugins, workflows and remote triggers are **not** given a fifth or
 - an MCP server request (sampling, roots, elicitation) requires a **host-minted managed run** scoped to that server and that budget, else `mcp_server_request_requires_managed_scope`;
 - a remote trigger is a `UserAction` bound to the authenticated principal that created the trigger — a trigger inherits a human's authority, it does not create its own.
 
-Rationale: the authority algebra with four origin kinds is analysable and closed (`/data/home/forge/hzcode/docs/02-decisions.md` ADR-012, ADR-016). Every additional kind is a new widening path. We refuse to grow the algebra to accommodate a component.
+Rationale: the authority algebra with four origin kinds is analysable and closed (`/data/home/forge/HorizonCode/docs/02-decisions.md` ADR-012, ADR-016). Every additional kind is a new widening path. We refuse to grow the algebra to accommodate a component.
 
 ### 7.3 Guard decision flow
 
@@ -1074,7 +1074,7 @@ The Guard is a pure function over `(AuthorizationRequestV1, policy snapshot, pos
 4. executable binding completeness/consistency → `executable_unverified`, `unexpected_executable_binding`, `untrusted_executable`, `invalid_executable_digest`
 5. principal/origin binding presence → `invalid_principal_or_origin`
 6. digest well-formedness → `invalid_effect_digest`
-7. resource containment → `resource_outside_workspace`. The pinned root is the workspace root, plus the user-state store root (`$XDG_STATE_HOME/horizon/`, §7.11.3) for `memory.*` and `artifact.write`, whose layout is owned by `/data/home/forge/hzcode/docs/12-sessions-state.md` §4.1. `memory.write` targets a user-state file, not the workspace, so G7 must not refuse it.
+7. resource containment → `resource_outside_workspace`. The pinned root is the workspace root, plus the user-state store root (`$XDG_STATE_HOME/horizon/`, §7.11.3) for `memory.*` and `artifact.write`, whose layout is owned by `/data/home/forge/HorizonCode/docs/12-sessions-state.md` §4.1. `memory.write` targets a user-state file, not the workspace, so G7 must not refuse it.
 8. policy snapshot and guarantee set identity → `unsupported_policy_or_guarantee`
 9. posture application → `posture_read_only`
 10. rule layers → `rule_denied`, `rule_ask`
@@ -1352,7 +1352,7 @@ A lease is not a credential to act; it is evidence that a specific act was autho
 
 ### 7.9 Receipts as evidence
 
-The receipt is the product's unit of trust (`/data/home/forge/hzcode/README.md` §2). Anatomy is in §4.6. What matters here is what it does and does not establish.
+The receipt is the product's unit of trust (`/data/home/forge/HorizonCode/README.md` §2). Anatomy is in §4.6. What matters here is what it does and does not establish.
 
 #### 7.9.1 What a receipt proves
 
@@ -1618,7 +1618,7 @@ A verifier must be able to answer, from the export alone: what was requested, by
 1. **No text-only permissions as a security control.** Policy may be *explained* in a prompt; it is never *enforced* by one (P6).
 2. **No library-only authority.** There is no in-process build of the guard that a plugin, dependency, workflow or code-mode payload could call instead (ADR-003, A11).
 3. **No auto-retry of `UNKNOWN`.** Not with an exponential backoff, not for "idempotent-looking" capabilities, not with a flag called `--force` on a non-interactive surface (E7).
-4. **No self-widening authority.** The learning loop may change memory, skills, prompts and routing; never policy, never a grant, never the kernel (ADR-010, `/data/home/forge/hzcode/README.md` §3.9).
+4. **No self-widening authority.** The learning loop may change memory, skills, prompts and routing; never policy, never a grant, never the kernel (ADR-010, `/data/home/forge/HorizonCode/README.md` §3.9).
 5. **No execution of workspace-named programs without a trust record** (C5, §7.7).
 6. **No guarantee claim that a probe did not establish** (S3). No "Landlock is probably available".
 7. **No silent degradation of confinement** (S5). Missing backend ⇒ typed refusal, never a fallback to unconfined execution.
@@ -1864,7 +1864,7 @@ Every guarantee in §2 maps to a test. All test paths below are `[planned]` exce
 | `exhaustive_reason_codes` | a `Deny` returned with a code outside §5.1 |
 | `exhaustive_guarantee_dimensions` | a dimension added to the enum without an assessment on every backend |
 | `capability_registry_parity` | a capability ID in the TS registry that the Rust kernel does not classify, or vice versa |
-| `doc_claim_ratchet` | a document claiming a status level it cannot prove (ADR-004 discipline; `/data/home/forge/hzcode/docs/_conventions.md` §8) |
+| `doc_claim_ratchet` | a document claiming a status level it cannot prove (ADR-004 discipline; `/data/home/forge/HorizonCode/docs/_conventions.md` §8) |
 | `refusal_list_ratchet` | code implementing an item from §7.17 without an amendment to this document |
 | `cache_prefix_guard` (cross-cutting) | policy text entering the prompt prefix in a way that makes the prefix non-byte-stable (ADR-009) |
 
@@ -1872,7 +1872,7 @@ Every guarantee in §2 maps to a test. All test paths below are `[planned]` exce
 
 ## 10. Status
 
-Every capability below is **`DESIGNED`** *as a specification claim* — with one implemented slice: the Guard decision path, in-memory leases, chained receipt/tamper-evident logs and `policy.json` overrides exist in v0.1 (`kernel/` Rust + byte-identical TS fallback; evidence and levels in `docs/28-implementation-status.md`). The sandbox matrix, Starlark policy engine, Trusted Host State and managed domain remain design. Ladder per `/data/home/forge/hzcode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`); the levels below are the ones `docs/28` §1 records, which is the only place a level above `DESIGNED` may be claimed.
+Every capability below is **`DESIGNED`** *as a specification claim* — with one implemented slice: the Guard decision path, in-memory leases, chained receipt/tamper-evident logs and `policy.json` overrides exist in v0.1 (`kernel/` Rust + byte-identical TS fallback; evidence and levels in `docs/28-implementation-status.md`). The sandbox matrix, Starlark policy engine, Trusted Host State and managed domain remain design. Ladder per `/data/home/forge/HorizonCode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`); the levels below are the ones `docs/28` §1 records, which is the only place a level above `DESIGNED` may be claimed.
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|
@@ -1883,7 +1883,7 @@ Every capability below is **`DESIGNED`** *as a specification claim* — with one
 | Postures as kernel data | DESIGNED | §4.3, §7.4; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` (`DirectSessionPermissionModeProjectionV1`) | `posture.rs` including the `danger-full-access` refusal |
 | Wildcard rule DSL | DESIGNED | §7.5.1 | `hz_policy` compile + canonical digest tests |
 | Starlark prefix engine | DESIGNED | §7.5.3; `source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/README.md` | `starlark.rs`, `unwrap.rs` |
-| Config merge lattice | DESIGNED | §7.6; ADR-008 in `/data/home/forge/hzcode/docs/02-decisions.md` | `merge.rs` property tests |
+| Config merge lattice | DESIGNED | §7.6; ADR-008 in `/data/home/forge/HorizonCode/docs/02-decisions.md` | `merge.rs` property tests |
 | Trust-on-first-use | DESIGNED | §7.7 | `trust.rs` adversarial tests |
 | One-use leases | TESTED + VERIFIED | §7.8; `kernel/tests/integration.rs` (lease expiry and consumption), `docs/28` §1; shape inherited from `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs` (`ExecutionLease::consume`) | `lease.rs` adversarial suite (L2, L5) |
 | Effect host (five phases) | DESIGNED | §6.2, §7.9 | `effect_host.rs` incl. crash tests |

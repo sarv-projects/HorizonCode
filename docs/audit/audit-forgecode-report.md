@@ -1,7 +1,7 @@
 # Forge (forgecode) — Deep Audit Report
 
 **Audit target:** `/data/home/forge/repo-tour/forgecode` (reference clone, shallow: 1 commit `a22b492` "fix(deps): update dependency @types/node to v26 (#4095)", dated 2026-10-31; `git log --oneline -30` returns exactly one commit because the clone is shallow — noted as a coverage caveat, not a repo property).
-**Mode:** read-only. Nothing in the repo was modified. Scratch files were written to `/tmp/audit-scratch/` only. `/data/home/forge/hzcode` was not touched.
+**Mode:** read-only. Nothing in the repo was modified. Scratch files were written to `/tmp/audit-scratch/` only. `/data/home/forge/HorizonCode` was not touched.
 **Report written incrementally** to `/tmp/audit-forgecode-report.md`.
 
 ---

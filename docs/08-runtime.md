@@ -6,21 +6,21 @@
 
 ## 1. Purpose
 
-This document decides the behaviour of **plane 2 (Orchestration)** in `/data/home/forge/hzcode/docs/_conventions.md` §2 — the one `Controller`, the session engine, the step engine, the agent-loop state machine, interruption / steering / queueing, retry and fallback policy, the dual-model Planner/Executor routing table, plan mode, todos and goals, the subagent fleet and teams, the scheduler, the self-improvement loop, budgets and leases, and long-horizon operation.
+This document decides the behaviour of **plane 2 (Orchestration)** in `/data/home/forge/HorizonCode/docs/_conventions.md` §2 — the one `Controller`, the session engine, the step engine, the agent-loop state machine, interruption / steering / queueing, retry and fallback policy, the dual-model Planner/Executor routing table, plan mode, todos and goals, the subagent fleet and teams, the scheduler, the self-improvement loop, budgets and leases, and long-horizon operation.
 
 Out of scope, owned elsewhere:
 
 | Concern | Owner document |
 |---|---|
-| Context compiler, cache guard, compaction, memory, prompts | `file:///data/home/forge/hzcode/docs/10-cognition.md` |
-| Guard, policy DSL, kernel leases, receipts, reconciliation, sandbox | `file:///data/home/forge/hzcode/docs/11-authority-safety.md` |
-| Session storage, event log, projections, checkpoints, fork/rewind | `file:///data/home/forge/hzcode/docs/12-sessions-state.md` and `file:///data/home/forge/hzcode/docs/06-events-and-flows.md` |
-| Tool declarations, wire protocol, surfaces | `file:///data/home/forge/hzcode/docs/04-lld.md`, `file:///data/home/forge/hzcode/docs/14-surfaces.md` |
-| Schema definitions | `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` |
+| Context compiler, cache guard, compaction, memory, prompts | `file:///data/home/forge/HorizonCode/docs/10-cognition.md` |
+| Guard, policy DSL, kernel leases, receipts, reconciliation, sandbox | `file:///data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| Session storage, event log, projections, checkpoints, fork/rewind | `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md` and `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md` |
+| Tool declarations, wire protocol, surfaces | `file:///data/home/forge/HorizonCode/docs/04-lld.md`, `file:///data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| Schema definitions | `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` |
 
-Canonical names used here (`hzcode`, `hzk`, `hz://`, `@horizoncode/*`, `hz_*`, `hz.*` events, capability IDs, status levels) are defined in `file:///data/home/forge/hzcode/docs/_conventions.md` and are used verbatim.
+Canonical names used here (`hzcode`, `hzk`, `hz://`, `@horizoncode/*`, `hz_*`, `hz.*` events, capability IDs, status levels) are defined in `file:///data/home/forge/HorizonCode/docs/_conventions.md` and are used verbatim.
 
-**Derivation sources** (per writing rule `source: <repo> <path>`; repositories live under `/data/home/forge/repo-tour/`; exact file paths are recorded in `file:///data/home/forge/hzcode/docs/01-vision-and-superset.md`, not re-verified in this pass):
+**Derivation sources** (per writing rule `source: <repo> <path>`; repositories live under `/data/home/forge/repo-tour/`; exact file paths are recorded in `file:///data/home/forge/HorizonCode/docs/01-vision-and-superset.md`, not re-verified in this pass):
 
 ```text
 source: opencode    — session/step core, one provider call per step, inbox admission
@@ -350,7 +350,7 @@ LearnLoop.propose(kind: 'prompt' | 'policy' | 'skill' | 'memory' | 'routing', ba
 
 ## 3. Interfaces
 
-All paths are `[planned]`; package ownership follows `file:///data/home/forge/hzcode/docs/_conventions.md` §3. Signatures are TypeScript unless marked otherwise.
+All paths are `[planned]`; package ownership follows `file:///data/home/forge/HorizonCode/docs/_conventions.md` §3. Signatures are TypeScript unless marked otherwise.
 
 ### 3.1 Functions owned by this subsystem
 
@@ -407,7 +407,7 @@ Every event above MUST carry `{event_id, session_id, run_id (root), parent_agent
 
 ## 4. Data
 
-Schemas are defined in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` and follow the `<Name>V<major>` convention of `file:///data/home/forge/hzcode/docs/_conventions.md` §7. This subsystem **reads** and **writes** the following. The five names marked ✓ are already registered and defined in `05-domain-and-schemas.md`; every other name is reconciled to a registered shape in `05-domain-and-schemas.md` §4.18 — the owner of all `*V1` schemas — and a name listed in neither place MUST NOT be used normatively (reconciled 2026-11-07, reaudit stage 2, RC-15).
+Schemas are defined in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` and follow the `<Name>V<major>` convention of `file:///data/home/forge/HorizonCode/docs/_conventions.md` §7. This subsystem **reads** and **writes** the following. The five names marked ✓ are already registered and defined in `05-domain-and-schemas.md`; every other name is reconciled to a registered shape in `05-domain-and-schemas.md` §4.18 — the owner of all `*V1` schemas — and a name listed in neither place MUST NOT be used normatively (reconciled 2026-11-07, reaudit stage 2, RC-15).
 
 | Schema | R/W | Used for |
 |---|---|---|
@@ -442,7 +442,7 @@ Schemas are defined in `file:///data/home/forge/hzcode/docs/05-domain-and-schema
 | `LearnProposalV1.status` | W | proposal lifecycle transitions and human decisions |
 | `EffectReceiptV1` ✓ | R | the evidence source for progress (R-runtime-107) and for eval grading (R-runtime-94) |
 
-Persistence: the runtime owns **no** private store. It writes events to the event log owned by `file:///data/home/forge/hzcode/docs/12-sessions-state.md`, schemas are serialised by `@horizoncode/protocol`, and budget/watchdog/heartbeat records are projections over the same log. No mutable side table may be the state of record for anything a rule above depends on.
+Persistence: the runtime owns **no** private store. It writes events to the event log owned by `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md`, schemas are serialised by `@horizoncode/protocol`, and budget/watchdog/heartbeat records are projections over the same log. No mutable side table may be the state of record for anything a rule above depends on.
 
 ## 5. Errors and failure modes
 
@@ -559,7 +559,7 @@ Classification is per R-runtime-33. The table states the runtime's behaviour and
 
 ## 7. Security and authority
 
-Capability IDs are the ones registered in `file:///data/home/forge/hzcode/docs/_conventions.md` §5; enforcement lives in the authority plane (`file:///data/home/forge/hzcode/docs/11-authority-safety.md`). The orchestration plane **requests**; it never decides.
+Capability IDs are the ones registered in `file:///data/home/forge/HorizonCode/docs/_conventions.md` §5; enforcement lives in the authority plane (`file:///data/home/forge/HorizonCode/docs/11-authority-safety.md`). The orchestration plane **requests**; it never decides.
 
 ### 7.1 Capabilities this subsystem consumes
 
@@ -731,7 +731,7 @@ An invariant is owned by **exactly one** row here. A new invariant MUST be added
 
 > **Implementation status (RC-13).** Every rule, interface, schema, budget and test below is `DESIGNED`. One slice of the loop is implemented — the step loop in `app/src/core/loop.ts`, SQLite sessions, per-session event streams and subagent delegation — and its levels are in `docs/28-implementation-status.md`. Planner/executor, teams, scheduler and budgets are design only.
 
-Status levels are those of `file:///data/home/forge/hzcode/docs/_conventions.md` §8. Where a name or number is not yet settled it is written **UNKNOWN**, not assumed.
+Status levels are those of `file:///data/home/forge/HorizonCode/docs/_conventions.md` §8. Where a name or number is not yet settled it is written **UNKNOWN**, not assumed.
 
 | Capability | Level | Evidence | What would move it up |
 |---|---|---|---|
@@ -767,4 +767,4 @@ Status levels are those of `file:///data/home/forge/hzcode/docs/_conventions.md`
 
 ### 11.2 Related documents
 
-`file:///data/home/forge/hzcode/docs/03-hld.md` (planes and process model) · `file:///data/home/forge/hzcode/docs/04-lld.md` (module layout) · `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` (schemas) · `file:///data/home/forge/hzcode/docs/06-events-and-flows.md` (event semantics) · `file:///data/home/forge/hzcode/docs/10-cognition.md` (context, cache guard, compaction) · `file:///data/home/forge/hzcode/docs/11-authority-safety.md` (Guard, leases, receipts, origin typing) · `file:///data/home/forge/hzcode/docs/12-sessions-state.md` (log, projections, checkpoints) · `file:///data/home/forge/hzcode/docs/24-feature-catalog.md` (tool family inventory).
+`file:///data/home/forge/HorizonCode/docs/03-hld.md` (planes and process model) · `file:///data/home/forge/HorizonCode/docs/04-lld.md` (module layout) · `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` (schemas) · `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md` (event semantics) · `file:///data/home/forge/HorizonCode/docs/10-cognition.md` (context, cache guard, compaction) · `file:///data/home/forge/HorizonCode/docs/11-authority-safety.md` (Guard, leases, receipts, origin typing) · `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md` (log, projections, checkpoints) · `file:///data/home/forge/HorizonCode/docs/24-feature-catalog.md` (tool family inventory).

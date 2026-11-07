@@ -71,3 +71,11 @@ Three report-only auditors read every doc line by line after the RC-15 adoption 
 | `reaudit-17-30.md` | docs 24–30 + `_conventions.md` | 48 (14 CONTRADICTION / 20 STALE / 13 DEADREF / 1 SUPERSET / 1 DUPLICATE) |
 
 Dup-hunt result: eight overlap families across 24/25/26/27/28/29/30/`_conventions` — seven correctly layered (owner + pointer), one true duplicate collapsed (RC-15(a) restating RC-13(b)).
+
+## Pass-5 report (`pass5/`) — repo-wide audit after the trust-hardening wave (2026-11-07)
+
+The first full-tree audit run *after* implementation code existed: eight reader slices over all ~48k tracked lines plus live re-verification of every headline claim, producing the trust-hardening commit `7c528db`, the docs-defect commit `91192f3`, a corpus-wide repo-root path sweep, and a rulings queue for the remaining cross-document contradictions.
+
+| File | Scope | Outcome |
+|---|---|---|
+| `pass5/repo-wide-audit-2026-11-07.md` | whole repo (`app/`, `kernel/`, `docs/`, this audit tree) | 12 code findings + 6 docs defects fixed (suites 285→297 TS, 17→20 Rust); 6 open items recorded with proposed rulings |

@@ -4,19 +4,19 @@
 
 - **Status:** `DESIGNED` for every surface in this document. Two slices exist and are recorded in `docs/28-implementation-status.md` (RC-13): the 8-method NDJSON kernel protocol and the provider adapters — both are *narrower and different in framing* from §4.2/§4.9 below. Primitives that exist in the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
 - **Sources** (read for this document):
-  - `source: /data/home/forge/hzcode/README.md`
-  - `source: /data/home/forge/hzcode/docs/01-vision-and-superset.md`
-  - `source: /data/home/forge/hzcode/docs/02-decisions.md`
-  - `source: /data/home/forge/hzcode/docs/_conventions.md`
-  - `source: /data/home/forge/hzcode/docs/05-domain-and-schemas.md`
+  - `source: /data/home/forge/HorizonCode/README.md`
+  - `source: /data/home/forge/HorizonCode/docs/01-vision-and-superset.md`
+  - `source: /data/home/forge/HorizonCode/docs/02-decisions.md`
+  - `source: /data/home/forge/HorizonCode/docs/_conventions.md`
+  - `source: /data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`
   - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs` (`HzKernelRpcV1`, `RpcRequestV1`, `RpcResponseV1`, `RpcEventV1`, `RpcControlV1`, `KernelHelloV1`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`)
   - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/rpc_handshake.rs`
   - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs` (dotted operation dispatch: `artifacts.read_range`, `host_run.bind`, `managed_provider.settle`, `managed_message.claim_wake`, `automations.create`, …)
   - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs`
   - `source: /data/home/forge/repo-tour/horizoncode/specs/v2/session.md`
-  - `source: /data/home/forge/hzcode/docs/audit/pass2/codex-report.md` (code-generated, schema-exported JSON-RPC shared by CLI, app-server and SDKs)
-  - `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part1.md` and `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part3.md` (contract-separated monorepo, ACP server files, plugin surface)
-- **Related documents:** `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` owns every payload shape named here; `file:///data/home/forge/hzcode/docs/06-events-and-flows.md` owns the event catalog and projector semantics; `file:///data/home/forge/hzcode/docs/12-sessions-state.md` owns the concrete storage layout. On a shape conflict, 05 wins; on a framing conflict, this document wins; on physical layout, 12 wins.
+  - `source: /data/home/forge/HorizonCode/docs/audit/pass2/codex-report.md` (code-generated, schema-exported JSON-RPC shared by CLI, app-server and SDKs)
+  - `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part1.md` and `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part3.md` (contract-separated monorepo, ACP server files, plugin surface)
+- **Related documents:** `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` owns every payload shape named here; `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md` owns the event catalog and projector semantics; `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md` owns the concrete storage layout. On a shape conflict, 05 wins; on a framing conflict, this document wins; on physical layout, 12 wins.
 
 ---
 
@@ -35,7 +35,7 @@ This document decides:
 9. **Versioning and compatibility** rules for `HZ_PROTO`, `HZ_ABI`, deprecation and generated code (i).
 10. The **error model** — codes, retryability and fail-closed classes (j).
 
-Out of scope: the field-level definitions of payload objects, which live in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md`; the event type catalogue, which lives in `file:///data/home/forge/hzcode/docs/06-events-and-flows.md`; the on-disk layout, which lives in `file:///data/home/forge/hzcode/docs/12-sessions-state.md`; and CLI exit codes, which are owned by `file:///data/home/forge/hzcode/docs/14-surfaces.md` §2.2 (RC-5) and are referenced, never restated, here. This document names those objects and constrains how they travel; it does not restate their fields.
+Out of scope: the field-level definitions of payload objects, which live in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; the event type catalogue, which lives in `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md`; the on-disk layout, which lives in `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md`; and CLI exit codes, which are owned by `file:///data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 (RC-5) and are referenced, never restated, here. This document names those objects and constrains how they travel; it does not restate their fields.
 
 ---
 
@@ -49,7 +49,7 @@ Numbered, individually testable. `MUST` violations are contract-test failures (�
 |---|---|
 | **C1** | The Controller protocol MUST be JSON-RPC 2.0. Canonical method names MUST be `hz.<noun>.<verb>`. Short aliases (for example `session.create`) MAY exist in CLI and SDK ergonomics and MUST NOT be accepted on the wire. |
 | **C2** | Every connection MUST begin with `hz.initialize`, exchanging `{hzProto, hzAbi, features: {required: [], optional: []}, client: {name, version, surface}}`. A peer that requires a feature the other side does not support MUST be rejected with `HZ_UNSUPPORTED_FEATURE` (fail closed); unknown *optional* features MUST be ignored. |
-| **C3** | Integers above 2^53 MUST travel as canonical decimal strings, matching `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.1. A JSON number in a `u64`/`i64` position MUST be rejected (`Validation`). |
+| **C3** | Integers above 2^53 MUST travel as canonical decimal strings, matching `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.1. A JSON number in a `u64`/`i64` position MUST be rejected (`Validation`). |
 | **C4** | One request per frame. JSON-RPC batch arrays MUST NOT be accepted: per-session ordering and per-request deadlines are contractual, and batching defeats both. |
 | **C5** | Every mutating call MUST accept an idempotency key (`idempotencyKey` in params, or the `Idempotency-Key` header on REST). An exact replay MUST return the original result with `replayed: true` and MUST NOT perform the mutation twice. |
 | **C6** | Ordering is contractual per session: events carry a gap-free `seq` (doc 05 §2.2 D10) and a transport MUST NOT reorder events of one session. Cross-session ordering MUST NOT be assumed. |
@@ -155,7 +155,7 @@ One Controller, eight surfaces (ADR-005). The table below is the surface registr
 | Plugin API | JSON-RPC 2.0 over a dedicated IPC channel | plugin host | `hzplugin/1` | `@horizoncode/plugin` | — | §4.7 |
 | SDKs | generated clients | `@horizoncode/sdk`, `-python`, `-go`, `-rust` | `HZ_PROTO=1` | `@horizoncode/sdk*` | `hz_sdk` (name registered; code `[planned]`) | §4.8 |
 
-Cross-cutting interfaces used by every surface: `hz.initialize` (§4.1.2), `hz.subscribe` (§4.4.1), the typed error carrier (§4.10), and the `hz://` resource resolver (`file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.2).
+Cross-cutting interfaces used by every surface: `hz.initialize` (§4.1.2), `hz.subscribe` (§4.4.1), the typed error carrier (§4.10), and the `hz://` resource resolver (`file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.2).
 
 ---
 
@@ -316,7 +316,7 @@ Two rules bound this group. (1) `hz.permission.asked` (and therefore an `hz.appr
 
 #### 4.1.4 Worked exchanges (Controller protocol)
 
-All examples use the ids and digests from `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.2/D3. Digests are shortened with `…` **for readability only**; on the wire a partial digest MUST be rejected (doc 05 D3).
+All examples use the ids and digests from `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.2/D3. Digests are shortened with `…` **for readability only**; on the wire a partial digest MUST be rejected (doc 05 D3).
 
 **Example 1 — `hz.initialize` (capability and feature negotiation, C2/C40)**
 
@@ -615,7 +615,7 @@ Handshake states: `hello` → `hello_result` → `startup_status: Starting` … 
 | `subscription.open` / `.ack` / `.close` | `{ownerKind, ownerId, after?}` | `{subscriptionId, cursor}` | kernel event stream mirroring the doc 05 `RpcControlV1` set |
 | `health.status` | `{}` | `{state, buildDigest, ownerEpoch, degradations[]}` | MUST NOT be used as a readiness signal before `Ready` |
 
-**Terminal vocabulary (RC-7) applied to the ABI.** `_conventions.md` RC-7 fixes one protocol-wide outcome enum — `succeeded | failed | denied | cancelled | budget_exhausted | timeout | interrupted | unknown` — and forbids any component from inventing its own terminal word. In this ABI: `effect.settle` carries a **receipt terminal** (`SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`) because a receipt answers only *did the world change and can we prove it*; the wider RC-7 outcome travels in the body as `outcomeReason` and is mapped to a terminal state by the writer using the total mapping table in `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.11. A settle request that supplies an `outcomeReason` without a terminal state, or a terminal state inconsistent with its reason, MUST be refused with `HZ_INVALID_PARAMS`. Kernel *event* payloads (statuses such as `budget_exhausted`, `timeout`, `cancelled`, `interrupted` on `hz.agent.completed`, `hz.session.claim.released`, `hz.session.busy.left`) use the RC-7 vocabulary verbatim, as catalogued in `file:///data/home/forge/hzcode/docs/06-events-and-flows.md`.
+**Terminal vocabulary (RC-7) applied to the ABI.** `_conventions.md` RC-7 fixes one protocol-wide outcome enum — `succeeded | failed | denied | cancelled | budget_exhausted | timeout | interrupted | unknown` — and forbids any component from inventing its own terminal word. In this ABI: `effect.settle` carries a **receipt terminal** (`SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`) because a receipt answers only *did the world change and can we prove it*; the wider RC-7 outcome travels in the body as `outcomeReason` and is mapped to a terminal state by the writer using the total mapping table in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.11. A settle request that supplies an `outcomeReason` without a terminal state, or a terminal state inconsistent with its reason, MUST be refused with `HZ_INVALID_PARAMS`. Kernel *event* payloads (statuses such as `budget_exhausted`, `timeout`, `cancelled`, `interrupted` on `hz.agent.completed`, `hz.session.claim.released`, `hz.session.busy.left`) use the RC-7 vocabulary verbatim, as catalogued in `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md`.
 
 **Naming note.** The operation strings in §4.2.2 follow the ancestor's dotted `service.operation` dispatch style (`artifacts.read_range`, `host_run.bind`, `managed_provider.settle`, `automations.create`) and normalize the guard/lease/effect path to `effect.*`. That normalization is a HorizonCode naming decision, not a rename of shipped behaviour; see §10 item 2 for the compatibility consequence.
 
@@ -781,7 +781,7 @@ Base path `/v1` on the server listener `[planned]` (`hzcode serve --listen 127.0
 | `503` | kernel unavailable or ABI mismatch (`Unavailable`) | error body, `HZ_KERNEL_UNAVAILABLE` + `Retry-After`; the app is in `degraded_read_only` |
 | `504` | deadline exceeded (`Deadline`) | error body, `HZ_DEADLINE_EXCEEDED` |
 
-**Rate limits are a named shape, not an ad-hoc limiter.** The entitlement model behind `429` is `RateLimitPolicyV1`, owned by `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.9 (per-principal, per-provider, per-budget scopes, their meet-combination and precedence). This surface MUST NOT define its own limiter: a `429` response MUST name the effective policy in `details.rateLimitPolicyId`, carry `windowMs` and a `Retry-After` derived per the policy's `retryAfterMode`, and the choice between refusing, queueing, degrading and asking belongs to the policy's `onExceeded` value, applied by the owning layer (the provider path, the budget guard, or the server's per-principal limiter). When several policies match, the numeric limit is the meet and the *reported* policy is the most specific scope; the `retryClass` MUST match the call's idempotency rather than defaulting to `SafeQueryRetry` (doc 05 D39).
+**Rate limits are a named shape, not an ad-hoc limiter.** The entitlement model behind `429` is `RateLimitPolicyV1`, owned by `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.9 (per-principal, per-provider, per-budget scopes, their meet-combination and precedence). This surface MUST NOT define its own limiter: a `429` response MUST name the effective policy in `details.rateLimitPolicyId`, carry `windowMs` and a `Retry-After` derived per the policy's `retryAfterMode`, and the choice between refusing, queueing, degrading and asking belongs to the policy's `onExceeded` value, applied by the owning layer (the provider path, the budget guard, or the server's per-principal limiter). When several policies match, the numeric limit is the meet and the *reported* policy is the most specific scope; the `retryClass` MUST match the call's idempotency rather than defaulting to `SafeQueryRetry` (doc 05 D39).
 
 #### 4.3.3 Authentication modes
 
@@ -1467,18 +1467,18 @@ Contract tests. `Gate = yes` means CI fails the build on violation. The last col
 | Kernel ABI envelope (`hello`, `request`, `response`, `event`, `control`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`) | `DESIGNED`; types `CODE_PRESENT (ancestor)` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/rpc_handshake.rs` |
 | Kernel effect operations (`effect.authorize`/`lease_issue`/`execute`/`observe`/`settle`/`reconcile`) | `DESIGNED`; underlying primitives `CODE_PRESENT (ancestor)` as `guard::authorize`, `EffectHost::handle_request`, `EffectHost::reconcile_effect` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs#L1289`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L4790`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L5801` |
 | Managed-domain and worktree operations | `DESIGNED`; ancestor operations exist under different names | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs` (dotted dispatch table), `source: /data/home/forge/repo-tour/horizoncode/kernel/src/worktree_lifecycle.rs` |
-| REST + SSE surface, auth modes, status mapping | `DESIGNED` — no server exists | this document; parity approach from `source: /data/home/forge/hzcode/docs/audit/pass2/codex-report.md` |
+| REST + SSE surface, auth modes, status mapping | `DESIGNED` — no server exists | this document; parity approach from `source: /data/home/forge/HorizonCode/docs/audit/pass2/codex-report.md` |
 | Event framing (SSE/NDJSON/JSON-RPC) and cursors | `DESIGNED` | this document; cursor honesty rules derived from the ancestor's owner-cursor and resnapshot semantics |
-| ACP surface | `DESIGNED` — no ACP agent is implemented | this document; mapping discipline informed by `source: /data/home/forge/hzcode/docs/audit/pass2/opencode-report.part3.md` (`packages/cli/src/acp/*`) |
+| ACP surface | `DESIGNED` — no ACP agent is implemented | this document; mapping discipline informed by `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part3.md` (`packages/cli/src/acp/*`) |
 | MCP server surface | `DESIGNED` — no MCP server is implemented | this document; capability/authority discipline is ours |
-| Plugin API | `DESIGNED` | this document; hook and manifest shapes from `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` |
+| Plugin API | `DESIGNED` | this document; hook and manifest shapes from `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` |
 | SDKs (TS, Python, Go, Rust) | `DESIGNED`; nothing generated | §4.8; crate names registered (`hz_sdk` in `_conventions.md` §4), no generator exists |
 | Versioning, deprecation, codegen rules | `DESIGNED` | §4.9 |
 | Feature-flag registry | `DESIGNED` — names are specified in §4.1.5; no build toggles them yet | §4.1.5 |
 | Error model and fail-closed classes | `DESIGNED`; category/retry-class sets `CODE_PRESENT (ancestor)` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs#L2169-L2202` |
 | Contract tests CT1–CT50 | `DESIGNED` — no test exists; every gate is a plan | §9 |
 
-**References owned elsewhere.** CLI exit codes are owned by `file:///data/home/forge/hzcode/docs/14-surfaces.md` §2.2 (RC-5). The concrete storage layout and table DDL behind `hz.db` are owned by `file:///data/home/forge/hzcode/docs/12-sessions-state.md`. The event catalogue referenced throughout §4.4 is owned by `file:///data/home/forge/hzcode/docs/06-events-and-flows.md`. Canonical hook lifecycle event names are owned by `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.15.3.
+**References owned elsewhere.** CLI exit codes are owned by `file:///data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 (RC-5). The concrete storage layout and table DDL behind `hz.db` are owned by `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md`. The event catalogue referenced throughout §4.4 is owned by `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md`. Canonical hook lifecycle event names are owned by `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.15.3.
 
 **Open items owned by this document**
 
@@ -1486,7 +1486,7 @@ Contract tests. `Gate = yes` means CI fails the build on violation. The last col
 2. **Kernel operation names are normalized, not verbatim.** The ancestor dispatches dotted operations such as `artifacts.read_range`, `host_run.bind`, `managed_provider.settle` and `automations.create`. §4.2.2 adopts that style and renames the guard/lease/effect path to `effect.*`. The rename is part of the HorizonCode kernel work and MUST be accompanied by an `HZ_ABI` review: this is a *naming* change to a v1 protocol only because no external client exists yet. If any client exists by the time it lands, the rename requires an `HZ_ABI` bump and a deprecation window.
 3. **§8 budgets are unmeasured targets.** They MUST be replaced with measured values (or reported as unmet) before any surface claims `VERIFIED`.
 4. **Feature-flag registry** — ~~not yet enumerated~~ **resolved**: the canonical list is published in §4.1.5 (owned by this document per `_conventions.md` §11 RC-9), with the negotiation classes, the surfaces each name enables, and the C41/C42 deprecation interplay; CT3 now tests against it.
-5. **Rate-limit policy shape** — ~~unspecified~~ **resolved**: the entitlement model is `RateLimitPolicyV1`, owned by `file:///data/home/forge/hzcode/docs/05-domain-and-schemas.md` §4.9 under rule D39 (meet across matching policies, most-specific scope reported, honest `Retry-After`, tests T33/T34); §4.3.2 references it by name and MUST NOT restate it. One shape, one owner (05), one referencing document (07).
+5. **Rate-limit policy shape** — ~~unspecified~~ **resolved**: the entitlement model is `RateLimitPolicyV1`, owned by `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.9 under rule D39 (meet across matching policies, most-specific scope reported, honest `Retry-After`, tests T33/T34); §4.3.2 references it by name and MUST NOT restate it. One shape, one owner (05), one referencing document (07).
 6. **MCP revision pinning — open until the MCP server surface is implemented.** §4.6 targets MCP `2025-06-18`-or-newer; the exact revision HorizonCode pins, and the compatibility promise for older revisions, MUST be fixed in the same change that implements the server, because MCP revisions do introduce breaking changes.
 7. **ACP revision pinning — open until the ACP surface is implemented.** §4.5 assumes the ACP revision that supports `session/load`, `sessionModes` and `usage_update`. The pinned revision and the fallback behaviour for clients that lack `loadSession` MUST be stated before implementation.
 8. **No receipts for reads on every surface.** This contract receipts mutations universally and treats pure reads as un-receipted (except where a read crosses the workspace boundary, e.g. `sandbox.probe`, `fs/read_text_file` outside the root). If the threat model changes to require universal read receipts, the surface shapes in §4.1 and §4.3 need revision — that is a deliberate, open question, not an oversight.

@@ -9,13 +9,13 @@
 This document decides four things and nothing else.
 
 1. **The delivery order.** Phases `M0`–`M8`: `M0` Foundation · `M1` Loop · `M2` Authority · `M3` Surfaces · `M4` Intelligence · `M5` Scale · `M6` Ecosystem · `M7` Enterprise · `M8` Self-improvement. Each phase states its goal, its deliverables, its exit criteria (a checklist of CI gates that must be green), its risks, and what is explicitly **not** in it.
-2. **The registries.** The document-ownership map for documents `03`–`23`, the new-feature index (`NF-001` … `NF-075`, defined in `/data/home/forge/hzcode/docs/24-feature-catalog.md` Section B; `NF-051`–`NF-075` indexed in §4.2a) and the ADR index.
+2. **The registries.** The document-ownership map for documents `03`–`23`, the new-feature index (`NF-001` … `NF-075`, defined in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` Section B; `NF-051`–`NF-075` indexed in §4.2a) and the ADR index.
 3. **The vocabulary.** An alphabetical glossary: one meaning per term used across the spec set, each entry naming the document that owns the definition.
 4. **The evidence rule.** What each status level requires, so that no document — including this one — can claim a level it has not earned.
 
-The roadmap is a *plan*, not a promise. A phase that cannot satisfy a gate reports that gate as `UNKNOWN` and does not advance. Per `/data/home/forge/hzcode/docs/_conventions.md` §8, a document MUST NOT claim a level above what its evidence supports.
+The roadmap is a *plan*, not a promise. A phase that cannot satisfy a gate reports that gate as `UNKNOWN` and does not advance. Per `/data/home/forge/HorizonCode/docs/_conventions.md` §8, a document MUST NOT claim a level above what its evidence supports.
 
-**Not in scope of this document:** the content of the phases (owned by the subsystem documents), the feature designs themselves (owned by `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5), and any implementation. This document owns ordering, gates, the evidence ladder and the words.
+**Not in scope of this document:** the content of the phases (owned by the subsystem documents), the feature designs themselves (owned by `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §5), and any implementation. This document owns ordering, gates, the evidence ladder and the words.
 
 **Phase-id reconciliation (closed).** Earlier drafts used `P0`–`P7`; the plan of record is `M0`–`M8`. The mapping (P0→M0 · P1+P3→M2 · P2→M1 · P4→M4 · P5→M5 · P6→M3 and M6 · P7→M7 and M8) is recorded in §8.2 OQ-R1, and `00-index.md` now describes this document as the `M0`–`M8` roadmap. Sibling documents that cite a `P<n>` phase identifier resolve through that mapping.
 
@@ -23,7 +23,7 @@ The roadmap is a *plan*, not a promise. A phase that cannot satisfy a gate repor
 
 ## 2. The delivery model
 
-### 2.1 The status ladder (restated from `/data/home/forge/hzcode/docs/_conventions.md` §8)
+### 2.1 The status ladder (restated from `/data/home/forge/HorizonCode/docs/_conventions.md` §8)
 
 `DESIGNED` → `CODE_PRESENT` → `WIRED` → `TESTED` → `VERIFIED` → `RELEASED`
 
@@ -44,7 +44,7 @@ The roadmap is a *plan*, not a promise. A phase that cannot satisfy a gate repor
 
 ### 2.3 The evidence gate applies to this roadmap too
 
-Each phase exits through a **set of gates**, not a review meeting. A gate is *met* only where its output is recorded; otherwise it is written `UNKNOWN` and the phase does not advance. This is the same fail-closed posture the kernel uses for effects (`/data/home/forge/hzcode/docs/11-authority-safety.md`), applied to delivery.
+Each phase exits through a **set of gates**, not a review meeting. A gate is *met* only where its output is recorded; otherwise it is written `UNKNOWN` and the phase does not advance. This is the same fail-closed posture the kernel uses for effects (`/data/home/forge/HorizonCode/docs/11-authority-safety.md`), applied to delivery.
 
 ### 2.4 Owner roles
 
@@ -88,20 +88,20 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M0-D1 | Freeze of documents `01`–`16`, `24`, `25` with per-capability status lines | `/data/home/forge/hzcode/docs/_conventions.md` §8, §9 |
-| M0-D2 | Schema catalogue `*V1` (`GuardDecisionV1`, `EffectReceiptV1`, `SessionPostureV1`, `AgentProfileV1`, `ToolDeclarationV1`, `StepRecordV1`, …) | `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` |
-| M0-D3 | `hz_codegen` generating `@horizoncode/protocol`, `crates/hz_abi` and the thin SDKs from those schemas; no schema edited twice | `/data/home/forge/hzcode/docs/04-lld.md`, `/data/home/forge/hzcode/docs/07-apis-and-contracts.md` |
-| M0-D4 | Protocol revision constants `HZ_ABI=1`, `HZ_PROTO=1` | `/data/home/forge/hzcode/docs/_conventions.md` §1 |
-| M0-D5 | Capability-ID registry (§5) and event-name catalogue (§6) frozen; every proposal in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.3/§3.4 either registered here or withdrawn | `/data/home/forge/hzcode/docs/_conventions.md` §5, §6 |
-| M0-D6 | CI gates registered by name and each backed by a job id, even where the job only asserts "not yet applicable" | `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
-| M0-D7 | Layering ranks declared for packages and crates before the first import; ratchet baseline created and set to may-only-decrease | `/data/home/forge/hzcode/docs/_conventions.md` §3, §4; NF-047, NF-048 |
-| M0-D8 | Repository skeleton: Bun workspaces + Cargo workspace, reproducible build scripts, the `hz_native` build matrix, kernel asset manifest (pin), NOTICE generation from the provenance register | `/data/home/forge/hzcode/docs/04-lld.md`; NF-046, NF-048 |
-| M0-D9 | `hz://` scheme registered with its path kinds and a typed (failing) resolver stub | `/data/home/forge/hzcode/docs/_conventions.md` §1; NF-011 |
+| M0-D1 | Freeze of documents `01`–`16`, `24`, `25` with per-capability status lines | `/data/home/forge/HorizonCode/docs/_conventions.md` §8, §9 |
+| M0-D2 | Schema catalogue `*V1` (`GuardDecisionV1`, `EffectReceiptV1`, `SessionPostureV1`, `AgentProfileV1`, `ToolDeclarationV1`, `StepRecordV1`, …) | `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` |
+| M0-D3 | `hz_codegen` generating `@horizoncode/protocol`, `crates/hz_abi` and the thin SDKs from those schemas; no schema edited twice | `/data/home/forge/HorizonCode/docs/04-lld.md`, `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` |
+| M0-D4 | Protocol revision constants `HZ_ABI=1`, `HZ_PROTO=1` | `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
+| M0-D5 | Capability-ID registry (§5) and event-name catalogue (§6) frozen; every proposal in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.3/§3.4 either registered here or withdrawn | `/data/home/forge/HorizonCode/docs/_conventions.md` §5, §6 |
+| M0-D6 | CI gates registered by name and each backed by a job id, even where the job only asserts "not yet applicable" | `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
+| M0-D7 | Layering ranks declared for packages and crates before the first import; ratchet baseline created and set to may-only-decrease | `/data/home/forge/HorizonCode/docs/_conventions.md` §3, §4; NF-047, NF-048 |
+| M0-D8 | Repository skeleton: Bun workspaces + Cargo workspace, reproducible build scripts, the `hz_native` build matrix, kernel asset manifest (pin), NOTICE generation from the provenance register | `/data/home/forge/HorizonCode/docs/04-lld.md`; NF-046, NF-048 |
+| M0-D9 | `hz://` scheme registered with its path kinds and a typed (failing) resolver stub | `/data/home/forge/HorizonCode/docs/_conventions.md` §1; NF-011 |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
 - `gate:wire-parity` — every protocol type has exactly one generated owner.
-- `gate:doc-status` — no document claims a level above its evidence; every `NF-###` in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5 is indexed in §4.2 of this document.
+- `gate:doc-status` — no document claims a level above its evidence; every `NF-###` in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §5 is indexed in §4.2 of this document.
 - `gate:layering` — the dependency ranks are declared and the check runs (it may pass vacuously at M0).
 - `gate:repolint-debt` — the ratchet baseline exists and may only decrease.
 - `gate:kernel-pin` — a manifest exists and pins the (not yet built) kernel asset format.
@@ -116,7 +116,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | Risk | Likelihood | Impact | Mitigation | Owner-role |
 |---|---|---|---|---|
-| Schema churn during M1 forces regenerated types mid-phase | high | medium | Freeze `*V1` at M0; new needs get `*V2`, never in-place edits (`/data/home/forge/hzcode/docs/_conventions.md` §7) | `spec-owner` |
+| Schema churn during M1 forces regenerated types mid-phase | high | medium | Freeze `*V1` at M0; new needs get `*V2`, never in-place edits (`/data/home/forge/HorizonCode/docs/_conventions.md` §7) | `spec-owner` |
 | Codegen drift between TS and Rust | medium | high | `gate:wire-parity` + generated-only directories | `spec-owner` |
 | Gate definitions exist only as prose | medium | medium | Every gate named in §3 gets a CI job id at M0 | `release-owner` |
 | The capability/event proposals in `24-feature-catalog.md` §3.3/§3.4 are neither registered nor withdrawn | medium | medium | M0-D5 makes the decision part of the freeze | `spec-owner` |
@@ -130,18 +130,18 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M1-D1 | `Controller`, session engine and step engine; one provider stream per step (ADR-011) | `/data/home/forge/hzcode/docs/03-hld.md`, `/data/home/forge/hzcode/docs/08-runtime.md` |
-| M1-D2 | Durable event log + projectors in one transaction, per-aggregate monotonic sequence (ADR-004) | `/data/home/forge/hzcode/docs/12-sessions-state.md`, `/data/home/forge/hzcode/docs/06-events-and-flows.md` |
-| M1-D3 | Admission before execution: durable inbox, `steer` vs `queue`; admission receipt | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/12-sessions-state.md` |
-| M1-D4 | Write-ahead execution claim, released only by a terminal state | `/data/home/forge/hzcode/docs/12-sessions-state.md` |
-| M1-D5 | Tools baseline: `read`, `edit`, `write`, `patch`, `bash`/`shell`, `grep`, `glob` (+ `todo` unless deferred with M5) | `/data/home/forge/hzcode/docs/09-tools.md` |
-| M1-D6 | Unified native capability stack, first slice: one N-API addon over `hz_shell`, `hz_edit`, `hz_diff`, `hz_walker` (NF-015 partial) | `/data/home/forge/hzcode/docs/04-lld.md`, `/data/home/forge/hzcode/docs/09-tools.md` |
-| M1-D7 | TUI: fullscreen renderer + scrollback-native inline mode, switchable by relaunch; terminal restore on panic and signal | `/data/home/forge/hzcode/docs/13-tui.md`; NF-029 (first half) |
-| M1-D8 | `hz://` resolution for sessions, parts, steps, receipts, artifacts (NF-011 partially live) | `/data/home/forge/hzcode/docs/_conventions.md` §1 |
-| M1-D9 | Rollout recording (reduced-state trace) and read-mode replay: `hzcode session verify <id>` walks the receipt chain | `/data/home/forge/hzcode/docs/12-sessions-state.md`; NF-026, NF-009 (read mode) |
-| M1-D10 | Hermetic record/replay harness in front of the provider transport (NF-039), so M1's tests do not depend on a live model | `/data/home/forge/hzcode/docs/18-testing-and-gates.md` [planned]; NF-039 |
-| M1-D11 | Artifact store slice: content-addressed writes for tool outputs and evidence attachments (NF-027 partial) | `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`; NF-027 |
-| M1-D12 | Work item carried from the ancestor: two edits to the same file in one message must not be refused with `stale_preimage` (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`, recorded in `/data/home/forge/hzcode/docs/24-feature-catalog.md` A.8) | `/data/home/forge/hzcode/docs/09-tools.md` |
+| M1-D1 | `Controller`, session engine and step engine; one provider stream per step (ADR-011) | `/data/home/forge/HorizonCode/docs/03-hld.md`, `/data/home/forge/HorizonCode/docs/08-runtime.md` |
+| M1-D2 | Durable event log + projectors in one transaction, per-aggregate monotonic sequence (ADR-004) | `/data/home/forge/HorizonCode/docs/12-sessions-state.md`, `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` |
+| M1-D3 | Admission before execution: durable inbox, `steer` vs `queue`; admission receipt | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/12-sessions-state.md` |
+| M1-D4 | Write-ahead execution claim, released only by a terminal state | `/data/home/forge/HorizonCode/docs/12-sessions-state.md` |
+| M1-D5 | Tools baseline: `read`, `edit`, `write`, `patch`, `bash`/`shell`, `grep`, `glob` (+ `todo` unless deferred with M5) | `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| M1-D6 | Unified native capability stack, first slice: one N-API addon over `hz_shell`, `hz_edit`, `hz_diff`, `hz_walker` (NF-015 partial) | `/data/home/forge/HorizonCode/docs/04-lld.md`, `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| M1-D7 | TUI: fullscreen renderer + scrollback-native inline mode, switchable by relaunch; terminal restore on panic and signal | `/data/home/forge/HorizonCode/docs/13-tui.md`; NF-029 (first half) |
+| M1-D8 | `hz://` resolution for sessions, parts, steps, receipts, artifacts (NF-011 partially live) | `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
+| M1-D9 | Rollout recording (reduced-state trace) and read-mode replay: `hzcode session verify <id>` walks the receipt chain | `/data/home/forge/HorizonCode/docs/12-sessions-state.md`; NF-026, NF-009 (read mode) |
+| M1-D10 | Hermetic record/replay harness in front of the provider transport (NF-039), so M1's tests do not depend on a live model | `/data/home/forge/HorizonCode/docs/18-testing-and-gates.md` [planned]; NF-039 |
+| M1-D11 | Artifact store slice: content-addressed writes for tool outputs and evidence attachments (NF-027 partial) | `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; NF-027 |
+| M1-D12 | Work item carried from the ancestor: two edits to the same file in one message must not be refused with `stale_preimage` (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`, recorded in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.8) | `/data/home/forge/HorizonCode/docs/09-tools.md` |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -164,10 +164,10 @@ Risk registers below name a *role*, not a person, because this set is a specific
 |---|---|---|---|---|
 | The log/state split drifts into two sources of truth | medium | high | Projections are derived and disposable; the log is the state of record (ADR-004) | `runtime-owner` |
 | Tool count grows faster than tool declarations | high | medium | `gate:tool-declaration` blocks the merge, not the review | `runtime-owner` |
-| TUI scope creep (a full application surface) delays the loop | high | medium | Inline mode is the fallback demo; components land per `/data/home/forge/hzcode/docs/13-tui.md` | `surface-owner` |
+| TUI scope creep (a full application surface) delays the loop | high | medium | Inline mode is the fallback demo; components land per `/data/home/forge/HorizonCode/docs/13-tui.md` | `surface-owner` |
 | Native addon build or ABI breaks on one platform | medium | high | `gate:cross-plane-abi`; TS fails closed with a typed error | `runtime-owner` |
 | Prompt prefix volatility introduced by tool schemas | medium | high | `gate:cache-guard` from M1, before providers multiply | `cognition-owner` |
-| Claim/inbox semantics re-litigated in code | medium | medium | `/data/home/forge/hzcode/docs/12-sessions-state.md` owns the semantics; changes go through that document first | `runtime-owner` |
+| Claim/inbox semantics re-litigated in code | medium | medium | `/data/home/forge/HorizonCode/docs/12-sessions-state.md` owns the semantics; changes go through that document first | `runtime-owner` |
 | Record/replay harness drifts from the real transport | medium | medium | NF-039 keys cassettes on the request digest and is extended by the same codec tests as the transport | `runtime-owner` |
 
 ### 3.3 M2 · Authority
@@ -178,19 +178,19 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M2-D1 | `crates/hz_kernel` skeleton: `guard.rs`, `effect_host.rs`, `supervisor_lease.rs`, `owner_log.rs` (NF-001, NF-049 partial) | `/data/home/forge/hzcode/docs/11-authority-safety.md`; `/data/home/forge/hzcode/docs/04-lld.md` |
-| M2-D2 | Effect host for `files.read/write/patch/delete/move` and `terminal.run`, then `terminal.pty`, `process.spawn`, `vcs.write` | `/data/home/forge/hzcode/docs/11-authority-safety.md`; capability registry `/data/home/forge/hzcode/docs/_conventions.md` §5 |
-| M2-D3 | One-use lease protocol + `EffectReceiptV1` issuance; events `hz.effect.decision.made`, `hz.effect.lease.issued`, `hz.effect.settled`; terminal-state enum per RC-7 | `/data/home/forge/hzcode/docs/06-events-and-flows.md`; `/data/home/forge/hzcode/docs/_conventions.md` §11 |
-| M2-D4 | `crates/hz_policy` wildcard rule compiler (first), then the Starlark prefix engine; `deny > ask > allow`; policy revision + digest in the posture (NF-003 complete) | `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M2-D5 | `@horizoncode/kernel-client` typed client; the kernel protocol fails closed on ABI mismatch (ADR-002) | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md` |
-| M2-D6 | Linux sandbox backend (bubblewrap + Landlock), `Sandbox::probe()` fail-closed, guarantee vectors with typed residuals; then macOS (Seatbelt) and Windows (write-restricted token/AppContainer) backends (NF-016 complete) | `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M2-D7 | Approvals: `ask` decisions surfaced in the TUI, answered once, recorded; postures as data (`DirectSessionPermissionModeProjectionV1`); `hz.policy.revision.changed` | `/data/home/forge/hzcode/docs/13-tui.md`, `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M2-D8 | Receipt inspector, receipt-chain walk and **dry-run replay** (re-evaluate policy against recorded intents without executing) | `/data/home/forge/hzcode/docs/12-sessions-state.md`, `/data/home/forge/hzcode/docs/13-tui.md`; NF-009 complete |
-| M2-D9 | `UNKNOWN` reconciliation: `hz.effect.unknown` → `hz.effect.reconciled`, with a declared observation path per effect class; the `UNKNOWN` UX (NF-036) | `/data/home/forge/hzcode/docs/11-authority-safety.md`, `/data/home/forge/hzcode/docs/12-sessions-state.md` |
-| M2-D10 | Egress control: one policy point for `net.fetch`/`net.search`, exact-origin allow-lists, local model-transport proxy, SSRF guard (NF-021) | `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M2-D11 | Capability-granted delegation: `DirectSessionGrant`, bounded, workspace-scoped, expiring, origin-typed (NF-014) | `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M2-D12 | Evidence gate wiring: `verify` compiles claims into obligations and can only lower them (NF-002); Trusted Host State chain with the two honesty levels (NF-017) | `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M2-D13 | `hzcode doctor` trust display: postures, grants, guarantee vectors, dead-lane health | `/data/home/forge/hzcode/docs/16-operations.md`; NF-049 partial |
+| M2-D1 | `crates/hz_kernel` skeleton: `guard.rs`, `effect_host.rs`, `supervisor_lease.rs`, `owner_log.rs` (NF-001, NF-049 partial) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md`; `/data/home/forge/HorizonCode/docs/04-lld.md` |
+| M2-D2 | Effect host for `files.read/write/patch/delete/move` and `terminal.run`, then `terminal.pty`, `process.spawn`, `vcs.write` | `/data/home/forge/HorizonCode/docs/11-authority-safety.md`; capability registry `/data/home/forge/HorizonCode/docs/_conventions.md` §5 |
+| M2-D3 | One-use lease protocol + `EffectReceiptV1` issuance; events `hz.effect.decision.made`, `hz.effect.lease.issued`, `hz.effect.settled`; terminal-state enum per RC-7 | `/data/home/forge/HorizonCode/docs/06-events-and-flows.md`; `/data/home/forge/HorizonCode/docs/_conventions.md` §11 |
+| M2-D4 | `crates/hz_policy` wildcard rule compiler (first), then the Starlark prefix engine; `deny > ask > allow`; policy revision + digest in the posture (NF-003 complete) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M2-D5 | `@horizoncode/kernel-client` typed client; the kernel protocol fails closed on ABI mismatch (ADR-002) | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` |
+| M2-D6 | Linux sandbox backend (bubblewrap + Landlock), `Sandbox::probe()` fail-closed, guarantee vectors with typed residuals; then macOS (Seatbelt) and Windows (write-restricted token/AppContainer) backends (NF-016 complete) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M2-D7 | Approvals: `ask` decisions surfaced in the TUI, answered once, recorded; postures as data (`DirectSessionPermissionModeProjectionV1`); `hz.policy.revision.changed` | `/data/home/forge/HorizonCode/docs/13-tui.md`, `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M2-D8 | Receipt inspector, receipt-chain walk and **dry-run replay** (re-evaluate policy against recorded intents without executing) | `/data/home/forge/HorizonCode/docs/12-sessions-state.md`, `/data/home/forge/HorizonCode/docs/13-tui.md`; NF-009 complete |
+| M2-D9 | `UNKNOWN` reconciliation: `hz.effect.unknown` → `hz.effect.reconciled`, with a declared observation path per effect class; the `UNKNOWN` UX (NF-036) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md`, `/data/home/forge/HorizonCode/docs/12-sessions-state.md` |
+| M2-D10 | Egress control: one policy point for `net.fetch`/`net.search`, exact-origin allow-lists, local model-transport proxy, SSRF guard (NF-021) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M2-D11 | Capability-granted delegation: `DirectSessionGrant`, bounded, workspace-scoped, expiring, origin-typed (NF-014) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M2-D12 | Evidence gate wiring: `verify` compiles claims into obligations and can only lower them (NF-002); Trusted Host State chain with the two honesty levels (NF-017) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M2-D13 | `hzcode doctor` trust display: postures, grants, guarantee vectors, dead-lane health | `/data/home/forge/HorizonCode/docs/16-operations.md`; NF-049 partial |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -200,7 +200,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 - `gate:sensitive-path-coverage` — every path declared `sensitive:` is covered by a test that proves it.
 - `gate:boundary-test` — effect submission has exactly one primitive with exactly one caller per effect class.
 - `gate:cross-plane-abi` — kernel-client fails closed on a missing or older ABI.
-- `gate:doc-status` — `/data/home/forge/hzcode/docs/11-authority-safety.md` and `/data/home/forge/hzcode/docs/12-sessions-state.md` statuses match their evidence.
+- `gate:doc-status` — `/data/home/forge/HorizonCode/docs/11-authority-safety.md` and `/data/home/forge/HorizonCode/docs/12-sessions-state.md` statuses match their evidence.
 - `gate:parity-ratchet` — no disposition regression while the policy engine is replaced (wildcards → Starlark).
 
 **Demonstrable artifact at exit.** Recorded runs on Linux, macOS and Windows where the same intent produces: a policy decision, an approval prompt, a one-use lease, a receipt, and — for a deliberately killed effect — an `UNKNOWN` that is later reconciled with the observation that decided it. The TUI receipt inspector shows the chain; a guarantee assessment reports a typed residual rather than assuming enforcement.
@@ -228,14 +228,14 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M3-D1 | `@horizoncode/server`: JSON-RPC over stdio/UDS/TCP plus HTTP/SSE/WS; no behaviour of its own (NF-006) | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M3-D2 | Web app (`@horizoncode/web`) as a client of the same Controller | `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M3-D3 | Desktop app (`@horizoncode/desktop`), a separate module against the published protocol (NF-046 partial) | `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M3-D4 | ACP in both directions: HorizonCode as an ACP agent *and* as a driver of external agents; IDE bridge with JWT channel, permission proxying and trusted-device rules (NF-037) | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M3-D5 | MCP server mode (expose the agent) alongside MCP client mode (ADR-006) | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/15-extensibility.md` |
-| M3-D6 | Generated SDKs: TS client plus Python/Go/Rust thin clients from one source | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
+| M3-D1 | `@horizoncode/server`: JSON-RPC over stdio/UDS/TCP plus HTTP/SSE/WS; no behaviour of its own (NF-006) | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`, `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M3-D2 | Web app (`@horizoncode/web`) as a client of the same Controller | `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M3-D3 | Desktop app (`@horizoncode/desktop`), a separate module against the published protocol (NF-046 partial) | `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M3-D4 | ACP in both directions: HorizonCode as an ACP agent *and* as a driver of external agents; IDE bridge with JWT channel, permission proxying and trusted-device rules (NF-037) | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`, `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M3-D5 | MCP server mode (expose the agent) alongside MCP client mode (ADR-006) | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`, `/data/home/forge/HorizonCode/docs/15-extensibility.md` |
+| M3-D6 | Generated SDKs: TS client plus Python/Go/Rust thin clients from one source | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`, `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
 | M3-D7 | Canonical exit-code table enforced across surfaces (RC-5; owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2 (S16)) | `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
-| M3-D8 | Bridge replay: session-lifecycle state cached client-side and replayed after a reconnect, bounded to lifecycle frames | `/data/home/forge/hzcode/docs/14-surfaces.md`; NF-037 |
+| M3-D8 | Bridge replay: session-lifecycle state cached client-side and replayed after a reconnect, bounded to lifecycle frames | `/data/home/forge/HorizonCode/docs/14-surfaces.md`; NF-037 |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -243,7 +243,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 - `gate:parity-ratchet` — no Section A disposition regresses; every capability edge on a declared surface has a row.
 - `gate:layering` — no front-end imports a non-contract package.
 - `gate:wire-parity` — the SDKs are generated, never hand-edited.
-- `gate:doc-status` — `/data/home/forge/hzcode/docs/14-surfaces.md` status lines match evidence.
+- `gate:doc-status` — `/data/home/forge/HorizonCode/docs/14-surfaces.md` status lines match evidence.
 - `gate:receipt-coverage` — a session started in one surface and continued in another yields one continuous receipt chain.
 
 **Demonstrable artifact at exit.** One session started in the TUI, attached to from the server, mirrored into an IDE through ACP, and read through the generated TS SDK — with the same events, the same receipts and the same exit codes.
@@ -268,19 +268,19 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M4-D1 | Provider layer, native wire codecs, `models.dev`-style catalog snapshot decoder; endpoints as configuration, not code (NF-044) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D2 | Context compiler: exactly two regions — byte-stable prefix and projected turn tail (NF-005) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D3 | Cache guard + golden prefix pins per prompt family (`packages/context/test/golden/prefix/<family>.sha256`, RC-8) | `/data/home/forge/hzcode/docs/_conventions.md` §11 (RC-8); `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D4 | Four-tier memory with provenance; tools `memory_retain`, `memory_recall`, `memory_edit`, `memory_reflect` (NF-008) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D5 | Retrieval: lexical + symbol + reference index, local-first (NF-042 partial) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D6 | Compaction preserving goal, plan, todos, open questions, the receipt *set*, unresolved `UNKNOWN`s, pending asks, active skill and remaining budgets | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D7 | Secret vault with redaction on the outbound path (NF-022) | `/data/home/forge/hzcode/docs/16-operations.md`, `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M4-D8 | Account pools with credential affinity and prompt-cache pinning (NF-024) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M4-D9 | Append-only price table + `pricecheck`; every usage record cites its rate revision (NF-050) | `/data/home/forge/hzcode/docs/16-operations.md` |
-| M4-D10 | Observability plumbing: OTel with GenAI conventions, local dashboard, redacted export (NF-041 partial) | `/data/home/forge/hzcode/docs/16-operations.md` |
-| M4-D11 | Record/replay harness completes the matrix (NF-039): cassettes keyed by request digest, deterministic clock/randomness/ids, used by the cache guard and later by evals | `/data/home/forge/hzcode/docs/18-testing-and-gates.md` [planned] |
-| M4-D12 | Code Mode v2 (NF-051), ACI reading modes (NF-052), execution recorder (NF-054), pre-submit governance loop (NF-053), preview environments (NF-055) | `/data/home/forge/hzcode/docs/27-implementation-plan.md` §3.1 (V4); `/data/home/forge/hzcode/docs/09-tools.md`, `/data/home/forge/hzcode/docs/06-events-and-flows.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M4-D13 | Tool-result dual output (NF-061), instruction epochs (NF-059), event-feed laws (NF-060), composer and review UX (NF-062) | `/data/home/forge/hzcode/docs/27-implementation-plan.md` §3.1 (V4); `/data/home/forge/hzcode/docs/05-domain-and-schemas.md`, `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, `/data/home/forge/hzcode/docs/10-cognition.md`, `/data/home/forge/hzcode/docs/13-tui.md` |
+| M4-D1 | Provider layer, native wire codecs, `models.dev`-style catalog snapshot decoder; endpoints as configuration, not code (NF-044) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D2 | Context compiler: exactly two regions — byte-stable prefix and projected turn tail (NF-005) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D3 | Cache guard + golden prefix pins per prompt family (`packages/context/test/golden/prefix/<family>.sha256`, RC-8) | `/data/home/forge/HorizonCode/docs/_conventions.md` §11 (RC-8); `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D4 | Four-tier memory with provenance; tools `memory_retain`, `memory_recall`, `memory_edit`, `memory_reflect` (NF-008) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D5 | Retrieval: lexical + symbol + reference index, local-first (NF-042 partial) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D6 | Compaction preserving goal, plan, todos, open questions, the receipt *set*, unresolved `UNKNOWN`s, pending asks, active skill and remaining budgets | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D7 | Secret vault with redaction on the outbound path (NF-022) | `/data/home/forge/HorizonCode/docs/16-operations.md`, `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M4-D8 | Account pools with credential affinity and prompt-cache pinning (NF-024) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M4-D9 | Append-only price table + `pricecheck`; every usage record cites its rate revision (NF-050) | `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M4-D10 | Observability plumbing: OTel with GenAI conventions, local dashboard, redacted export (NF-041 partial) | `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M4-D11 | Record/replay harness completes the matrix (NF-039): cassettes keyed by request digest, deterministic clock/randomness/ids, used by the cache guard and later by evals | `/data/home/forge/HorizonCode/docs/18-testing-and-gates.md` [planned] |
+| M4-D12 | Code Mode v2 (NF-051), ACI reading modes (NF-052), execution recorder (NF-054), pre-submit governance loop (NF-053), preview environments (NF-055) | `/data/home/forge/HorizonCode/docs/27-implementation-plan.md` §3.1 (V4); `/data/home/forge/HorizonCode/docs/09-tools.md`, `/data/home/forge/HorizonCode/docs/06-events-and-flows.md`, `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M4-D13 | Tool-result dual output (NF-061), instruction epochs (NF-059), event-feed laws (NF-060), composer and review UX (NF-062) | `/data/home/forge/HorizonCode/docs/27-implementation-plan.md` §3.1 (V4); `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`, `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`, `/data/home/forge/HorizonCode/docs/10-cognition.md`, `/data/home/forge/HorizonCode/docs/13-tui.md` |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -300,7 +300,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 | Risk | Likelihood | Impact | Mitigation | Owner-role |
 |---|---|---|---|---|
 | Provider paging/caching differences break the byte-stable prefix | high | high | Pins per `(provider, model, config)`; drift is a build failure, not a note | `cognition-owner` |
-| Compaction silently drops authority context (`UNKNOWN`, pending asks) | medium | high | Preservation assertions per `/data/home/forge/hzcode/docs/10-cognition.md` | `cognition-owner` |
+| Compaction silently drops authority context (`UNKNOWN`, pending asks) | medium | high | Preservation assertions per `/data/home/forge/HorizonCode/docs/10-cognition.md` | `cognition-owner` |
 | Memory grows without a retention floor | high | medium | Retention floor carried in the tail; memory writes are events with provenance | `cognition-owner` |
 | Vault/redaction leaks credentials into prompts, logs or telemetry | low | high | Redaction is the default on provider and observe paths; `gate:sensitive-path-coverage` | `release-owner` |
 | Model catalog drift makes cost accounting wrong | medium | medium | The price table is append-only and cited by revision (NF-050) | `release-owner` |
@@ -314,17 +314,17 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M5-D1 | Subagent construction funnel: capability narrowing, budget inheritance, depth/concurrency ceilings, context capsule, receipt linkage (NF-007) | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M5-D2 | Tools `task`, `read_only_task`, `fleet` (`id`/`depends_on`, upstream results, `adopt_ref`, `fail_fast`), `parallel_tasks` | `/data/home/forge/hzcode/docs/09-tools.md` |
-| M5-D3 | Teams and message bus; events `hz.agent.spawned`, `hz.agent.message.sent`, `hz.agent.completed` | `/data/home/forge/hzcode/docs/06-events-and-flows.md`, `/data/home/forge/hzcode/docs/08-runtime.md` |
-| M5-D4 | Budgets inherited across the session tree: tokens, wall-clock, steps, triage, search calls, currency; enforced at admission boundaries (NF-025) | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/16-operations.md` |
-| M5-D5 | Scheduler with an occurrence journal that survives restarts (NF-012, NF-028 partial) | `/data/home/forge/hzcode/docs/08-runtime.md` |
-| M5-D6 | Plan, Goal and Todo state machines with an approved-plan window; tools `todo`, `update_goal` (NF-045) | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/09-tools.md` |
-| M5-D7 | Goals, attempts and the run/attempt model; `hzcode session tree` reconstructs authority and cost | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/12-sessions-state.md` |
-| M5-D8 | Deterministic planner/executor routing: `executor-only` / `light` / `full` / `plan-for-approval` / `plan-only` chosen from raw user text by policy (NF-004) | `/data/home/forge/hzcode/docs/08-runtime.md` |
-| M5-D9 | Worktree pool primitives for child isolation (NF-019, partial — see risk register) | `/data/home/forge/hzcode/docs/12-sessions-state.md`, `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M5-D10 | Rhai workflow engine bindings; tool `workflow` (NF-012) | `/data/home/forge/hzcode/docs/15-extensibility.md` |
-| M5-D11 | Notification and watchdog system: stalls, budget thresholds, held leases, unreconciled `UNKNOWN`s (NF-028) | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/16-operations.md` |
+| M5-D1 | Subagent construction funnel: capability narrowing, budget inheritance, depth/concurrency ceilings, context capsule, receipt linkage (NF-007) | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M5-D2 | Tools `task`, `read_only_task`, `fleet` (`id`/`depends_on`, upstream results, `adopt_ref`, `fail_fast`), `parallel_tasks` | `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| M5-D3 | Teams and message bus; events `hz.agent.spawned`, `hz.agent.message.sent`, `hz.agent.completed` | `/data/home/forge/HorizonCode/docs/06-events-and-flows.md`, `/data/home/forge/HorizonCode/docs/08-runtime.md` |
+| M5-D4 | Budgets inherited across the session tree: tokens, wall-clock, steps, triage, search calls, currency; enforced at admission boundaries (NF-025) | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M5-D5 | Scheduler with an occurrence journal that survives restarts (NF-012, NF-028 partial) | `/data/home/forge/HorizonCode/docs/08-runtime.md` |
+| M5-D6 | Plan, Goal and Todo state machines with an approved-plan window; tools `todo`, `update_goal` (NF-045) | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| M5-D7 | Goals, attempts and the run/attempt model; `hzcode session tree` reconstructs authority and cost | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/12-sessions-state.md` |
+| M5-D8 | Deterministic planner/executor routing: `executor-only` / `light` / `full` / `plan-for-approval` / `plan-only` chosen from raw user text by policy (NF-004) | `/data/home/forge/HorizonCode/docs/08-runtime.md` |
+| M5-D9 | Worktree pool primitives for child isolation (NF-019, partial — see risk register) | `/data/home/forge/HorizonCode/docs/12-sessions-state.md`, `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M5-D10 | Rhai workflow engine bindings; tool `workflow` (NF-012) | `/data/home/forge/HorizonCode/docs/15-extensibility.md` |
+| M5-D11 | Notification and watchdog system: stalls, budget thresholds, held leases, unreconciled `UNKNOWN`s (NF-028) | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/16-operations.md` |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -358,16 +358,16 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M6-D1 | Plugin system: out-of-process host, manifest-declared capabilities, per-use admission (NF-043, NF-032 partial) | `/data/home/forge/hzcode/docs/15-extensibility.md` |
-| M6-D2 | Plugin marketplace with signed manifests; install shows the declared capability set and installs disabled by default (NF-032) | `/data/home/forge/hzcode/docs/15-extensibility.md`, `/data/home/forge/hzcode/docs/16-operations.md` |
-| M6-D3 | Skill system + synthesis with eval verification (`skillify`); `unverified` skills are visible as such (NF-033) | `/data/home/forge/hzcode/docs/15-extensibility.md`, `/data/home/forge/hzcode/docs/08-runtime.md` |
-| M6-D4 | LSP/DAP broker: one server per language per workspace, capability-gated, mutating operations receipted (NF-042 complete) | `/data/home/forge/hzcode/docs/09-tools.md` |
-| M6-D5 | Deferred tool discovery and capability-scoped tool catalogs: `tool_search`, core set plus index (NF-038) | `/data/home/forge/hzcode/docs/09-tools.md` |
-| M6-D6 | Collaboration with presence: shared sessions, driver/approver roles as grants, scoped share links (NF-030) | `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M6-D7 | Team memory: the fourth tier, sync with provenance-preserving conflict resolution, local-only fallback (NF-013) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M6-D8 | Import and migration from other agents (settings, hooks, MCP servers, commands, skill directories); imported settings may only narrow (ADR-008, NF-031 partial) | `/data/home/forge/hzcode/docs/21-migration.md` [planned] |
-| M6-D9 | Multimodal and voice I/O: `view_image`, attachments, `stt`/`tts`, out-of-process media rendering (NF-040) | `/data/home/forge/hzcode/docs/09-tools.md`, `/data/home/forge/hzcode/docs/04-lld.md` |
-| M6-D10 | CLI shell integration: `wrap`, `du`, `doctor`, zsh `:`-prefixed plugin (the agent as a shell citizen) | `/data/home/forge/hzcode/docs/14-surfaces.md` |
+| M6-D1 | Plugin system: out-of-process host, manifest-declared capabilities, per-use admission (NF-043, NF-032 partial) | `/data/home/forge/HorizonCode/docs/15-extensibility.md` |
+| M6-D2 | Plugin marketplace with signed manifests; install shows the declared capability set and installs disabled by default (NF-032) | `/data/home/forge/HorizonCode/docs/15-extensibility.md`, `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M6-D3 | Skill system + synthesis with eval verification (`skillify`); `unverified` skills are visible as such (NF-033) | `/data/home/forge/HorizonCode/docs/15-extensibility.md`, `/data/home/forge/HorizonCode/docs/08-runtime.md` |
+| M6-D4 | LSP/DAP broker: one server per language per workspace, capability-gated, mutating operations receipted (NF-042 complete) | `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| M6-D5 | Deferred tool discovery and capability-scoped tool catalogs: `tool_search`, core set plus index (NF-038) | `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| M6-D6 | Collaboration with presence: shared sessions, driver/approver roles as grants, scoped share links (NF-030) | `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M6-D7 | Team memory: the fourth tier, sync with provenance-preserving conflict resolution, local-only fallback (NF-013) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M6-D8 | Import and migration from other agents (settings, hooks, MCP servers, commands, skill directories); imported settings may only narrow (ADR-008, NF-031 partial) | `/data/home/forge/HorizonCode/docs/21-migration.md` [planned] |
+| M6-D9 | Multimodal and voice I/O: `view_image`, attachments, `stt`/`tts`, out-of-process media rendering (NF-040) | `/data/home/forge/HorizonCode/docs/09-tools.md`, `/data/home/forge/HorizonCode/docs/04-lld.md` |
+| M6-D10 | CLI shell integration: `wrap`, `du`, `doctor`, zsh `:`-prefixed plugin (the agent as a shell citizen) | `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -400,12 +400,12 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M7-D1 | Signed, cached managed policy with a pre-sandbox policy heal; managed ≥ user ≥ workspace, narrowing only (NF-031 complete) | `/data/home/forge/hzcode/docs/16-operations.md`, `/data/home/forge/hzcode/docs/11-authority-safety.md` |
-| M7-D2 | Offline and air-gapped operation end-to-end: local-first, offline, air-gapped modes with typed refusals for capabilities that cannot work degraded (NF-023) | `/data/home/forge/hzcode/docs/16-operations.md` |
-| M7-D3 | Multi-machine execution under `remote.exec`: remote hosts return **their** guarantee vector and residuals; per-host grants (NF-020) | `/data/home/forge/hzcode/docs/11-authority-safety.md`, `/data/home/forge/hzcode/docs/14-surfaces.md` |
-| M7-D4 | Distribution integrity: one static binary per platform, kernel asset digest pinned, digest-pinned signed updates, desktop and mobile as separate thin modules (NF-046 complete) | `/data/home/forge/hzcode/docs/16-operations.md` |
-| M7-D5 | Provenance and release artifacts: pinned upstreams, NOTICE from the register, signed release artifacts (NF-048 complete) | `/data/home/forge/hzcode/docs/16-operations.md` |
-| M7-D6 | Audit export: receipts + policy revisions + trust records for an auditor, offline-verifiable (NF-017, NF-041 complete) | `/data/home/forge/hzcode/docs/16-operations.md` |
+| M7-D1 | Signed, cached managed policy with a pre-sandbox policy heal; managed ≥ user ≥ workspace, narrowing only (NF-031 complete) | `/data/home/forge/HorizonCode/docs/16-operations.md`, `/data/home/forge/HorizonCode/docs/11-authority-safety.md` |
+| M7-D2 | Offline and air-gapped operation end-to-end: local-first, offline, air-gapped modes with typed refusals for capabilities that cannot work degraded (NF-023) | `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M7-D3 | Multi-machine execution under `remote.exec`: remote hosts return **their** guarantee vector and residuals; per-host grants (NF-020) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md`, `/data/home/forge/HorizonCode/docs/14-surfaces.md` |
+| M7-D4 | Distribution integrity: one static binary per platform, kernel asset digest pinned, digest-pinned signed updates, desktop and mobile as separate thin modules (NF-046 complete) | `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M7-D5 | Provenance and release artifacts: pinned upstreams, NOTICE from the register, signed release artifacts (NF-048 complete) | `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M7-D6 | Audit export: receipts + policy revisions + trust records for an auditor, offline-verifiable (NF-017, NF-041 complete) | `/data/home/forge/HorizonCode/docs/16-operations.md` |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -438,13 +438,13 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 | # | Deliverable | Specified by |
 |---|---|---|
-| M8-D1 | Trajectories, evals, distillation, `skillify` and gated proposals; authority impact always `none` (NF-010, NF-033 complete, NF-034, NF-035) | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/15-extensibility.md` |
-| M8-D2 | Managed coding domain: Goal / SpecVersion / Run / Task / Attempt / WorkerExecution / Evidence / Verification, OwnerLog, task DAG, verifier, worktree pool completion, resource budget (NF-018, NF-019 complete, NF-017 complete) | `/data/home/forge/hzcode/docs/11-authority-safety.md`, `/data/home/forge/hzcode/docs/12-sessions-state.md` |
-| M8-D3 | Long-horizon unattended runs: checkpoint/rewind/resume, retention, reconciled `UNKNOWN`s, no human in the loop — under unchanged postures | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/12-sessions-state.md` |
-| M8-D4 | Prompt tuning under cache discipline: variants evaluated as whole prefixes with paired evals; promotion is a proposal (NF-034) | `/data/home/forge/hzcode/docs/10-cognition.md` |
-| M8-D5 | Trajectory dataset export with outbound redaction and scoping (NF-035) | `/data/home/forge/hzcode/docs/08-runtime.md`, `/data/home/forge/hzcode/docs/16-operations.md` |
-| M8-D6 | Adversarial certification suite: prompt injection, authority confusion, path escape, egress abuse, classifier-free routing attacks — with recorded evidence bundles | `/data/home/forge/hzcode/docs/22-threat-model-certification.md` [planned] |
-| M8-D7 | `RELEASED` march: every capability raised level by level with named evidence; `gate:doc-status` green on the whole set | `/data/home/forge/hzcode/docs/_conventions.md` §8 |
+| M8-D1 | Trajectories, evals, distillation, `skillify` and gated proposals; authority impact always `none` (NF-010, NF-033 complete, NF-034, NF-035) | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/15-extensibility.md` |
+| M8-D2 | Managed coding domain: Goal / SpecVersion / Run / Task / Attempt / WorkerExecution / Evidence / Verification, OwnerLog, task DAG, verifier, worktree pool completion, resource budget (NF-018, NF-019 complete, NF-017 complete) | `/data/home/forge/HorizonCode/docs/11-authority-safety.md`, `/data/home/forge/HorizonCode/docs/12-sessions-state.md` |
+| M8-D3 | Long-horizon unattended runs: checkpoint/rewind/resume, retention, reconciled `UNKNOWN`s, no human in the loop — under unchanged postures | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/12-sessions-state.md` |
+| M8-D4 | Prompt tuning under cache discipline: variants evaluated as whole prefixes with paired evals; promotion is a proposal (NF-034) | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| M8-D5 | Trajectory dataset export with outbound redaction and scoping (NF-035) | `/data/home/forge/HorizonCode/docs/08-runtime.md`, `/data/home/forge/HorizonCode/docs/16-operations.md` |
+| M8-D6 | Adversarial certification suite: prompt injection, authority confusion, path escape, egress abuse, classifier-free routing attacks — with recorded evidence bundles | `/data/home/forge/HorizonCode/docs/22-threat-model-certification.md` [planned] |
+| M8-D7 | `RELEASED` march: every capability raised level by level with named evidence; `gate:doc-status` green on the whole set | `/data/home/forge/HorizonCode/docs/_conventions.md` §8 |
 
 **Exit criteria — gate checklist.** All of these must be green:
 
@@ -477,38 +477,38 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 ### 4.1 Document assignments (`03`–`23`)
 
-`24-feature-catalog.md` §1 and NF-047 refer to the ownership map in this section. Documents `00`–`16` and `24`–`30` exist; titles below are confirmed by `/data/home/forge/hzcode/docs/00-index.md`. Documents `17`–`23` are **proposals** and carry no authority until `spec-owner` ratifies them; until a document exists, its topic is owned by the closest existing document and the gap is recorded in §8.
+`24-feature-catalog.md` §1 and NF-047 refer to the ownership map in this section. Documents `00`–`16` and `24`–`30` exist; titles below are confirmed by `/data/home/forge/HorizonCode/docs/00-index.md`. Documents `17`–`23` are **proposals** and carry no authority until `spec-owner` ratifies them; until a document exists, its topic is owned by the closest existing document and the gap is recorded in §8.
 
 | Doc | File | Owns |
 |---|---|---|
-| 03 | `/data/home/forge/hzcode/docs/03-hld.md` | Planes, processes, trust boundaries, interfaces, deployment targets |
-| 04 | `/data/home/forge/hzcode/docs/04-lld.md` | Packages, crates, modules, function signatures, invariants |
-| 05 | `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` | Domain model, every `*V1` schema |
-| 06 | `/data/home/forge/hzcode/docs/06-events-and-flows.md` | Event catalogue, end-to-end flows |
-| 07 | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md` | Controller protocol, kernel ABI, HTTP/SSE, ACP, MCP, plugin API, SDKs |
-| 08 | `/data/home/forge/hzcode/docs/08-runtime.md` | Agent loop, planner/executor, subagents, teams, budgets, self-improvement |
-| 09 | `/data/home/forge/hzcode/docs/09-tools.md` | Tool catalogue and tool system |
-| 10 | `/data/home/forge/hzcode/docs/10-cognition.md` | Providers, context compiler, cache contract, memory, retrieval, compaction |
-| 11 | `/data/home/forge/hzcode/docs/11-authority-safety.md` | Threat model, Guard, leases, receipts, sandbox matrix, policy |
-| 12 | `/data/home/forge/hzcode/docs/12-sessions-state.md` | Event log, projections, inbox, claims, snapshots, time travel, durability |
-| 13 | `/data/home/forge/hzcode/docs/13-tui.md` | The terminal UI in full |
-| 14 | `/data/home/forge/hzcode/docs/14-surfaces.md` | Headless, server, web, desktop, IDE/ACP, MCP server, SDKs, collaboration |
-| 15 | `/data/home/forge/hzcode/docs/15-extensibility.md` | Plugins, skills, commands, hooks, workflows, MCP/ACP depth |
-| 16 | `/data/home/forge/hzcode/docs/16-operations.md` | Install and release integrity, CI gates, observability, diagnostics, security ops, runbooks |
+| 03 | `/data/home/forge/HorizonCode/docs/03-hld.md` | Planes, processes, trust boundaries, interfaces, deployment targets |
+| 04 | `/data/home/forge/HorizonCode/docs/04-lld.md` | Packages, crates, modules, function signatures, invariants |
+| 05 | `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` | Domain model, every `*V1` schema |
+| 06 | `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` | Event catalogue, end-to-end flows |
+| 07 | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` | Controller protocol, kernel ABI, HTTP/SSE, ACP, MCP, plugin API, SDKs |
+| 08 | `/data/home/forge/HorizonCode/docs/08-runtime.md` | Agent loop, planner/executor, subagents, teams, budgets, self-improvement |
+| 09 | `/data/home/forge/HorizonCode/docs/09-tools.md` | Tool catalogue and tool system |
+| 10 | `/data/home/forge/HorizonCode/docs/10-cognition.md` | Providers, context compiler, cache contract, memory, retrieval, compaction |
+| 11 | `/data/home/forge/HorizonCode/docs/11-authority-safety.md` | Threat model, Guard, leases, receipts, sandbox matrix, policy |
+| 12 | `/data/home/forge/HorizonCode/docs/12-sessions-state.md` | Event log, projections, inbox, claims, snapshots, time travel, durability |
+| 13 | `/data/home/forge/HorizonCode/docs/13-tui.md` | The terminal UI in full |
+| 14 | `/data/home/forge/HorizonCode/docs/14-surfaces.md` | Headless, server, web, desktop, IDE/ACP, MCP server, SDKs, collaboration |
+| 15 | `/data/home/forge/HorizonCode/docs/15-extensibility.md` | Plugins, skills, commands, hooks, workflows, MCP/ACP depth |
+| 16 | `/data/home/forge/HorizonCode/docs/16-operations.md` | Install and release integrity, CI gates, observability, diagnostics, security ops, runbooks |
 
 | Doc | Proposed file `[planned]` | Proposed ownership — **unratified** |
 |---|---|---|
-| 17 | `/data/home/forge/hzcode/docs/17-storage-and-persistence.md` | Event-store files and migrations, blob/CAS layout, retention ledger, reindex/backup |
-| 18 | `/data/home/forge/hzcode/docs/18-testing-and-gates.md` | Test harness, record/replay, gate implementations of `24-feature-catalog.md` §3.5, evidence-bundle format |
-| 19 | `/data/home/forge/hzcode/docs/19-schema-evolution.md` | `*V1`→`*V2` rules, compatibility windows, protocol revision policy |
-| 20 | `/data/home/forge/hzcode/docs/20-plugin-authoring.md` | Extension protocol, plugin manifest, authoring guide, marketplace rules |
-| 21 | `/data/home/forge/hzcode/docs/21-migration.md` | Import of settings, rules, MCP servers, skills and memories from other agents; narrowing-only rule |
-| 22 | `/data/home/forge/hzcode/docs/22-threat-model-certification.md` | Adversarial certification suite, attack classes, evidence bundles for M8-D6 |
-| 23 | `/data/home/forge/hzcode/docs/23-doc-authoring.md` | How to add a document, a capability id, an event or a gate; ratchet and status rules |
+| 17 | `/data/home/forge/HorizonCode/docs/17-storage-and-persistence.md` | Event-store files and migrations, blob/CAS layout, retention ledger, reindex/backup |
+| 18 | `/data/home/forge/HorizonCode/docs/18-testing-and-gates.md` | Test harness, record/replay, gate implementations of `24-feature-catalog.md` §3.5, evidence-bundle format |
+| 19 | `/data/home/forge/HorizonCode/docs/19-schema-evolution.md` | `*V1`→`*V2` rules, compatibility windows, protocol revision policy |
+| 20 | `/data/home/forge/HorizonCode/docs/20-plugin-authoring.md` | Extension protocol, plugin manifest, authoring guide, marketplace rules |
+| 21 | `/data/home/forge/HorizonCode/docs/21-migration.md` | Import of settings, rules, MCP servers, skills and memories from other agents; narrowing-only rule |
+| 22 | `/data/home/forge/HorizonCode/docs/22-threat-model-certification.md` | Adversarial certification suite, attack classes, evidence bundles for M8-D6 |
+| 23 | `/data/home/forge/HorizonCode/docs/23-doc-authoring.md` | How to add a document, a capability id, an event or a gate; ratchet and status rules |
 
 ### 4.2 Feature index — `NF-001`…`NF-050`
 
-Every id below has a definition section in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §5 (anchor `NF-<id>`); the owning document is the assignment from §4.1. Where a phase column shows two phases, the first is the partial claim and the second the completion (the partial scope must be named in the status line — see §8.2 OQ-R3).
+Every id below has a definition section in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §5 (anchor `NF-<id>`); the owning document is the assignment from §4.1. Where a phase column shows two phases, the first is the partial claim and the second the completion (the partial scope must be named in the status line — see §8.2 OQ-R3).
 
 | Id | Name | Owning doc | Phase |
 |---|---|---|---|
@@ -599,7 +599,7 @@ Definitions in `24-feature-catalog.md` Section B; adopted by RC-12 and RC-15; se
 
 ### 4.3 ADR index
 
-Every ADR in `/data/home/forge/hzcode/docs/02-decisions.md` §1 (`ADR-001`–`ADR-016`), all **Accepted**. The one-line decision is the ADR title unless noted.
+Every ADR in `/data/home/forge/HorizonCode/docs/02-decisions.md` §1 (`ADR-001`–`ADR-016`), all **Accepted**. The one-line decision is the ADR title unless noted.
 
 | ADR | Decision (one line) | Owner doc |
 |---|---|---|
@@ -624,13 +624,13 @@ Every ADR in `/data/home/forge/hzcode/docs/02-decisions.md` §1 (`ADR-001`–`AD
 
 ## 5. Glossary
 
-Alphabetical. One sentence per term, then the document that **owns** the definition. Where this glossary and an owning document disagree, the owning document wins and this entry is a bug. Naming conventions themselves are owned by `/data/home/forge/hzcode/docs/_conventions.md`; entries cite its sections where the term is registered there.
+Alphabetical. One sentence per term, then the document that **owns** the definition. Where this glossary and an owning document disagree, the owning document wins and this entry is a bug. Naming conventions themselves are owned by `/data/home/forge/HorizonCode/docs/_conventions.md`; entries cite its sections where the term is registered there.
 
 ### A–B
 
 | Term | Definition | Owning doc |
 |---|---|---|
-| **ABI** | The versioned binary interface between the JS agent plane and the Rust kernel/native plane, generated from schemas and bumped on breaking change (`HZ_ABI=1`). | 04; `/data/home/forge/hzcode/docs/_conventions.md` §1 |
+| **ABI** | The versioned binary interface between the JS agent plane and the Rust kernel/native plane, generated from schemas and bumped on breaking change (`HZ_ABI=1`). | 04; `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
 | **ACP** | Agent Client Protocol — the IDE/agent interoperability protocol HorizonCode both speaks as an agent and drives outward. | 07, 14 |
 | **ACP agent** | HorizonCode acting in ACP server role: it exposes sessions and permission requests to an IDE or another agent. | 14 |
 | **admission** | The act of accepting a user prompt into a session before any step runs, producing a durable record and a cheap receipt. | 08, 12; event `hz.session.prompt.admitted` |
@@ -650,8 +650,8 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 
 | Term | Definition | Owning doc |
 |---|---|---|
-| **cache guard** | The CI contract that recompiles the prompt prefix for every `(provider, model, config)` tuple and fails on drift (`gate:cache-guard`). | 10; `/data/home/forge/hzcode/docs/_conventions.md` §11 (RC-8) |
-| **capability ID** | The stable identifier for an authority a tool needs (`files.write`, `terminal.run`, …); aliases never change its effect class. | `/data/home/forge/hzcode/docs/_conventions.md` §5 |
+| **cache guard** | The CI contract that recompiles the prompt prefix for every `(provider, model, config)` tuple and fails on drift (`gate:cache-guard`). | 10; `/data/home/forge/HorizonCode/docs/_conventions.md` §11 (RC-8) |
+| **capability ID** | The stable identifier for an authority a tool needs (`files.write`, `terminal.run`, …); aliases never change its effect class. | `/data/home/forge/HorizonCode/docs/_conventions.md` §5 |
 | **capability scope** | The declared set of capability IDs a run, child or plugin may use — stated before it starts, narrowed for children, enforced by Guard. | 08, 11; NF-014, NF-018 |
 | **capsule (context capsule)** | The bounded, versioned context a subagent is constructed with — its own prefix/tail assembly derived from the parent, never a raw dump of parent history. | 08 |
 | **checkpoint** | A durable marker at a well-defined point so compaction, resume and rewind have a provider-visible boundary (`hz.session.checkpoint.created`). | 12 |
@@ -672,11 +672,11 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | **decision (GuardDecision)** | The typed outcome of `authorize()` — `GuardDecisionV1` carries `ask`/`deny`, a `reason_code` and the digest of the intent it binds. | 11 |
 | **delegation** | The act of granting a narrowed, bounded capability set to a child or plugin, always through Guard, a lease and a receipt. | 11; NF-007, NF-014 |
 | **DirectSessionGrant** | The persisted form of a bounded, workspace-scoped, expiring pre-authorisation that still traverses Guard on every use. | 11; NF-014 |
-| **disposition** | In the parity matrix, how a capability relates to a reference implementation (`inherit` / `supersede` / `new` / `reject`); a disposition may not silently regress (`gate:parity-ratchet`). | `/data/home/forge/hzcode/docs/24-feature-catalog.md` §4 |
-| **durable event** | An event written to the session log and therefore part of the state of record (as opposed to an ephemeral event). | 12; `/data/home/forge/hzcode/docs/_conventions.md` §6 |
+| **disposition** | In the parity matrix, how a capability relates to a reference implementation (`inherit` / `supersede` / `new` / `reject`); a disposition may not silently regress (`gate:parity-ratchet`). | `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §4 |
+| **durable event** | An event written to the session log and therefore part of the state of record (as opposed to an ephemeral event). | 12; `/data/home/forge/HorizonCode/docs/_conventions.md` §6 |
 | **durable inbox** | The persisted queue of admitted prompts, control items and steering messages that survives restarts. | 12 |
 | **effect** | A single attempt to change state outside the agent: read as well as write, classed by effect class and always mediated by the kernel. | 11 |
-| **effect class** | One of `read-only` · `workspace-write` · `network` · `process` · `credential` · `remote` · `external-effect`. | `/data/home/forge/hzcode/docs/_conventions.md` §5 |
+| **effect class** | One of `read-only` · `workspace-write` · `network` · `process` · `credential` · `remote` · `external-effect`. | `/data/home/forge/HorizonCode/docs/_conventions.md` §5 |
 | **effect host** | The kernel component that executes a leased effect, observes it, and issues the receipt. | 11 |
 | **ephemeral event** | An event streamed for liveness (progress, deltas) that is not part of the durable log. | 12 |
 | **epoch fence** | The guard that prevents work computed under an old epoch (context, policy revision, snapshot) from being applied after an epoch change. | 10, 12 |
@@ -692,7 +692,7 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | **fail-closed** | The default when a guarantee cannot be proven: refuse or report `UNKNOWN` — never proceed and never report success. | 11, 16 |
 | **fleet** | A set of subagents with an explicit dependency graph (`id`/`depends_on`), upstream results, `adopt_ref`, and `fail_fast`. | 08 |
 | **front-end / surface** | A client of the Controller — TUI, print/headless, server, web, desktop, IDE/ACP, MCP server, SDKs; it renders and collects input only. | 14 |
-| **gate / ratchet** | A CI check named in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5; a *ratchet* may only tighten — its baseline may decrease, never increase. | `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
+| **gate / ratchet** | A CI check named in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5; a *ratchet* may only tighten — its baseline may decrease, never increase. | `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
 | **goal** | The durable statement of what the user is trying to achieve, updated by events (`hz.goal.updated`) and preserved across compaction. | 08; tool `update_goal` |
 | **Guard** | The kernel decision point: every effect resolves to a `GuardDecisionV1` before a lease can exist. | 11 |
 | **guard decision** | See *decision (GuardDecision)*. | 11 |
@@ -703,8 +703,8 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | Term | Definition | Owning doc |
 |---|---|---|
 | **handoff** | The explicit transfer of a task, result or continuation between agents (parent↔child, IDE↔agent, or ACP peer), carried by a named tool and recorded as events rather than prose. | 08, 14; tool `task` |
-| **HZ_ABI / HZ_PROTO** | Integer protocol revisions, bumped on breaking change; a mismatch fails closed. | `/data/home/forge/hzcode/docs/_conventions.md` §1 |
-| **hz://** | The single resource URI space (`hz://session/<id>`, `hz://receipt/<id>`, `hz://artifact/<sha256>`, `hz://trusted-state/<digest>`, …), resolved with capability checks, never by string parsing. | `/data/home/forge/hzcode/docs/_conventions.md` §1; NF-011 |
+| **HZ_ABI / HZ_PROTO** | Integer protocol revisions, bumped on breaking change; a mismatch fails closed. | `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
+| **hz://** | The single resource URI space (`hz://session/<id>`, `hz://receipt/<id>`, `hz://artifact/<sha256>`, `hz://trusted-state/<digest>`, …), resolved with capability checks, never by string parsing. | `/data/home/forge/HorizonCode/docs/_conventions.md` §1; NF-011 |
 | **intent digest** | The hash of the canonical intent an effect was authorised for, bound into the decision, the lease and the receipt so the executed effect can be shown to equal the approved one. | 11 |
 | **kernel (`hzk`)** | The separate authority process that owns Guard, leases, the effect host, receipts, the OwnerLog and the managed domain. | 03, 11; ADR-003 |
 | **kernel release** | A release of the kernel asset whose digest must be pinned; the agent must not proceed on an unpinned or older ABI (`gate:kernel-pin`, `gate:cross-plane-abi`). | 16; NF-046 |
@@ -739,7 +739,7 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 
 | Term | Definition | Owning doc |
 |---|---|---|
-| **parity ratchet** | The CI rule that no capability disposition may regress and no declared surface may lose an edge (`gate:parity-ratchet`). | `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5; NF-006 |
+| **parity ratchet** | The CI rule that no capability disposition may regress and no declared surface may lose an edge (`gate:parity-ratchet`). | `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5; NF-006 |
 | **part** | The addressable unit of session content (message part, tool output part, file diff part) created and updated by events. | 05; events `hz.part.created`, `hz.part.updated` |
 | **personality** | **Not a term in this spec set.** No document defines a personality system; agent behaviour is configured through agent profiles. Named here only so the word is not invented later. | — |
 | **plan mode** | The posture in which the agent plans without mutating: plan state is durable, and executing requires leaving plan mode or an approved-plan window. | 08; NF-045 |
@@ -750,7 +750,7 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | **prompt admission** | See *admission*: the durable acceptance of a prompt into the session before execution, receipted cheaply. | 08, 12 |
 | **prompt family** | The named prompt template set (per agent profile/model role) whose compiled prefix is pinned and checked by the cache guard. | 10; RC-8 |
 | **prompt prefix** | The byte-stable leading region of a compiled request (system prompt, sorted tool schemas, declared configuration); volatility here is a bug, not a tuning choice. | 10 |
-| **protocol revision** | See *HZ_ABI / HZ_PROTO*. | `/data/home/forge/hzcode/docs/_conventions.md` §1 |
+| **protocol revision** | See *HZ_ABI / HZ_PROTO*. | `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
 | **provenance register** | The machine-readable map from every inherited file to its origin, from which the human-readable NOTICE is generated (`gate:provenance`). | 16; NF-048 |
 
 ### R
@@ -772,7 +772,7 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | Term | Definition | Owning doc |
 |---|---|---|
 | **sandbox guarantee vector** | See *guarantee vector*. | 11; NF-016 |
-| **schema version (`V1`)** | The suffix on every wire/durable schema (`GuardDecisionV1`); a schema is never edited in place, a new major is written. | `/data/home/forge/hzcode/docs/_conventions.md` §7 |
+| **schema version (`V1`)** | The suffix on every wire/durable schema (`GuardDecisionV1`); a schema is never edited in place, a new major is written. | `/data/home/forge/HorizonCode/docs/_conventions.md` §7 |
 | **sensitive-path coverage** | The gate that requires every path declared `sensitive:` to be covered by a test that proves it (`gate:sensitive-path-coverage`). | 16; NF-047 |
 | **session** | The durable unit of work: admitted prompts, steps, parts, effects and receipts under one id and one posture. | 05, 12 |
 | **session posture** | The effective, digest-carrying statement of a session's mode, approval policy and policy revision — the thing `hzcode doctor` displays and drift is detected against. | 11; NF-014 |
@@ -782,11 +782,11 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | **snapcompact** | Bitmap-frame context compression for vision-capable models: a compacted representation shipped as an image region of the turn tail, never of the prefix. | 10; NF-008 |
 | **snapshot** | The persisted compact form of a session log prefix used for fast recovery and time travel; storage metadata, not a session event. | 12; RC-3 |
 | **spec version** | `SpecVersion` in the managed domain: the frozen specification a managed run is executed and verified against. | 11; NF-018 |
-| **step** | The atomic unit of agent progress: one provider stream and its tool requests, with its own events and usage attribution. | 08; `/data/home/forge/hzcode/docs/_conventions.md` §6 |
+| **step** | The atomic unit of agent progress: one provider stream and its tool requests, with its own events and usage attribution. | 08; `/data/home/forge/HorizonCode/docs/_conventions.md` §6 |
 | **steer/queue** | The two admission behaviours: *steering* injects new user input at the running step boundary; *queueing* defers it until after the current turn — the choice is recorded, not implicit. | 08, 12 |
 | **subagent** | A child agent constructed by the single subagent primitive with narrowed capabilities, inherited budget and a receipt-linked parent. | 08; ADR-016 |
 | **supervisor (lease)** | The kernel-side lease renewed only on real progress, so a stalled or wedged run is detected and reported rather than hanging. | 11; NF-049 |
-| **superset (strict superset)** | The product claim that HorizonCode implements every mapped capability of the references in `/data/home/forge/hzcode/docs/24-feature-catalog.md` §4, at equal or stronger disposition; measured by `gate:parity-ratchet`. | 01; `24-feature-catalog.md` §4 |
+| **superset (strict superset)** | The product claim that HorizonCode implements every mapped capability of the references in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §4, at equal or stronger disposition; measured by `gate:parity-ratchet`. | 01; `24-feature-catalog.md` §4 |
 
 ### T
 
@@ -807,7 +807,7 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 
 | Term | Definition | Owning doc |
 |---|---|---|
-| **UNKNOWN** | A terminal effect state: the outcome cannot be proven; it stays visible until reconciled and is **never** silently retried. | `/data/home/forge/hzcode/docs/_conventions.md` §11 (RC-7); 11, 12 |
+| **UNKNOWN** | A terminal effect state: the outcome cannot be proven; it stays visible until reconciled and is **never** silently retried. | `/data/home/forge/HorizonCode/docs/_conventions.md` §11 (RC-7); 11, 12 |
 | **verifier** | The managed-domain component that checks worker evidence against the Task/SpecVersion contract and can only lower a claim. | 11; NF-018 |
 | **VFS** | The injectable virtual filesystem the embedded shell (and confined effects) operate against, so a shell command cannot assume ambient disk access. | 04; NF-015 |
 | **wildcard rule** | A declarative policy pattern (`Bash(git *)`, `FileEdit(/src/*)`) compiled into the policy engine; a wildcard never widens a capability by itself. | 11; NF-003 |
@@ -827,7 +827,7 @@ Each phase closes with the same five steps, in order:
 | # | Step | Artifact |
 |---|---|---|
 | D1 | Build the phase's demonstrable artifact (§3) from a clean checkout, with no unpublished local state | build log + commit id |
-| D2 | Run the phase's gate checklist in CI on that commit; record every gate result, including inapplicable gates as `UNKNOWN` | gate report, one line per gate from `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
+| D2 | Run the phase's gate checklist in CI on that commit; record every gate result, including inapplicable gates as `UNKNOWN` | gate report, one line per gate from `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
 | D3 | Run the demo script on a **fresh workspace** (not the author's) and capture the terminal and network trace | recorded demo + script |
 | D4 | Emit an evidence bundle: gate report, demo trace, receipts touched, guarantee vectors, unresolved `UNKNOWN`s | evidence bundle referenced by digest in Trusted Host State (NF-017) |
 | D5 | Raise each capability's status to exactly what D2–D4 support, naming the evidence path | diff to the owning document's status section |
@@ -879,11 +879,11 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 
 | # | Open question | Source | Owner-role | Blocking |
 |---|---|---|---|---|
-| OQ-I1 | **Universal read receipts.** The set receipts mutations universally and treats pure reads as un-receipted except where a read crosses the workspace boundary. If the threat model changes to require universal read receipts, the surface shapes of the API contract need revision. | `/data/home/forge/hzcode/docs/07-apis-and-contracts.md` “Open items owned by this document” | `kernel-owner` | Non-blocking for M1–M2; **blocking for the M2 claim that the evidence gate covers all surfaces** |
-| OQ-I2 | Open items owned by `/data/home/forge/hzcode/docs/05-domain-and-schemas.md` (“Open items owned by this document”). | doc 05 | `spec-owner` | Contents owned by doc 05; not enumerated here |
-| OQ-I3 | Open items created by `/data/home/forge/hzcode/docs/06-events-and-flows.md` §10.1. | doc 06 | `runtime-owner` | Contents owned by doc 06; not enumerated here |
-| OQ-I4 | Open items owned by `/data/home/forge/hzcode/docs/07-apis-and-contracts.md`, other than OQ-I1. | doc 07 | `spec-owner` | Contents owned by doc 07; not enumerated here |
-| OQ-I5 | Open items created by `/data/home/forge/hzcode/docs/12-sessions-state.md` §10.1. | doc 12 | `runtime-owner` | Contents owned by doc 12; not enumerated here |
+| OQ-I1 | **Universal read receipts.** The set receipts mutations universally and treats pure reads as un-receipted except where a read crosses the workspace boundary. If the threat model changes to require universal read receipts, the surface shapes of the API contract need revision. | `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` “Open items owned by this document” | `kernel-owner` | Non-blocking for M1–M2; **blocking for the M2 claim that the evidence gate covers all surfaces** |
+| OQ-I2 | Open items owned by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` (“Open items owned by this document”). | doc 05 | `spec-owner` | Contents owned by doc 05; not enumerated here |
+| OQ-I3 | Open items created by `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` §10.1. | doc 06 | `runtime-owner` | Contents owned by doc 06; not enumerated here |
+| OQ-I4 | Open items owned by `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md`, other than OQ-I1. | doc 07 | `spec-owner` | Contents owned by doc 07; not enumerated here |
+| OQ-I5 | Open items created by `/data/home/forge/HorizonCode/docs/12-sessions-state.md` §10.1. | doc 12 | `runtime-owner` | Contents owned by doc 12; not enumerated here |
 
 **Disclosure.** Only the doc-07 item above was inspected in full text during the writing of this document; the other four are sections the set itself declares as open. This register claims no completeness beyond “these documents declare open items, and here is where they live.” Enumerating them is the owning document's job.
 
@@ -906,15 +906,15 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 | Item | Level | Evidence |
 |---|---|---|
 | Roadmap M0–M8 | `DESIGNED` | This document, §3 |
-| Phase exit criteria / gate checklists | `DESIGNED` | §3; gate names from `/data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 |
+| Phase exit criteria / gate checklists | `DESIGNED` | §3; gate names from `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
 | Feature index (`NF-001`…`NF-075`) | `DESIGNED` | §4.2 + §4.2a; definitions owned by `24-feature-catalog.md` §5 |
-| ADR index | `DESIGNED` | §4.3; decisions owned by `/data/home/forge/hzcode/docs/02-decisions.md` |
+| ADR index | `DESIGNED` | §4.3; decisions owned by `/data/home/forge/HorizonCode/docs/02-decisions.md` |
 | Document ownership map (`03`–`23`) | `DESIGNED` | §4.1; `17`–`23` unratified |
 | Glossary | `DESIGNED` | §5; definitions owned by the cited documents |
 | Test plan / acceptance harness | `DESIGNED` | §6 |
 | Metric definitions | `DESIGNED` | §7 |
 | Open questions register | `DESIGNED` | §8 |
-| Every capability in every sibling document | `DESIGNED` (the implemented subset carries real levels in `28-implementation-status.md`) | `/data/home/forge/hzcode/docs/28-implementation-status.md` |
+| Every capability in every sibling document | `DESIGNED` (the implemented subset carries real levels in `28-implementation-status.md`) | `/data/home/forge/HorizonCode/docs/28-implementation-status.md` |
 
 A claim above `DESIGNED` in this document, without a named artifact, is a defect and `gate:doc-status` must fail on it.
 
@@ -924,22 +924,22 @@ A claim above `DESIGNED` in this document, without a named artifact, is a defect
 
 | Document | Relationship |
 |---|---|
-| `/data/home/forge/hzcode/docs/00-index.md` | Reading order and the status ladder; phase-description staleness resolved (OQ-R1 closed — the index now says `M0`–`M8`) |
-| `/data/home/forge/hzcode/docs/_conventions.md` | Names, packages, crates, capability IDs, events, schemas, status levels, writing rules; §11 rulings are binding here |
-| `/data/home/forge/hzcode/docs/01-vision-and-superset.md` | Why the product exists; the superset claim the parity ratchet measures |
-| `/data/home/forge/hzcode/docs/02-decisions.md` | The 16 ADRs indexed in §4.3 |
-| `/data/home/forge/hzcode/docs/24-feature-catalog.md` | Parity matrix (Section A), new features (Section B, `NF-001`–`NF-075`), gates (§3.5), rejections (§7) |
-| `/data/home/forge/hzcode/README.md` | Product description |
-| `/data/home/forge/hzcode/docs/11-authority-safety.md` | Guard, leases, receipts, sandbox, policy — the M2 core |
-| `/data/home/forge/hzcode/docs/12-sessions-state.md` | Log, projections, claims, snapshots, time travel — the M1 core |
-| `/data/home/forge/hzcode/docs/10-cognition.md` | Providers, context compiler, memory, compaction — the M4 core |
-| `/data/home/forge/hzcode/docs/08-runtime.md` | Agent loop, subagents, teams, budgets — the M5 core |
-| `/data/home/forge/hzcode/docs/14-surfaces.md` | Every surface and the canonical exit-code table (RC-5) — the M3 core |
-| `/data/home/forge/hzcode/docs/16-operations.md` | Install, release integrity, observability, enterprise — the M7 core |
-| `/data/home/forge/hzcode/docs/28-implementation-status.md` | Implementation levels and evidence for everything built today — the single source of truth for status |
-| `/data/home/forge/hzcode/docs/29-final-audit.md` | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
-| `/data/home/forge/hzcode/docs/30-steal-list.md` | The adoption queue RC-15(d) makes live: the pass-3 shortlist and the ordered work plan (items 1–8 and 11) |
+| `/data/home/forge/HorizonCode/docs/00-index.md` | Reading order and the status ladder; phase-description staleness resolved (OQ-R1 closed — the index now says `M0`–`M8`) |
+| `/data/home/forge/HorizonCode/docs/_conventions.md` | Names, packages, crates, capability IDs, events, schemas, status levels, writing rules; §11 rulings are binding here |
+| `/data/home/forge/HorizonCode/docs/01-vision-and-superset.md` | Why the product exists; the superset claim the parity ratchet measures |
+| `/data/home/forge/HorizonCode/docs/02-decisions.md` | The 16 ADRs indexed in §4.3 |
+| `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` | Parity matrix (Section A), new features (Section B, `NF-001`–`NF-075`), gates (§3.5), rejections (§7) |
+| `/data/home/forge/HorizonCode/README.md` | Product description |
+| `/data/home/forge/HorizonCode/docs/11-authority-safety.md` | Guard, leases, receipts, sandbox, policy — the M2 core |
+| `/data/home/forge/HorizonCode/docs/12-sessions-state.md` | Log, projections, claims, snapshots, time travel — the M1 core |
+| `/data/home/forge/HorizonCode/docs/10-cognition.md` | Providers, context compiler, memory, compaction — the M4 core |
+| `/data/home/forge/HorizonCode/docs/08-runtime.md` | Agent loop, subagents, teams, budgets — the M5 core |
+| `/data/home/forge/HorizonCode/docs/14-surfaces.md` | Every surface and the canonical exit-code table (RC-5) — the M3 core |
+| `/data/home/forge/HorizonCode/docs/16-operations.md` | Install, release integrity, observability, enterprise — the M7 core |
+| `/data/home/forge/HorizonCode/docs/28-implementation-status.md` | Implementation levels and evidence for everything built today — the single source of truth for status |
+| `/data/home/forge/HorizonCode/docs/29-final-audit.md` | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
+| `/data/home/forge/HorizonCode/docs/30-steal-list.md` | The adoption queue RC-15(d) makes live: the pass-3 shortlist and the ordered work plan (items 1–8 and 11) |
 
-**Derivation.** `source: /data/home/forge/hzcode/docs/_conventions.md` (names, status ladder, RC-1…RC-15 — RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here); `source: /data/home/forge/hzcode/docs/24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: /data/home/forge/hzcode/docs/02-decisions.md` §1 (ADR table); `source: /data/home/forge/hzcode/docs/00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
+**Derivation.** `source: /data/home/forge/HorizonCode/docs/_conventions.md` (names, status ladder, RC-1…RC-15 — RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here); `source: /data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: /data/home/forge/HorizonCode/docs/02-decisions.md` §1 (ADR table); `source: /data/home/forge/HorizonCode/docs/00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
 
 
