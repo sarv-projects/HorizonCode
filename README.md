@@ -4,7 +4,7 @@
 
 HorizonCode is a terminal-first coding agent whose *reasoning* is separated from its *authority to act*: a fast TypeScript/Bun runtime runs the agent loop, context, tools and UI, while a supervised **Rust kernel** owns capability admission, policy, leases, sandbox confinement, effects and receipts. It is designed as the **superset of the state of the art** — deliberately merging the best capabilities of OpenCode, Claude Code, Codex, Grok Build, DeepSeek-Reasonix, oh-my-pi and ForgeCode — and then adding capabilities none of them have.
 
-> **Status (2026-11-06, design corpus ratified through RC-15 on 2026-11-07):** the design set (`docs/`) is complete and ratified; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (297 TypeScript tests + 20 Rust tests passing). Skills, subagents, Code Mode and preview servers are implemented, tested and green. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) · audits: [`docs/29-final-audit.md`](./docs/29-final-audit.md) (2026-11-06) and [`docs/30-steal-list.md`](./docs/30-steal-list.md) (2026-11-07, adoption wave — RC-15).
+> **Status (2026-11-06, design corpus ratified through RC-15 on 2026-11-07):** the design set (`docs/`) is complete and ratified; **v0.1 of the product is implemented, verified and green** — Rust trust kernel, Bun runtime core, seven tools, chat-first TUI, and a deep test suite (303 TypeScript tests + 20 Rust tests passing; plus the 2026-11-07 trust-hardening pass and NF-072 parallel tool batches). Skills, subagents, Code Mode and preview servers are implemented, tested and green. Live handoff state: [`CURRENT_RUN.md`](./CURRENT_RUN.md) · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) · audits: [`docs/29-final-audit.md`](./docs/29-final-audit.md) (2026-11-06) and [`docs/30-steal-list.md`](./docs/30-steal-list.md) (2026-11-07, adoption wave — RC-15).
 
 ## Run it now
 
@@ -21,7 +21,7 @@ What exists today (all verified end-to-end by the integrator, not just reported)
 - `app/src/core/` — runtime: kernel client (`trusted`) with byte-identical TS fallback (`untrusted`), SQLite sessions, Anthropic/OpenAI/mock providers, agent loop (stream → guard → approve → tool → receipt → events).
 - `app/src/tools/` — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` (the base seven) plus `agent` (subagent delegation), `code_mode` (JS subprocess over the NDJSON tool bridge) and `preview` (dev-server lifecycle) — all guard- and approval-aware.
 - `app/src/tui/` + `app/src/main.ts` — chat-first UI: streaming chat bar, tool cards, y/n/a approvals, history, headless mode; `bin/hzcode` launcher.
-- `app/tests/` — 297 passing tests across core (incl. skills, subagents, code mode, preview), tools, providers and TUI (incl. real PTY scenarios); run `cd app && /home/forge/.bun/bin/bun test`.
+- `app/tests/` — 303 passing tests across core (incl. skills, subagents, code mode, preview, tool batches), tools, providers and TUI (incl. real PTY scenarios); run `cd app && /home/forge/.bun/bin/bun test`.
 
 Architecture note: [`app/src/contracts.ts`](./app/src/contracts.ts) is the frozen interface both implementations compile against — event and receipt hashes interop between Rust and TypeScript byte-for-byte.
 

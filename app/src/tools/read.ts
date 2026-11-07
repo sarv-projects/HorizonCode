@@ -1,7 +1,7 @@
 /** `read` — read a text file (optionally a line range) with line numbers. */
 
 import { readFile, stat } from "node:fs/promises";
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { isBinary, relPath, resolvePath } from "./helpers";
 
 const MAX_LINES = 2000;
@@ -17,12 +17,13 @@ function msg(e: unknown): string {
 
 /** Guard + (when policy says `ask`) approve a read of `resolved`. Returns an error string, or null. */
 async function checkAccess(ctx: ToolContext, resolved: string, rel: string): Promise<string | null> {
-  const decision = await ctx.guard({ kind: "fs.read", target: resolved });
+  const action: GuardAction = { kind: "fs.read", target: resolved };
+  const decision = await ctx.guard(action);
   if (decision.decision === "deny") {
     return `denied by policy${decision.reason ? `: ${decision.reason}` : ""}`;
   }
   if (decision.decision === "ask") {
-    const ok = await ctx.approve({ title: `Read ${rel}`, detail: resolved, kind: "fs.read" });
+    const ok = await ctx.approve({ title: `Read ${rel}`, detail: resolved, kind: "fs.read" }, action);
     if (!ok) return "declined by user";
   }
   return null;

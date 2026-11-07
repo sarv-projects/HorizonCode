@@ -128,6 +128,9 @@ export const codemodeTool: Tool = {
     required: ["code"],
   },
 
+  // NF-072: a lifecycle tool — an exclusive call is its own barrier in a batch.
+  concurrencyClass: "exclusive",
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const code = typeof args.code === "string" ? args.code : "";
     if (code.trim() === "") return { ok: false, output: "", error: "code is required" };
@@ -248,7 +251,7 @@ export const codemodeTool: Tool = {
           if (decision.decision === "ask") {
             let approved = false;
             try {
-              approved = await ctx.approve({ title: `code_mode: ${name}`, detail: action.target, kind: action.kind });
+              approved = await ctx.approve({ title: `code_mode: ${name}`, detail: action.target, kind: action.kind }, action);
             } catch {
               approved = false;
             }

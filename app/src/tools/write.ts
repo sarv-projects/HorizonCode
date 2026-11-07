@@ -2,7 +2,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { relPath, resolvePath } from "./helpers";
 
 function fail(error: string): ToolResult {
@@ -31,6 +31,9 @@ export const writeTool: Tool = {
     required: ["path", "content"],
   },
 
+  // NF-072: a mutating tool — an exclusive call is its own barrier in a batch.
+  concurrencyClass: "exclusive",
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
@@ -42,16 +45,20 @@ export const writeTool: Tool = {
       const lines = countLines(content);
       const bytes = Buffer.byteLength(content, "utf8");
 
-      const decision = await ctx.guard({ kind: "fs.write", target: resolved });
+      const action: GuardAction = { kind: "fs.write", target: resolved };
+      const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
       if (decision.decision === "ask") {
-        const approved = await ctx.approve({
-          title: `Write ${rel}`,
-          detail: `${lines} lines, ${bytes} bytes`,
-          kind: "fs.write",
-        });
+        const approved = await ctx.approve(
+          {
+            title: `Write ${rel}`,
+            detail: `${lines} lines, ${bytes} bytes`,
+            kind: "fs.write",
+          },
+          action,
+        );
         if (!approved) return fail("declined by user");
       }
 

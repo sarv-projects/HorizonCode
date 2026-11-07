@@ -1,6 +1,6 @@
 /** `shell` — run one bash command in the workspace. */
 
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { resolvePath, scrubEnv, truncate } from "./helpers";
 
 const MAX_OUTPUT = 30_000;
@@ -56,12 +56,13 @@ export const shellTool: Tool = {
       const dir = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(ctx.cwd, args.cwd) : ctx.cwd;
       const timeoutMs = Math.min(numberOr(args.timeoutMs, DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS);
 
-      const decision = await ctx.guard({ kind: "shell.exec", target: command });
+      const action: GuardAction = { kind: "shell.exec", target: command };
+      const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
       if (decision.decision === "ask") {
-        const approved = await ctx.approve({ title: "Run shell command", detail: command, kind: "shell.exec" });
+        const approved = await ctx.approve({ title: "Run shell command", detail: command, kind: "shell.exec" }, action);
         if (!approved) return fail("declined by user");
       }
       if (ctx.signal.aborted) return fail("aborted");

@@ -96,10 +96,10 @@ export interface PolicyRule {
 
 /**
  * Built-in policy used when <state-dir>/policy.json is absent.
- * Evaluation: deny > allow > ask. Any matching deny wins; then any matching
- * allow; otherwise ask. Active (unexpired) leases grant allow unless a deny
- * rule matches. "workspace" scope = target path resolves inside the workspace
- * root; anything else is "outside".
+ * Evaluation: deny > lease > allow > ask (docs/28 ruling 11; guard.rs order).
+ * Any matching deny wins; then an unexpired matching lease; then any matching
+ * allow; otherwise ask. "workspace" scope = the target path resolves inside
+ * the workspace root, through symlinks; anything else is "outside".
  */
 export const DEFAULT_POLICY: PolicyRule[] = [
   { kind: "fs.read", scope: "workspace", decision: "allow" },
@@ -150,7 +150,7 @@ export interface ToolContext {
   sessionId: string;
   signal: AbortSignal;
   guard(action: GuardAction): Promise<GuardDecision>;
-  approve(req: ApprovalRequest): Promise<boolean>;
+  approve(req: ApprovalRequest, action?: GuardAction): Promise<boolean>;
   receipt(rec: ReceiptInput): Promise<Receipt>;
   /** Present when the runtime supports delegation (the `agent` tool). */
   delegate?: DelegateRunner;
@@ -166,6 +166,12 @@ export interface Tool {
   name: string;
   description: string;
   parameters: Record<string, unknown>; // JSON Schema object
+  /**
+   * NF-072 batch scheduling class. "shared" (the default when absent) lets
+   * concurrent siblings in one batch run together; "exclusive" makes the call
+   * its own barrier. Mutating and lifecycle tools are exclusive.
+   */
+  concurrencyClass?: "shared" | "exclusive";
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
