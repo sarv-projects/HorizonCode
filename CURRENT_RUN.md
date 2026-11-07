@@ -1,8 +1,8 @@
 # HorizonCode — Current Run State
 
-> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-07, ~19:45 UTC** (product state incl. the trust-hardening pass, docs pass-5, the NF-072/073/074 waves, the NF-069/052 edit ladder, the CI gate runner and the reference-defect observations). Workspace: `/data/home/forge/HorizonCode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
+> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-07, ~20:05 UTC** (product state incl. the trust-hardening pass, docs pass-5, the NF-072/073/074 waves, the NF-069/052 edit ladder, the B-1 repo-map tool, the CI gate runner and the reference-defect observations). Workspace: `/data/home/forge/HorizonCode`. Repo: `github.com/sarv-projects/HorizonCode` (branch `main`).
 >
-> **TL;DR — the V1 product mission is complete; V2 adoption is underway; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. On 2026-11-07: the trust-hardening pass (chain anchors, final kernel refusals, symlink-resolved scopes, canonical-JSON parity), docs pass-5, the RC-16 corpus ruling wave, and **V2 waves 1–4 — NF-072 parallel tool batches, NF-073 loop safety rails, NF-069/052 edit ladder, NF-074 context-cost contracts** — plus the **CI gate runner** (`ops/gates.sh`, six real gates) and the **reference-repo defect observations** (88 cited rows, `docs/30` §4 item 11). Latest green run: **`bun test` 351 pass / 0 fail (33 files)**, **`cargo test` 17 integration + 3 unit**, **`ops/gates.sh` 6/6**. A deep audit of all twelve reference clones is recorded in `docs/29-final-audit.md`; the RC-15 adoption wave ([`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into its owner documents, and its §4 queue is now the build plan — items 1–4 are landed, **item 5 (repo-map B-1) is next**. RC-13 makes `docs/28` the single source of truth for implementation status.
+> **TL;DR — the V1 product mission is complete; V2 adoption is underway; the design corpus is not frozen.** Design corpus (docs 00–30) + v0.1 product + deep test suite + all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed. On 2026-11-07: the trust-hardening pass (chain anchors, final kernel refusals, symlink-resolved scopes, canonical-JSON parity), docs pass-5, the RC-16 corpus ruling wave, and **V2 waves 1–5 — NF-072 parallel tool batches, NF-073 loop safety rails, NF-069/052 edit ladder, NF-074 context-cost contracts, B-1 repo-map** — plus the **CI gate runner** (`ops/gates.sh`, six real gates) and the **reference-repo defect observations** (88 cited rows, `docs/30` §4 item 11). Latest green run: **`bun test` 364 pass / 0 fail (34 files)**, **`cargo test` 17 integration + 3 unit**, **`ops/gates.sh` 6/6**. A deep audit of all twelve reference clones is recorded in `docs/29-final-audit.md`; the RC-15 adoption wave ([`docs/30-steal-list.md`](./docs/30-steal-list.md)) is merged into its owner documents, and its §4 queue is now the build plan — items 1–5 are landed, **item 6 (NF-071 managed runtime) is next**. RC-13 makes `docs/28` the single source of truth for implementation status.
 
 ---
 
@@ -48,6 +48,7 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 | **Edit-application ladder** (NF-069/052, A-1…A-5) | **VERIFIED** | `bun test tests/tools/edit-ladder.test.ts` → 12 pass incl. byte-identical error fixtures; fuzzy successes name their rung; `docs/28` §1 + ruling 16 |
 | **Context-cost contracts** (NF-074) | **VERIFIED** | 24 new tests (`tests/core/output-budget.test.ts` + `tests/tools/shell-minimiser.test.ts`); live: 20 KB shell output → capped for the model, full text spilled under `.hzcode/spills/<sha256>.txt`, receipt digests the **full** output; `docs/28` §1 + ruling 18; acceptance `docs/24` §12.2 #66 |
 | **CI gate runner** (`ops/gates.sh`) | **VERIFIED** | `bash ops/gates.sh` → 6/6 green (~13 s), exit 0; catalogue honest (all 18 `docs/24` §3.5 gates `declared-gap`); hosted wiring: `bash ops/install-ci.sh` (needs a token with `workflow` scope) |
+| **Repo-map tool** (`repo_map`, B-1) | **VERIFIED** | `bun test tests/tools/repo-map.test.ts` → 13 pass (personalised PageRank, binary-search budget, byte-stability); live run ranked `app/src/core/loop.ts` first under focus; `docs/28` §1 + ruling 19 |
 | Chat TUI (interactive + headless) | **VERIFIED** | `bun test tests/tui` → 48 pass incl. real PTY scenarios |
 | **Skills** (discovery, /activation, prompt injection) | **VERIFIED** | `bun test tests/core/skills-agents.test.ts`; live chat `/demo …` → `skill active: demo` |
 | **Subagents** (`agent` tool, child session, no recursion) | **VERIFIED** | same suite: nested run through the real kernel, receipts + child stream verify |
@@ -61,6 +62,8 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 
 | Commit | What |
 |---|---|
+| `0616584` | **V2 wave 5: B-1 `repo_map` tool** (8 files, +617; 13 tests; `docs/28` ruling 19) |
+| `1fd05fa` | CURRENT_RUN refresh — NF-074 wave handoff |
 | `3088223` | CI payload: workflow shipped as `ops/ci/github-actions.yml` + `ops/install-ci.sh` (automation token has no `workflow` scope) |
 | `5cbb4f3` | **V2 wave 4: NF-074 context-cost contracts** (10 files, +683; 24 tests; `docs/28` ruling 18) |
 | `d6fbb69` | Reference-repo defect observations — 88 cited rows; closes `docs/30` §4 item 11 |
@@ -131,7 +134,7 @@ export HZ_PROVIDER=anthropic HZ_API_KEY=...   # or OPENAI_API_KEY; or ~/.hzcode/
 ## 5. What remains
 
 1. **Real-provider last mile** — one live chat through each adapter (needs API keys). The adapters are pinned by canned-server tests.
-2. **V2 adoption continues from `docs/30` §4** — items 1–4 landed 2026-11-07 (NF-073 rails, NF-072 batches, NF-069/052 edit ladder, NF-074 context-cost contracts; `docs/28` rulings 14–18). Next: **item 5 (repo-map B-1: PageRank ranking + tuned weights + binary-search budget)**, then item 6 (NF-071 managed runtime), item 7 (NF-075 growth loop), item 8 (verification wave). docs/27 remains the coarse V0–V7 map. Land additions through the same status ladder and update `docs/28` in the same commit.
+2. **V2 adoption continues from `docs/30` §4** — items 1–5 landed 2026-11-07 (NF-073 rails, NF-072 batches, NF-069/052 edit ladder, NF-074 context-cost contracts, B-1 repo-map; `docs/28` rulings 14–19). Next: **item 6 (NF-071 managed runtime)**, then item 7 (NF-075 growth loop), item 8 (verification wave). docs/27 remains the coarse V0–V7 map. Land additions through the same status ladder and update `docs/28` in the same commit.
 3. **Hosted CI needs one manual step** — `.github/workflows/ci.yml` cannot be committed by the automation identity (no `workflow` token scope). `bash ops/install-ci.sh` installs the tracked payload; commit + push it from a token that has the scope.
 4. **Nothing else is in flight — do not look for unfinished agent work.**
 
