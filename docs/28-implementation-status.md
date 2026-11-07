@@ -4,7 +4,7 @@
 >
 > Status ladder per `docs/_conventions.md` §8: **`DESIGNED`** → **`CODE_PRESENT`** → **`WIRED`** → **`TESTED`** (automated tests exist and pass) → **`VERIFIED`** (the integrator ran the evidence command and observed the result; agent reports alone never reach `VERIFIED`) → **`RELEASED`**. Only `TESTED` and `VERIFIED` are claimed below; a level above what the evidence supports is never claimed, and an unknown is written `UNKNOWN`, never an implied success.
 >
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15). Hardened 2026-11-07 (trust-hardening pass: chain anchors, refusal semantics, symlink-resolved scopes, canonical-JSON parity — §3 rulings 11–13, §4 gap 7).
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). Hardened 2026-11-07 (trust-hardening pass: chain anchors, refusal semantics, symlink-resolved scopes, canonical-JSON parity — §3 rulings 11–13, §4 gap 7; then V2 wave 1: NF-072 parallel tool batches — §1 row, ruling 14).
 
 ---
 
@@ -15,6 +15,7 @@
 | **Rust trust kernel** — chained event log, receipt chain, guard (leases, `policy.json`; precedence owned by `docs/11-authority-safety.md` R1, shipped divergence in §4 gap 5), NDJSON protocol (8 methods) | **VERIFIED** | `cd kernel && cargo test` → 17 integration + 3 unit green; `kernel/target/release/hz-kernel --selftest` → `SELFTEST OK (14 checks)` | Includes tamper detection, chain-anchor truncation tests, 4-process concurrent append lock test, guard matrix, 1MB payloads |
 | **Frozen contracts / hashing** (`app/src/contracts.ts`) | **VERIFIED** | Rust↔TS interop: each side verifies the other's files (`log.verify`, `receipt.verify` → `ok:true`) | Canonical JSON + sha256 rules shared byte-for-byte (UTF-8 byte key order, integer values, `.head` anchors) |
 | **Runtime core** — config, kernel client (`trusted`) + TS fallback (`untrusted`), SQLite sessions, agent loop (stream → guard → approve → tool → receipt → events) | **TESTED + VERIFIED** | Kernel-client suite 11/11 green; e2e: `printf 'list files' \| ./bin/hzcode` → streamed answer → tool card → receipt; `kernelMode=trusted` checked live | Fallback/both-directions/config/session/scope interop suites: **all landed and green** |
+| **Tool batch scheduling** (NF-072) — per-tool `concurrencyClass`, parallel shared segments, exclusive barriers, all-settled failures, per-call leases + receipts, keyed concurrent approvals | **TESTED + VERIFIED** | `cd app && bun test tests/core/batch.test.ts` → 6 pass; live timing: two `sleep 0.6` shell calls in one batch → ~850 ms wall (sequential would be ≥ 1.2 s) | Ruling 14. `edit`/`write`/`todo`/`agent`/`code_mode`/`preview` exclusive; reads/search/shell shared; `GuardGate` serializes decisions and an approval names its action |
 | **Providers** — Anthropic, OpenAI, mock + SSE parser | **VERIFIED** | `cd app && /home/forge/.bun/bin/bun test tests/providers` → 72 pass / 0 fail | Canned localhost servers, byte-level chunk splitting, aborts, 2 parallel tool calls; two real fixes landed (empty `arguments` for no-input tool calls) |
 | **Tools** — `read write edit grep glob shell todo` | **TESTED + VERIFIED** | Tool suite green in the full run; e2e glob exercised through guard + receipt | `shell.ts` fix: `detached:true` + drain grace (compound-command timeout bug, 6/10 runs flaky before) |
 | **Chat TUI** — chat bar, streaming, tool cards, y/n/a approvals, history, slash sugar; **headless mode** | **VERIFIED** | `bun test tests/tui` → 48 pass / 0 fail incl. real PTY scenarios (`/usr/bin/script`) | Mutation-checked: breaking the prompt glyph trips 6 assertions |
@@ -34,7 +35,7 @@
 cd kernel && cargo test
 
 # Full TypeScript suite (~8 s)
-cd app && /home/forge/.bun/bin/bun test        # 297 pass / 0 fail / 28 files
+cd app && /home/forge/.bun/bin/bun test        # 303 pass / 0 fail / 29 files
 
 # End-to-end, human path
 cd /data/home/forge/HorizonCode && printf 'list files' | ./bin/hzcode
@@ -43,7 +44,7 @@ cd /data/home/forge/HorizonCode && printf 'list files' | ./bin/hzcode
 | Suite | Files | What it pins down |
 |---|---|---|
 | `kernel/tests/integration.rs` | 1 (1380 lines) | chain append/verify, tamper (byte + middle payload + truncated line + chain anchor), 4-process concurrency, receipts chain, guard matrix + policy.json + lease expiry, protocol malformed/unknown/1MB/unicode edges |
-| `app/tests/core` | 8 files (75 tests) | trusted client vs Rust kernel: chained appends with independently recomputed hashes, read windows, tamper, receipts, policy/lease flow; TS fallback + both-direction interop (incl. canonical-JSON astral-key parity, lease-pattern parity, refusal semantics, chain anchors); symlink-resolved workspace scopes; config precedence; sessions; skills + subagents; code mode + preview |
+| `app/tests/core` | 9 files (81 tests) | trusted client vs Rust kernel: chained appends with independently recomputed hashes, read windows, tamper, receipts, policy/lease flow; TS fallback + both-direction interop (incl. canonical-JSON astral-key parity, lease-pattern parity, refusal semantics, chain anchors); symlink-resolved workspace scopes; config precedence; sessions; skills + subagents; code mode + preview; tool batches (NF-072: classes, barriers, parallel timing, keyed approvals) |
 | `app/tests/tools` | 9 files | per-tool behavior incl. caps, binary refusal, edit occurrence rules, skip-dirs, shell timeout/kill/env-scrub/abort, todo session isolation |
 | `app/tests/providers` | 6 files | SSE translation for Anthropic + OpenAI, chunk-boundary torture, aborts, HTTP errors, mock termination |
 | `app/tests/tui` | 8 files | headless golden paths, CLI contract, approvals fail-closed, render/banner contracts, PTY scenarios |
@@ -67,12 +68,13 @@ All suites complete — the totals above are from the integrator's final green r
 11. **Kernel refusals are final.** `KernelClient` falls back to the local kernel only on transport failures (exit, timeout, malformed output, unknown request id). An error *response* from the kernel is surfaced to the caller and the mode stays `trusted`; a refusing guard fails closed at the `GuardGate`. Refusing was previously indistinguishable from unreachable.
 12. **Chain anchors.** Every `*.jsonl` chain carries a `<file>.head` anchor (seq + hash of the last record), written atomically after each append. `log.verify`/`receipt.verify` compare the chain against it, and appends refuse when tail and anchor disagree. An absent anchor is a legacy chain and is accepted; §4 gap 7 records the residual.
 13. **Scopes and lease patterns.** `scopeFor` resolves symlinks (workspace and target, through the deepest existing ancestor) before classifying inside/outside. Lease patterns are exact or trailing-`*` only — identical in both implementations — and an empty pattern is refused rather than widened to `*`.
+14. **Batches run by concurrency class (NF-072).** A batch is split into segments: consecutive `shared` calls run concurrently (`Promise.all`, all-settled — one call's failure cancels no sibling); an `exclusive` call is its own barrier. Every call still resolves, guards, leases and receipts individually, and the whole sequence lands on the same event chain. `GuardGate` serializes `check`/`approve`, and an approval passes the action it answers so concurrent asks cannot cross-wire. `concurrencyClass` is additive on `Tool`; absent means shared.
 
 ---
 
 ## 4. Known gaps / next work (front of the queue)
 
-1. **Nothing in flight.** Every workstream is integrated, tested and verified (§1). Final full runs: `bun test` 297 pass / 0 fail (28 files); `cargo test` 17 integration + 3 unit green; live chat e2e green (mock + skills).
+1. **V2 wave 1 landed (NF-072); nothing else in flight.** Tool batches run by concurrency class (§1 row, ruling 14). Final full runs: `bun test` 303 pass / 0 fail (29 files); `cargo test` 17 integration + 3 unit green; live chat e2e green (mock + skills). Next from the `docs/30` §4 queue: item 1 (NF-073 loop rails), then items 3–5.
 2. **Real-provider validation** (needs API keys): one live chat each through the Anthropic and OpenAI adapters. The adapters are pinned by the canned-server suites — this is the last mile.
 3. **V2+ is the next planning surface** — docs/27 sequences it (planner/executor duality, memory tiers, compaction, sandbox matrix, surfaces, governance). Land additions through the same ladder and update this table in the same commit.
 4. **Keep this file honest** — statuses and counts update in the same commit as the code that changes them.

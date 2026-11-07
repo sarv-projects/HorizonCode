@@ -12,7 +12,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { newId } from "../contracts";
 
 const OUTPUT_CAP = 4096;
@@ -132,9 +132,10 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
   const portNumber = typeof args.port === "number" && Number.isFinite(args.port) ? Math.floor(args.port) : undefined;
 
   // The same guard path a shell command would take.
+  const action: GuardAction = { kind: "shell.exec", target: command };
   let decision: { decision: string; reason?: string };
   try {
-    decision = await ctx.guard({ kind: "shell.exec", target: command });
+    decision = await ctx.guard(action);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, output: `DENIED by policy: guard unavailable (${message})`, error: "guard unavailable" };
@@ -146,7 +147,7 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
   if (decision.decision === "ask") {
     let approved = false;
     try {
-      approved = await ctx.approve({ title: `start preview: ${command}`, detail: command, kind: "shell.exec" });
+      approved = await ctx.approve({ title: `start preview: ${command}`, detail: command, kind: "shell.exec" }, action);
     } catch {
       approved = false;
     }
@@ -263,6 +264,9 @@ export const previewTool: Tool = {
     },
     required: ["action"],
   },
+
+  // NF-072: a lifecycle tool — an exclusive call is its own barrier in a batch.
+  concurrencyClass: "exclusive",
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {

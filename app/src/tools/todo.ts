@@ -50,6 +50,9 @@ export const todoTool: Tool = {
     required: ["action"],
   },
 
+  // NF-072: a mutating tool (session state) — an exclusive call is its own barrier.
+  concurrencyClass: "exclusive",
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       const action = args.action;

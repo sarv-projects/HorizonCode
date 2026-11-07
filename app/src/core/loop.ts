@@ -216,6 +216,32 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
   }
 }
 
+/**
+ * NF-072 batch scheduling. Every tool carries a concurrency class: `shared`
+ * calls in one batch run concurrently; an `exclusive` call is its own barrier
+ * (`docs/24` NF-072). Unknown tools are pure error paths and share.
+ */
+export function concurrencyClassOf(name: string): "shared" | "exclusive" {
+  return getTool(name)?.concurrencyClass === "exclusive" ? "exclusive" : "shared";
+}
+
+/** Split a batch into execution segments: a shared run, then an exclusive barrier, then the next run. */
+export function batchSegments(calls: ToolCall[]): ToolCall[][] {
+  const segments: ToolCall[][] = [];
+  let shared: ToolCall[] = [];
+  for (const call of calls) {
+    if (concurrencyClassOf(call.name) === "exclusive") {
+      if (shared.length > 0) segments.push(shared);
+      shared = [];
+      segments.push([call]);
+    } else {
+      shared.push(call);
+    }
+  }
+  if (shared.length > 0) segments.push(shared);
+  return segments;
+}
+
 /** Keep the newest messages, starting at a user turn so the replay stays valid. */
 export function trimHistory(messages: ChatMsg[], limit = HISTORY_LIMIT): ChatMsg[] {
   const list = Array.isArray(messages) ? messages : [];
@@ -278,11 +304,15 @@ export function streamFor(sessionId: string): string {
 /**
  * The one place approvals are decided for a turn. Guessing twice about the same
  * action is bad manners (and two prompts for one shell command is a bug), so an
- * action that was allowed stays allowed for the rest of the turn.
+ * action that was allowed stays allowed for the rest of the turn. Under NF-072
+ * concurrent batch siblings share this gate, so every decision is serialized
+ * and an approval names the action it answers.
  */
 export class GuardGate {
   private readonly resolved = new Map<string, { leaseId?: string }>();
   private pending: GuardAction | null = null;
+  /** One decision at a time: concurrent batch siblings are serialized here. */
+  private mutex: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly workspace: string,
@@ -295,32 +325,53 @@ export class GuardGate {
     return `${action.kind}\u0000${action.target}`;
   }
 
-  async check(action: GuardAction): Promise<GuardDecision> {
-    const key = GuardGate.key(action);
-    const cached = this.resolved.get(key);
-    if (cached) return { decision: "allow", reason: "already allowed in this turn", leaseId: cached.leaseId };
-    let decision: GuardDecision;
-    try {
-      decision = await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases);
-    } catch (err) {
-      // Fail closed: an unreachable guard is a deny, never a silent allow.
-      return { decision: "deny", reason: `guard unavailable: ${errorMessage(err)}` };
-    }
-    if (decision.decision === "ask") this.pending = action;
-    else if (decision.decision === "allow") this.resolved.set(key, { leaseId: decision.leaseId });
-    return decision;
+  private serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.mutex.then(task, task);
+    this.mutex = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
-  async approve(req: ApprovalRequest): Promise<boolean> {
-    const pending = this.pending;
-    this.pending = null;
+  async check(action: GuardAction): Promise<GuardDecision> {
+    return this.serialize(async () => {
+      const key = GuardGate.key(action);
+      const cached = this.resolved.get(key);
+      if (cached) return { decision: "allow" as const, reason: "already allowed in this turn", leaseId: cached.leaseId };
+      let decision: GuardDecision;
+      try {
+        decision = await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases);
+      } catch (err) {
+        // Fail closed: an unreachable guard is a deny, never a silent allow.
+        return { decision: "deny" as const, reason: `guard unavailable: ${errorMessage(err)}` };
+      }
+      if (decision.decision === "ask") this.pending = action;
+      else if (decision.decision === "allow") this.resolved.set(key, { leaseId: decision.leaseId });
+      return decision;
+    });
+  }
+
+  /**
+   * Approve `req`, naming the action it answers when the caller knows it. With
+   * concurrent siblings each holding a pending ask, the answer must name its
+   * question; `pending` is only the fallback for callers that cannot (the
+   * legacy single-slot behaviour).
+   */
+  async approve(req: ApprovalRequest, action?: GuardAction): Promise<boolean> {
+    return this.serialize(() => this.approveNow(req, action));
+  }
+
+  private async approveNow(req: ApprovalRequest, action?: GuardAction): Promise<boolean> {
+    const waiting = action ?? this.pending ?? undefined;
     let ok = false;
     try {
       ok = await this.handler()(req);
     } catch {
       ok = false;
     }
-    if (ok && pending) this.resolved.set(GuardGate.key(pending), { leaseId: undefined });
+    if (ok && waiting) this.resolved.set(GuardGate.key(waiting), { leaseId: undefined });
+    if (this.pending !== null && this.pending === waiting) this.pending = null;
     return ok;
   }
 
@@ -462,7 +513,7 @@ async function executeTool(
         { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
         { kind: "system", id: "hz-guard" },
       );
-      const approved = await gate.approve(request);
+      const approved = await gate.approve(request, action);
       await logEvent(
         deps,
         EventTypes.approvalDecision,
@@ -482,7 +533,7 @@ async function executeTool(
     sessionId: deps.sessionId,
     signal: deps.signal,
     guard: (a: GuardAction) => gate.check(a),
-    approve: (req: ApprovalRequest) => gate.approve(req),
+    approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
     delegate: deps.delegate,
   };
@@ -612,12 +663,20 @@ export async function runTurn(deps: LoopDeps, userText: string): Promise<{ text:
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) break;
 
-      for (const call of turn.toolCalls) {
+      // NF-072: shared calls in a segment run concurrently; an exclusive call
+      // is its own barrier. All-settled: one call's failure cancels no sibling.
+      for (const segment of batchSegments(turn.toolCalls)) {
         if (deps.signal.aborted) {
           aborted = true;
           break;
         }
-        await runToolCall(deps, gate, call);
+        await Promise.all(
+          segment.map((call) =>
+            runToolCall(deps, gate, call).catch((err) => {
+              emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
+            }),
+          ),
+        );
       }
       if (aborted) break;
     }

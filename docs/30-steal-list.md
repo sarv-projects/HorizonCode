@@ -187,7 +187,7 @@ New Section-A sources: the six second-wave sources are recorded in the **A.9 add
 Ordered by value ÷ effort. Items 1–5 are cheap, mostly local, and directly strengthen the existing v0.1; items 6–8 are the next capability wave; items 9–11 are process.
 
 1. **Wire the loop safety rails (NF-073).** Charge failed turns, cap consecutive format errors with their own exit status, render the budget countdown, keep the sentinel exit protocol. Small diff to `loop.ts`/contracts; immediately improves long-run behaviour.
-2. **Adopt per-tool concurrency classes + parallel batch (NF-072).** One optional field on the Tool interface; `shared` default, `exclusive` for edit/write/ask; barrier semantics. The confirmed oh-my-pi win.
+2. **Adopt per-tool concurrency classes + parallel batch (NF-072).** One optional field on the Tool interface; `shared` default, `exclusive` for edit/write/ask; barrier semantics. The confirmed oh-my-pi win. **Landed 2026-11-07** — `docs/28` §1 (ruling 14).
 3. **Upgrade the edit path (NF-069/052 extensions, A-1…A-5).** Escalating ladder (exact → indent-normalised → 3-way → line-patch), diff-shaped failure feedback with did-you-mean, bounded reflection slot, parity fixtures with byte-identical errors.
 4. **Adopt the context-cost contracts (NF-074).** Output-budget fit with usage anchoring and framing charge; the `docs/09-tools.md` §10 R-tools-42 caps (≤ 16 KiB / ≤ 4,000 tokens per result) with spill; shell minimiser + command interception (on by default).
 5. **Adopt the repo-map algorithm (B-1)** — PageRank ranking + tuned weight table + binary-search budget; replaces guesswork in the existing `repo_map` tool.

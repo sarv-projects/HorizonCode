@@ -40,6 +40,9 @@ export const agentTool: Tool = {
     required: ["task"],
   },
 
+  // NF-072: a lifecycle tool (runs a nested loop) — an exclusive batch barrier.
+  concurrencyClass: "exclusive",
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       const task = typeof args.task === "string" ? args.task.trim() : "";

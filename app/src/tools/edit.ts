@@ -1,7 +1,7 @@
 /** `edit` — exact string replacement in one file. */
 
 import { readFile, writeFile } from "node:fs/promises";
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { isBinary, relPath, resolvePath } from "./helpers";
 
 function fail(error: string): ToolResult {
@@ -52,6 +52,9 @@ export const editTool: Tool = {
     required: ["path", "old", "new"],
   },
 
+  // NF-072: a mutating tool — an exclusive call is its own barrier in a batch.
+  concurrencyClass: "exclusive",
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
@@ -65,7 +68,8 @@ export const editTool: Tool = {
       const resolved = resolvePath(ctx.cwd, args.path);
       const rel = relPath(ctx.cwd, resolved);
 
-      const decision = await ctx.guard({ kind: "fs.write", target: resolved });
+      const action: GuardAction = { kind: "fs.write", target: resolved };
+      const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
@@ -88,11 +92,14 @@ export const editTool: Tool = {
       const replacements = all ? matches : 1;
 
       if (decision.decision === "ask") {
-        const approved = await ctx.approve({
-          title: `Edit ${rel}`,
-          detail: `${replacements} occurrence(s)`,
-          kind: "fs.write",
-        });
+        const approved = await ctx.approve(
+          {
+            title: `Edit ${rel}`,
+            detail: `${replacements} occurrence(s)`,
+            kind: "fs.write",
+          },
+          action,
+        );
         if (!approved) return fail("declined by user");
       }
 
