@@ -876,6 +876,11 @@ Purpose: a named, versioned agent definition — the template from which a sessi
 | `routingRole` | `OneOf{executor, planner, either}` | used by deterministic routing (`01-vision-and-superset.md` §4.4; `24-feature-catalog.md` NF-004) |
 | `toolAllowlist`, `toolDenylist` | `[]string` | patterns; denylist wins |
 | `capabilityCeiling` | `[]CapabilityId` | may only **narrow** the session ceiling (D17) |
+| `resultSchema` | `Sha256Ref?` | typed output contract; `kind=verify` MUST be three-valued + typed findings |
+| `requiresInputs` | `[]string` | inputs the profile must be given; absence refuses with `precondition_unmet` |
+| `refusesWhen` | `[]string` | structured refusals, evaluated before budget reservation |
+| `partitionBy` | `string?` | sibling nodes sharing one profile MUST carry distinct partition keys |
+| `ownsPaths` | `[]string` | kernel refuses cross-session writes to an owned path |
 | `budgetDefaults` | `BudgetV1` | |
 | `maxSteps` | `u32?` | |
 | `context` | `{sources: []string, capsuleSizeBytes: u64, includeRepoMap: bool}` | |
@@ -888,7 +893,7 @@ Purpose: a named, versioned agent definition — the template from which a sessi
 | `digest` | `Digest` | |
 | `extensions` | `Map<string, JsonValue>` | |
 
-Invariants: `capabilityCeiling` MUST be a subset of the session's — a profile MUST NOT widen authority (this is the profile-level half of D17); a session pins `{id, revision, digest}` at creation and MUST NOT follow later revisions; `kind=plan` or `research` MUST declare a read-only posture override request.
+Invariants: `capabilityCeiling` MUST be a subset of the session's — a profile MUST NOT widen authority (this is the profile-level half of D17); a session pins `{id, revision, digest}` at creation and MUST NOT follow later revisions; `kind=plan` or `research` MUST declare a read-only posture override request. The profile *contract* over these fields (result-schema rules, capability presets, tier policy, and `relay` modelled as `kind=act` with a one-entry allow-list) is owned by `docs/15-extensibility.md` §3.6.
 Versioning: additive; a new `kind` value is additive-gated (D8).
 Persisted: profile files (built-in, user, workspace, plugin) plus the pinned ref in `hz.db::sessions.agent_profile_ref`.
 

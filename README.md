@@ -9,7 +9,7 @@ HorizonCode is a terminal-first coding agent whose *reasoning* is separated from
 ## Run it now
 
 ```bash
-cd /data/home/forge/hzcode
+cd /data/home/forge/HorizonCode
 ./bin/hzcode                          # opens the chat bar (mock model, zero config)
 printf 'list files' | ./bin/hzcode    # headless: one message per stdin line
 ```
@@ -47,7 +47,7 @@ Architecture note: [`app/src/contracts.ts`](./app/src/contracts.ts) is the froze
 > Most agents ask the model what it wants to do, then do it.
 > **HorizonCode separates the agent's reasoning from the authority to act.**
 
-The model can *request* an action; only the kernel can *authorise* it. Every admitted effect settles into a durable **receipt**, and anything that cannot be proven settled terminates as an explicit **`UNKNOWN`** that is reconciled rather than blindly retried. A run is therefore **auditable instead of believable**: `hzcode session verify <id>` replays the receipt chain plus the independent-evidence gate and tells you whether the work is done — not whether the model said so.
+The model can *request* an action; only the kernel can *authorise* it. Every admitted effect settles into a durable **receipt**, and anything that cannot be proven settled terminates as an explicit **`UNKNOWN`** that is reconciled rather than blindly retried. A run is therefore **auditable instead of believable**: the receipt chain replays and verifies today (`log.verify` / `receipt.verify` in the kernel protocol, hash-chained in `kernel/`), and the designed `hzcode session verify <id>` adds the independent-evidence gate on top (docs 14/16; DESIGNED) — the question is what is *proven*, not what the model said.
 
 ---
 

@@ -37,7 +37,7 @@ cd kernel && cargo test
 cd app && /home/forge/.bun/bin/bun test        # 297 pass / 0 fail / 28 files
 
 # End-to-end, human path
-cd /data/home/forge/hzcode && printf 'list files' | ./bin/hzcode
+cd /data/home/forge/HorizonCode && printf 'list files' | ./bin/hzcode
 ```
 
 | Suite | Files | What it pins down |
@@ -76,7 +76,7 @@ All suites complete — the totals above are from the integrator's final green r
 2. **Real-provider validation** (needs API keys): one live chat each through the Anthropic and OpenAI adapters. The adapters are pinned by the canned-server suites — this is the last mile.
 3. **V2+ is the next planning surface** — docs/27 sequences it (planner/executor duality, memory tiers, compaction, sandbox matrix, surfaces, governance). Land additions through the same ladder and update this table in the same commit.
 4. **Keep this file honest** — statuses and counts update in the same commit as the code that changes them.
-5. **Shipped kernel guard encodes the inverted precedence order vs `docs/11-authority-safety.md` R1** — `kernel/src/guard.rs` evaluates deny → lease → allow-rule → default ask, so a matching `allow` rule beats a matching `ask` (read: `file:///data/home/forge/hzcode/kernel/src/guard.rs#L1-L10` and `file:///data/home/forge/hzcode/kernel/src/guard.rs#L151-L199`). Doc 11 R1 owns the order; the code does not implement it yet. This is an implementation divergence, tracked here, not silently corrected in either the docs or the code.
+5. **Shipped kernel guard encodes the inverted precedence order vs `docs/11-authority-safety.md` R1** — `kernel/src/guard.rs` evaluates deny → lease → allow-rule → default ask, so a matching `allow` rule beats a matching `ask` (read: `file:///data/home/forge/HorizonCode/kernel/src/guard.rs#L1-L10` and `file:///data/home/forge/HorizonCode/kernel/src/guard.rs#L151-L199`). Doc 11 R1 owns the order; the code does not implement it yet. This is an implementation divergence, tracked here, not silently corrected in either the docs or the code.
 6. **State/config directory name diverges from `_conventions.md` §1** — the shipped code uses `.hzcode/` for workspace state, kernel receipts and skills, and `~/.hzcode/config.json` for user config (`app/src/core/kernel.ts`, `app/src/core/config.ts`, `app/src/core/skills.ts`), while the canonical names in `_conventions.md` §1 are `.hz/` and `~/.config/horizon/`. `README.md` and `CURRENT_RUN.md` document the shipped paths truthfully; the contracts (`docs/03`, `docs/04`, `docs/12`) specify the canonical ones. Renaming the code (or amending the canonical names via an RC) is open work — recorded here rather than papered over in either direction (reaudit 2026-11-07, RC-15).
 7. **Chain anchors close tail truncation, with one documented residual.** Both implementations now write `*.head` (seq + hash of the last record) after every append, verify against it, and refuse to extend a chain whose tail disagrees; deleting whole trailing records and rewritten/corrupt anchors report `brokenAt` (tests: `kernel/tests/integration.rs` anchor suite, `app/tests/core/{fallback,interop}.test.ts`). Residual: an actor who can rewrite the log can also delete or rewrite its anchor, and an absent anchor is accepted as a legacy chain — the anchor raises the cost of careless or partial tampering, it is not a keyed proof. Keying/anchor-of-record is future work.
 
