@@ -237,7 +237,7 @@ One architecture, four shapes. The shapes differ in *where the processes run* an
 
 | Shape | Processes | Storage | Trust note |
 |---|---|---|---|
-| **D1 · Single box (default)** | P1 + P2 + P3 on one machine; P4 as needed; P6 lazily | `~/.local/share/horizon/` (log, projections, artifacts), `.hz/` (workspace config), kernel state under `~/.local/state/horizon/hzk/` | Everything is one user's authority. The kernel is still a separate process and still fail-closed. |
+| **D1 · Single box (default)** | P1 + P2 + P3 on one machine; P4 as needed; P6 lazily | `~/.local/state/horizon/` (user state: `user.db`, memory, logs), `.hz/` (workspace config + `.hz/state/`: the log, projections, blobs, artifacts and kernel state — `12-sessions-state.md` §4.1 owns the layout) | Everything is one user's authority. The kernel is still a separate process and still fail-closed. |
 | **D2 · Remote sandbox** | P1 local, P7 remote (its own P2 + P3), P4 remote | Log/artifacts on the remote; the local side keeps a mirror of the transcript and receipts (`hz://session/<id>` stays resolvable locally) | File bytes and effects never touch the local host; the local host holds no workspace write authority for the remote tree. |
 | **D3 · Server + clients** | P5 (+ P2 + P3 co-located) and N thin clients (TUI, web, desktop, IDE) | Server-side; clients hold no durable state | Client identity is authenticated per device; the server's session has one owner but many observers; every mutation still goes through the server's P3. |
 | **D4 · CI / batch** | P1 headless (`run`/`exec`) + P2 + P3, ephemeral | Ephemeral workspace + a JSONL transcript and a receipt bundle emitted as build artifacts | No interactive approver, therefore posture MUST be read-only or pre-granted; an `ask` with no answerer MUST fail closed, not hang. |
@@ -318,7 +318,7 @@ The two truths join on three ids carried by both: `sessionId`, `effectId`, `rece
 | Vector / lexical index | `~/.local/share/horizon/index/` | Local-first BM25 + embeddings + symbol index; rebuildable, never authoritative. |
 | Workspace config | `.hz/` in the workspace | Untrusted: MAY only narrow user config (H-12). |
 | User config, credentials, trust decisions | `~/.config/horizon/` | Trust decisions are keyed by path **and** digest. |
-| Kernel state (OwnerLog, leases, policy revision, cgroup scopes) | `~/.local/state/horizon/hzk/` | Owned by P3; reachable from P2 only through I-03, never through the filesystem. |
+| Kernel state (OwnerLog, leases, policy revision, cgroup scopes) | `<workspace>/.hz/state/kernel/` | Owned by P3; owner-only permissions (D12); reachable from P2 only through I-03, never through the filesystem; layout owned by `12-sessions-state.md` §4.1. |
 
 ### 5.3 What is deliberately not data of record
 
@@ -411,7 +411,7 @@ One user turn, from Enter to a settled receipt chain. Steps, not components.
 15. For each admitted call the runtime calls `KernelClient.authorize()` (I-04) with: capability ID, canonical argument map, workspace binding digest, posture revision + digest, batch id, and the **origin kind derived from the canonical operation** — never supplied by the request (H-8).
 16. Inside `hzk`, `hz_policy` evaluates the effective policy: wildcard rules first, then the Starlark prefix engine for structural command decisions, with precedence `deny > ask > allow`. `Guard.authorize()` returns a `GuardDecisionV1` whose `intent_digest` binds the exact operation and arguments.
 17. **`ask`**: the runtime emits `hz.permission.asked` and blocks the batch. An answer arrives as `hz.permission.answered`, is recorded, and — if allowed — re-enters at step 15 as a bounded, workspace-scoped grant that still traverses Guard, lease and receipt. No answerer within the timeout ⇒ REFUSED, never an implicit allow.
-18. **`allow`**: the kernel issues **one-use** leases for the batch (per batch, not per call, so an edit set is admitted atomically). The runtime publishes `hz.effect.decision.made` and `hz.effect.lease.issued`.
+18. **`allow`**: the kernel admits the batch as one unit — one decision, one lease set (`04-lld.md` L-40) — so an edit set is admitted atomically; the leases themselves are **one-use per effect**, each bound to its own intent digest and consumed exactly once at that effect's execute. The runtime publishes `hz.effect.decision.made` and `hz.effect.lease.issued`.
 
 **Execution**
 

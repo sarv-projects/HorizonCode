@@ -1104,7 +1104,7 @@ A plugin runs in a sandboxed host (worker, process or wasm) and talks to the hos
 <-- {"jsonrpc":"2.0","id":"pl-2","result":{
       "effectId":"eff_01J9Z9D3M7…","decision":"Deny","terminal":"DENIED","receiptId":"rcp_01J9Z9D3M8…",
       "error":{"hzCode":"HZ_POLICY_DENIED","category":"Authorization","retryClass":"Never",
-               "details":{"reasonCode":"denied_by_network_policy","networkPolicy":"none"}}}}
+               "details":{"reasonCode":"denied_by_policy","networkPolicy":"none"}}}}
 
 --> {"jsonrpc":"2.0","id":"pl-1","error":{"code":-32013,"message":"network egress is disabled in this session",
       "data":{"hzCode":"HZ_POLICY_DENIED","category":"Authorization","retryClass":"Never",
@@ -1217,6 +1217,8 @@ One carrier is used everywhere: the kernel ABI's `TypedErrorV1` shape, exposed a
 | `-32025` | `HZ_CURSOR_RESET` | `Conflict` | `RetryAfterContextRecovery` | the event cursor is no longer retained; re-snapshot | no |
 | `-32026` | `HZ_SANDBOX_PROBE_FAILED` | `Unavailable` | `UserActionRequired` | the sandbox probe failed; effects requiring that dimension are refused | yes |
 | `-32027` | `HZ_REDACTION_REQUIRED` | `Validation` | `UserActionRequired` | content carried a secret; supply a reference instead | yes |
+
+**Wire vocabulary vs internal diagnostics.** The `HZ_*` codes above are the only codes that cross a surface — JSON-RPC `error.data`, REST bodies, CLI diagnostics, SDK errors. Other code families are internal and MUST NOT appear in a wire carrier: the log-invariant codes of `06-events-and-flows.md` §5 (`LOG_*`, `SESSION_*`) and the module-internal dotted codes of `04-lld.md` §5.2 (e.g. `session.posture_stale`, `internal.cas_inconsistent`). A surface maps an internal condition to the registered code for its category; `HZ_INTERNAL`/`HZ_GENERIC` are fallbacks only where no specific code exists, and C43 keeps the mapping stable (RC-16(b)).
 
 #### 4.10.3 Status mapping (REST)
 

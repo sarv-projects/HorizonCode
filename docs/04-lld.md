@@ -160,7 +160,7 @@ Each module has one job. `source:` lines name the ancestor module the design inh
 |---|---|---|---|---|
 | `guard.rs` | Admission decision: canonical operation → capability ID → policy evaluation → `GuardDecisionV1` with `reason_code` and `intent_digest`. Owns action-ID classification and the workspace binding used in digests. | `AuthorizationRequestV1`, `GuardDecisionV1`, `ReasonCode`, `WorkspaceBinding` | `authorize()`, `approval_policy()`, `workspace_binding()`, `intent_digest()`, `argument_digest()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` |
 | `policy.rs` | Policy host: load the effective rule set, compile it with `hz_policy`, cache the compiled revision, hot-reload on change. Never touches the filesystem per decision. | `PolicySetV1`, `PolicyRevision`, `CompiledPolicy` | `load()`, `compile()`, `evaluate()`, `revision()`, `watch()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/workspace_command_profile.rs` (policy parts) |
-| `lease.rs` | One-use lease arbiter: issue per batch, mark consumed at execute, expire by deadline, revoke on posture change or shutdown. A lease id is a reference, never authorization (L-13). | `LeaseV1`, `LeaseArbiter`, `LeaseState`, `Epoch` | `issue_batch()`, `consume()`, `expire()`, `revoke()`, `validate()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/direct_session_grant.rs` |
+| `lease.rs` | One-use lease arbiter: issue one one-use lease per effect as a single set at batch admission; mark each consumed at its own effect's execute; expire by deadline, revoke on posture change or shutdown. A lease id is a reference, never authorization (L-13). | `LeaseV1`, `LeaseArbiter`, `LeaseState`, `Epoch` | `issue_batch()`, `consume()`, `expire()`, `revoke()`, `validate()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/direct_session_grant.rs` |
 | `effect_host.rs` | The executor: prepare → dispatch → observe → settle for every effect class, plus HTTP egress execution and terminal execution. Owns the effect state machine and the wiring to PTY, shell, VCS, edit and egress. | `EffectHost`, `EffectRequestV1`, `EffectState`, `Observation` | `open()`, `open_live()`, `handle_request()`, `begin_dispatch()`, `mark_running()`, `mark_cancelling()`, `settle()`, `mark_unknown()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs` |
 | `receipt.rs` | Receipt ledger: write exactly one terminal receipt per effect, reject duplicates (L-14), index by `sessionId`/`effectId`/`receiptId`, expose `hz://receipt/<id>`. | `EffectReceiptV1`, `ReceiptLedger`, `ReceiptIndex` | `settle()`, `get()`, `list_for_session()`, `verify_chain()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/managed_settlement_provenance.rs` (provenance parts) |
 | `owner_log.rs` | Durable authority log: canonical codecs, committed-head filesystem storage, segment seals, hash chain, replay validation. The head is the sole commit authority. | `OwnerLog`, `OwnerRecordV1`, `Segment`, `CommittedHead`, `OwnerLogError` | `open()`, `append()`, `commit()`, `replay()`, `head()`, `seal_segment()` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/owner_log.rs` |
@@ -244,11 +244,11 @@ Every durable fact has exactly one writer and one owning module. Two components 
 | Projections | `packages/core/src/session/projector.ts` (`applyAll()`) | SQLite `projections` | `controller.ts`, surfaces, `agents/` | Pure function of `events`; rebuildable at any time from offset 0 (`projectAll()`). |
 | Inbox items, claims, posture | `session/inbox.ts`, `session/claim.ts`, `session/posture.ts` | SQLite `claims` + projection rows | `SessionEngine`, `agents/spawn.ts` | The claim row is the write-ahead lease that makes resume possible (§6.6). |
 | Usage and cost | `session/verify.ts` (`verifySession()`) | SQLite `usage` | `session/budget.ts`, `server`, `sdk` | One row per completed attempt; RC-4 fixes attribution for cancelled attempts. |
-| Attachments, tool output blobs, patch preimages (runtime side) | `context/` and `tools/runtime.ts` through the CAS writer | SQLite `blobs` + `.hz/blobs/` | projectors, compaction, evidence bundles | Content-addressed; deduplicated by `sha256`. |
-| Kernel authority records (intents, leases, receipts, settlements) | `crates/hz_kernel/src/owner_log.rs` (`OwnerLog.append()`) | OwnerLog segments + `head` | `receipt.rs`, `verifier.rs`, reconciliation | The kernel never opens the session log (§3.3 rule 1); the join happens in `session/verify.ts`. |
-| Receipt index | `receipt.rs` (`ReceiptLedger.settle()`) | kernel receipts SQLite | `KernelClient.receipts()`, `effect/ledger.ts` | Exactly one terminal receipt per `effectId` (L-14). |
-| Authority artifacts, checkpoints | `artifact.rs`, `checkpoint.rs` | `$XDG_STATE_HOME/horizon/kernel/artifacts/` CAS | `verifier.rs`, `verifySession()` | Separate CAS from the runtime-side `blobs` store; the only join is the digest. |
-| Worktree leases | `worktree.rs` (`WorktreePool`) | SQLite `worktrees` in kernel state + `.hz/worktrees/` on disk | `agents/spawn.ts`, `hzcode worktree` | Pool is bounded; a lease references a managed worktree root, never a user directory. |
+| Attachments, tool output blobs, patch preimages (runtime side) | `context/` and `tools/runtime.ts` through the CAS writer | SQLite `blobs` + `.hz/state/blobs/<ab>/<cd>/<sha256>` | projectors, compaction, evidence bundles | Content-addressed; deduplicated by `sha256`. |
+| Kernel authority records (intents, leases, receipts, settlements) | `crates/hz_kernel/src/owner_log.rs` (`OwnerLog.append()`) | OwnerLog segments + `head` under `.hz/state/kernel/ownerlog/` (`12` §4.1) | `receipt.rs`, `verifier.rs`, reconciliation | The kernel never opens the session log (§3.3 rule 1); the join happens in `session/verify.ts`. |
+| Receipt index | `receipt.rs` (`ReceiptLedger.settle()`) | kernel receipts journal under `.hz/state/kernel/` | `KernelClient.receipts()`, `effect/ledger.ts` | Exactly one terminal receipt per `effectId` (L-14). |
+| Authority artifacts, checkpoints | `artifact.rs`, `checkpoint.rs` | `.hz/state/artifacts/objects/<ab>/<cd>/<sha256>` CAS | `verifier.rs`, `verifySession()` | Separate CAS from the runtime-side `blobs` store; the only join is the digest. |
+| Worktree leases | `worktree.rs` (`WorktreePool`) | SQLite `worktrees` in kernel state + working copies under the worktree pool root (`05` §4.5) | `agents/spawn.ts`, `hzcode worktree` | Pool is bounded; a lease references a managed worktree root, never a user directory. |
 | Schedule journal | `automation.rs` (`Journal`) | Kernel OwnerLog records referenced by digest | `automation.rs`, `hzcode schedule` | RC-3: storage metadata, not a session event. |
 | Config, policy, secrets key refs | `resolveConfig()` in `@horizoncode/cli`; `policy.rs` for the compiled set | `.hz/config.jsonc`, `~/.config/horizon/` | every package (read), `hz_policy` (compile) | JSONC (§4.16.1 of `05-domain-and-schemas.md` owns the document shape). Secrets are handles only; no value is ever written to a store or a log. |
 
@@ -260,14 +260,14 @@ The session store is one SQLite database per workspace: `<workspace>/.hz/state/h
 |---|---|---|---|
 | `events` | `session/log.ts` | The append-only event log: `seq`, `sessionId`, `name`, `payload`, `cursor`, `idempotencyKey`, `createdAt`. | Monotonic per-session `seq`; unique `(sessionId, cursor)`; insert-only; L-41 enforced by the admission path, not by a trigger. |
 | `projections` | `session/projector.ts` | One row per (session, projector, key) materialized projection, written in the same transaction as its event. | L-30: a projector reads only `events` and writes only its own rows. Projectors are pure; `rebuild()` truncates and replays. |
-| `blobs` | CAS writer (`context/`, `tools/runtime.ts`) | Metadata for each content-addressed blob: `digest`, `size`, `kind`, `refcount`, `firstSeen`. | Bytes live in `.hz/blobs/` (§4.4); a `blobs` row without a file, or a file without a row, is `internal.cas_inconsistent`. |
+| `blobs` | CAS writer (`context/`, `tools/runtime.ts`) | Metadata for each content-addressed blob: `digest`, `size`, `kind`, `refcount`, `firstSeen`. | Bytes live in `.hz/state/blobs/` (§4.4); a `blobs` row without a file, or a file without a row, is `internal.cas_inconsistent`. |
 | `claims` | `session/claim.ts` | The write-ahead claim (`ExecutionClaimV1`): `fenceToken`, `ownerProcessIncarnation`, `ownerEpoch`, `acquiredAtMs`, `heartbeatAtMs`, `ttlMs`, `state ∈ {held, released, expired, revoked}`; recovery is recorded as `resumedFromClaimId` on the successor claim. | At most one `held` row per session (L-6). Survives process death on purpose (§6.6). |
 | `usage` | `session/verify.ts` | Usage and cost per attempt, joined later with receipts: `runId`, `stepId`, `provider`, `tokensIn/Out`, `costMicros`, `attribution`. | Written once at verification; never adjusted. Unknown cost is stored as `UNKNOWN`, never as `0`. |
 | `event_snapshot`, `retention_ledger` | `session/log.ts` | Log snapshots, and retention markers that make deletions auditable. | RC-3: storage metadata; surfaced by `hzcode doctor` and `hzcode worktree list --journal`, never re-emitted as events. |
 
 **Store rules.**
 
-1. One connection per session actor; `journal_mode = WAL`, `synchronous = NORMAL` for events, `FULL` for the claim row.
+1. One connection per session actor; `journal_mode = WAL`, `synchronous = FULL` (the default `strict` mode; `NORMAL` only under `--durability=fast`) for events, `FULL` for the claim row; the pragma set is owned by `12-sessions-state.md` §4.3 (S-10) and the default by `06-events-and-flows.md` E-29.
 2. `appendWithProjections()` opens exactly one transaction: the `events` insert plus every projector write either commit together or not at all.
 3. A second writer attempting `BEGIN IMMEDIATE` on a session already claimed MUST fail with `session.claim_conflict`, never queue (L-6, L-25).
 4. `hzcode doctor` verifies: table set, WAL truncation, orphan blob rows, `UNKNOWN` usage rows, and unrecovered claims.
@@ -279,11 +279,13 @@ The session store is one SQLite database per workspace: `<workspace>/.hz/state/h
   config.jsonc               # workspace config (rank-0 read, cli writes) — JSONC (§4.16.1 of doc 05)
   state/hzcode.db            # §4.2 session store (events, projections, blobs, claims, usage)
   state/hzcode.db-wal        # WAL; never copied without its sibling
-  blobs/<ab>/<sha256>         # CAS: two-level shard, bytes only
-  checkpoints/<checkpointId>.json
-  worktrees/<attemptId>/      # managed worktrees, leased by worktree.rs
-  locks/session-<sessionId>.lock
-  logs/                       # per-session debug logs (telemetry, redacted)
+  state/blobs/<ab>/<cd>/<sha256>            # runtime CAS: two-level shard, bytes only
+  state/artifacts/objects/<ab>/<cd>/<sha256>  # kernel-owned artifact CAS (§4.5)
+  state/kernel/              # kernel state: ownerlog/, effect-journal/, leases/, budget/, verifier/, worktrees/, trusted-state/
+  state/snapshots/<checkpointId>/
+  state/host.json            # host guard (host id, mount class, heartbeat)
+  state/exports/             # default .hzs output directory
+  index/                     # derived FTS/vector/symbol indices (disposable)
 
 $XDG_CONFIG_HOME/horizon/          # default ~/.config/horizon/
   config.jsonc               # user config (JSONC)
@@ -293,27 +295,25 @@ $XDG_CONFIG_HOME/horizon/          # default ~/.config/horizon/
   skills/, plugins/, agents/  # user-provided manifests
 
 $XDG_STATE_HOME/horizon/          # default ~/.local/state/horizon/
-  kernel/owner-log/segment-*.hzol, head    # §3.3 owner_log.rs
-  kernel/receipts.db                       # §3.3 receipt.rs index
-  kernel/artifacts/<ab>/<sha256>           # authority CAS (artifact.rs)
-  kernel/worktrees/
-  cache/index/<workspaceId>/     # hz_index persistence (rebuildable)
+  user.db                          # trust records, model registry cache, price table
+  memory/<workspace_digest>.db     # user-scope memory (+ .vec sidecar)
+  worktrees/                       # worktree pool root (working copies)
   logs/hzk.log
 
 $XDG_RUNTIME_DIR/horizon/         # default /run/user/<uid>/horizon/
   hzk.sock, hzk.pid            # supervisor lease + ABI socket (§6.1)
 ```
 
-Nothing outside this list is written by HorizonCode. A path under `.hz/` is workspace data; a path under `$XDG_STATE_HOME` is machine data; the two are never mixed in one file, because one is copyable with the repository and the other is not.
+Nothing outside this list is written by HorizonCode. A path under `.hz/` is workspace data; a path under `$XDG_STATE_HOME` is machine data; the two are never mixed in one file, because one is copyable with the repository and the other is not. `12-sessions-state.md` §4.1 owns the canonical layout; this tree MUST match it.
 
 ### 4.4 Blob / CAS layout
 
-1. **Address.** Every blob is named by the `sha256` of its bytes. The path is `<root>/<first-two-hex>/<sha256>`. Two shard levels were rejected as unnecessary — the first two hex characters give 256 buckets, enough for a workspace.
+1. **Address.** Every blob is named by the `sha256` of its bytes. The path is `<root>/<ab>/<cd>/<sha256>` — the canonical **two-level** shard (`12-sessions-state.md` §4.1), one layout for session blobs and kernel artifacts alike: a workspace accumulates blobs from every session it ever ran, and the second level keeps directory sizes sane.
 2. **Write.** `create temp in the same directory → write → fsync file → rename → fsync directory → insert/refcount in the owning store`. A crash between rename and refcount insert is repaired by `hzcode doctor` (scan-and-adopt), never by trusting one side.
 3. **Read.** Verified on first read per process only if the blob is an evidence artifact; ordinary tool output trusts the digest (cost of re-hash is not worth it on the hot path).
 4. **Deduplication.** The same bytes are stored once. The `blobs.refcount` (runtime) and the artifact refs (kernel) are separate counters; neither store may delete a blob the other still references by digest inside a live receipt or evidence bundle.
 5. **GC.** Only at `hzcode gc`, only with refcount `0`, only for blobs older than the retention marker. A blob referenced by any unreconciled effect or any `UNKNOWN` claim is never collected (§5.2).
-6. **Two stores, one rule.** The runtime CAS (`.hz/blobs/`) and the authority CAS (`$XDG_STATE_HOME/.../artifacts/`) MUST NOT share a directory and MUST NOT share a database. The verifier compares them by digest (`verify_chain()` / `joinReceipts()`), which is the only permitted join.
+6. **Two stores, one rule.** The runtime CAS (`.hz/state/blobs/`) and the kernel-owned artifact CAS (`.hz/state/artifacts/`) MUST NOT share a directory and MUST NOT share a database. The verifier compares them by digest (`verify_chain()` / `joinReceipts()`), which is the only permitted join.
 
 ### 4.5 Retention
 
@@ -361,6 +361,8 @@ Codes are `<prefix>.<snake_case>`, where the prefix names the owning module. Onl
 
 **Fail-closed list.** `guard.*`, `policy.*`, `lease.*`, `sandbox.*`, `budget.*`, `protocol.revision_mismatch`, `verify.*`, `native.load_failed`, `internal.*`: when any of these is raised, the affected operation MUST NOT be attempted, and the runtime MUST prefer refusal to an unproven proceed. A `degrade` is legal only where the degradation is declared in the capability's status row (§10) and recorded (L-42).
 
+**Internal vs wire codes.** The codes of this table are module-internal diagnostics — raised across module boundaries inside the runtime and carried in `hz.error.raised` payloads. They are **not** wire codes: a surface that returns an error to a caller maps them to the registered `HZ_*` vocabulary (`07-apis-and-contracts.md` §4.10.2), and a wire carrier MUST NOT contain a dotted internal code (RC-16(b)).
+
 ### 5.3 Crash policy per boundary
 
 Each row states what survives a crash at that boundary, and what the process does when it comes back. "Crash" includes `SIGKILL`, OOM kill, power loss, and a panicking child — the design does not distinguish.
@@ -377,7 +379,7 @@ Each row states what survives a crash at that boundary, and what the process doe
 | CB-8 | Crash during blob write | Temp file present, no rename, maybe no row | Temp garbage is swept; a row without bytes is `internal.cas_inconsistent`; `hzcode doctor` repairs (scan-and-adopt). | `defect` |
 | CB-9 | Child process (tool/subagent/plugin) crashes | Parent holds the receipt and the effect id | The exit status is the observation: the effect settles `failed` (or `interrupted` for cancellation), never `UNKNOWN` by default; `mark_unknown()` only on lost observation. | `retry` per tool |
 | CB-10 | TUI dies | Nothing durable | The session continues headless if a server/client remains attached; the TUI re-attaches by `replay()` from its last cursor. | — |
-| CB-11 | Machine reboot | `.hz/state.db`, OwnerLog segments, artifacts | Startup gate: supervisor epoch advances, claims recovered, `hzcode doctor` reports anything it repaired. | — |
+| CB-11 | Machine reboot | `.hz/state/hzcode.db`, OwnerLog segments, artifacts | Startup gate: supervisor epoch advances, claims recovered, `hzcode doctor` reports anything it repaired. | — |
 
 **Crash rules.**
 
@@ -438,7 +440,7 @@ Six LLD-level flows. Each names the process (`[cli]`, `[hzk]`, `[surface]`, `[co
 
 1. `[hzk]` `guard.rs` `approval_policy()` returns `ask`; the decision carries the `intent_digest`, the capability ID and the posture revision it decided under. An `ask` exists only where an answer could change the outcome (RC-6).
 2. `[core]` `effect/runtime.ts` appends `hz.permission.asked` with that digest — the log, not the kernel, is the record a surface reads.
-3. `[surface]` The TUI is subscribed through `@horizoncode/sdk`; it renders the prompt from the projected event and calls `HzClient.approve(questionId, answer)` — it never talks to `hzk` and never sees a lease.
+3. `[surface]` The TUI is subscribed through `@horizoncode/sdk`; it renders the prompt from the projected event and calls `HzClient.approve(approvalId, answer)` — it never talks to `hzk` and never sees a lease.
 4. `[core]` `Controller.answer()` validates the question is still open, then re-enters `effect/runtime.ts`, which calls `KernelClient.execute()` with the answer bound to the same `intent_digest` and posture revision.
 5. `[hzk]` Re-validation at execute time: a stale revision is `session.posture_stale`; a changed digest is `guard.denied`; both are `refuse` and neither is retried automatically (L-13, L-28).
 6. `[core]` On accept: lease issued and F3 continues from step 7. On reject: `hz.permission.answered` with a negative answer, the call settles `denied`, and the step continues with a typed refusal the model may read (L-19).

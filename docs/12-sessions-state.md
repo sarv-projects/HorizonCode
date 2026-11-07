@@ -256,13 +256,16 @@ export interface ClaimStateV1 {
 |---|---|---|
 | `<workspace>/.hz/state/hzcode.db` | The event log, projections, blob refs, indices | Workspace-scoped, so two checkouts never share a log. `0600`, dir `0700`. |
 | `<workspace>/.hz/state/hzcode.db-wal`, `-shm` | WAL and shared-memory files | Present only in WAL mode (never on network filesystems). |
-| `<workspace>/.hz/state/blobs/<aa>/<sha256>` | Content-addressed blob bodies | Two-level fan-out; atomic write-then-rename. |
-| `<workspace>/.hz/state/artifacts/` | Kernel-owned artifact store root | Not written by the TS side. |
+| `<workspace>/.hz/state/blobs/<ab>/<cd>/<sha256>` | Content-addressed blob bodies | Two-level fan-out; atomic write-then-rename. |
+| `<workspace>/.hz/state/artifacts/` | Kernel-owned artifact CAS (`objects/<ab>/<cd>/<sha256>`) | Two-level shard; not written by the TS side. |
 | `$XDG_STATE_HOME/horizon/user.db` | Trust records, model registry cache, price table, user-scope settings projections | Rollback journal safety rules apply here too. |
 | `$XDG_STATE_HOME/horizon/memory/<workspace_digest>.db` (+ a `.vec` sidecar) | Per-workspace user-scope memory store (`memory.read` / `memory.write`) | This is the path scheme `10-cognition.md` §4.2 cites; the same rollback-journal rules apply, and doc 11 §7.3.1 step 7 admits this root for `memory.*` and `artifact.write`. |
+| `<workspace>/.hz/state/kernel/` | Kernel authority state: `ownerlog/`, `effect-journal/`, `leases/`, `budget/`, `verifier/`, `worktrees/`, `trusted-state/` | Owner-only permissions (D12); not written by the TS side. |
 | `<workspace>/.hz/state/snapshots/<checkpointId>/` | Snapshot artifacts (when enabled) | Bounded per §2.7 S-47. |
 | `<workspace>/.hz/state/host.json` | Host guard: host id, mount class, last heartbeat | Read before any write on shared-media mounts (§2.10 S-76). |
 | `<workspace>/.hz/state/exports/` | Default output directory for `.hzs` archives | Excluded from quota accounting once written. |
+
+**Ownership.** This table is the concrete layout of record: every other document that names a state path cites this section, and a divergence in a citing document is a defect there, not a second layout (RC-16(f), reconciled 2026-11-07).
 
 A `--portable` mode moves all runtime state under the workspace directory (useful for containers and CI); it does not change any of the durability rules, only the paths.
 
@@ -470,7 +473,7 @@ Rationale for keeping clients off the database: the protocol is the only support
 
 ## 5. Errors & failure modes
 
-`FC` = fail-closed: the operation is refused rather than attempted in a degraded mode. Codes appear in `hz.error.raised.payload.code` (the error class rides in `payload.class` — `06` row 40 and RC-2) and in CLI diagnostics.
+`FC` = fail-closed: the operation is refused rather than attempted in a degraded mode. Codes appear in `hz.error.raised.payload.code` (the error class rides in `payload.class` — `06` row 40 and RC-2) and in CLI diagnostics. As in `06` §5, these codes are internal diagnostics: a surface maps them to the registered `HZ_*` vocabulary (`07` §4.10.2) before returning them to a caller (RC-16(b)).
 
 | Code | Raised when | Behaviour | FC |
 |---|---|---|---|

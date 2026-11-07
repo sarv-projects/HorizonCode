@@ -416,7 +416,7 @@ All are `[planned]` in `packages/tui/src/types.ts` and generated from schemas wh
 | `SlashEntry` | `{ name; aliases; description; argumentSchema; executionKind; surfaces: SurfaceId[]; requiresApproval: boolean; receiptClass; source }` | R54. |
 | `BlockView` | `{ id; kind: BlockKind; foldState: "expanded" \| "collapsed" \| "pinned"; streamState: "idle" \| "streaming" \| "interrupted" \| "complete"; coarse: boolean; provenance: ProvenanceKey }` | R99–R103, R68, R163. |
 | `HunkView` | `{ id; file; preimageDigest; postimageDigest; linesAdded; linesRemoved; state: HunkState; receiptId?: string; reasonCode?: string }` | R77–R82. |
-| `ApprovalView` | `{ askId; capabilityId; effectClass; originKind; target; sandboxMode; policyRevision; reasonCode; effectBody: EffectBody; expiresAt; options: ApprovalOption[] }` | R87–R98. |
+| `ApprovalView` | `{ approvalId; capabilityId; effectClass; originKind; target; sandboxMode; policyRevision; reasonCode; effectBody: EffectBody; expiresAt; options: ApprovalOption[] }` | R87–R98. |
 | `EffectBody` | tagged union: `Shell \| FilePatch \| Network \| Credential \| Remote \| Unrenderable` | R88–R89; `Unrenderable` disables allows. |
 | `UnknownChip` | `{ receiptId; capabilityId; effectClass; resourceKey; since; reconcileAttempts }` | R169–R171. |
 | `StatusSegment` | `{ id; priority; render(props): Cells; provenance: ProvenanceKey }` | R157–R166. |
@@ -605,7 +605,7 @@ Validation (`hzcode keybind check`) MUST report, per binding: `id`, `keys`, `con
 | `tool_call` | `toolCallId`, `toolName`, `capabilityId`, `effectClass`, `kind`, `status`, `rawInput`, `locations` | `hz.step.tool.requested` |
 | `tool_call_update` | `toolCallId`, `status`, `rawOutput`, `content`, `locations`, `receiptId` | `hz.step.tool.completed` |
 | `plan` | `entries` | `hz.plan.updated` |
-| `permission` | `askId`, `capabilityId`, `decision`, `reasonCode`, `scope` | `hz.permission.asked`/`answered` |
+| `permission` | `approvalId`, `capabilityId`, `decision`, `reasonCode`, `scope` | `hz.permission.asked`/`answered` |
 | `unknown` | `receiptId`, `capabilityId`, `effectClass`, `resourceKey` | `hz.effect.unknown` |
 | `usage` | `messageId`, `stopReason`, `usage` | `hz.usage.recorded` |
 | `error` | `message`, `capabilityId?`, `reasonCode?`, `retryable` | `hz.error.raised` |

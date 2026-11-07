@@ -4,6 +4,8 @@
 > **This document answers:** *where do we start, in what order, on what machine, with what gates, and how do we know each step is real.*
 >
 > **Companion:** `docs/26-learning-synthesis-2.md` (what the deep-dive pass taught us and which of it we adopt). This plan assumes that learning; where a plan item is sourced from a specific reference or from that synthesis, it is cited.
+>
+> **Execution precedence (RC-16(h)).** The concrete build order is the action queue in [`docs/30-steal-list.md`](./30-steal-list.md) §4; the V0–V7 ladder below is the coarse capability map. Where the two appear to disagree, the newest ratified queue (`docs/30` §4) wins.
 
 ---
 
