@@ -11,6 +11,7 @@
 
 import * as path from "node:path";
 import { realpathSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type {
   ActorRef,
   ApprovalHandler,
@@ -36,6 +37,14 @@ import type {
 import { EventTypes, newId, nowIso } from "../contracts";
 import { getTool, toolSpecs } from "../tools";
 import { canonicalJson, sha256Hex } from "./canon";
+import {
+  estimatePromptTokens,
+  estimateTokens,
+  fitMaxOutputTokens,
+  FRAMING_CHARGE_TOKENS,
+  planToolOutputCap,
+  windowForModel,
+} from "./output-budget";
 import type { KernelClient } from "./kernel";
 import type { SessionStore } from "./session";
 
@@ -292,11 +301,10 @@ function normalizeToolResult(result: ToolResult | undefined | null): ToolResult 
   return { ok: false, output, error };
 }
 
-/** What the model sees as the tool's answer. */
-function toolMessageContent(result: ToolResult): string {
-  const output = typeof result.output === "string" ? result.output : "";
-  if (result.ok) return output === "" ? "(no output)" : output;
-  const reason = typeof result.error === "string" && result.error !== "" ? result.error : output;
+/** What the model sees as the tool's answer; `text` is the capped output. */
+function toolMessageContent(result: ToolResult, text: string): string {
+  if (result.ok) return text === "" ? "(no output)" : text;
+  const reason = typeof result.error === "string" && result.error !== "" ? result.error : text;
   return reason === "" ? "tool failed" : reason;
 }
 
@@ -582,7 +590,7 @@ async function beginUserTurn(deps: LoopDeps, prompt: string): Promise<void> {
 async function collectAssistant(
   deps: LoopDeps,
   history: ChatMsg[],
-  rails?: { budgetLine?: string; corrective?: string },
+  rails?: { budgetLine?: string; corrective?: string; anchorBase?: number; appendedTokens?: number },
 ): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
   const basePrompt =
@@ -597,9 +605,17 @@ async function collectAssistant(
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
   const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
+  // NF-074(a): fit the output cap to the remaining window — anchored on the
+  // newest provider usage, plus the tail counted locally since that turn, or
+  // the whole-prompt estimate before any usage has been seen.
+  const inputEstimate =
+    rails?.anchorBase !== undefined
+      ? rails.anchorBase + (rails.appendedTokens ?? 0)
+      : estimatePromptTokens(basePrompt + extra + rail, history, JSON.stringify(specs));
   const request: ProviderRequest = {
     model: deps.model,
     system: basePrompt + extra + rail,
+    maxTokens: fitMaxOutputTokens(inputEstimate, windowForModel(deps.model)),
     messages: history,
     tools: specs,
     signal: deps.signal,
@@ -700,7 +716,7 @@ async function executeTool(
   }
 }
 
-async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Promise<void> {
+async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Promise<number> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
   emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
@@ -708,7 +724,22 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
 
   const executed = await executeTool(deps, gate, call, parsed);
   const result = executed.result;
-  const content = toolMessageContent(result);
+  // NF-074(b): cap the model-facing result and spill the full text. The
+  // receipt digest below stays the digest of the FULL output — the cap is a
+  // context budget, never an evidence change.
+  const plan = planToolOutputCap(typeof result.output === "string" ? result.output : "", {
+    spillDir: path.join(deps.workspace, ".hzcode", "spills"),
+    displaySpillDir: path.join(".hzcode", "spills"),
+  });
+  if (plan.spill) {
+    try {
+      mkdirSync(path.dirname(plan.spill.file), { recursive: true });
+      if (!existsSync(plan.spill.file)) writeFileSync(plan.spill.file, plan.spill.contents, "utf8");
+    } catch (err) {
+      emit(deps.callbacks, { type: "notice", message: `could not spill the full output: ${errorMessage(err)}` });
+    }
+  }
+  const content = toolMessageContent(result, plan.text);
 
   deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
   await logEvent(
@@ -718,7 +749,7 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
       callId: call.id,
       name: call.name,
       ok: result.ok,
-      output: truncateForEvent(result.output ?? "", 4000),
+      output: truncateForEvent(plan.text, 4000),
       error: result.error,
       ms: Date.now() - started,
       leaseId: executed.leaseId,
@@ -753,6 +784,8 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
     status: result.ok ? "ok" : "error",
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
   });
+  // The locally counted context cost of this message (NF-074(a) tail).
+  return FRAMING_CHARGE_TOKENS + estimateTokens(content);
 }
 
 /**
@@ -788,6 +821,9 @@ export async function runTurn(
     let calls = 0;
     let consecutiveFormatErrors = 0;
     let corrective: string | undefined;
+    // NF-074(a): the newest provider usage anchor and the locally counted tail.
+    let anchorBase: number | undefined;
+    let appendedTokens = 0;
 
     for (;;) {
       // The single sentinel: budgets are checked before every dispatch, under
@@ -815,9 +851,18 @@ export async function runTurn(
       const turn = await collectAssistant(deps, history, {
         budgetLine: budgetCountdownLine(ledger.countdown()),
         corrective,
+        anchorBase,
+        appendedTokens,
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
+        const reportedInput = turn.usage.inputTokens ?? 0;
+        if (reportedInput > 0) {
+          // The next request's prompt will include this turn's output and calls.
+          anchorBase = reportedInput + (turn.usage.outputTokens ?? 0);
+          appendedTokens = FRAMING_CHARGE_TOKENS + estimateTokens(turn.text);
+          for (const call of turn.toolCalls) appendedTokens += estimateTokens(call.arguments);
+        }
       }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;
@@ -862,9 +907,13 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call).catch((err) => {
-              emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
-            }),
+            runToolCall(deps, gate, call)
+              .then((tokens) => {
+                appendedTokens += tokens;
+              })
+              .catch((err) => {
+                emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
+              }),
           ),
         );
       }

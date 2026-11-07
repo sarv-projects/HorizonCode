@@ -42,5 +42,20 @@ export function scrubEnv(): Record<string, string> {
     if (v === undefined || SECRET_ENV.test(k)) continue;
     env[k] = v;
   }
+  // NF-074 / docs/09 §2.10 item 3: env-taming defaults for the child — the
+  // human's own value always wins when one is set.
+  for (const [k, v] of Object.entries(TAMING_ENV_DEFAULTS)) {
+    if (env[k] === undefined) env[k] = v;
+  }
   return env;
 }
+
+/** Non-interactive defaults for spawned shells (PAGER family, progress bars). */
+export const TAMING_ENV_DEFAULTS: Record<string, string> = {
+  PAGER: "cat",
+  MANPAGER: "cat",
+  GIT_PAGER: "cat",
+  LESS: "-R",
+  TQDM_DISABLE: "1",
+  PIP_PROGRESS_BAR: "off",
+};
