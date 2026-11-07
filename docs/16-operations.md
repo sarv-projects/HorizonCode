@@ -140,6 +140,21 @@ The remaining ops gates introduced by this document — none of which appears in
 | `gate:doc-names` `[planned]` | A name used in `docs/` is defined neither in `_conventions.md` nor in the registered gate catalog (R-ops-74). |
 | `gate:doc-template` `[planned]` | A document omits a template section without a stated reason, or presents them out of order (R-ops-76). |
 
+#### 2.4.2 Checks adopted from the final audit (Part D, RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+- **Prompt-vs-grant lint:** a profile whose prompt mentions an effect absent from its ceiling fails the build.
+- **Generated-reference drift:** model-facing references (tool catalogs, command docs) are **generated** from the declarations; CI gates drift.
+- **`.hz`-cannot-supply-authority test:** workspace-supplied configuration can never encode an authority grant (narrowing only, mechanically asserted).
+
+#### 2.4.3 Metric and fixture contracts (RC-15)
+
+> Adopted 2026-11-07 from the adoption wave (H-7 and the hostile-fixture corpus; sources A.9.6 oh-my-pi, A.9.5 mini-swe-agent, distilled in `30-steal-list.md` §2 F/H).
+
+- **Metric contract:** every published number carries four slots — **Metric** (what is measured), **Anchor** (the baseline it is compared against), **Population** (on what runs), **Excludes** (what was discarded and why). A number without the four slots is not a result; cross-version comparisons without it are theatre.
+- **Hostile-input fixture corpus for read paths:** checked-in fixtures including a lockfile tarpit, a single 600 KB line, a FIFO, lying extensions, Unicode filenames and near-miss filenames — the file tools, truncation and redaction paths MUST run against them in CI.
+
 ### 2.5 Observability
 
 Owner: `@horizoncode/observe` (OTel, logging, metrics, redaction — `_conventions.md` §3). Default posture: **local-first**. A run records everything it needs locally and exports nothing anywhere unless the operator says so.

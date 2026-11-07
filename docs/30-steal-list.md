@@ -1,6 +1,6 @@
 # 30 — Adoption shortlist: the steal list and the action queue
 
-> **Class: working queue (non-normative).** This document consolidates the four pass-3 deep dives — `audit/aider` (35 steal items), `audit/mini-swe-agent` (41), `audit/hermes-agent` (38), `audit/oh-my-pi` (28) — into one traceable shortlist, and ends with the ordered action queue. Every row cites its source report (§4 item numbers) where the full evidence path lives. Nothing here is a status claim; register candidates at the end are **proposed** for the next catalog revision.
+> **Class: working queue (non-normative).** This document consolidates the four pass-3 deep dives — `audit/aider` (35 steal items), `audit/mini-swe-agent` (41), `audit/hermes-agent` (38), `audit/oh-my-pi` (28) — into one traceable shortlist, and ends with the ordered action queue. Every row cites its source report (§4 item numbers) where the full evidence path lives. Nothing here is a status claim; register candidates at the end were **adopted** as `NF-071` … `NF-075` (RC-15, 2026-11-07); items 1–8 and 11 below remain the live work plan.
 
 ---
 
@@ -13,7 +13,7 @@
 | hermes-agent | `repo-tour/hermes-agent` @ `d4e7c343` (22,782 files) | `docs/audit/pass3/audit-hermes-report.md` | 38 | Managed persistent loop; growth machinery |
 | oh-my-pi | `repo-tour/oh-my-pi` (10,321 files) | `docs/audit/pass3/audit-omp-deep-report.md` | 28 | Lean loop, claim-verified |
 
-**Synthesis rule.** Consolidate by *mechanism family* (many items overlap across repos); keep every entry traceable to its report §4 number; mark each entry's disposition against the existing corpus (NF-### / doc / new candidate). The register stays closed until the candidates in §3 pass the normal revision.
+**Synthesis rule.** Consolidate by *mechanism family* (many items overlap across repos); keep every entry traceable to its report §4 number; mark each entry's disposition against the existing corpus (NF-### / doc / new candidate). The register stays closed until the candidates in §3 pass the normal revision; they did — adopted 2026-11-07 (RC-15).
 
 ---
 
@@ -160,9 +160,9 @@ Each row: mechanism → best source (report §4 item) → disposition. "Extends"
 
 ---
 
-## 3. Register candidates (proposed for the next catalog revision)
+## 3. Register candidates (adopted by RC-15)
 
-Ready-to-paste titles; **not** yet Section B rows. Each passed the merge test (≥2 sources or uniquely user-noticeable) in the four reports.
+Adopted as Section B rows (`NF-071` … `NF-075`, doc 24 §5; RC-15). Each passed the merge test (≥2 sources or uniquely user-noticeable) in the four reports.
 
 | Proposed | Feature | Primary source | Notes |
 |---|---|---|---|
@@ -172,9 +172,9 @@ Ready-to-paste titles; **not** yet Section B rows. Each passed the merge test (�
 | **NF-074** | Context-cost contracts: usage-anchored output-budget fit, framing tokens, spill-to-artifact defaults, shell-output minimisation and command interception | omp (B-6, B-7, C-7) | Direct per-turn token savings; pairs with NF-061 |
 | **NF-075** | Growth loop v2: post-turn review fork on the warm cache, editorial standard for captured lessons, curator with archive-not-delete | hermes (G-1…G-4) | Extends NF-010/033; the editorial standard is the safety half |
 
-Extend-only notes (no new row): repo-map ranking algorithm → doc 09; edit ladder detail → NF-052/069; cache addendum → NF-005; metric contract → doc 16; hostile read fixtures → doc 16.
+Extend-only notes (no new row): repo-map ranking algorithm → doc 09; edit ladder detail → NF-052/069; cache addendum → NF-005; metric contract → doc 16; hostile read fixtures → doc 16 — folded into the owner documents in the adoption revision (RC-15).
 
-New Section-A sources: **aider, mini-swe-agent and hermes-agent are sources 9–11** for the parity matrix; their rows are queued with the same per-row disposition requirement as the twelve-repo audit's queue (docs/29 §B.1(c)).
+New Section-A sources: the six second-wave sources are recorded in the **A.9 addendum** (doc 24 §4.1; RC-15) — SWE-agent, OpenHands, wshobson/agents, aider, mini-swe-agent, hermes-agent; per-capability rows keep the same per-row disposition requirement as the twelve-repo audit's queue (docs/29 §B.1(c)).
 
 ---
 
@@ -190,8 +190,8 @@ Ordered by value ÷ effort. Items 1–5 are cheap, mostly local, and directly st
 6. **Build the managed runtime (NF-071).** Owner/worker frames + durable admission FIFO + `spawn_owned`/supervisor/lint. Adopt the contracts; skip the adapter matrix.
 7. **Build the growth loop (NF-075).** Background-review fork with cache parity + editorial standard + curator; the safety half (editorial standard, read-before-write, description budget) lands *with* the fork, never after.
 8. **Verification wave:** hostile read fixtures, evals-from-post-mortems, metric contract (H-7) on every published number, answer-isolation precondition on eval runs, test-model-in-library.
-9. **Fold the register:** propose NF-071…075 through the next catalog revision (this document is the queue); add Section-A rows for aider/mini-swe-agent/hermes-agent as sources 9–11.
-10. **Fold the extend-notes into their owners:** cache addendum (NF-005), edit-ladder detail (NF-052/069), metric contract (doc 16), git hygiene (E-1…E-4 → doc 09/05), observability (I-1…I-9 → doc 14).
+9. **Fold the register — done 2026-11-07 (RC-15):** `NF-071`…`NF-075` adopted; the six second-wave sources recorded as the A.9 addendum; the build sequence below stands.
+10. **Fold the extend-notes into their owners — done in the adoption revision (RC-15):** cache addendum (NF-005), edit-ladder detail (NF-052/069), metric contract (doc 16), git hygiene (E-1…E-4 → doc 09/05), observability (I-1…I-9 → doc 14).
 11. **Record the four repos' defects** as reference-repo observations, not ours: aider's duplicated repo-map capture (~1.41× weight inflation), DeepSeek/Anthropic cache-cost arithmetic, `cur_tokens` double count; mini-swe-agent's three v1-leftover doc/fixture breaks; hermes' shallow-clone limitation; oh-my-pi's unstated metric contract and unasserted answer isolation.
 
 ### What *not* to copy (deliberate refusals)

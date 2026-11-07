@@ -129,6 +129,14 @@ Every projection has a `ProjectorSpec { name, owner, consumes[], tables[], appli
 | F-7 | Every flow that mutates a workspace MUST leave a receipt whose observation is independent of the model's own text. The evidence gate may lower a claim but never raise it. |
 | F-8 | Every flow states at least one failure branch; a flow with no failure branch is an untested flow. |
 
+### 2.9 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**1. Precedence:** profile-ceiling ∧ task-override — a task-level override entry point may narrow or re-target *within* the profile ceiling, is honoured only at the declared entry points, and is recorded in the admission event; an override that would exceed the ceiling is refused, not clamped silently.
+
+**2. NF-053 flows:** the governed plan FSM (Plan → Propose → Await verification → enforce linting; violation ⇒ roll back and re-plan) as a named flow, with the pre-submit review gate (re-run repro, remove repro artifacts, restore test files, then re-submit) and its deliberately-audited force path.
+
 ---
 
 ## 3. Interfaces (Part A)

@@ -430,6 +430,10 @@ Absent by design: `time`, `rand`, filesystem, network, process, environment. A w
 
 Registration produces a `RegisteredAgentProfileProofV1` (profile id, revision, definition digest, owner-binding digest, permission-ceiling digest) so an accepted task can pin exactly what it ran under (`source: /data/home/forge/repo-tour/horizoncode/kernel/src/agent_profile.rs`).
 
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+**Profile contract additions (wshobson P1–P10):** every profile declares `resultSchema` (typed output; `kind=verify` MUST be three-valued + typed findings), `requiresInputs[]`, `refusesWhen[]` (evaluated before budget reservation; structured `precondition_unmet`), `partitionBy` (sibling nodes with one profile MUST carry distinct partition keys), `ownsPaths` (kernel refuses cross-session writes to an owned path), and a prompt skeleton (Mission / Invariants / Protocol / Inputs / Output contract / Never). Capability presets compose downward only: `observe ⊂ execute ⊂ mutate`, plus `coordinate`/`verify`/`publish`; `kind=relay` is a single-tool profile; tier policy maps kind → model tier (verify/plan → strongest; act → mid; research → cheapest unless `requiresReasoning`). Canonical id + revision + digest per profile, with `@provenance`. **Bundling decision: 15 profiles, one per capability class** — plugins may add profiles only by narrowing; "python-expert" is a skill over `worker`, not a 20th agent.
+
 ### 3.7 MCP
 
 **Client surface.**

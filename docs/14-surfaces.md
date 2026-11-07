@@ -274,6 +274,24 @@ Rule numbering is stable and testable. `MUST` fails a gate; `SHOULD` is reported
 | S171 | The ratchet MUST also check the *converse* direction of drift: a server method or SDK method with no registry row, an event kind with no `docs/13-tui.md` §3.2 row or `jsonl` kind, and an MCP-exposed tool not present in the registry. |
 | S172 | The ratchet MUST run in CI on every PR and MUST be runnable locally (`hzcode parity check --json`), producing a machine-readable report listing gap, surface, owner, and the fix hint. |
 
+### 2.12 (k) Compaction UX, bulk review and preview (NF-062, NF-055)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15).
+
+1. **Compaction UX metrics:** before/after/saved tokens, manual compaction CTA, busy-guard disabling — with the baseline captured **before** the request (the condense POST can only return after the server emitted its event).
+2. **Bulk review (NF-062):** Keep All / Undo All over per-hunk review, both receipted (`files.patch` under the review lease).
+3. **Preview surface (NF-055):** the bound preview URL is displayed per session; opening/refreshing is a surface action, never authority.
+
+### 2.13 (l) Observability affordances (RC-15)
+
+> Adopted 2026-11-07 from the adoption wave (`30-steal-list.md` §2 I; sources A.9.4 aider, A.9.5 mini-swe-agent).
+
+1. **Prompt inspection:** a surface MUST be able to dump the exact rendered message list and exit **without a provider call** (`--show-prompts`-class); prompt behaviour is never debugged by guesswork.
+2. **Per-chunk context cost table:** a `/tokens`-class view lists each context chunk with its token count, a `$` figure, and a remediation hint per row (which command frees it).
+3. **State externalisation:** `--show-repo-map`- and `/settings`-class flags print the exact state the harness sent; a local-only analytics log records events without any network call.
+4. **Batch progress answers "broken or slow?":** per-status histogram, ETA and running cost while a batch runs; Ctrl-C **drains** in-flight work instead of discarding results already paid for; in an interactive session Ctrl-C is user input (an injected message), not an abort.
+5. **No prompt without a TTY:** unattended runs degrade to a saved `LimitsExceeded` trajectory rather than an interactive prompt or a crash.
+
 ---
 
 ## 3. Interfaces

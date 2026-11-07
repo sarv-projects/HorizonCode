@@ -203,6 +203,60 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-56.** No filesystem write outside the workspace without an explicit grant. The default scope for `files.*` is `workspace://**`; writing to a path outside the workspace requires a lease whose scope names that path, obtained through an `ask` that a human answered — the model cannot widen its own scope.
 
+### 2.9 Adopted insertions (RC-15)
+
+> Adopted 2026-11-07 from [29-final-audit.md](./29-final-audit.md) Part D (RC-15); the two R-tools rules below were queued as R-tools-56/57 there and are renumbered to R-tools-57/58 at adoption to avoid collision with the existing R-tools-56.
+
+**1. ACI reading-mode rules (NF-052) — verbatim:**
+
+- **R-read-window-1.** `read` MUST accept `cursor: 'open' | 'next' | 'prev'` in addition to `path`/`startLine`/`endLine`. When `cursor` is present, the window is `readWindowLines` (default 100) long and the step is `readWindowLines - readOverlapLines` (default overlap 2), positioned within the file's bounds. The result MUST include `view: {path, firstLine, lastLine, totalLines, moreAbove, moreBelow}` and MUST render the top/bottom cut as `(N more lines above)` / `(N more lines below)` when non-zero.
+- **R-read-window-2.** `read` MUST accept `gotoLine: number`, positioning the window so the line sits `floor(readWindowLines / 6)` lines below the window's first line; `gotoLine` on a symbol name MUST be resolved by the symbol index and reported as `resolvedVia: 'symbol'`.
+- **R-read-window-3.** The session MUST retain the last window per path as session state (`view.cursor`), refreshed from observed `read`/`edit`/`insert` effects and never from model-authored text. `cursor: 'open'` re-renders that stored window; a stale cursor (path removed) MUST fail with `NotFound`, not silently re-open at line 1.
+- **R-read-window-4.** A windowed `read` of a file longer than `readWindowLines` is the default when `path` is given without a range. A full-file read requires `full: true`, is capped by R-tools-42, and MUST report `truncated` with an artifact pointer.
+- **R-edit-window-1.** When the session holds a window for the edited path, `edit` MUST resolve `oldString` **within that window**; a unique match elsewhere MUST NOT be applied and the call MUST fail with `detail.matchesOutsideWindow: [line…]` plus a `recoveryHint: "read the file at those lines first"`.
+- **R-edit-window-2.** When `oldString` occurs more than once inside the window and `replaceAll=false`, `edit` MUST fail with `AmbiguousMatch` naming every match line in `detail.matches[]`.
+- **R-edit-lint-1.** When a syntax check is available for the file's language, `edit`/`insert` MUST evaluate the postimage before writing. If the postimage introduces diagnostics absent from the preimage, the call MUST fail with `category: 'syntax-break'`, MUST leave the file byte-identical, and MUST return both the would-be postimage window and the current window in `detail`.
+- **R-grep-summary-1.** `grep` MUST support `mode: 'summary'` returning `files: [{path, matchCount}]` and no match text. Above `grepSummaryMaxFiles` (default 100) it MUST return `truncated{reason: 'count'}` and a `recoveryHint` telling the model to narrow the pattern or scope, and MUST return no file list.
+- **R-tools-57 (rendering).** Every model-facing result that reports an empty payload MUST render an explicit sentence (e.g. "the command succeeded and produced no output") instead of an empty block; every `truncated` result MUST carry a `recoveryHint` naming at least one cheaper follow-up call (`read` range, `grep -n`, `outline`, redirect-to-file).
+- **R-tools-58 (state line).** The model-facing step tail MUST project an environment-derived state line (`openFile`, window range, `cwd`), produced by a state command and refreshed from observed effects. It MUST NOT be part of the byte-stable prefix, MUST NOT be model-authorable, and MUST NOT be counted as evidence for `verify`.
+
+**2. Phase-2 `aci.*` group** (admitted only under a preset so the default tool prefix does not grow): `aci.open` (files.read, parallel-safe), `aci.goto` (line or symbol), `aci.scroll` (direction, pages), `aci.find` (summary|matches), `aci.insert` (files.patch, kernel lease). Cursor movement is session state (`lease: session`), never a kernel lease and never a tool argument. Prompt fragment + tests as drafted in the report §6 (cursor math, cursor persistence, outside-window refusal, lint-revert, summary cap at 101 files, recovery hints, narrated empty, state-not-model-authorable).
+
+**3. Env-taming defaults:** the shell environment MUST default `PAGER=cat`, `MANPAGER=cat`, `GIT_PAGER=cat`, `LESS=-R`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off`, and the interactive-command blocklist (`vim`, `less`, `tail -f`, bare `python`, …) applies unless explicitly overridden.
+
+**4. Code-mode invariants (NF-051) — CM-1…CM-14, verbatim from the decision report:**
+
+| # | Rule |
+|---|---|
+| CM-1 | The callable surface inside the snippet is exactly the declared subset ∩ `visibleTools(session)` ∩ the step's registry snapshot; nothing else resolves. |
+| CM-2 | Subset enforcement is **static and total**: dynamic access (`tools[name]`), aliasing `tools`, and computed property calls are rejected by the scanner. |
+| CM-3 | Every nested call re-enters the ordinary pipeline: resolve → Guard → durable prepare → its own one-use lease → execute → settle → receipt. The snippet never sees a lease, receipt id, or host object. |
+| CM-4 | The outer `ask` shows the declared subset only, and covers exactly "run a confined program with this subset". Loops cannot widen it. |
+| CM-5 | Amplification is bounded before the first inner call: `maxToolCalls` (default finite), per-inner-call budget, per-step lease ceiling, and the outer timeout. |
+| CM-6 | Timing out or terminating the cell **never** reports a dispatched mutation as failed-safe: every inner call ends in a terminal state, `UNKNOWN` when the transport died after dispatch, and the step reconciles. |
+| CM-7 | The result's audit table carries, per call: `toolId`, `toolCallId`, `leaseId`, `receiptId?`, terminal state, `ms`. Read-only calls emit no effect-claiming receipt. |
+| CM-8 | Confinement is declared as a guarantee vector with typed residuals, and the operation fails closed when the host cannot meet the caller's minimum (`SandboxUnavailable`). |
+| CM-9 | The snippet's engine has no ambient I/O: no filesystem, network, process, `WebAssembly`, shared memory, dynamic codegen of host bindings; imports resolve only to declared globals. |
+| CM-10 | Discovery inside the snippet is a pipeline call (`search(...)` lowers to `tool_search`), admitted, counted, paginated, respecting `admitTools`/visibility. |
+| CM-11 | Snippet state (`store`/`load`) is JSON-only, session-scoped, snapshotted per exec, and never authority. |
+| CM-12 | Snippet output is untrusted data: bounded, truncated with an in-band marker, never re-parsed as tool ids/receipt ids/decisions, never a completion claim. |
+| CM-13 | Default posture is one-shot with a bounded wall clock **plus** an explicit cell mode (`exec\|wait\|terminate`, `cellId`), session-scoped and receipted; no cell survives session termination. |
+| CM-14 | Resource caps (heap/wall/call-count/output) are settable per session and actually enforced (no "plumbed but reset to none" gap). |
+
+**5. Dual-output result rendering** (NF-061): the model sees `content`; the UI sees `metadata`; code mode sees `machineOutput` (ephemeral). Retention failure ⇒ operational failure (§D-05).
+
+**6. Cancellation taxonomy:** "effect interruption is the cancellation mechanism" — tools MUST NOT translate interruption or defects into model-visible failures; broad catch-around-execute is invalid because it consumes interruption and defects. Terminal vocabulary is RC-7's single enum.
+
+**7. Reserved tool name `execute` and name normalization:** `execute` is reserved (code-mode call surface); tool names normalize unsupported characters to `_` at declaration load.
+
+### 2.10 Adoption-wave extensions (RC-15)
+
+> Adopted 2026-11-07 from the adoption wave ([30-steal-list.md](./30-steal-list.md) §2; sources A.9.4 aider and A.9.5 mini-swe-agent).
+
+- **Repo-map ranking (extends `repo_map`, §4.2):** the ranking is a tree-sitter def/ref graph scored by personalised PageRank against the task context, with a binary search over the token budget to pick the cut point — no embeddings, no index service, no extra model call. The aider weight table is the starting prior and is re-tuned only against measured benchmark evidence, never by taste.
+- **Edit-application ladder (extends NF-069):** apply `oldString` exact → after relative-indent normalisation → three-way merge → line-level patch. On failure the result MUST return the failing block, the actual lines that most resemble it, and whether the REPLACE lines are already present — diff-shaped feedback the model can fix in one shot. A single bounded reflection slot caps self-repair; it is not a retry loop.
+- **Git hygiene (E-1/E-3/E-4):** commit dirty state before a multi-edit turn so the edit diff is attributable; keep lint-fix commits separate from feature commits; generate commit messages from the diff **plus** conversation context (Conventional Commits, weak-model-first with a token-limit fallback); and keep a continuous Markdown transcript for resume and post-mortem.
+
 ---
 
 ## 3. Interfaces

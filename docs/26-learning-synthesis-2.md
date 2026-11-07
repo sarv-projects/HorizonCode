@@ -167,7 +167,7 @@ Applied in this pass (spec set updated):
 
 Queued for the next doc pass (rule text fully drafted in this document and the reports; each is an insertion, not a redesign):
 
-> **Final audit (2026-11-06).** The stale blanket status claims this queue implied are reconciled across the set (status notes dated 2026-11-06 in docs `00`, `03`–`11`, `16`, `24`, `25`). The sixteen insertions below are carried **in full** in `29-final-audit.md` Part D — that part is their authoritative text until each owning document folds them in at its next revision (RC-13).
+> **Final audit (2026-11-06); adoption revision (2026-11-07).** The stale blanket status claims this queue implied are reconciled across the set (status notes dated 2026-11-06 in docs `00`, `03`–`11`, `16`, `24`, `25`). The sixteen insertions below were carried **in full** in `29-final-audit.md` Part D and are now **folded into their owner documents** (RC-15); Part D remains the historical verbatim copy. This ledger is closed.
 
 | Doc | Queued change | Source of the drafted text |
 |---|---|---|
