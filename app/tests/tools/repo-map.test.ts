@@ -2,11 +2,15 @@
  *
  * The map is deterministic (byte-stable), budget-bounded with a truncation
  * marker, focus-personalised, test-excluding by default, and admits one
- * `fs.read` per call.
+ * `fs.read` per call. The per-file scan facts are cached in two layers — a
+ * bounded in-process memo and a persistent index at
+ * `<state root>/repo-map/index.json` — and the cache never changes the rendered
+ * map: it only moves the stats line's `cache: r reused, p parsed` counts, which
+ * describe how the call obtained its facts (same inputs -> same counts).
  */
 
 import { describe, expect, test } from "bun:test";
-import { rmSync, utimesSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   buildRepoMap,
@@ -21,6 +25,15 @@ import {
   resetRepoMapCache,
   repoMapTool,
 } from "../../src/tools/repo-map";
+import {
+  REPO_MAP_INDEX_MAX_ENTRIES,
+  REPO_MAP_INDEX_VERSION,
+  repoMapCacheDir,
+  repoMapCachePath,
+  repoMapIndexStats,
+  saveRepoMapIndex,
+  type RepoMapFileEntry,
+} from "../../src/tools/repo-map-cache";
 import { makeWorkspace, mockToolContext, writeFixture } from "./helpers";
 
 const FIXTURE = {
@@ -40,6 +53,31 @@ function manyFiles(n: number): Record<string, string> {
   }
   return ws;
 }
+
+/** The rendered map body: everything before the `[repo_map: ...]` stats line. */
+function bodyOf(map: string): string {
+  const at = map.indexOf("\n[repo_map:");
+  return at === -1 ? map : map.slice(0, at);
+}
+
+/** This call's `cache: r reused, p parsed` counters, from the stats line. */
+function cacheCountsOf(map: string): { reused: number; parsed: number } {
+  const match = /cache: (\d+) reused, (\d+) parsed/.exec(map);
+  if (match === null) throw new Error(`no cache counters in ${JSON.stringify(map)}`);
+  return { reused: Number(match[1]), parsed: Number(match[2]) };
+}
+
+/** Parse the persistent index of a fixture workspace. */
+function readIndex(ws: string): { version: number; entries: Record<string, RepoMapFileEntry> } {
+  return JSON.parse(readFileSync(repoMapCachePath(ws), "utf8"));
+}
+
+/** Permission bits of a path (the tests' only way to observe a mode). */
+function modeOf(target: string): number {
+  return statSync(target).mode & 0o777;
+}
+
+const onUnix = process.platform !== "win32";
 
 /* --------------------------------- parts --------------------------------- */
 
@@ -112,7 +150,7 @@ describe("buildRepoMap", () => {
     expect(result.filesIncluded).toBe(3);
     expect(result.filesOmitted).toBe(0);
     expect(result.truncated).toBe(false);
-    expect(result.map).toMatch(/\[repo_map: 3 files, ~\d+ tokens\]$/);
+    expect(result.map).toMatch(/\[repo_map: 3 files, ~\d+ tokens, cache: \d+ reused, \d+ parsed\]$/);
   });
 
   test("includeTests brings the test files in", () => {
@@ -139,15 +177,17 @@ describe("buildRepoMap", () => {
 
     const clamped = buildRepoMap({ root: ws, cwd: ws, maxTokens: 999_999 });
     if ("empty" in clamped) throw new Error("unexpected empty");
-    expect(clamped.map).toBe(full.map);
+    expect(bodyOf(clamped.map)).toBe(bodyOf(full.map));
   });
 
-  test("byte-stable: two builds of the same tree are identical", () => {
+  test("byte-stable: a repeat build renders the same bytes; consecutive warm calls are fully identical", () => {
     const ws = makeWorkspace(FIXTURE);
     const one = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
     const two = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
-    if ("empty" in one || "empty" in two) throw new Error("unexpected empty");
-    expect(one.map).toBe(two.map);
+    const three = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
+    if ("empty" in one || "empty" in two || "empty" in three) throw new Error("unexpected empty");
+    expect(bodyOf(two.map)).toBe(bodyOf(one.map)); // the tree render never moves
+    expect(three.map).toBe(two.map); // full bytes, the [repo_map: ...] stats line included
   });
 
   test("an empty workspace reports empty", () => {
@@ -166,7 +206,7 @@ describe("buildRepoMap", () => {
 /* ---------------------------------- tool ---------------------------------- */
 
 describe("the tool", () => {
-  test("execute admits one fs.read, renders the map, and is byte-stable across calls", async () => {
+  test("execute admits one fs.read, renders the map, and wires the persistent index", async () => {
     const ws = makeWorkspace(FIXTURE);
     const ctx = mockToolContext({ cwd: ws });
     const r1 = await repoMapTool.execute({ focus: ["src/a.ts"] }, ctx);
@@ -174,9 +214,12 @@ describe("the tool", () => {
     expect(r1.ok).toBe(true);
     expect(r1.output).toContain("src/a.ts:");
     expect(r1.output).toContain("[repo_map: 3 files");
-    expect(r1.output).toBe(r2.output);
+    expect(bodyOf(r2.output)).toBe(bodyOf(r1.output));
     expect(ctx.guardCalls.length).toBe(2);
     expect(ctx.guardCalls[0]?.kind).toBe("fs.read");
+    // The tool resolves the index through paths.ts: <workspace>/.hz/state/repo-map/index.json.
+    expect(repoMapCachePath(ws)).toBe(path.join(ws, ".hz", "state", "repo-map", "index.json"));
+    expect(readIndex(ws).version).toBe(REPO_MAP_INDEX_VERSION);
   }, 20000);
 
   test("execute refuses an empty workspace with the spec's error name", async () => {
@@ -198,7 +241,7 @@ describe("the tool", () => {
 /* ---------------------------- per-file scan cache ---------------------------- */
 
 describe("the per-file scan cache", () => {
-  test("cold vs warm: rendered map and stats line are byte-identical, and the warm call is served from cache", () => {
+  test("cold vs warm: the map body is byte-identical and the warm call is served from the memo", () => {
     const ws = makeWorkspace(FIXTURE);
     resetRepoMapCache();
     const cold = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
@@ -206,13 +249,12 @@ describe("the per-file scan cache", () => {
     const afterCold = repoMapCacheStats();
     expect(afterCold.misses).toBe(3); // src/a.ts, src/b.ts, src/c.ts — tests/ is excluded
     expect(afterCold.hits).toBe(0);
+    expect(cacheCountsOf(cold.map)).toEqual({ reused: 0, parsed: 3 });
 
     const warm = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
     if ("empty" in warm) throw new Error("unexpected empty");
-    expect(warm.map).toBe(cold.map); // full bytes, the [repo_map: ...] stats line included
-    const statsLine = /\[repo_map: [^\]]*\]/.exec(cold.map)?.[0];
-    expect(statsLine).toBeDefined();
-    expect(warm.map).toContain(statsLine as string);
+    expect(bodyOf(warm.map)).toBe(bodyOf(cold.map)); // the stats counters moved, the tree render did not
+    expect(cacheCountsOf(warm.map)).toEqual({ reused: 3, parsed: 0 });
 
     const afterWarm = repoMapCacheStats();
     expect(afterWarm.hits - afterCold.hits).toBe(3); // every file came from the cache
@@ -268,13 +310,13 @@ describe("the per-file scan cache", () => {
     expect(r1.map).toContain("one");
     expect(r2.map).toContain("two");
     expect(r2.map).not.toContain("one");
-    expect(r3.map).toBe(r1.map); // wsOne's entry was not overwritten by wsTwo's
+    expect(bodyOf(r3.map)).toBe(bodyOf(r1.map)); // wsOne's entry was not overwritten by wsTwo's
     expect(repoMapCacheStats().size).toBe(2); // both absolute paths live side by side
   });
 
   test("the cache is bounded and evicts the least recently used entry", () => {
     const cache = new RepoFileScanCache(2);
-    const facts = (def: string) => ({ defs: [def], tokenCounts: new Map<string, number>() });
+    const facts = (def: string) => ({ defs: [def], exported: [true], tokenCounts: new Map<string, number>() });
     cache.set("/w/a.ts", "10:1", facts("a"));
     cache.set("/w/b.ts", "10:1", facts("b"));
 
@@ -292,5 +334,159 @@ describe("the per-file scan cache", () => {
     const stats = repoMapCacheStats();
     expect(stats.max).toBe(4096);
     expect(stats.size).toBeLessThanOrEqual(stats.max);
+  });
+});
+
+/* ------------------------- the persistent identifier index ------------------------- */
+
+describe("the persistent index", () => {
+  test("cold, index-cold and warm calls render identical map bytes; the counts follow the source", () => {
+    const ws = makeWorkspace(FIXTURE);
+    resetRepoMapCache();
+    const indexFile = repoMapCachePath(ws);
+
+    const cold = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"], indexFile });
+    if ("empty" in cold) throw new Error("unexpected empty");
+    expect(cold.cacheReused).toBe(0);
+    expect(cold.cacheParsed).toBe(3);
+    expect(cacheCountsOf(cold.map)).toEqual({ reused: 0, parsed: 3 });
+    expect(readIndex(ws).version).toBe(REPO_MAP_INDEX_VERSION); // the build persisted its scan
+
+    resetRepoMapCache(); // a new process: memo empty, the index on disk
+    const hit = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"], indexFile });
+    const warm = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"], indexFile });
+    if ("empty" in hit || "empty" in warm) throw new Error("unexpected empty");
+    expect(hit.cacheReused).toBe(3);
+    expect(hit.cacheParsed).toBe(0);
+    expect(cacheCountsOf(hit.map)).toEqual({ reused: 3, parsed: 0 });
+    expect(hit.map).toMatch(/\[repo_map: 3 files, ~\d+ tokens, cache: 3 reused, 0 parsed\]$/);
+
+    // Cache-hit vs cold: the rendered map is byte-identical...
+    expect(bodyOf(hit.map)).toBe(bodyOf(cold.map));
+    // ...and once the facts are cached, consecutive calls are byte-identical
+    // INCLUDING the stats line: same inputs -> same counts.
+    expect(warm.map).toBe(hit.map);
+  });
+
+  test("the index stores everything the extraction phase produces", () => {
+    const ws = makeWorkspace({ "src/a.ts": "export function alpha() {\n  return beta();\n}\n" });
+    resetRepoMapCache();
+    const result = buildRepoMap({ root: ws, cwd: ws, indexFile: repoMapCachePath(ws) });
+    if ("empty" in result) throw new Error("unexpected empty");
+    const entry = readIndex(ws).entries["src/a.ts"];
+    const stat = statSync(path.join(ws, "src/a.ts"));
+    expect(entry?.mtimeMs).toBe(stat.mtimeMs);
+    expect(entry?.size).toBe(stat.size);
+    expect(entry?.defs).toEqual(["alpha"]);
+    expect(entry?.exported).toEqual([true]);
+    expect(entry?.refs["alpha"]).toBe(1);
+    expect(entry?.refs["beta"]).toBe(1);
+  });
+
+  test("touch one file -> only it reparses; the other entries are served from the index", () => {
+    const ws = makeWorkspace(FIXTURE);
+    const indexFile = repoMapCachePath(ws);
+    resetRepoMapCache();
+    const first = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in first) throw new Error("unexpected empty");
+    expect(first.cacheParsed).toBe(3);
+
+    // Same byte length (alpha -> alphb), so only mtimeMs can invalidate the entry.
+    const abs = writeFixture(ws, "src/a.ts", "export function alphb() {\n  return beta();\n}\n");
+    utimesSync(abs, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+    resetRepoMapCache(); // memo empty: the persistent layer alone decides what to reparse
+    const indexBefore = repoMapIndexStats();
+
+    const second = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in second) throw new Error("unexpected empty");
+    const indexAfter = repoMapIndexStats();
+    expect(indexAfter.hits - indexBefore.hits).toBe(2); // b and c were served from the index...
+    expect(indexAfter.misses - indexBefore.misses).toBe(1); // ...while a's changed stamp forced the reparse
+    expect(second.cacheReused).toBe(2);
+    expect(second.cacheParsed).toBe(1);
+    expect(cacheCountsOf(second.map)).toEqual({ reused: 2, parsed: 1 });
+    expect(second.map).toContain("alphb");
+    expect(second.map).not.toContain("alpha");
+    expect(readIndex(ws).entries["src/a.ts"]?.defs).toEqual(["alphb"]);
+  });
+
+  test("a deleted file is pruned from the index", () => {
+    const ws = makeWorkspace(FIXTURE);
+    const indexFile = repoMapCachePath(ws);
+    resetRepoMapCache();
+    const first = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in first) throw new Error("unexpected empty");
+    expect(Object.keys(readIndex(ws).entries).sort()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+
+    rmSync(path.join(ws, "src/a.ts"));
+    resetRepoMapCache();
+    const second = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in second) throw new Error("unexpected empty");
+    expect(second.map).not.toContain("src/a.ts");
+    expect(second.cacheReused).toBe(2);
+    expect(second.cacheParsed).toBe(0);
+    expect(Object.keys(readIndex(ws).entries).sort()).toEqual(["src/b.ts", "src/c.ts"]);
+  });
+
+  test("a corrupt or wrong-version index is rebuilt, typed, never a crash", () => {
+    const ws = makeWorkspace(FIXTURE);
+    const indexFile = repoMapCachePath(ws);
+    mkdirSync(repoMapCacheDir(ws), { recursive: true });
+    writeFileSync(indexFile, "{ not json at all", "utf8");
+    resetRepoMapCache();
+
+    const rebuilt = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in rebuilt) throw new Error("unexpected empty");
+    expect(rebuilt.cacheReused).toBe(0);
+    expect(rebuilt.cacheParsed).toBe(3);
+    expect(repoMapIndexStats().invalid).toBeGreaterThanOrEqual(1);
+    expect(readIndex(ws).version).toBe(REPO_MAP_INDEX_VERSION); // the garbage was overwritten
+    expect(Object.keys(readIndex(ws).entries).length).toBe(3);
+
+    // A version this reader does not know is the same typed full rebuild.
+    writeFileSync(indexFile, JSON.stringify({ version: REPO_MAP_INDEX_VERSION + 1, entries: {} }), "utf8");
+    resetRepoMapCache();
+    const again = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in again) throw new Error("unexpected empty");
+    expect(again.cacheReused).toBe(0);
+    expect(again.cacheParsed).toBe(3);
+    expect(readIndex(ws).entries["src/b.ts"]?.defs).toEqual(["beta"]);
+  });
+
+  test("the caps prune deterministically: over the entry bound the lexicographically last entries fall", () => {
+    const ws = makeWorkspace({});
+    const indexFile = repoMapCachePath(ws);
+    const entries = new Map<string, RepoMapFileEntry>();
+    for (let i = 0; i <= REPO_MAP_INDEX_MAX_ENTRIES; i++) {
+      entries.set(`src/f${String(i).padStart(6, "0")}.ts`, { mtimeMs: 1, size: 1, defs: ["d"], exported: [true], refs: {} });
+    }
+    const saved = saveRepoMapIndex(indexFile, entries);
+    expect(saved.ok).toBe(true);
+    expect(saved.written).toBe(true);
+    expect(saved.kept + saved.pruned).toBe(entries.size);
+    expect(saved.pruned).toBeGreaterThanOrEqual(1);
+    expect(saved.kept).toBeLessThanOrEqual(REPO_MAP_INDEX_MAX_ENTRIES);
+    const onDisk = JSON.parse(readFileSync(indexFile, "utf8")) as { entries: Record<string, unknown> };
+    expect(Object.keys(onDisk.entries).length).toBe(saved.kept);
+    expect(onDisk.entries["src/f000000.ts"]).toBeDefined(); // the kept end is the lexicographic head
+  });
+});
+
+describe.skipIf(!onUnix)("the persistent index permissions", () => {
+  test("the index dir is 0700 and the file 0600, and a loose pair is tightened on the next call", () => {
+    const ws = makeWorkspace(FIXTURE);
+    const indexFile = repoMapCachePath(ws);
+    resetRepoMapCache();
+    const first = buildRepoMap({ root: ws, cwd: ws, indexFile });
+    if ("empty" in first) throw new Error("unexpected empty");
+    expect(modeOf(repoMapCacheDir(ws))).toBe(0o700);
+    expect(modeOf(indexFile)).toBe(0o600);
+
+    chmodSync(indexFile, 0o644);
+    chmodSync(repoMapCacheDir(ws), 0o755);
+    const second = buildRepoMap({ root: ws, cwd: ws, indexFile }); // unchanged index: still tightened
+    if ("empty" in second) throw new Error("unexpected empty");
+    expect(modeOf(indexFile)).toBe(0o600);
+    expect(modeOf(repoMapCacheDir(ws))).toBe(0o700);
   });
 });
