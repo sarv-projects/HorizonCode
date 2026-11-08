@@ -1,8 +1,9 @@
 /**
- * evals.ts — eval cases built from post-mortems, with an enforced
- * answer-isolation precondition (docs/30 §4 item 8, reduced form).
+ * evals.ts — eval cases built from post-mortems, the enforced
+ * answer-isolation precondition, and the executor-injected eval runner
+ * (docs/30 §4 item 8, reduced form).
  *
- * Three things live here and nothing else:
+ * Four things live here and nothing else:
  *  1. `evalCaseFromPostmortem(pm)`: a candidate case in a LOCAL form, plainly
  *     named `PostmortemEvalCase`. The wire schema is docs/05 §4.10
  *     `EvalCaseV1` (`evl_<ulid>`, a different field set, `DESIGNED` in that
@@ -18,22 +19,55 @@
  *     `metricContract()` from `core/metrics.ts` (H-7, docs/16 §2.4.3) — every
  *     count leaves this module as a contracted block (Metric/Anchor/Population/
  *     Excludes), never as a bare number.
+ *  4. `runEvalCase` / `runEvalSet`: the eval RUNNER, executor-INJECTED. The
+ *     caller supplies `opts.executor`; the runner itself performs no I/O, no
+ *     provider call and no loop run, which is what makes the grader fully
+ *     unit-testable today. NOTHING in the product wires this to the live loop:
+ *     the loop/provider executor and the test-model-in-library are the
+ *     remaining docs/30 §4 item 8 pieces (named at the bottom).
+ *
+ * The runner, as pinned (one case): (a) it re-asserts the answer-isolation
+ * precondition against the case with the caller's `forbiddenTexts` FIRST — a
+ * case-side leak or an unusable list throws the typed `EvalCaseRefusal` before
+ * any execution, naming the leaking field; (b) it executes through the
+ * injected `executor` inside try/catch — a throw (or a malformed result) is
+ * GRADED, never re-thrown: exactly one `executor_error` failure and an errored
+ * outcome `{terminal: "failed", error}` (the loop's own internal-error shape:
+ * `loop.ts` reports `detail: "internal_error"` as terminal `failed`, and the
+ * RC-7 terminal vocabulary has no `internal_error` value, so it cannot be a
+ * terminal here); (c) it grades every assertion the case carries — `terminal`
+ * (the observed terminal must equal the case's value) and `no_answer_leak`
+ * (definition below) — and a kind the runner cannot grade fails as
+ * `unknown_assertion` rather than being silently skipped; (d) it returns
+ * `{caseId, passed, failures, outcome}`. `runEvalSet` re-asserts every case
+ * BEFORE the set's first execution (a leak anywhere refuses the whole set —
+ * nothing has run) and publishes the run/passed/failed counts as contracted
+ * blocks; the aggregate carries no bare count.
+ *
+ * The `no_answer_leak` definition, pinned — both halves. CASE half: the case
+ * record itself must contain none of the forbidden texts; step (a) proves that
+ * before execution and refuses, naming the field (`$.task`, `$.setup.tools[1]`,
+ * …). RUN half: with the executor's `finalAnswer` in hand, that string must
+ * not contain any of the forbidden texts; the first match in list order fails
+ * the assertion, naming the text. The injected executor reports only
+ * `{terminal, finalAnswer, toolCalls?}` — no transcript, tool results or
+ * receipts — so the run half is exactly this finalAnswer check, stated rather
+ * than implied.
  *
  * Refusals are typed (`EvalCaseRefusal`) and carry a machine-readable `code`;
  * the four codes and their exact message prefixes are: `no_task`, `bad_source`,
  * `answer_leak`, `bad_forbidden` (the strings are pinned in
  * `tests/core/postmortems-evals.test.ts`).
  *
- * Not in this slice, named: no eval RUNNER exists (cases are data; replaying a
- * trajectory and grading assertions belongs to the eval harness), there is no
- * live wiring into the loop, and docs/30 §4 item 8's test-model-in-library is
- * not here. The answer-isolation precondition here is the string-level half
- * (Reasonix `answer_isolation.go`'s OS read sandbox is the other half, docs/29
- * C-27): a case whose task *is* the answer has nothing to leak and still must
- * not be run.
+ * Not in this slice, named: the live-loop/provider executor (nothing builds
+ * one here; nothing in the product calls `runEvalCase`/`runEvalSet` yet), and
+ * test-model-in-library. The answer-isolation precondition here is the
+ * string-level half (Reasonix `answer_isolation.go`'s OS read sandbox is the
+ * other half, docs/29 C-27): a case whose task *is* the answer has nothing to
+ * leak and still must not be run.
  */
 
-import type { TerminalState } from "../contracts";
+import type { RunExit, TerminalState } from "../contracts";
 import { metricContract } from "./metrics";
 import type { PostmortemRecord } from "./postmortem";
 
@@ -284,10 +318,10 @@ export function summarizeEvalSet(cases: readonly PostmortemEvalCase[]): EvalSetS
     }
   });
 
-  const population = `${cases.length} post-mortem-derived eval case(s) in this set (local candidate form, core/evals.ts; no runner exists in this slice)`;
+  const population = `${cases.length} post-mortem-derived eval case(s) in this set (local candidate form, core/evals.ts; this is a case-population summary — run results are published by runEvalSet)`;
   const anchor = "none — first measurement (no prior eval set or run to compare against)";
   const excludes =
-    "eval runs and their outcomes — no runner exists in this slice, so these are case-population numbers, not results";
+    "eval runs and their outcomes — this summary is case-population, not results; run outcomes are published by runEvalSet";
   const terminalDistribution = Object.keys(terminals)
     .sort()
     .map((key) => `${key}=${terminals[key]}`)
@@ -320,4 +354,307 @@ export function summarizeEvalSet(cases: readonly PostmortemEvalCase[]): EvalSetS
   ];
 
   return { cases: cases.length, withNoAnswerLeakAssertion, terminals, tools, published };
+}
+
+/* ------------------------------- the runner ------------------------------- */
+
+/** What one injected execution observed — the executor's contract, exactly. */
+export interface EvalExecutorResult {
+  /** The RC-7 terminal the run ended on (`RunExit.terminal`). */
+  terminal: RunExit["terminal"];
+  /** The run's final assistant output: the only run text the runner grades. */
+  finalAnswer: string;
+  /** The tool names the run exercised, when the executor can report them. */
+  toolCalls?: string[];
+}
+
+/**
+ * The injected executor: runs one case and reports what the run observed. The
+ * runner never builds one — no loop wiring, no provider harness — which is
+ * what keeps the grading logic pure and unit-testable today.
+ */
+export type EvalExecutor = (caseObj: PostmortemEvalCase) => Promise<EvalExecutorResult>;
+
+/** The runner's options: who executes, and the answer side to check against. */
+export interface EvalRunnerOptions {
+  executor: EvalExecutor;
+  /**
+   * The answer side of the trajectory (the final assistant output(s)). A
+   * forbidden text in the CASE refuses (typed, before any execution); a
+   * forbidden text in the run's `finalAnswer` fails `no_answer_leak`.
+   */
+  forbiddenTexts: readonly string[];
+}
+
+/** Why a run failed; the closed set of failure kinds the runner produces. */
+export type EvalFailureKind = "terminal" | "no_answer_leak" | "executor_error" | "unknown_assertion";
+
+/** One graded failure: what was expected, what was observed, and why. */
+export interface EvalFailure {
+  kind: EvalFailureKind;
+  /** The assertion's expected value (`terminal` only). */
+  expected?: string;
+  /** What was observed instead: the terminal, the matched text, the thrown message. */
+  observed?: string;
+  detail: string;
+}
+
+/** The normalised observation the runner graded. */
+export interface EvalRunOutcome {
+  terminal: TerminalState;
+  finalAnswer: string;
+  toolCalls: string[];
+  /**
+   * Set when the executor threw or returned a malformed result: no run was
+   * observed. The terminal is then the loop's internal-error shape — `failed`,
+   * exactly what `loop.ts` reports for `detail: "internal_error"` (the RC-7
+   * vocabulary has no `internal_error` value, so it cannot be a terminal here).
+   */
+  error?: string;
+}
+
+/** The graded result of one case: the failures, the observation, the verdict. */
+export interface EvalRunResult {
+  caseId: string;
+  passed: boolean;
+  failures: EvalFailure[];
+  outcome: EvalRunOutcome;
+}
+
+/** The set aggregate: published numbers only (H-7). */
+export interface EvalSetRunAggregate {
+  /**
+   * One contracted block per count (Metric/Anchor/Population/Excludes): the
+   * aggregate carries no bare count — a caller that needs one counts
+   * `results`, and a number that leaves here without its four slots cannot be
+   * produced.
+   */
+  published: string[];
+}
+
+/** `runEvalSet`'s full result: per-case results in input order + the aggregate. */
+export interface EvalSetRun {
+  results: EvalRunResult[];
+  aggregate: EvalSetRunAggregate;
+}
+
+/**
+ * The RC-7 terminal vocabulary as data, exhaustive by construction (the same
+ * pattern as `core/postmortem.ts`): adding a value to `TerminalState` in
+ * `../contracts.ts` makes this declaration fail to compile instead of silently
+ * missing a value here. Used to refuse a malformed executor result — a
+ * terminal outside the closed vocabulary cannot be compared honestly.
+ */
+const RC7: Record<TerminalState, true> = {
+  succeeded: true,
+  failed: true,
+  denied: true,
+  cancelled: true,
+  unknown: true,
+  budget_exhausted: true,
+  timeout: true,
+  interrupted: true,
+};
+const TERMINALS: readonly string[] = Object.keys(RC7);
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** A case must be runnable before anything else happens (programming errors). */
+function requireRunnableCase(caseObj: unknown, label: string): PostmortemEvalCase {
+  const candidate = caseObj as Partial<PostmortemEvalCase> | null;
+  if (
+    candidate === null ||
+    typeof candidate !== "object" ||
+    typeof candidate.id !== "string" ||
+    candidate.id.trim() === ""
+  ) {
+    throw new Error(`${label} is not an eval case (id missing)`);
+  }
+  if (!Array.isArray(candidate.assertions) || candidate.assertions.length === 0) {
+    throw new Error(`${label} carries no assertions — an eval case that asserts nothing is theatre`);
+  }
+  return caseObj as PostmortemEvalCase;
+}
+
+function requireExecutor(opts: EvalRunnerOptions | undefined, label: string): EvalExecutor {
+  const executor = opts?.executor;
+  if (typeof executor !== "function") {
+    throw new Error(`${label}: opts.executor must be a function — the runner never builds one (no loop/provider wiring in this slice)`);
+  }
+  return executor;
+}
+
+/**
+ * Normalise an executor return value; a malformed result is refused the same
+ * way a throw is — as a graded `executor_error`, never a comparison. There is
+ * no honest terminal to compare and no text to scan.
+ */
+function normalizeExecutorResult(raw: unknown): { outcome: EvalRunOutcome } | { malformed: string } {
+  const result = raw as Partial<EvalExecutorResult> | null;
+  if (result === null || typeof result !== "object") {
+    return { malformed: "the executor returned a non-object result" };
+  }
+  if (typeof result.terminal !== "string" || !TERMINALS.includes(result.terminal)) {
+    return {
+      malformed: `the executor returned terminal ${JSON.stringify(result.terminal)} — not an RC-7 value (${TERMINALS.join(", ")})`,
+    };
+  }
+  if (typeof result.finalAnswer !== "string") {
+    return { malformed: "the executor returned no finalAnswer string" };
+  }
+  const toolCalls = result.toolCalls;
+  if (toolCalls !== undefined && (!Array.isArray(toolCalls) || !toolCalls.every((name) => typeof name === "string"))) {
+    return { malformed: "the executor returned toolCalls that is not an array of strings" };
+  }
+  return {
+    outcome: {
+      terminal: result.terminal as TerminalState,
+      finalAnswer: result.finalAnswer,
+      toolCalls: [...(toolCalls ?? [])],
+    },
+  };
+}
+
+/** The graded shape of "the executor produced no run": one failure, errored outcome. */
+function executorErrorResult(caseId: string, message: string): EvalRunResult {
+  return {
+    caseId,
+    passed: false,
+    failures: [
+      {
+        kind: "executor_error",
+        observed: message,
+        detail: `executor_error: ${message} — graded, not re-thrown; there was no observation, so no assertion is graded against one`,
+      },
+    ],
+    outcome: { terminal: "failed", finalAnswer: "", toolCalls: [], error: message },
+  };
+}
+
+/**
+ * Grade every assertion the case carries (step (c)) against the observation. A
+ * kind the runner cannot grade is a failure, not a skip: a case the runner
+ * cannot check must not pass.
+ */
+function gradeAssertions(
+  caseObj: PostmortemEvalCase,
+  outcome: EvalRunOutcome,
+  forbidden: readonly string[],
+): EvalFailure[] {
+  const failures: EvalFailure[] = [];
+  caseObj.assertions.forEach((raw, index) => {
+    const assertion = raw as { kind?: unknown; value?: unknown } | null;
+    if (assertion?.kind === "terminal") {
+      const expected = assertion.value;
+      if (outcome.terminal !== expected) {
+        failures.push({
+          kind: "terminal",
+          expected: typeof expected === "string" ? expected : String(expected),
+          observed: outcome.terminal,
+          detail: `terminal assertion failed: expected ${JSON.stringify(expected)}, observed ${JSON.stringify(outcome.terminal)}`,
+        });
+      }
+      return;
+    }
+    if (assertion?.kind === "no_answer_leak") {
+      // The RUN half of the pinned definition: the run's own output must not
+      // contain the answer side. The CASE half was proved by step (a) before
+      // any execution.
+      const hit = forbidden.find((text) => outcome.finalAnswer.includes(text));
+      if (hit !== undefined) {
+        failures.push({
+          kind: "no_answer_leak",
+          observed: hit,
+          detail: `no_answer_leak assertion failed: the run's finalAnswer carries answer-side text ${JSON.stringify(preview(hit))} — the run's own output must not contain the answer side`,
+        });
+      }
+      return;
+    }
+    failures.push({
+      kind: "unknown_assertion",
+      observed: assertion?.kind === undefined ? "undefined" : String(assertion.kind),
+      detail: `assertions[${index}] carries kind ${JSON.stringify(assertion?.kind)} — not a kind this runner grades; a case the runner cannot grade must not pass`,
+    });
+  });
+  return failures;
+}
+
+/**
+ * Run one eval case (docs/30 §4 item 8, runner half — reduced form).
+ *
+ * Pure and dependency-injected: no I/O, no clock, no randomness; the same case
+ * and the same executor yield the same result. Order is the contract: (a) the
+ * answer-isolation precondition is re-asserted against the case BEFORE the
+ * executor is called (a leak refuses, typed, naming the field); (b) the
+ * executor is awaited inside try/catch — a throw or a malformed result becomes
+ * a graded `executor_error` result, never a rejection; (c) every assertion is
+ * graded; (d) the typed result is returned.
+ */
+export async function runEvalCase(caseObj: PostmortemEvalCase, opts: EvalRunnerOptions): Promise<EvalRunResult> {
+  const evalCase = requireRunnableCase(caseObj, "runEvalCase: caseObj");
+  const executor = requireExecutor(opts, "runEvalCase");
+
+  // (a) FIRST, before any execution: the case must not carry the answer side.
+  assertAnswerIsolation(evalCase, opts.forbiddenTexts);
+  // The same pure validation, reused so the run-half scan is exactly the list
+  // step (a) accepted.
+  const forbidden = normalizeForbidden(opts.forbiddenTexts);
+
+  // (b) Execute; an executor throw or a malformed result is graded, not thrown.
+  let outcome: EvalRunOutcome;
+  try {
+    const normalized = normalizeExecutorResult(await executor(evalCase));
+    if ("malformed" in normalized) {
+      return executorErrorResult(evalCase.id, `the executor returned a malformed result: ${normalized.malformed}`);
+    }
+    outcome = normalized.outcome;
+  } catch (err) {
+    return executorErrorResult(evalCase.id, `the executor threw: ${errorMessage(err)}`);
+  }
+
+  // (c) Grade every assertion the case carries.
+  const failures = gradeAssertions(evalCase, outcome, forbidden);
+
+  // (d) The typed result.
+  return { caseId: evalCase.id, passed: failures.length === 0, failures, outcome };
+}
+
+/**
+ * Run a whole set: every case is checked against the answer side BEFORE the
+ * set's first execution (a leak anywhere refuses the whole set — nothing has
+ * run), then each case goes through `runEvalCase`. The aggregate publishes the
+ * run/passed/failed counts as contracted blocks (H-7) and carries no bare
+ * count: a caller that needs one counts `results`.
+ *
+ * Determinism mirrors `runEvalCase`: no I/O, no clock, no randomness; the same
+ * cases and the same executor yield the same results, twice in a row.
+ */
+export async function runEvalSet(
+  cases: readonly PostmortemEvalCase[],
+  opts: EvalRunnerOptions,
+): Promise<EvalSetRun> {
+  if (!Array.isArray(cases)) throw new Error("runEvalSet: cases must be an array");
+  const executor = requireExecutor(opts, "runEvalSet");
+  // A refusal anywhere refuses the set before ANY execution.
+  cases.forEach((c, index) => requireRunnableCase(c, `runEvalSet: cases[${index}]`));
+  for (const c of cases) assertAnswerIsolation(c, opts.forbiddenTexts);
+
+  const results: EvalRunResult[] = [];
+  for (const c of cases) results.push(await runEvalCase(c, { executor, forbiddenTexts: opts.forbiddenTexts }));
+
+  const passed = results.filter((result) => result.passed).length;
+  const failed = results.length - passed;
+  const population = `${results.length} post-mortem-derived eval case(s) run through the injected executor (core/evals.ts runEvalSet; the executor is caller-supplied — no loop or provider wiring)`;
+  const anchor = "none — first eval run in this repository (no prior run of this set to compare against)";
+  const excludes =
+    "none — every case in the set produced a graded result (a case-side refusal refuses the whole set before its first execution; an executor throw is graded as executor_error)";
+  const published = [
+    metricContract({ metric: "eval cases run", anchor, population, excludes, value: results.length }),
+    metricContract({ metric: "eval cases passed", anchor, population, excludes, value: passed }),
+    metricContract({ metric: "eval cases failed", anchor, population, excludes, value: failed }),
+  ];
+
+  return { results, aggregate: { published } };
 }
