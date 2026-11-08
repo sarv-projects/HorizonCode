@@ -49,6 +49,28 @@ function replaceFirst(hay: string, oldStr: string, next: string): string {
   return hay.slice(0, i) + next + hay.slice(i + oldStr.length);
 }
 
+/**
+ * The exact-rung projection of this edit against `before`: what the file would
+ * contain if the call ran right now. Pure and side-effect free — plan-mode
+ * staging uses it to show the diff without touching disk. The fuzzy rungs are
+ * deliberately NOT projected: they consume the session's reflection slot and
+ * depend on a live read, so staging refuses them instead of guessing (the
+ * model is told to use write with the full content, or exit plan mode).
+ */
+export function projectExactEdit(
+  before: string,
+  oldStr: string,
+  newStr: string,
+  all: boolean,
+): { ok: true; after: string } | { ok: false; error: string } {
+  const matches = countOccurrences(before, oldStr);
+  if (matches === 0) return { ok: false, error: "no exact match for the old text" };
+  if (matches > 1 && !all) {
+    return { ok: false, error: `found ${matches} matches; set all:true or provide more context` };
+  }
+  return { ok: true, after: all ? replaceAll(before, oldStr, newStr) : replaceFirst(before, oldStr, newStr) };
+}
+
 /* ------------------------- NF-069 / A-1…A-5 ladder ------------------------- */
 
 /** The escalation order, as reported in results and errors (byte-stable). */

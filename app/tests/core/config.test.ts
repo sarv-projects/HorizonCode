@@ -206,3 +206,44 @@ test("HZ_MAX_* budget variables parse; 0 means unlimited and junk is ignored", (
   expect(loadConfig({ HZ_MAX_STEPS: "nonsense" }, file).budget).toBeUndefined();
   expect(loadConfig({ HZ_MAX_STEPS: "-3" }, file).budget).toBeUndefined();
 });
+
+test("the mcp section lives in the user config only; malformed servers are skipped and named", () => {
+  cleanEnv();
+  // No `mcp` key: nothing to start, and no invented default servers.
+  expect(loadConfig({}, homeWithConfig().file).mcp).toBeUndefined();
+
+  const { file } = homeWithConfig(
+    JSON.stringify({
+      mcp: {
+        servers: [
+          { id: "files", command: "bun", args: ["run", "server.ts"], env: { LOG_LEVEL: "debug" }, cwd: "/tmp" },
+          // The next four are malformed in different ways; the last duplicates the first.
+          { id: "Bad Id", command: "bun" },
+          { id: "no-command" },
+          { id: "bad-args", command: "bun", args: "run" },
+          { id: "bad-env", command: "bun", env: { LOG_LEVEL: 1 } },
+          { id: "files", command: "bun" },
+        ],
+      },
+    }),
+  );
+  const config = loadConfig({}, file);
+  // docs/09 §4.7 v1: ONLY user-config servers are eligible — no env, no
+  // workspace path exists for MCP, so a cloned repo cannot name a program.
+  expect(config.mcp?.servers).toEqual([
+    { id: "files", command: "bun", args: ["run", "server.ts"], env: { LOG_LEVEL: "debug" }, cwd: "/tmp" },
+  ]);
+  expect(config.mcp?.rejected.length).toBe(5);
+  const rejected = config.mcp?.rejected.join("\n") ?? "";
+  expect(rejected).toContain("must match [a-z0-9-]");
+  expect(rejected).toContain("command must be a non-empty string");
+  expect(rejected).toContain("args must be an array of strings");
+  expect(rejected).toContain("env.LOG_LEVEL must be a string");
+  expect(rejected).toContain("duplicates server id");
+
+  // A wrong-shaped section is a refusal list, never a crash.
+  const wrongShape = homeWithConfig(JSON.stringify({ mcp: { servers: "one" } }));
+  expect(loadConfig({}, wrongShape.file).mcp).toEqual({ servers: [], rejected: ["mcp.servers must be an array"] });
+  const notAnObject = homeWithConfig(JSON.stringify({ mcp: [1, 2] }));
+  expect(loadConfig({}, notAnObject.file).mcp?.rejected.length).toBe(1);
+});

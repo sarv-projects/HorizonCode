@@ -869,7 +869,7 @@ describe("ttlMs <= 0 parity (finding 13)", () => {
 /* ------------------------------ finding 14 ------------------------------ */
 
 describe("unknown action kinds are refused (finding 14)", () => {
-  test("fallback: check and mint refuse an unknown kind, the five known kinds decide", async () => {
+  test("fallback: check and mint refuse an unknown kind, the six known kinds decide", async () => {
     const { client } = await fallbackClientFixture("hz-kinds-ts-");
     const unknown = { kind: "fs.edit" as GuardAction["kind"], target: "/etc/passwd" };
     const decision = await client.checkGuard(unknown, "outside");
@@ -877,7 +877,9 @@ describe("unknown action kinds are refused (finding 14)", () => {
     expect(decision.reason ?? "").toMatch(/HZ_PRECONDITION_FAILED: unknown action kind "fs\.edit"/);
     await expect(client.makeLease("fs.edit" as Lease["kind"], "*", 60_000)).rejects.toThrow(/unknown action kind/);
 
-    for (const kind of ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn"] as const) {
+    // `mcp.invoke` joined the vocabulary with the MCP surface (docs/09 §4.7) and
+    // must decide like the rest: a known kind, never an unknown-kind refusal.
+    for (const kind of ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn", "mcp.invoke"] as const) {
       const known = await client.checkGuard({ kind, target: "/some/where" }, "outside");
       expect(["allow", "ask", "deny"], kind).toContain(known.decision);
       expect(known.reason ?? "").not.toContain("unknown action kind");

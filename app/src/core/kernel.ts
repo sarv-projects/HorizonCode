@@ -232,7 +232,7 @@ export function patternMatches(pattern: string, target: string): boolean {
  * is keyed to the exact mutating kind, so an unrecognised spelling must never
  * reach the policy as an unknown rule. Keep in step with contracts' GuardKind.
  */
-export const KNOWN_GUARD_KINDS = ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn"] as const;
+export const KNOWN_GUARD_KINDS = ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn", "mcp.invoke"] as const;
 
 /** The typed refusal for a kind this kernel does not know. */
 export function unknownKindRefusal(kind: string): string {

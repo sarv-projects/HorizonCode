@@ -35,8 +35,11 @@
  * ever added, and a store line that does not parse makes `curate` REFUSE
  * (`CuratorError: store-corrupt`) rather than read the history as empty — the
  * owned-spawn ledger's rule, that "unreadable" and "nothing recorded" are
- * different facts. Never applied: no code path here writes a skill, a memory, a
- * prompt or a session (ADR-010 — proposals are proposals). The store is
+ * different facts. The read half (`loadProposals`) exists for consumers outside
+ * the writer — the grow CLI's `--list` and `--apply` — and parses through the
+ * same canonical rows under the same refusal rules; it still applies nothing.
+ * Never applied: no code path here writes a skill, a memory, a prompt or a
+ * session (ADR-010 — proposals are proposals). The store is
  * owner-only (docs/03 D12): the directory is chmod 0700 and the file 0600 on
  * every touch (Unix, umask-proof), so a loose older file is tightened.
  *
@@ -437,6 +440,75 @@ function readStoreDigests(file: string): string[] {
     digests.push(digest);
   }
   return digests;
+}
+
+/* ------------------------------ the read half ------------------------------ */
+
+/** The parsed store, in file order. */
+export interface ProposalLoad {
+  storePath: string;
+  /** True when the store file does not exist (nothing recorded yet — healthy). */
+  missing: boolean;
+  proposals: StoredProposalRow[];
+}
+
+const STORED_DIGEST_RE = /^[0-9a-f]{64}$/;
+
+function isStoredProposalRow(value: unknown): value is StoredProposalRow {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Partial<StoredProposalRow>;
+  if (row.schemaVersion !== 1) return false;
+  if (typeof row.kind !== "string" || !(PROPOSAL_KINDS as readonly string[]).includes(row.kind)) return false;
+  if (typeof row.title !== "string" || typeof row.body !== "string") return false;
+  if (typeof row.digest !== "string" || !STORED_DIGEST_RE.test(row.digest)) return false;
+  if (!Array.isArray(row.evidence) || row.evidence.some((entry) => typeof entry !== "string")) return false;
+  if (!Array.isArray(row.reads) || row.reads.some((entry) => typeof entry !== "string")) return false;
+  if (typeof row.createdAt !== "string" || row.origin !== REVIEW_FORK_ORIGIN) return false;
+  return true;
+}
+
+/**
+ * Read the store for consumers outside `curate` — the grow CLI's `--list` and
+ * `--apply`. The same honesty rule as `readStoreDigests`: a missing file is the
+ * one healthy empty answer; a file whose bytes cannot be read, whose lines are
+ * not JSON, or whose rows are not v1 proposal rows is a REFUSAL
+ * (`store-corrupt`) — never "no proposals", because callers act on this. Pure
+ * read: nothing here writes, chmods or applies (ADR-010).
+ */
+export function loadProposals(stateDir: string): ProposalLoad {
+  if (typeof stateDir !== "string" || stateDir.trim() === "" || !path.isAbsolute(stateDir)) {
+    throw new CuratorError("invalid-store", `stateDir must be a non-empty absolute path (got ${JSON.stringify(stateDir)})`);
+  }
+  const file = proposalsFilePath(stateDir);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      return { storePath: file, missing: true, proposals: [] };
+    }
+    throw new CuratorError(
+      "store-corrupt",
+      `proposals store is unreadable (${errorMessage(err)}); refusing to report an unknown history as empty`,
+    );
+  }
+  const proposals: StoredProposalRow[] = [];
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = (lines[index] as string).trim();
+    if (line === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (err) {
+      throw new CuratorError("store-corrupt", `line ${index + 1} is not JSON (${errorMessage(err)})`);
+    }
+    if (!isStoredProposalRow(parsed)) {
+      throw new CuratorError("store-corrupt", `line ${index + 1} is not a v1 proposal row; refusing to skip it silently`);
+    }
+    proposals.push(parsed);
+  }
+  return { storePath: file, missing: false, proposals };
 }
 
 /**

@@ -13,10 +13,13 @@
  */
 
 import * as path from "node:path";
+import { readFileSync } from "node:fs";
 import type {
   ApprovalHandler,
+  ApprovalRequest,
   ChatMsg,
   ContextUsage,
+  GuardAction,
   GuardKind,
   KernelMode,
   Lease,
@@ -26,9 +29,11 @@ import type {
   RuntimeCallbacks,
   RuntimeEvent,
   RuntimeOptions,
+  ToolContext,
+  ToolResult,
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
-import { loadConfig, type HzConfig } from "./config";
+import { loadConfig, type HzConfig, type McpConfig } from "./config";
 import { KernelClient } from "./kernel";
 import {
   BudgetLedger,
@@ -36,6 +41,7 @@ import {
   getApprovalHandler,
   MAX_PROVIDER_CALLS,
   runTurn,
+  scopeFor,
   SESSION_LEASE_TTL_MS,
   setApprovalHandler as setProcessApprovalHandler,
   streamFor,
@@ -45,6 +51,16 @@ import { SessionStore, type SessionInfo } from "./session";
 import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
 import { runNested } from "./subagent";
 import { stopAllPreviews } from "../tools/preview";
+// Plan mode's staging store and the apply path: /apply runs each staged write
+// through the ordinary `write` tool, so an applied plan takes exactly the guard,
+// approval and read-before-write route a live write takes (no second writer).
+import { discardStaged, stagedChanges as planStagedChanges, type StagedChange } from "./plan";
+// The MCP manager (docs/09 §4.7): connect-time spawn admissions happen through
+// the session's kernel; its children are reaped by close().
+import { startMcpManager, type McpManager } from "./mcp";
+import { getTool } from "../tools";
+import { noteRead } from "../tools/read-ledger";
+import { canonicalJson, sha256Hex } from "./canon";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -61,6 +77,19 @@ export interface HzRuntime extends Runtime {
   sessions(): SessionInfo[];
   /** The most recent dispatch's context estimate, or undefined before one ran. */
   contextUsage(): ContextUsage | undefined;
+  /**
+   * Plan mode (the user's toggle): while on, `write`/`edit` calls stage for
+   * review and effectful tools (shell, undo, preview, agent, code_mode) are
+   * refused; read-only tools are unaffected.
+   */
+  setPlanMode(on: boolean): void;
+  planMode(): boolean;
+  /** The session's staged changes, oldest first (plan mode's review surface). */
+  stagedChanges(): readonly StagedChange[];
+  /** Apply every staged change through the ordinary guard path; summary line. */
+  applyPlan(): Promise<string>;
+  /** Discard one staged change, or all; returns how many were dropped. */
+  discardPlan(rel?: string): number;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -90,6 +119,10 @@ class HzRuntimeImpl implements HzRuntime {
   private lastContext: ContextUsage | undefined;
   /** NF-073: the resolved budget every turn tree draws from (0 = unlimited). */
   private readonly budget: RunBudget;
+  /** Plan mode's per-session toggle (the TUI's /plan); off by default. */
+  private planOn = false;
+  /** The MCP manager this runtime owns, started by createRuntime, stopped by close(). */
+  private mcp: McpManager | undefined;
 
   constructor(args: {
     workspace: string;
@@ -173,6 +206,131 @@ class HzRuntimeImpl implements HzRuntime {
     return this.lastContext;
   }
 
+  setPlanMode(on: boolean): void {
+    this.planOn = on === true;
+  }
+
+  planMode(): boolean {
+    return this.planOn;
+  }
+
+  stagedChanges(): readonly StagedChange[] {
+    return planStagedChanges(this.session.id);
+  }
+
+  discardPlan(rel?: string): number {
+    return discardStaged(this.session.id, rel);
+  }
+
+  /**
+   * Apply the session's staged changes (the TUI's /apply). Each change runs
+   * through the ordinary `write` tool — the same guard check, approval prompt
+   * (an fs.write outside the workspace still asks), read-before-write ledger,
+   * atomic replacement and change journal a live write takes, so an applied
+   * plan is indistinguishable from the same edit made directly. A change that
+   * cannot be applied is KEPT and named with its reason; the rest continue —
+   * one refusal must not drop the remainder of the plan.
+   */
+  async applyPlan(): Promise<string> {
+    const pending = planStagedChanges(this.session.id);
+    if (pending.length === 0) {
+      return this.planOn
+        ? "nothing staged yet — plan mode stages write/edit calls for /changes to inspect"
+        : "nothing staged (plan mode is off; writes apply directly)";
+    }
+    const write = getTool("write");
+    if (write === undefined) return "the write tool is unavailable in this build; nothing applied";
+    const ctx: ToolContext = {
+      cwd: this.workspace,
+      workspace: this.workspace,
+      sessionId: this.session.id,
+      signal: new AbortController().signal,
+      guard: (action: GuardAction) =>
+        this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
+      approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),
+      receipt: (rec) => this.kernel.issueReceipt(rec),
+    };
+    const written: string[] = [];
+    const kept: string[] = [];
+    for (const change of pending) {
+      // A staged change is a snapshot, not a lock: if the file moved on since it
+      // was staged, applying would silently overwrite the newer content. The
+      // change is KEPT and the reason stated — the user re-stages against the
+      // new state (same rule the change journal's stale-check encodes).
+      let current: string | null = null;
+      try {
+        current = readFileSync(change.resolved).toString("utf8");
+      } catch {
+        current = null;
+      }
+      const movedOn = change.before === null ? current !== null : current !== change.before;
+      if (movedOn) {
+        kept.push(
+          `${change.rel}: changed on disk since it was staged${change.before === null ? " (the file now exists)" : ""} — re-stage to review the new state`,
+        );
+        continue;
+      }
+      // /changes showed this content before /apply ran: the read the ledger
+      // wants IS the review (write otherwise refuses an existing unread file).
+      if (change.before !== null) noteRead(ctx, change.resolved);
+      let result: ToolResult;
+      try {
+        result = await write.execute({ path: change.rel, content: change.after }, ctx);
+      } catch (err) {
+        result = { ok: false, output: "", error: errorMessage(err) };
+      }
+      if (result.ok) {
+        written.push(change.rel);
+        discardStaged(this.session.id, change.rel);
+        // The receipt chain stays unbroken for applied writes: the loop issues
+        // one receipt per tool call, and /apply is a real write the loop never
+        // saw. Best-effort; a failure is noticed, never fatal to the apply.
+        try {
+          await this.kernel.issueReceipt({
+            action: "tool.execute",
+            tool: "write",
+            argsDigest: sha256Hex(canonicalJson({ path: change.rel, content: change.after })),
+            resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+          });
+        } catch (err) {
+          this.note(`could not issue a receipt for the applied write ${change.rel}: ${errorMessage(err)}`);
+        }
+      } else {
+        const reason = (result.error && result.error !== "" ? result.error : result.output) || "failed";
+        kept.push(`${change.rel}: ${reason.split("\n")[0]}`);
+      }
+    }
+    const parts: string[] = [
+      written.length > 0 ? `applied ${written.length} staged change(s): ${written.join(", ")}` : "applied nothing",
+    ];
+    if (kept.length > 0) parts.push(`kept ${kept.length}: ${kept.join("; ")}`);
+    const summary = parts.join(" \u2014 ");
+    await this.append(streamFor(this.session.id), "plan.apply", {
+      applied: written,
+      kept,
+      remaining: planStagedChanges(this.session.id).length,
+    });
+    return summary;
+  }
+
+  /**
+   * Connect the configured MCP servers (docs/09 §4.7). Called once by
+   * createRuntime; a server that fails to start is a notice, not a startup
+   * failure, and every connect is admitted as a `spawn` through the session's
+   * kernel before the program runs.
+   */
+  async startMcp(config: McpConfig | undefined): Promise<void> {
+    if (this.mcp !== undefined) return;
+    this.mcp = await startMcpManager(config, {
+      workspace: this.workspace,
+      sessionId: this.session.id,
+      guard: (action: GuardAction) =>
+        this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
+      approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),
+      onNotice: (message: string) => this.note(message),
+    });
+  }
+
   sessions(): SessionInfo[] {
     return this.store.listSessions();
   }
@@ -207,6 +365,11 @@ class HzRuntimeImpl implements HzRuntime {
       workspace: this.workspace,
       provider: this.provider.name,
       model: this.currentModel,
+      // Ruling 33: the mode THIS run came up in is part of the session's
+      // provenance. Read after kernel.start(), so the log records what actually
+      // ran rather than what was hoped for — and a later fallback (or a resume
+      // under a different transport) can never rewrite an earlier run's record.
+      kernelMode: this.kernel.mode,
     });
   }
   private async logSessionEnd(sessionId: string): Promise<void> {
@@ -271,6 +434,9 @@ class HzRuntimeImpl implements HzRuntime {
           signal: controller.signal,
           callbacks,
           sessionLeases: this.leases,
+          // Plan mode rides this run's deps: staging/refusals happen inside
+          // executeTool, and the model is told via the plan rail line.
+          planMode: this.planOn,
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
@@ -314,6 +480,9 @@ class HzRuntimeImpl implements HzRuntime {
     this.closed = true;
     this.abort();
     await this.sendQueue.catch(() => undefined);
+    // MCP children are this runtime's spawns: reap them before the kernel goes
+    // down, so no server process outlives the session that started it.
+    await this.mcp?.stop();
     // Previews are process-global (tools/preview.ts): stop every live one, from
     // any session, so no dev server outlives the runtime that started it.
     await stopAllPreviews();
@@ -372,12 +541,27 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     },
   });
   await impl.logSessionStart();
+  if (impl.kernelMode === "untrusted") {
+    // Ruling 33: the mode is first-class. Coming up without the Rust kernel
+    // gets exactly ONE notice, delivered on the first turn (note() queues it
+    // when nothing is running — the same path kernel mode-change notes use).
+    // The wording is honest about what parity does and does not cover: guard
+    // decisions are pinned to the kernel's by tests/core/interop.test.ts; the
+    // OS-level guarantees are what the in-process fallback cannot give.
+    impl.note(
+      "kernel: running without the Rust kernel binary (untrusted/fallback) — guard decisions are contract-identical " +
+        "(interop-pinned); OS-level process supervision, file locking and the supervised-kill ladder are weaker in this mode",
+    );
+  }
   if (repaired.repaired > 0) {
     impl.note(
       `repaired ${repaired.repaired} interrupted tool call(s) left by a run that was killed mid-execution ` +
         `(${repaired.calls.join(", ")}) — each was answered with UNKNOWN; verify the real state before trusting it`,
     );
   }
+  // MCP servers: user-config only, spawned via the spawn-kind admission, and
+  // reaped by close(). Starting them never fails the session.
+  await impl.startMcp(config.mcp);
   return impl;
 }
 

@@ -325,6 +325,8 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
       [{ kind: "shell.exec", target: "rm -rf /" }, "*"],
       [{ kind: "net.fetch", target: "https://example.invalid" }, "*"],
       [{ kind: "spawn", target: "/bin/ls" }, "*"],
+      // docs/09 §4.7: the eighth default row — an MCP tool call asks.
+      [{ kind: "mcp.invoke", target: "github:create_pr" }, "*"],
     ];
     for (const [action, scope] of cases) {
       const [fromRust, fromLocal] = await Promise.all([rust.checkGuard(action, scope), local.checkGuard(action, scope)]);
@@ -385,6 +387,103 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     }
     await rust.close();
     await local.close();
+  });
+
+  test("mcp.invoke evaluates identically on both transports, and the unknown-kind refusal stays intact", async () => {
+    const workspace = tempDir("hz-ws-mcp-invoke-");
+    const action: GuardAction = { kind: "mcp.invoke", target: "github:create_pr" };
+
+    // (a) Default policy: mcp.invoke is a known kind with an ask row on both
+    // transports (docs/09 §4.7) — never an unknown-kind refusal, never an allow.
+    const localDefault = await localClient(path.join(tempDir("hz-state-mcp-default-ts-"), "kernel"), workspace);
+    expect((await localDefault.checkGuard(action, "*")).decision).toBe("ask");
+    await localDefault.close();
+    const rustDefault = runKernelNdjson(
+      [{ id: 1, method: "guard.check", params: { action, scope: "*" } }],
+      path.join(tempDir("hz-state-mcp-default-rs-"), "kernel"),
+    );
+    expect(replyResult<{ decision: string }>(rustDefault.replies, 1).decision).toBe("ask");
+
+    // (b) The same policy.json: allow, deny and ask rows for mcp.invoke decide
+    // identically on both transports. A deny wins over anything, as everywhere.
+    const decide = async (policy: unknown[], row: { action: GuardAction; scope: PolicyScope; expected: string }): Promise<void> => {
+      const write = (dir: string): string => {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(path.join(dir, "policy.json"), JSON.stringify(policy));
+        return dir;
+      };
+      const local = await localClient(write(path.join(tempDir("hz-state-mcp-pol-ts-"), "kernel")), workspace);
+      const rust = runKernelNdjson(
+        [{ id: 1, method: "guard.check", params: { action: row.action, scope: row.scope } }],
+        write(path.join(tempDir("hz-state-mcp-pol-rs-"), "kernel")),
+      );
+      expect((await local.checkGuard(row.action, row.scope)).decision, `local ${JSON.stringify(row.action)}`).toBe(row.expected);
+      expect(
+        replyResult<{ decision: string }>(rust.replies, 1).decision,
+        `rust ${JSON.stringify(row.action)}`,
+      ).toBe(row.expected);
+      await local.close();
+    };
+    await decide([{ kind: "mcp.invoke", scope: "*", decision: "allow" }], { action, scope: "*", expected: "allow" });
+    await decide(
+      [
+        { kind: "mcp.invoke", scope: "*", decision: "allow" },
+        { kind: "mcp.invoke", scope: "*", decision: "deny" },
+      ],
+      { action, scope: "*", expected: "deny" },
+    );
+    await decide(
+      [
+        { kind: "mcp.invoke", scope: "*", decision: "allow" },
+        { kind: "mcp.invoke", scope: "*", decision: "ask" },
+      ],
+      { action, scope: "*", expected: "ask" },
+    );
+
+    // (c) A lease for the new kind is mintable and spent by one effect on both
+    // transports — the kind is in the lease vocabulary too, not only in rules.
+    const stateDir = path.join(tempDir("hz-state-mcp-lease-"), "kernel");
+    const rust = runKernelNdjson(
+      [
+        { id: 1, method: "guard.lease", params: { kind: "mcp.invoke", pattern: "github:create_pr", ttlMs: 60_000 } },
+        { id: 2, method: "guard.check", params: { action, scope: "*" } },
+        { id: 3, method: "guard.check", params: { action, scope: "*" } },
+      ],
+      stateDir,
+    );
+    const lease = replyResult<Lease>(rust.replies, 1);
+    const first = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 2);
+    expect(first.decision).toBe("allow");
+    expect(first.leaseId).toBe(lease.leaseId);
+    expect(replyResult<{ decision: string }>(rust.replies, 3).decision).toBe("ask");
+
+    const local = await localClient(stateDir, workspace);
+    const localLease = await local.makeLease("mcp.invoke", "github:create_pr", 60_000);
+    const localFirst = await local.checkGuard(action, "*");
+    expect(localFirst.decision).toBe("allow");
+    expect(localFirst.leaseId).toBe(localLease.leaseId);
+    expect((await local.checkGuard(action, "*", [], undefined)).decision).toBe("ask");
+    await local.close();
+
+    // (d) The unknown-kind refusal is unchanged and now names every known kind:
+    // a near-miss MCP kind is refused BEFORE evaluation on both transports.
+    const nearMiss = { kind: "mcp.connect" as GuardAction["kind"], target: "github" };
+    const localNear = await localClient(path.join(tempDir("hz-state-mcp-near-ts-"), "kernel"), workspace);
+    const localRefusal = await localNear.checkGuard(nearMiss, "*");
+    expect(localRefusal.decision).toBe("deny");
+    expect(localRefusal.reason ?? "").toContain('unknown action kind "mcp.connect"');
+    expect(localRefusal.reason ?? "").toContain("mcp.invoke");
+    await localNear.close();
+    const rustNear = runKernelNdjson(
+      [
+        { id: 1, method: "guard.check", params: { action: nearMiss, scope: "*" } },
+        { id: 2, method: "guard.lease", params: { kind: "mcp.connect", pattern: "*", ttlMs: 60_000 } },
+      ],
+      path.join(tempDir("hz-state-mcp-near-rs-"), "kernel"),
+    );
+    expect(rustNear.replies[0]?.error?.message ?? "").toContain('unknown action kind "mcp.connect"');
+    expect(rustNear.replies[0]?.error?.message ?? "").toContain("mcp.invoke");
+    expect(rustNear.replies[1]?.error?.message ?? "").toContain('unknown action kind "mcp.connect"');
   });
 
   test("astral and private-use payload keys hash identically under both implementations", async () => {

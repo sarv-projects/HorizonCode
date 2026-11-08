@@ -1209,6 +1209,9 @@ fn guard_default_policy_matrix() {
         ("net.fetch", "https://example.com", Some("workspace"), "ask"),
         ("net.fetch", "https://example.com", Some("outside"), "ask"),
         ("spawn", "node", Some("workspace"), "ask"),
+        // docs/09 §4.7: the MCP tool-call kind asks by default, whatever the
+        // caller's scope (an MCP call is not a path, so scope is "*").
+        ("mcp.invoke", "github:create_pr", Some("*"), "ask"),
         // an unknown kind is refused before evaluation now (typed
         // HZ_PRECONDITION_FAILED — see
         // guard_rejects_unknown_action_kinds_before_evaluation), never answered
@@ -1225,6 +1228,81 @@ fn guard_default_policy_matrix() {
             kind, target, scope
         );
     }
+}
+
+/// docs/09 §4.7 / R-tools-18/19/33 (reduced form): `mcp.invoke` is a first-class
+/// guard kind. `parse_rule` whitelists it in policy.json (so allow/ask/deny rows
+/// on it are served, never "unknown kind"), the default row asks, an exact lease
+/// admits one call, and the unknown-kind refusal names it among the known kinds.
+#[test]
+fn guard_mcp_invoke_evaluates_and_unknown_kinds_stay_refused() {
+    let dir = TempDir::new("guard-mcp-invoke");
+    let mut kernel = Kernel::start(dir.path());
+
+    // Default policy: an MCP tool call (serverId:toolName) asks.
+    assert_eq!(
+        guard_decision(&mut kernel, "mcp.invoke", "github:create_pr", Some("*"), None),
+        "ask"
+    );
+
+    // A kernel-issued lease admits the exact call (lease > ask)...
+    let lease = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "mcp.invoke", "pattern": "github:create_pr", "ttlMs": 60_000 }),
+    );
+    let decision = guard_check(&mut kernel, "mcp.invoke", "github:create_pr", Some("*"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["leaseId"], lease["leaseId"]);
+    // ...exactly once (ruling 32), and only for its own target.
+    assert_eq!(
+        guard_decision(&mut kernel, "mcp.invoke", "github:create_pr", Some("*"), None),
+        "ask",
+        "a consumed lease must not admit a second MCP call"
+    );
+    assert_eq!(
+        guard_decision(&mut kernel, "mcp.invoke", "github:merge_pr", Some("*"), None),
+        "ask"
+    );
+
+    // policy.json may carry allow/ask/deny rows for the kind: parse_rule accepts
+    // the spelling (a malformed policy would exit 2 / refuse the check instead).
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "mcp.invoke", "scope": "*", "decision": "ask" },
+            { "kind": "mcp.invoke", "scope": "*", "decision": "deny" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let decision = guard_check(&mut kernel, "mcp.invoke", "github:create_pr", Some("*"), None);
+    assert_eq!(decision["decision"], json!("deny"), "{}", decision);
+
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "mcp.invoke", "scope": "*", "decision": "allow" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        guard_decision(&mut kernel, "mcp.invoke", "github:create_pr", Some("*"), None),
+        "allow"
+    );
+
+    // The unknown-kind refusal is unchanged, and now names `mcp.invoke` too.
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "mcp.connect", "target": "github" } }),
+    );
+    assert!(message.contains("unknown action kind \"mcp.connect\""), "{}", message);
+    assert!(message.contains("mcp.invoke"), "the refusal must list the known kinds: {}", message);
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "fs.edit", "target": "x" } }),
+    );
+    assert!(message.contains("unknown action kind \"fs.edit\""), "{}", message);
 }
 
 #[test]
@@ -1891,6 +1969,7 @@ fn guard_rejects_unknown_action_kinds_before_evaluation() {
         ("shell.exec", "echo hi"),
         ("net.fetch", "https://example.invalid"),
         ("spawn", "agent task"),
+        ("mcp.invoke", "github:create_pr"),
     ] {
         let decision = guard_check(&mut kernel, kind, target, Some("workspace"), None);
         assert!(

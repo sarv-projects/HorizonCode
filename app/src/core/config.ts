@@ -41,6 +41,15 @@ export interface HzConfig {
   apiKey?: string;
   /** NF-073 run budgets from the environment; absent keys stay unlimited. */
   budget?: RunBudget;
+  /**
+   * MCP servers, v1 reduced form (docs/09 §4.7). ONLY entries from the USER
+   * config file are eligible: a workspace cannot name a server that would run
+   * with the user's authority (README §3.4 "programs named by a workspace stay
+   * off until trusted" — v1 has no trust store, so it has no workspace path at
+   * all). Entries that do not parse are skipped and named in `rejected`; a
+   * malformed entry must never stop the chat from starting.
+   */
+  mcp?: McpConfig;
   /** Where the values came from, for the banner and for debugging. */
   sources: {
     provider: "env" | "file" | "detected" | "default";
@@ -50,6 +59,25 @@ export interface HzConfig {
   };
 }
 
+/** One configured MCP server (stdio only in v1). */
+export interface McpServerConfig {
+  /** The slug that namespaces this server's tools: `[a-z0-9-]+`. */
+  id: string;
+  /** The program to start (spawned through the one owned-spawn path). */
+  command: string;
+  args?: string[];
+  /** Extra environment entries for the child; hzcode's env is scrubbed first. */
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
+/** The parsed `mcp` config section: what to start, and what was skipped. */
+export interface McpConfig {
+  servers: McpServerConfig[];
+  /** One readable line per entry that was malformed and skipped. */
+  rejected: string[];
+}
+
 export type EnvLike = Record<string, string | undefined>;
 
 interface ConfigFile {
@@ -57,6 +85,7 @@ interface ConfigFile {
   model?: unknown;
   baseUrl?: unknown;
   apiKey?: unknown;
+  mcp?: unknown;
 }
 
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
@@ -79,6 +108,86 @@ function normalizeProvider(value: string | undefined): ProviderName | undefined 
   if (!value) return undefined;
   const lower = value.toLowerCase();
   return lower === "anthropic" || lower === "openai" || lower === "mock" ? lower : undefined;
+}
+
+/** The slug an MCP server id must match so the tool-name grammar round-trips. */
+const MCP_SERVER_ID = /^[a-z0-9-]+$/;
+
+/**
+ * Validate one `mcp.servers[]` entry. Returns the normalized server, or a
+ * readable reason string — never throws: a malformed entry is a skip that gets
+ * named (the manager emits it as a notice), not a startup failure.
+ */
+export function parseMcpServer(value: unknown, index: number): McpServerConfig | string {
+  const where = `mcp.servers[${index}]`;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return `${where} is not an object`;
+  const raw = value as Record<string, unknown>;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (id === "" || !MCP_SERVER_ID.test(id)) {
+    return `${where}.id must match [a-z0-9-] (got ${JSON.stringify(raw.id ?? null)})`;
+  }
+  const command = typeof raw.command === "string" ? raw.command.trim() : "";
+  if (command === "") return `${where}.command must be a non-empty string`;
+  let args: string[] | undefined;
+  if (raw.args !== undefined) {
+    if (!Array.isArray(raw.args) || raw.args.some((arg) => typeof arg !== "string")) {
+      return `${where}.args must be an array of strings`;
+    }
+    args = raw.args as string[];
+  }
+  let env: Record<string, string> | undefined;
+  if (raw.env !== undefined) {
+    if (raw.env === null || typeof raw.env !== "object" || Array.isArray(raw.env)) {
+      return `${where}.env must be an object of strings`;
+    }
+    for (const [key, item] of Object.entries(raw.env as Record<string, unknown>)) {
+      if (typeof item !== "string") return `${where}.env.${key} must be a string`;
+    }
+    env = { ...(raw.env as Record<string, string>) };
+  }
+  let cwd: string | undefined;
+  if (raw.cwd !== undefined) {
+    if (typeof raw.cwd !== "string" || raw.cwd.trim() === "") return `${where}.cwd must be a non-empty string`;
+    cwd = raw.cwd;
+  }
+  const server: McpServerConfig = { id, command };
+  if (args !== undefined) server.args = args;
+  if (env !== undefined) server.env = env;
+  if (cwd !== undefined) server.cwd = cwd;
+  return server;
+}
+
+/**
+ * Parse the `mcp` section of the config file. `undefined` means "no mcp
+ * section" (or nothing usable in it); rejected entries are collected, never
+ * thrown — the manager turns them into notices.
+ */
+export function parseMcpConfig(value: unknown): McpConfig | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { servers: [], rejected: ["mcp must be an object with an optional `servers` array"] };
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.servers === undefined) return undefined;
+  if (!Array.isArray(raw.servers)) return { servers: [], rejected: ["mcp.servers must be an array"] };
+  const servers: McpServerConfig[] = [];
+  const rejected: string[] = [];
+  const ids = new Set<string>();
+  (raw.servers as unknown[]).forEach((item, index) => {
+    const parsed = parseMcpServer(item, index);
+    if (typeof parsed === "string") {
+      rejected.push(parsed);
+      return;
+    }
+    if (ids.has(parsed.id)) {
+      rejected.push(`mcp.servers[${index}] duplicates server id ${JSON.stringify(parsed.id)}; skipped`);
+      return;
+    }
+    ids.add(parsed.id);
+    servers.push(parsed);
+  });
+  if (servers.length === 0 && rejected.length === 0) return undefined;
+  return { servers, rejected };
 }
 
 /**
@@ -155,12 +264,15 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   if (envTokens !== undefined) budget.maxTokens = envTokens;
   if (envWall !== undefined) budget.maxWallMs = envWall;
 
+  const mcp = parseMcpConfig(fromFile.mcp);
+
   return {
     provider,
     model,
     baseUrl,
     apiKey,
     budget: Object.keys(budget).length > 0 ? budget : undefined,
+    mcp,
     sources: {
       provider: providerSource,
       model: envModel ? "env" : fileModel ? "file" : "default",

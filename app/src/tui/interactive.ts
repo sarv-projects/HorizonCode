@@ -11,21 +11,38 @@ import * as readline from "node:readline";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ContextUsage, Runtime, ToolSpec } from "../contracts";
+import { unifiedDiff } from "../core/plan";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting } from "./banner";
-import { createRenderer, type Renderer } from "./render";
-import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText } from "./style";
+import { createRenderer, diffBlock, type Renderer } from "./render";
+import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
 
 const PROMPT = "\u276f ";
 const HISTORY_LIMIT = 500;
+
+/** What the TUI needs from one staged change; a core `StagedChange` fits as-is. */
+export interface StagedChangeView {
+  rel: string;
+  /** Present when the core hands its StagedChange over: the chat diffs it here. */
+  before?: string | null;
+  after?: string;
+  /** Or a pre-rendered unified diff; when both are absent only the name shows. */
+  diff?: string;
+}
 
 /** Extras the core runtime may or may not expose yet; each one is optional. */
 type RuntimeWithExtras = Runtime & {
   newSession?: () => unknown;
   setModel?: (model: string) => unknown;
   contextUsage?: () => ContextUsage | undefined;
+  /** Plan-mode hooks. An older core simply does not offer them; nothing breaks. */
+  setPlanMode?: (on: boolean) => unknown;
+  planMode?: () => boolean;
+  stagedChanges?: () => ReadonlyArray<StagedChangeView>;
+  applyPlan?: () => Promise<string>;
+  discardPlan?: () => number;
 };
 
 const toolSpecs = (toolsModule as { toolSpecs?: () => ToolSpec[] }).toolSpecs;
@@ -118,6 +135,10 @@ function printHelp(r: Renderer): void {
     ["/model [name]", "show or switch the model"],
     ["/files", "tools the assistant can use"],
     ["/context", "what the next request will carry"],
+    ["/plan [on|off]", "toggle plan mode (writes are staged)"],
+    ["/changes", "review staged changes and diffs"],
+    ["/apply", "write the staged changes"],
+    ["/discard", "drop the staged changes"],
     ["/exit", "leave (Ctrl+D also works)"],
   ];
   const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
@@ -143,9 +164,172 @@ function showTools(r: Renderer): void {
   r.notice(`tools (${names.length}): ${names.join(", ")}`);
 }
 
+/* ------------------------------ plan mode ------------------------------ */
+
+/** How many lines of each staged diff /changes shows before the cap marker. */
+const CHANGES_DIFF_LINES = 20;
+
+/** The chat bar, with the PLAN badge ahead of the prompt when plan mode is on. */
+export function planPrompt(planOn: boolean): string {
+  return (planOn ? bold(yellow("PLAN")) + " " : "") + bold(cyan(PROMPT));
+}
+
+/** The runtime's current plan-mode flag, or false when it does not say. */
+function readPlanMode(runtime: Runtime): boolean {
+  const read = (runtime as RuntimeWithExtras).planMode;
+  if (typeof read !== "function") return false;
+  try {
+    return Boolean(read.call(runtime));
+  } catch {
+    return false;
+  }
+}
+
+/** One typed refusal line for a command whose runtime hook is absent. */
+function notSupported(renderer: Renderer, method: string): void {
+  renderer.notice(`not supported by this runtime: ${method} \u2014 this core build does not expose the plan-mode hook`);
+}
+
+/** State the plan commands share with runInteractive: the badge follows it. */
+export interface PlanCommandState {
+  on: boolean;
+}
+
+/**
+ * The four plan-mode slash commands, factored out of runInteractive so tests
+ * can drive them without a TTY (the same unit-level pattern as the approval
+ * handler). Returns false when `name` is not a plan command, so the caller's
+ * command table decides the unknown-command answer. Every runtime method is
+ * optional: an absent hook prints one typed "not supported" line — never a
+ * crash, and never a wrong answer (a toggle that cannot reach the core does
+ * not flip the badge).
+ */
+export async function runPlanCommand(
+  name: string,
+  arg: string,
+  runtime: Runtime,
+  renderer: Renderer,
+  state: PlanCommandState,
+): Promise<boolean> {
+  switch (name) {
+    case "plan":
+      togglePlanMode(arg, runtime, renderer, state);
+      return true;
+    case "changes":
+      listStagedChanges(runtime, renderer);
+      return true;
+    case "apply":
+      await applyStagedPlan(runtime, renderer);
+      return true;
+    case "discard":
+      discardStagedPlan(runtime, renderer);
+      return true;
+    default:
+      return false;
+  }
+}
+
+function togglePlanMode(arg: string, runtime: Runtime, renderer: Renderer, state: PlanCommandState): void {
+  const explicit = arg === "on" ? true : arg === "off" ? false : undefined;
+  if (arg !== "" && explicit === undefined) {
+    renderer.notice("usage: /plan [on|off] \u2014 bare /plan toggles plan mode");
+    return;
+  }
+  const extras = runtime as RuntimeWithExtras;
+  if (typeof extras.setPlanMode !== "function") {
+    notSupported(renderer, "setPlanMode");
+    return;
+  }
+  const next = explicit ?? !state.on;
+  try {
+    extras.setPlanMode.call(runtime, next);
+  } catch (err) {
+    renderer.notice(`could not change plan mode: ${errorMessage(err)}`);
+    return;
+  }
+  // A runtime that reports its own mode is the source of truth; one that
+  // cannot keeps the requested value locally (so the badge still follows).
+  state.on = typeof extras.planMode === "function" ? readPlanMode(runtime) : next;
+  renderer.notice(
+    state.on
+      ? "plan mode on \u2014 writes and edits are staged for review; /changes shows them, /apply writes them, /discard drops them"
+      : "plan mode off \u2014 new writes apply directly; anything already staged stays until /apply or /discard",
+  );
+}
+
+/** The diff /changes shows for one staged entry: precomputed, derived, or none. */
+function stagedDiff(change: StagedChangeView): string {
+  if (typeof change.diff === "string" && change.diff !== "") return change.diff;
+  if (typeof change.after !== "string") return "";
+  const before = typeof change.before === "string" ? change.before : null;
+  return unifiedDiff(before, change.after, typeof change.rel === "string" ? change.rel : "change", CHANGES_DIFF_LINES);
+}
+
+function listStagedChanges(runtime: Runtime, renderer: Renderer): void {
+  const staged = (runtime as RuntimeWithExtras).stagedChanges;
+  if (typeof staged !== "function") {
+    notSupported(renderer, "stagedChanges");
+    return;
+  }
+  let list: ReadonlyArray<StagedChangeView>;
+  try {
+    const raw = staged.call(runtime) as ReadonlyArray<StagedChangeView> | undefined;
+    list = Array.isArray(raw) ? raw : [];
+  } catch (err) {
+    renderer.notice(`could not list staged changes: ${errorMessage(err)}`);
+    return;
+  }
+  if (list.length === 0) {
+    renderer.notice("no staged changes \u2014 /plan on stages writes and edits for review");
+    return;
+  }
+  renderer.notice(`staged changes (${list.length}):`);
+  for (const change of list) {
+    const rel = sanitizeText(change?.rel ?? "") || "(unnamed)";
+    renderer.line("  " + bold(rel));
+    const diff = stagedDiff(change ?? { rel: "(unnamed)" });
+    if (diff !== "") renderer.write(diffBlock(diff) + "\n");
+  }
+}
+
+async function applyStagedPlan(runtime: Runtime, renderer: Renderer): Promise<void> {
+  const apply = (runtime as RuntimeWithExtras).applyPlan;
+  if (typeof apply !== "function") {
+    notSupported(renderer, "applyPlan");
+    return;
+  }
+  try {
+    const summary = await Promise.resolve(apply.call(runtime));
+    const line = typeof summary === "string" && summary.trim() !== "" ? summary.trim() : "the staged plan is applied";
+    renderer.notice(`applied: ${line}`);
+  } catch (err) {
+    renderer.notice(`could not apply the staged plan: ${errorMessage(err)}`);
+  }
+}
+
+function discardStagedPlan(runtime: Runtime, renderer: Renderer): void {
+  const discard = (runtime as RuntimeWithExtras).discardPlan;
+  if (typeof discard !== "function") {
+    notSupported(renderer, "discardPlan");
+    return;
+  }
+  try {
+    const raw = discard.call(runtime);
+    const count = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+    renderer.notice(
+      count === 0 ? "nothing to discard \u2014 no staged changes" : `discarded ${count} staged change${count === 1 ? "" : "s"}`,
+    );
+  } catch (err) {
+    renderer.notice(`could not discard the staged plan: ${errorMessage(err)}`);
+  }
+}
+
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   const { workspace, ui } = opts;
   let runtime: Runtime = opts.runtime;
+  // Plan mode is a session posture: the badge reflects the runtime's flag, and
+  // /plan updates it through the optional hook when the core exposes one.
+  const planState: PlanCommandState = { on: readPlanMode(runtime) };
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -238,7 +422,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     typedGuardArmed = false;
     if (blank) renderer.write("\n");
     try {
-      rl.setPrompt(bold(cyan(PROMPT)));
+      rl.setPrompt(planPrompt(planState.on));
       rl.prompt();
     } catch {
       /* terminal went away */
@@ -268,7 +452,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const drainQueue = async (): Promise<void> => {
     while (!exiting && queued.length > 0) {
       const next = queued.shift() as string;
-      renderer.write(bold(cyan(PROMPT)) + sanitizeText(next) + "\n");
+      renderer.write(planPrompt(planState.on) + sanitizeText(next) + "\n");
       await sendTurn(next);
     }
   };
@@ -345,6 +529,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (next) {
           runtime = next;
           ui.runtime = next;
+          // A fresh session starts with whatever posture its runtime reports
+          // (staged changes are per-session; nothing here carries over).
+          planState.on = readPlanMode(next);
         }
         break;
       }
@@ -357,6 +544,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "context":
         showContext();
         break;
+      case "plan":
+      case "changes":
+      case "apply":
+      case "discard": {
+        // The plan commands own their notices; the prompt (and its badge) is
+        // reprinted by the common showPrompt() at the end of runSlash.
+        await runPlanCommand(name, arg, runtime, renderer, planState);
+        break;
+      }
       default:
         renderer.notice(`unknown command /${name} \u2014 try /help`);
         break;
@@ -393,7 +589,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const waiter = answerWaiter;
       answerWaiter = null;
       try {
-        rl.setPrompt(bold(cyan(PROMPT)));
+        rl.setPrompt(planPrompt(planState.on));
       } catch {
         /* ignore */
       }
@@ -433,7 +629,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const initial = (opts.initialMessage ?? "").trim();
   if (initial !== "") {
-    renderer.line(bold(cyan(PROMPT)) + sanitizeText(initial));
+    renderer.line(planPrompt(planState.on) + sanitizeText(initial));
     void handleUserLine(initial);
   } else {
     showPrompt();
