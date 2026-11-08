@@ -9,8 +9,10 @@
  * is cut to the token budget by binary search over the ranked file list.
  *
  * Reduced form, stated: no tree-sitter (no dependency; patterns are lexical),
- * no persistent index (the map is rebuilt per call, so it is never `stale`),
- * and `tokens` is the runtime's bytes/4 estimate — the same estimate the
+ * no persistent index (the map is rebuilt per call; a bounded in-process memo
+ * of per-file scan facts — absolute path keyed, `size:mtimeMs` stamped — only
+ * skips recomputation and never changes the rendered bytes, so it is never
+ * `stale`), and `tokens` is the runtime's bytes/4 estimate — the same estimate the
  * output-budget fit uses, never an accounting claim.
  */
 
@@ -24,6 +26,9 @@ const DEFAULT_MAX_TOKENS = 4_000;
 const HARD_MAX_TOKENS = 16_000;
 const MAX_FILES = 3_000;
 const MAX_FILE_BYTES = 1024 * 1024;
+/** Per-file scan facts kept in the process-wide memo; a little above MAX_FILES
+ * so one session holds a full tree plus headroom for a second root. */
+const MAX_CACHE_ENTRIES = 4_096;
 const MAX_DEFS_PER_FILE = 12;
 const DAMPING = 0.85;
 const ITERATIONS = 30;
@@ -150,6 +155,114 @@ export function countIdents(text: string): Map<string, number> {
   return counts;
 }
 
+/** What one file's text contributes to the map scan. Pure, deterministic. */
+export interface RepoFileScan {
+  defs: string[];
+  tokenCounts: Map<string, number>;
+}
+
+/**
+ * Size+mtime of a file, the trust contract for a cached scan: exactly the
+ * stamp LocalKernel's `fileStamp`/`tailOf` uses. A changed stamp is never
+ * reused, so a write by this or any other process is noticed without a
+ * restart.
+ */
+function fileStamp(abs: string): string | undefined {
+  try {
+    const stat = statSync(abs);
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Bounded, in-process memoisation of the per-file pure work (`extractDefs` +
+ * `countIdents`), keyed by the absolute path so two workspaces can never
+ * cross-contaminate, and trusted only while the file's `size:mtimeMs` stamp
+ * matches. Pure memoisation: the stored facts were computed by the very same
+ * functions a cold scan calls, so a warm call renders identical bytes.
+ *
+ * Bound: 4096 entries with LRU eviction (a hit moves the entry to the
+ * most-recent end; inserting past the bound drops the least recently used).
+ * A complete walk of a root prunes the entries under that root it did not
+ * see — a deleted or moved file's facts are dropped instead of lingering.
+ */
+export class RepoFileScanCache {
+  readonly max: number;
+  hits = 0;
+  misses = 0;
+  private readonly entries = new Map<string, { stamp: string } & RepoFileScan>();
+
+  constructor(max = MAX_CACHE_ENTRIES) {
+    this.max = Number.isFinite(max) && max >= 1 ? Math.floor(max) : MAX_CACHE_ENTRIES;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  /** Facts for `abs`, but only under the exact stamp a prior scan stored. */
+  get(abs: string, stamp: string): RepoFileScan | undefined {
+    const entry = this.entries.get(abs);
+    if (entry === undefined || entry.stamp !== stamp) {
+      this.misses++;
+      if (entry !== undefined) this.entries.delete(abs); // a changed stamp is never reused
+      return undefined;
+    }
+    this.hits++;
+    this.entries.delete(abs); // refresh recency: eviction is LRU, not FIFO
+    this.entries.set(abs, entry);
+    return entry;
+  }
+
+  set(abs: string, stamp: string, facts: RepoFileScan): void {
+    this.entries.delete(abs);
+    this.entries.set(abs, { stamp, defs: facts.defs, tokenCounts: facts.tokenCounts });
+    while (this.entries.size > this.max) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+  }
+
+  /** Drop cached entries under `root` that a complete walk did not see. */
+  pruneUnder(root: string, seen: ReadonlySet<string>): number {
+    const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+    let dropped = 0;
+    for (const key of [...this.entries.keys()]) {
+      if (key.startsWith(prefix) && !seen.has(key)) {
+        this.entries.delete(key);
+        dropped++;
+      }
+    }
+    return dropped;
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+}
+
+const repoFileScanCache = new RepoFileScanCache();
+
+/** Test/diagnostic introspection into the process-wide scan cache. */
+export function repoMapCacheStats(): { size: number; max: number; hits: number; misses: number } {
+  return {
+    size: repoFileScanCache.size,
+    max: repoFileScanCache.max,
+    hits: repoFileScanCache.hits,
+    misses: repoFileScanCache.misses,
+  };
+}
+
+/** Empty the process-wide scan cache and its counters (tests: cold-start a measurement). */
+export function resetRepoMapCache(): void {
+  repoFileScanCache.clear();
+  repoFileScanCache.hits = 0;
+  repoFileScanCache.misses = 0;
+}
+
 /**
  * Personalised PageRank over the file graph. `edges` maps from-file to a map
  * of to-file weights; `personalization` holds non-negative weights (files not
@@ -271,23 +384,40 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
   );
 
   const infos: FileInfo[] = [];
+  const seen = new Set<string>();
+  let walkComplete = true;
   const walk = (dir: string): void => {
-    if (infos.length >= MAX_FILES) return;
+    if (infos.length >= MAX_FILES) {
+      walkComplete = false;
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
+      walkComplete = false;
       return;
     }
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-      if (infos.length >= MAX_FILES) return;
+      if (infos.length >= MAX_FILES) {
+        walkComplete = false;
+        return;
+      }
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
         walk(abs);
       } else if (entry.isFile()) {
+        seen.add(abs);
         const rel = relPath(opts.cwd, abs);
         if (!opts.includeTests && isTestPath(rel)) continue;
+        const stamp = fileStamp(abs);
+        if (stamp === undefined) continue;
+        const cached = repoFileScanCache.get(abs, stamp);
+        if (cached !== undefined) {
+          infos.push({ rel, defs: cached.defs, tokenCounts: cached.tokenCounts });
+          continue;
+        }
         let buf: Buffer;
         try {
           buf = readFileSync(abs);
@@ -296,17 +426,18 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
         }
         if (buf.length > MAX_FILE_BYTES || isBinary(buf)) continue;
         const text = buf.toString("utf8");
+        // Files without definitions still participate as reference sources.
         const defs = extractDefs(text, path.extname(entry.name));
-        if (defs.length === 0) {
-          // Files without definitions still participate as reference sources.
-          infos.push({ rel, defs: [], tokenCounts: countIdents(text) });
-        } else {
-          infos.push({ rel, defs, tokenCounts: countIdents(text) });
-        }
+        const tokenCounts = countIdents(text);
+        repoFileScanCache.set(abs, stamp, { defs, tokenCounts });
+        infos.push({ rel, defs, tokenCounts });
       }
     }
   };
   walk(opts.root);
+  // Only a complete walk is evidence about what no longer exists: it drops the
+  // facts of files under this root it did not see (deleted, moved, filtered).
+  if (walkComplete) repoFileScanCache.pruneUnder(opts.root, seen);
 
   if (infos.length === 0) return { empty: true };
 

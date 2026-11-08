@@ -6,6 +6,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { rmSync, utimesSync } from "node:fs";
+import path from "node:path";
 import {
   buildRepoMap,
   countIdents,
@@ -14,9 +16,12 @@ import {
   pickByBudget,
   rankFiles,
   renderMap,
+  RepoFileScanCache,
+  repoMapCacheStats,
+  resetRepoMapCache,
   repoMapTool,
 } from "../../src/tools/repo-map";
-import { makeWorkspace, mockToolContext } from "./helpers";
+import { makeWorkspace, mockToolContext, writeFixture } from "./helpers";
 
 const FIXTURE = {
   "src/a.ts": "export function alpha() {\n  return beta();\n}\n",
@@ -187,5 +192,105 @@ describe("the tool", () => {
     expect(r.ok).toBe(true);
     expect(r.output).toContain("src/a.ts:");
     expect(r.output).not.toContain("tests/");
+  });
+});
+
+/* ---------------------------- per-file scan cache ---------------------------- */
+
+describe("the per-file scan cache", () => {
+  test("cold vs warm: rendered map and stats line are byte-identical, and the warm call is served from cache", () => {
+    const ws = makeWorkspace(FIXTURE);
+    resetRepoMapCache();
+    const cold = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
+    if ("empty" in cold) throw new Error("unexpected empty");
+    const afterCold = repoMapCacheStats();
+    expect(afterCold.misses).toBe(3); // src/a.ts, src/b.ts, src/c.ts — tests/ is excluded
+    expect(afterCold.hits).toBe(0);
+
+    const warm = buildRepoMap({ root: ws, cwd: ws, focus: ["src/b.ts"] });
+    if ("empty" in warm) throw new Error("unexpected empty");
+    expect(warm.map).toBe(cold.map); // full bytes, the [repo_map: ...] stats line included
+    const statsLine = /\[repo_map: [^\]]*\]/.exec(cold.map)?.[0];
+    expect(statsLine).toBeDefined();
+    expect(warm.map).toContain(statsLine as string);
+
+    const afterWarm = repoMapCacheStats();
+    expect(afterWarm.hits - afterCold.hits).toBe(3); // every file came from the cache
+    expect(afterWarm.misses).toBe(afterCold.misses); // and none was re-scanned
+  });
+
+  test("a file whose stamp changed is re-scanned, even when its size is unchanged", () => {
+    const ws = makeWorkspace({ "src/a.ts": "export function alpha() {}\n" });
+    resetRepoMapCache();
+    const before = buildRepoMap({ root: ws, cwd: ws });
+    if ("empty" in before) throw new Error("unexpected empty");
+    expect(before.map).toContain("alpha");
+
+    // Same byte length ("alpha" -> "alphb"), so only mtimeMs can invalidate the entry.
+    const abs = writeFixture(ws, "src/a.ts", "export function alphb() {}\n");
+    utimesSync(abs, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+    const missesBefore = repoMapCacheStats().misses;
+
+    const after = buildRepoMap({ root: ws, cwd: ws });
+    if ("empty" in after) throw new Error("unexpected empty");
+    expect(after.map).toContain("alphb");
+    expect(after.map).not.toContain("alpha");
+    expect(repoMapCacheStats().misses).toBe(missesBefore + 1);
+  });
+
+  test("a deleted file's entry is dropped and it never reaches the map", () => {
+    const ws = makeWorkspace({
+      "src/a.ts": "export function alpha() {}\n",
+      "src/b.ts": "export function beta() {}\n",
+    });
+    resetRepoMapCache();
+    const first = buildRepoMap({ root: ws, cwd: ws });
+    if ("empty" in first) throw new Error("unexpected empty");
+    expect(first.map).toContain("alpha");
+    expect(repoMapCacheStats().size).toBe(2);
+
+    rmSync(path.join(ws, "src/a.ts"));
+    const second = buildRepoMap({ root: ws, cwd: ws });
+    if ("empty" in second) throw new Error("unexpected empty");
+    expect(second.map).not.toContain("alpha");
+    expect(second.map).toContain("beta");
+    expect(repoMapCacheStats().size).toBe(1); // the deleted file's facts were pruned
+  });
+
+  test("two workspaces never share an entry, even at the same relative path", () => {
+    resetRepoMapCache();
+    const wsOne = makeWorkspace({ "src/f.ts": "export function one() {}\n" });
+    const wsTwo = makeWorkspace({ "src/f.ts": "export function two() {}\n" });
+    const r1 = buildRepoMap({ root: wsOne, cwd: wsOne });
+    const r2 = buildRepoMap({ root: wsTwo, cwd: wsTwo });
+    const r3 = buildRepoMap({ root: wsOne, cwd: wsOne });
+    if ("empty" in r1 || "empty" in r2 || "empty" in r3) throw new Error("unexpected empty");
+    expect(r1.map).toContain("one");
+    expect(r2.map).toContain("two");
+    expect(r2.map).not.toContain("one");
+    expect(r3.map).toBe(r1.map); // wsOne's entry was not overwritten by wsTwo's
+    expect(repoMapCacheStats().size).toBe(2); // both absolute paths live side by side
+  });
+
+  test("the cache is bounded and evicts the least recently used entry", () => {
+    const cache = new RepoFileScanCache(2);
+    const facts = (def: string) => ({ defs: [def], tokenCounts: new Map<string, number>() });
+    cache.set("/w/a.ts", "10:1", facts("a"));
+    cache.set("/w/b.ts", "10:1", facts("b"));
+
+    expect(cache.get("/w/a.ts", "10:1")?.defs).toEqual(["a"]); // a is now most recent
+    cache.set("/w/c.ts", "10:1", facts("c")); // over the bound: b is evicted
+    expect(cache.size).toBe(2);
+    expect(cache.get("/w/b.ts", "10:1")).toBeUndefined();
+    expect(cache.get("/w/a.ts", "10:1")?.defs).toEqual(["a"]);
+
+    // A changed stamp is never served, and the stale entry is forgotten.
+    expect(cache.get("/w/a.ts", "11:2")).toBeUndefined();
+    expect(cache.size).toBe(1);
+
+    // The process-wide cache honours its own bound.
+    const stats = repoMapCacheStats();
+    expect(stats.max).toBe(4096);
+    expect(stats.size).toBeLessThanOrEqual(stats.max);
   });
 });
