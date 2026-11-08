@@ -1,6 +1,9 @@
 /** HorizonCode tool registry: the tools the model may call. */
 
 import type { Tool, ToolSpec } from "../contracts";
+// Dynamic tools (MCP, docs/09 §4.7) live in their own registry; the static list
+// is the builtins. One lookup order for the whole loop (getTool/toolSpecs).
+import { getMcpTool, mcpToolSpecs } from "../core/mcp/registry";
 import { agentTool } from "./agent";
 import { codemodeTool } from "./codemode";
 import { editTool } from "./edit";
@@ -33,9 +36,12 @@ export const tools: Tool[] = [
 export const BASE_TOOL_NAMES = ["read", "write", "edit", "grep", "glob", "shell", "todo"] as const;
 
 export function getTool(name: string): Tool | undefined {
-  return tools.find((t) => t.name === name);
+  return tools.find((t) => t.name === name) ?? getMcpTool(name);
 }
 
 export function toolSpecs(): ToolSpec[] {
-  return tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+  return [
+    ...tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+    ...mcpToolSpecs(),
+  ];
 }

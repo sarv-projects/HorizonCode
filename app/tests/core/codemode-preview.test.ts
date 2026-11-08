@@ -239,6 +239,12 @@ describe("code_mode", () => {
   test("a 20 MB newline-free flood keeps the parent bounded and still completes", async () => {
     const ws = tempWorkspace();
     const { ctx } = makeCtx(ws);
+    // Measure after a forced collection on both ends: the property is that the
+    // flood does not ACCUMULATE in the parent, and an uncollected transient at
+    // measurement time made this assertion order- and load-dependent (it tripped
+    // the wave-14 gates run at a 20 MB flood that the bounded-buffer assertion
+    // in codemode-frames.test.ts proves is handled correctly).
+    Bun.gc(true);
     const before = process.memoryUsage().rss;
     const result = await codemodeTool.execute(
       {
@@ -254,6 +260,7 @@ describe("code_mode", () => {
       },
       ctx,
     );
+    Bun.gc(true);
     const delta = process.memoryUsage().rss - before;
     expect(result.ok).toBe(true);
     expect(result.output).toContain('"flood-complete"');

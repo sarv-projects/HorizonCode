@@ -38,7 +38,11 @@ use crate::time::{iso_from_unix_millis, now_millis, parse_iso_millis};
 type Rule = (&'static str, &'static str, &'static str);
 
 /// Built-in policy used when `<state-dir>/policy.json` is absent.
-pub const DEFAULT_POLICY: [Rule; 7] = [
+///
+/// `mcp.invoke` covers every namespaced MCP tool call (docs/09 §4.7): a
+/// server's own annotations are a claim, not authority, so the default is
+/// `ask` — connecting a server, and calling any tool on it, is a human call.
+pub const DEFAULT_POLICY: [Rule; 8] = [
     ("fs.read", "workspace", "allow"),
     ("fs.write", "workspace", "allow"),
     ("fs.read", "outside", "ask"),
@@ -46,6 +50,7 @@ pub const DEFAULT_POLICY: [Rule; 7] = [
     ("shell.exec", "*", "ask"),
     ("net.fetch", "*", "ask"),
     ("spawn", "*", "ask"),
+    ("mcp.invoke", "*", "ask"),
 ];
 
 const MAX_LEASES: usize = 1024;
@@ -95,7 +100,7 @@ pub struct Grant {
 /// client's `fs.edit`) would otherwise reach the policy as an unknown rule and
 /// land on the fallback answer. Keep this list in step with `parse_rule` and
 /// the TS `GuardKind`.
-pub const KNOWN_KINDS: [&str; 5] = ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn"];
+pub const KNOWN_KINDS: [&str; 6] = ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn", "mcp.invoke"];
 
 pub fn known_kind(kind: &str) -> bool {
     KNOWN_KINDS.contains(&kind)
@@ -538,7 +543,7 @@ fn parse_rule(index: usize, item: &Value) -> Result<PolicyRule, PolicyError> {
         .map_err(|e| invalid(e.to_string()))?;
     if !matches!(
         rule.kind.as_str(),
-        "*" | "fs.read" | "fs.write" | "shell.exec" | "net.fetch" | "spawn"
+        "*" | "fs.read" | "fs.write" | "shell.exec" | "net.fetch" | "spawn" | "mcp.invoke"
     ) {
         return Err(invalid(format!("unknown kind {:?}", rule.kind)));
     }

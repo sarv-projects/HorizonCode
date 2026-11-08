@@ -10,7 +10,7 @@ import type { ApprovalHandler, ApprovalRequest, GuardAction, GuardKind, Lease, R
 import * as core from "../core";
 import { SESSION_LEASE_TTL_MS } from "../core/loop";
 import type { KernelClient } from "../core/kernel";
-import { createRenderer, type Renderer } from "./render";
+import { createRenderer, diffBlock, previewOf, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, truncate, yellow } from "./style";
 
 type RuntimeWithExtras = Runtime & {
@@ -120,6 +120,11 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
 
     r.ensureLineStart();
     r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + (detail ? " " + detail : "") + "\n");
+    // An optional preview rides the request when the caller can produce one (a
+    // staged diff for a plan-mode write): shown before the ask, absent on old
+    // callers — the prompt is unchanged then.
+    const preview = previewOf(req);
+    if (preview !== "") r.write(diffBlock(preview) + "\n");
 
     let answer = "";
     try {

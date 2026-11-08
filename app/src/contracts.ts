@@ -73,10 +73,10 @@ export type EventType = (typeof EventTypes)[keyof typeof EventTypes] | string;
 
 /* ------------------------------- Guard ------------------------------- */
 
-export type GuardKind = "fs.read" | "fs.write" | "shell.exec" | "net.fetch" | "spawn";
+export type GuardKind = "fs.read" | "fs.write" | "shell.exec" | "net.fetch" | "spawn" | "mcp.invoke";
 export interface GuardAction {
   kind: GuardKind;
-  target: string; // path for fs.*, command for shell.exec, url for net.fetch
+  target: string; // path for fs.*, command for shell.exec, url for net.fetch, <serverId>:<toolName> for mcp.invoke
   detail?: Record<string, unknown>;
 }
 export type GuardDecisionValue = "allow" | "ask" | "deny";
@@ -115,6 +115,9 @@ export const DEFAULT_POLICY: PolicyRule[] = [
   { kind: "shell.exec", scope: "*", decision: "ask" },
   { kind: "net.fetch", scope: "*", decision: "ask" },
   { kind: "spawn", scope: "*", decision: "ask" },
+  // docs/09 §4.7: `mcp.invoke` covers every MCP tool call, keyed by
+  // `<serverId>:<toolName>`. Connects are admitted as `spawn`.
+  { kind: "mcp.invoke", scope: "*", decision: "ask" },
 ];
 
 /* ------------------------------ Receipts ------------------------------ */

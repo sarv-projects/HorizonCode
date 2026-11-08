@@ -45,6 +45,44 @@ export function compactArgs(args: unknown): string {
   return truncate(json.replace(/\s+/g, " "), 120);
 }
 
+/**
+ * The optional preview a runtime attached to an event or approval request, or
+ * "" when there is none. A preview is evidence text (a staged diff), so control
+ * characters are stripped before it can reach the terminal.
+ */
+export function previewOf(value: unknown): string {
+  if (value === null || typeof value !== "object") return "";
+  const raw = (value as { preview?: unknown }).preview;
+  if (typeof raw !== "string" || raw === "") return "";
+  return sanitizeText(raw).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+}
+
+/**
+ * Render one staged diff for the chat: two-space indent, dim `---`/`+++`
+ * headers, cyan `@@` hunk markers, green additions, red deletions, dim
+ * truncation marker. A pure string function (like compactArgs) so the event
+ * renderer and the approval prompt share one look; "" in, "" out, and callers
+ * print nothing when there is nothing to show. Diff lines are written as they
+ * are — an over-wide line soft-wraps in the terminal, because rewrapping would
+ * break the one-character change column.
+ */
+export function diffBlock(diff: string): string {
+  const text = typeof diff === "string" ? sanitizeText(diff.replace(/\r\n?/g, "\n")) : "";
+  if (text === "") return "";
+  const lines = text.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.map(diffLine).join("\n");
+}
+
+function diffLine(line: string): string {
+  if (line.startsWith("--- ") || line.startsWith("+++ ")) return "  " + dim(line);
+  if (line.startsWith("@@")) return "  " + cyan(line);
+  if (line.startsWith("+")) return "  " + green(line);
+  if (line.startsWith("-")) return "  " + red(line);
+  if (/^\.\.\. \d+ more lines$/.test(line)) return "  " + dim(line);
+  return "  " + line;
+}
+
 function firstLine(text: unknown, limit = 1000): string {
   const s = sanitizeText(text).trim();
   const line = s.split("\n")[0] ?? "";
@@ -137,6 +175,13 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
           const ok = ev.status === "ok";
           const summary = firstLine(ev.summary);
           emit("  " + dim("\u2514 ") + (ok ? green("ok") : red("error")) + (summary ? dim(": " + summary) : ""), dim);
+        }
+        // The optional preview the runtime attached to this card (a staged
+        // diff in plan mode): rendered under either state, absent on old cores.
+        const preview = previewOf(ev);
+        if (preview !== "") {
+          ensureLineStart();
+          write(diffBlock(preview) + "\n");
         }
         break;
       }

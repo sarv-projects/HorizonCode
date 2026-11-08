@@ -6,6 +6,7 @@
   "scripts": {
     "start": "bun run src/main.ts",
     "eval": "bun run src/eval-run.ts",
+    "grow": "bun run src/grow.ts",
     "check": "bun build src/main.ts --target=bun --outdir=/tmp/hz-b-app"
   }
 }

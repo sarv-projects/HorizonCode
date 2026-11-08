@@ -10,7 +10,7 @@
  */
 
 import * as path from "node:path";
-import { closeSync, constants, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import type {
   ActorRef,
   ApprovalHandler,
@@ -35,6 +35,7 @@ import type {
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
 import { getTool, toolSpecs } from "../tools";
+import { projectExactEdit } from "../tools/edit";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
 // and nowhere else (compaction.ts holds the pinning, the summary and the
@@ -43,6 +44,18 @@ import { COMPACTION_EVENT, compactHistory } from "./compaction";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
 import { instructionPrompt, loadInstructionBlocks } from "./instructions";
+// The plan-mode staging store (session-scoped): write/edit calls are staged
+// instead of applied while the user has plan mode on; the TUI reviews the
+// staged diffs with /changes and applies them with /apply (each apply passes
+// the ordinary guard/approval path).
+import { stageWrite, unifiedDiff } from "./plan";
+// The MCP tool registry (docs/09 §4.7): mcp__ tools admit as `mcp.invoke`.
+import { mcpAdmissionFor } from "./mcp/registry";
+// Hooks v1 (docs/15 H2–H4 reduced form): pre/post tool middleware that can
+// only narrow — a pre deny sinks into the standard tool-result shape, a post
+// failure is a notice (see hooks.ts for the named differences from HookV1).
+import { loadHooks, runPostToolHooks, runPreToolHooks, type HooksConfig } from "./hooks";
+import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -53,7 +66,7 @@ import {
 } from "./output-budget";
 import type { KernelClient } from "./kernel";
 import { resolvedInside, resolveSymlinkChain } from "./kernel";
-import { realpathish, spillDir as workspaceSpillDir } from "./paths";
+import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
 
 // The symlink-aware resolution moved to paths.ts (the single state-path
@@ -208,6 +221,11 @@ function argString(args: Record<string, unknown>, ...names: string[]): string | 
  */
 export function guardActionFor(name: string, args: Record<string, unknown>, workspace: string): GuardAction | undefined {
   const resolved = (value: string): string => path.resolve(workspace, value);
+  // MCP tools are dynamic: their admission comes from the registry that defines
+  // them (`mcp.invoke`, target `<serverId>:<toolName>`), never from the static
+  // table below.
+  const mcp = mcpAdmissionFor(name);
+  if (mcp !== undefined) return mcp;
   switch (name) {
     case "read": {
       const file = argString(args, "path", "file");
@@ -399,6 +417,8 @@ function approvalRequestFor(name: string, action: GuardAction, workspace: string
       return { title: `fetch ${shown}`, detail: action.target, kind: action.kind };
     case "spawn":
       return { title: `spawn ${shown}`, detail: action.target, kind: action.kind };
+    case "mcp.invoke":
+      return { title: `call MCP tool ${shown}`, detail: action.target, kind: action.kind };
     default:
       return { title: `${name} ${shown}`.trim(), detail: action.target, kind: "other" };
   }
@@ -851,6 +871,14 @@ export interface LoopDeps {
   ledger?: BudgetLedger;
   /** Nested delegation runner (the `agent` tool); absent in child runs. */
   delegate?: DelegateRunner;
+  /**
+   * Plan mode (the user's toggle): `write`/`edit` calls stage a diff the user
+   * reviews with /changes and applies with /apply; shell, undo, preview, agent
+   * and code_mode are refused; read-only tools are unaffected.
+   */
+  planMode?: boolean;
+  /** Loaded hooks (tests inject; absent = loaded once per run from config). */
+  hooks?: HooksConfig;
 }
 
 interface AssistantTurn {
@@ -1047,6 +1075,8 @@ async function collectAssistant(
     appendedTokens?: number;
     /** The project-instruction section (docs/10 R121-R123); "" when none. */
     instructions?: string;
+    /** The plan-mode rail line when the user has plan mode on. */
+    planLine?: string;
   },
 ): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
@@ -1063,6 +1093,7 @@ async function collectAssistant(
   if (rails?.pinned !== undefined && rails.pinned !== "") railParts.push(rails.pinned);
   if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
+  if (rails?.planLine !== undefined && rails.planLine !== "") railParts.push(rails.planLine);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
   const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
@@ -1128,13 +1159,103 @@ async function collectAssistant(
   return turn;
 }
 
+/* ------------------------------ plan mode ------------------------------ */
+
+/**
+ * Tools plan mode refuses outright. Staging covers `write`/`edit`; everything
+ * here would take an effect the user has not reviewed, so it is refused with a
+ * typed result the model can read. Read-only tools (read/glob/grep/repo_map/
+ * todo) are unaffected, and an unknown name falls through to the ordinary
+ * unknown-tool refusal.
+ */
+const PLAN_MODE_REFUSED: Record<string, string> = {
+  shell: "plan mode: commands are not run while planning; the user applies the plan (or exits plan mode) to execute",
+  undo: "plan mode: undo restores files and is not staged; exit plan mode to undo",
+  preview: "plan mode: dev servers are not started; exit plan mode to run one",
+  agent: "plan mode: subagents are not spawned while planning; exit plan mode to delegate",
+  code_mode: "plan mode: code programs are not run; exit plan mode to execute",
+};
+
+/** The projection of a write/edit as it would land right now, or a refusal. */
+function projectChange(
+  name: string,
+  args: Record<string, unknown>,
+  workspace: string,
+): { ok: true; resolved: string; rel: string; before: string | null; after: string } | { ok: false; error: string } {
+  const file = argString(args, "path", "file_path", "file");
+  if (file === undefined) return { ok: false, error: `${name} requires a path` };
+  const resolved = path.resolve(workspace, file);
+  let before: string | null = null;
+  try {
+    before = readFileSync(resolved).toString("utf8");
+  } catch {
+    before = null;
+  }
+  const rel = pathInsideWorkspace(resolved, workspace) ? path.relative(path.resolve(workspace), resolved) : resolved;
+  if (name === "write") {
+    if (typeof args.content !== "string") return { ok: false, error: "write requires a string content" };
+    return { ok: true, resolved, rel, before, after: args.content };
+  }
+  if (before === null) return { ok: false, error: `edit: file not found: ${rel}` };
+  if (typeof args.old !== "string" || args.old === "" || typeof args.new !== "string") {
+    return { ok: false, error: "edit requires old and new strings" };
+  }
+  const projected = projectExactEdit(before, args.old, args.new, args.all === true);
+  if (!projected.ok) {
+    return {
+      ok: false,
+      error: `edit: ${projected.error} in ${rel} — while staging only the exact rung is available; use write with the full intended content, or exit plan mode`,
+    };
+  }
+  return { ok: true, resolved, rel, before, after: projected.after };
+}
+
+/** The plan-mode answer for a call, or undefined when the call proceeds. */
+function planModeOutcome(
+  name: string,
+  args: Record<string, unknown>,
+  deps: LoopDeps,
+): { result: ToolResult; staged?: true; preview?: string } | undefined {
+  const refusal = PLAN_MODE_REFUSED[name];
+  if (refusal !== undefined) {
+    return { result: { ok: false, output: refusal, error: refusal } };
+  }
+  if (name !== "write" && name !== "edit") return undefined;
+  const projected = projectChange(name, args, deps.workspace);
+  if (!projected.ok) {
+    const message = `plan mode: ${projected.error}`;
+    return { result: { ok: false, output: message, error: message } };
+  }
+  const report = stageWrite(deps.sessionId, {
+    resolved: projected.resolved,
+    rel: projected.rel,
+    before: projected.before,
+    after: projected.after,
+    tool: name === "edit" ? "edit" : "write",
+  });
+  if (!report.staged) {
+    const message =
+      "plan mode: change refused — the stage is at its cap, or this single change exceeds it; " +
+      "review with /changes and free room with /discard, then re-issue the call";
+    return { result: { ok: false, output: message, error: message } };
+  }
+  const evictedNote = report.evicted > 0 ? ` (evicted ${report.evicted} earlier staged change(s) to stay within the cap)` : "";
+  const diff = unifiedDiff(projected.before, projected.after, projected.rel, 40);
+  return {
+    result: { ok: true, output: `staged for review (plan mode): ${projected.rel}${evictedNote}\n${diff}` },
+    staged: true,
+    preview: diff,
+  };
+}
+
 async function executeTool(
   deps: LoopDeps,
   gate: GuardGate,
   call: ToolCall,
   parsed: { args: Record<string, unknown>; error?: string },
   faults: RunFaults,
-): Promise<{ result: ToolResult; leaseId?: string }> {
+  hooks: HooksConfig,
+): Promise<{ result: ToolResult; leaseId?: string; staged?: boolean; preview?: string }> {
   if (parsed.error) {
     return {
       result: { ok: false, output: `Invalid arguments for ${call.name}: ${parsed.error}`, error: `invalid arguments: ${parsed.error}` },
@@ -1143,6 +1264,15 @@ async function executeTool(
   const tool = getTool(call.name);
   if (!tool || (deps.toolFilter !== undefined && !deps.toolFilter(call.name))) {
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
+  }
+
+  // Plan mode: staging/refusals happen AFTER the tool resolves (an unknown name
+  // keeps its unknown-tool refusal) and BEFORE any guard check — a staged
+  // change takes no effect, so there is nothing to admit yet; /apply admits
+  // each staged write through the ordinary guard when it runs.
+  if (deps.planMode === true) {
+    const planned = planModeOutcome(call.name, parsed.args, deps);
+    if (planned !== undefined) return planned;
   }
 
   const admission = admissionFor(call.name, parsed.args, deps.workspace);
@@ -1165,6 +1295,16 @@ async function executeTool(
     }
     if (decision.decision === "ask") {
       const request = approvalRequestFor(call.name, action, deps.workspace);
+      // Reviewable before writing: a write/edit ask carries the projected diff
+      // when it can be computed cheaply; any problem (unreadable file, no
+      // exact match) silently omits it — the ask itself is unchanged.
+      let approvalPreview: string | undefined;
+      if (call.name === "write" || call.name === "edit") {
+        const projected = projectChange(call.name, parsed.args, deps.workspace);
+        if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
+      }
+      const asked: ApprovalRequest & { preview?: string } =
+        approvalPreview !== undefined ? { ...request, preview: approvalPreview } : request;
       await logEvent(
         deps,
         faults,
@@ -1172,7 +1312,7 @@ async function executeTool(
         { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
         { kind: "system", id: "hz-guard" },
       );
-      const approved = await gate.approve(request, action);
+      const approved = await gate.approve(asked, action);
       await logEvent(
         deps,
         faults,
@@ -1185,6 +1325,23 @@ async function executeTool(
       }
       leaseId = gate.leaseFor(action);
     }
+  }
+
+  // hooks v1: the admitted call, once Guard/approval allowed it. A pre hook can
+  // only narrow further (H2 — it never allows what the guard asked or denied);
+  // a denying or failed hook sinks into the standard tool-result shape.
+  const hookDecision = await runPreToolHooks(hooks, {
+    sessionId: deps.sessionId,
+    workspace: deps.workspace,
+    callId: call.id,
+    tool: call.name,
+    args: parsed.args,
+    onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+    onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+  });
+  if (hookDecision.decision === "deny") {
+    const denied = `DENIED by hook: ${hookDecision.reason}`;
+    return { result: { ok: false, output: denied, error: denied } };
   }
 
   const context: ToolContext = {
@@ -1251,16 +1408,18 @@ async function runToolCall(
   call: ToolCall,
   faults: RunFaults,
   evidence: RunEvidence,
+  hooks: HooksConfig,
 ): Promise<number> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
   emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
   await logEvent(deps, faults, EventTypes.toolCall, { callId: call.id, name: call.name, args: parsed.args }, { kind: "tool", id: call.name });
 
-  const executed = await executeTool(deps, gate, call, parsed, faults);
+  const executed = await executeTool(deps, gate, call, parsed, faults, hooks);
   const result = executed.result;
   // Completion evidence: what this run changed, and whether anything checked it.
-  if (result.ok) {
+  // A staged (plan-mode) write changed nothing on disk, so it is not evidence.
+  if (result.ok && executed.staged !== true) {
     if (call.name === "write" || call.name === "edit") evidence.noteMutation(parsed.args.path ?? parsed.args.file_path ?? parsed.args.file);
     else if (call.name === "shell") evidence.noteCommand(parsed.args.command);
     else if (call.name === "todo") evidence.noteTodoCall(parsed.args.action);
@@ -1277,6 +1436,21 @@ async function runToolCall(
     if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
   }
   const content = toolMessageContent(result, plan.text);
+
+  // hooks v1 post point: an observation hook sees the model-facing text; a
+  // failure here is a notice, never a blocked step (H4).
+  await runPostToolHooks(hooks, {
+    sessionId: deps.sessionId,
+    workspace: deps.workspace,
+    callId: call.id,
+    tool: call.name,
+    args: parsed.args,
+    ok: result.ok,
+    ms: Date.now() - started,
+    outputExcerpt: content,
+    onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+    onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+  });
 
   try {
     deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
@@ -1344,9 +1518,30 @@ async function runToolCall(
     args: parsed.args,
     status: result.ok ? "ok" : "error",
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
+    ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
   });
   // The locally counted context cost of this message (NF-074(a) tail).
   return FRAMING_CHARGE_TOKENS + estimateTokens(content);
+}
+
+/**
+ * The post-mortem failure class for a non-succeeded exit. Deliberately coarse:
+ * the class is a sorting key for the growth loop, not a diagnosis — the
+ * record's terminal + detail carry the precise outcome.
+ */
+function classifyFailure(exit: RunExit): FailureClass {
+  switch (exit.detail) {
+    case "provider_error":
+      return "provider_error";
+    case "format_errors":
+      return "format";
+    case "steps":
+    case "tokens":
+    case "wall_clock":
+      return "budget";
+    default:
+      return "unknown";
+  }
 }
 
 /**
@@ -1395,6 +1590,17 @@ export async function runTurn(
     })();
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
+    // Plan mode rides the system rail: the model is told what staging means on
+    // every step, so a long planning turn cannot drift into treating a staged
+    // change as applied (the rail survives trims; history does not).
+    const planLine =
+      deps.planMode === true
+        ? "PLAN MODE is ON (the user's setting): write and edit calls are STAGED, not applied — the user reviews them with /changes and applies with /apply; shell, undo, preview, agent and code_mode calls are refused while planning."
+        : undefined;
+    // Hooks are config-backed and loaded ONCE per run (absent config = zero
+    // cost, zero spawns). A malformed config is a fail-closed refusal state
+    // carried by the loader, not an exception here.
+    const hooks = deps.hooks ?? loadHooks(deps.workspace);
     // NF-073: one ledger for the run tree (the main turn and every subagent it
     // spawns); a caller that passes its own ledger shares one ceiling.
     const ledger =
@@ -1477,6 +1683,7 @@ export async function runTurn(
         anchorBase,
         appendedTokens,
         instructions,
+        planLine,
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
@@ -1531,7 +1738,7 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence)
+            runToolCall(deps, gate, call, faults, evidence, hooks)
               .then((tokens) => {
                 appendedTokens += tokens;
               })
@@ -1641,6 +1848,41 @@ export async function runTurn(
   if (failure !== undefined) {
     if (exit.terminal === "succeeded") exit = { terminal: "failed", detail: "internal_error" };
     emit(deps.callbacks, { type: "error", message: failure });
+  }
+  // Post-mortems (docs/30 §4 item 8): a run that did not succeed leaves a
+  // record the growth loop can learn from — the RC-7 terminal, a failure
+  // class, the transcript range and its digest, tool counts, the task line.
+  // Best-effort: failing to record must never take the turn down, and it is
+  // noticed rather than swallowed. (A succeeded run records nothing: the
+  // lesson store is for failures; "noteworthy ≠ failed" stays available by
+  // calling recordPostmortem directly.)
+  if (exit.terminal !== "succeeded") {
+    try {
+      const rows = deps.store.history(deps.sessionId);
+      const events: TranscriptEvent[] = rows.map((msg, index) => ({
+        seq: index + 1,
+        role: msg.role,
+        text: typeof msg.content === "string" ? msg.content : "",
+      }));
+      const toolCounts: Record<string, number> = {};
+      for (const msg of rows) {
+        const toolName = (msg as { toolName?: unknown }).toolName;
+        if (msg.role === "tool" && typeof toolName === "string" && toolName !== "") {
+          toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1;
+        }
+      }
+      await recordPostmortem({
+        stateDir: workspaceStateDir(deps.workspace),
+        sessionId: deps.sessionId,
+        terminal: exit.terminal,
+        detail: exit.detail,
+        transcript: events,
+        toolCalls: toolCounts,
+        failureClass: classifyFailure(exit),
+      });
+    } catch (err) {
+      emit(deps.callbacks, { type: "notice", message: `could not record a post-mortem: ${errorMessage(err)}` });
+    }
   }
   emit(deps.callbacks, { type: "turn.done" });
   return { text, aborted: aborted || deps.signal.aborted, exit };
