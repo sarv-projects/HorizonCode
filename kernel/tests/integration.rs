@@ -1995,6 +1995,209 @@ fn zero_ttl_lease_is_already_expired_and_negative_is_refused() {
     assert!(message.contains("ttlMs"), "{}", message);
 }
 
+/// Ruling 32 / docs/11 L1 (reduced form): a lease admits ONE effect. The first
+/// matching check consumes it — the allow cites the lease id and the lease is
+/// gone — so a second identical action falls back to the policy (`ask`) instead
+/// of reusing the authority. Re-approval mints a new lease; the spent one is
+/// never authority again.
+#[test]
+fn guard_lease_is_consumed_at_most_once() {
+    let dir = TempDir::new("guard-lease-once");
+    let mut kernel = Kernel::start(dir.path());
+
+    let lease = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 60_000 }),
+    );
+    let first = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(first["decision"], json!("allow"));
+    assert_eq!(first["leaseId"], lease["leaseId"]);
+    assert!(
+        first["reason"].as_str().unwrap_or("").contains("consumed"),
+        "the allow must say the lease was consumed: {}",
+        first
+    );
+
+    // The spent lease does not admit a second effect...
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
+        "ask",
+        "a consumed lease must not admit a second effect"
+    );
+    // ...even when its id is echoed back as a caller-supplied claim.
+    let replay = kernel.ok(
+        "guard.check",
+        json!({
+            "action": { "kind": "shell.exec", "target": "echo hi" },
+            "scope": "workspace",
+            "leases": [lease],
+        }),
+    );
+    assert_eq!(replay["decision"], json!("ask"));
+
+    // A fresh lease covers the next effect — re-approval is one mint per effect.
+    let second = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 60_000 }),
+    );
+    assert_ne!(second["leaseId"], lease["leaseId"]);
+    let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["leaseId"], second["leaseId"]);
+}
+
+/// Ruling 32 / docs/11 L7 (reduced form): "always" mints a session GRANT. The
+/// grant itself allows nothing — each check it covers mints a fresh one-use
+/// lease BOUND to that exact action, which the decision returns and the receipt
+/// cites. The grant is never consumed; the leases it mints always are.
+#[test]
+fn guard_grant_mints_one_fresh_lease_per_effect() {
+    let dir = TempDir::new("guard-grant-mint");
+    let mut kernel = Kernel::start(dir.path());
+
+    let grant = kernel.ok(
+        "guard.grant",
+        json!({ "kind": "shell.exec", "pattern": "echo *", "ttlMs": 60_000, "sessionId": "s1" }),
+    );
+    assert_eq!(grant["owner"], json!("s1"));
+    assert!(
+        is_iso_utc(grant["expiry"].as_str().unwrap_or("")),
+        "grant expiry must be ISO-8601 UTC: {}",
+        grant
+    );
+
+    // Each covered effect gets its own fresh, bound lease.
+    let d1 = kernel.ok(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "echo one" }, "sessionId": "s1" }),
+    );
+    assert_eq!(d1["decision"], json!("allow"));
+    assert!(
+        d1["reason"].as_str().unwrap_or("").contains("minted one-use lease"),
+        "the allow must name the minted lease: {}",
+        d1
+    );
+    let id1 = d1["leaseId"].as_str().unwrap_or("").to_string();
+    assert!(!id1.is_empty() && id1 != grant["leaseId"].as_str().unwrap_or(""),
+        "a grant must never be cited as a usable lease id: {}", d1);
+    let d2 = kernel.ok(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "echo two" }, "sessionId": "s1" }),
+    );
+    assert_eq!(d2["decision"], json!("allow"));
+    let id2 = d2["leaseId"].as_str().unwrap_or("").to_string();
+    assert!(id2 != id1 && id2 != id1, "each effect gets a distinct lease: {} vs {}", id1, id2);
+
+    // The minted lease is spent by issue: it exists only as the evidence for
+    // the decision that returned it. A repeat of "echo one" is covered because
+    // the grant mints AGAIN — never because the previous mint was consulted.
+    let d3 = kernel.ok(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "echo one" }, "sessionId": "s1" }),
+    );
+    assert_eq!(d3["decision"], json!("allow"));
+    assert!(
+        d3["reason"].as_str().unwrap_or("").contains("minted one-use lease"),
+        "a repeat is a fresh mint, not a consulted lease: {}",
+        d3
+    );
+    assert_ne!(d3["leaseId"].as_str().unwrap_or(""), id1, "the second mint must be a new lease");
+
+    // Owner scoping (inherited from ruling 29) still applies to grants: another
+    // session and a session-less caller are not covered.
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "echo one", Some("child")),
+        "ask"
+    );
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "echo one", None),
+        "ask"
+    );
+
+    // Expiry: a grant past its window mints nothing.
+    kernel.ok(
+        "guard.grant",
+        json!({ "kind": "shell.exec", "pattern": "sleep *", "ttlMs": 1, "sessionId": "s1" }),
+    );
+    sleep(Duration::from_millis(40));
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "sleep 1", Some("s1")),
+        "ask",
+        "an expired grant must fall back to the policy (ask)"
+    );
+
+    // A legacy owner-less grant is globally consultable (documented), matching
+    // the owner-less lease rule.
+    let legacy = kernel.ok(
+        "guard.grant",
+        json!({ "kind": "shell.exec", "pattern": "echo world", "ttlMs": 60_000 }),
+    );
+    assert!(legacy.get("owner").is_none(), "owner must be omitted: {}", legacy);
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "echo world", Some("child")),
+        "allow"
+    );
+
+    // Protocol validation mirrors guard.lease.
+    let message = kernel.err("guard.grant", json!({ "kind": "shell.exec", "pattern": "*" }));
+    assert!(message.contains("ttlMs"), "{}", message);
+    let message = kernel.err(
+        "guard.grant",
+        json!({ "kind": "fs.edit", "pattern": "*", "ttlMs": 10 }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+}
+
+/// A grant is an answer to `ask`, never a bypass: policy deny still wins over a
+/// matching grant, and a surface a plain allow rule already covers is decided
+/// by that rule — no grant is consulted, and no lease id is fabricated.
+#[test]
+fn guard_grant_never_beats_deny_and_never_fires_on_allow() {
+    let dir = TempDir::new("guard-grant-scope");
+    let mut kernel = Kernel::start(dir.path());
+    let ws = TempDir::new("guard-grant-scope-ws");
+    let target = ws.path().join("note.txt");
+    let target = target.to_str().expect("utf8 target");
+
+    // Default policy: fs.write workspace is allowed. A grant for the exact
+    // path must not turn that into a "grant-minted lease" allow: the allow rule
+    // answers, with no leaseId.
+    kernel.ok(
+        "guard.grant",
+        json!({ "kind": "fs.write", "pattern": target, "ttlMs": 60_000 }),
+    );
+    let decision = guard_check(&mut kernel, "fs.write", target, Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("policy allow"),
+        "an allow rule answers on its own: {}",
+        decision
+    );
+    assert!(
+        decision.get("leaseId").is_none(),
+        "no lease may be fabricated where an allow rule answered: {}",
+        decision
+    );
+
+    // A deny rule outranks a matching grant: the grant is consultable but the
+    // decision is deny, with no lease minted.
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "shell.exec", "scope": "*", "decision": "deny" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    kernel.ok(
+        "guard.grant",
+        json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 60_000 }),
+    );
+    let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(decision.get("leaseId").is_none(), "deny mints nothing: {}", decision);
+}
+
 /// Stream names that traverse are refused, not sanitized into something else:
 /// the name appears in the error, and nothing was created outside the events dir.
 #[test]

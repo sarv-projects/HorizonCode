@@ -151,14 +151,16 @@ gate_rust_kernel_suite() {
 
 gate_kernel_selftest() {
   local bin="$ROOT/kernel/target/release/hz-kernel"
-  if [ ! -x "$bin" ]; then
-    if ! command -v cargo >/dev/null 2>&1; then
-      printf 'no release binary at %s and no cargo to build one\n' "$bin"
-      return 1
-    fi
-    printf 'release binary absent — building it first\n'
-    ( cd "$ROOT/kernel" && cargo build --release --locked )
+  if ! command -v cargo >/dev/null 2>&1; then
+    printf 'cargo is not on PATH — the Rust toolchain is required\n'
+    return 1
   fi
+  # ALWAYS rebuild the release binary before using it. The TS interop suite
+  # resolves this exact path first (tests/core/helpers.ts), so a stale binary
+  # silently validates OLD kernel behaviour — observed during ruling 32:
+  # the suite passed against a kernel without one-use leases. The build is a
+  # no-op when the tree is unchanged.
+  ( cd "$ROOT/kernel" && cargo build --release --locked ) || return 1
   local state
   state="$(mktemp -d "$WORK_DIR/selftest.XXXXXX")"
   "$bin" --selftest --state-dir "$state"

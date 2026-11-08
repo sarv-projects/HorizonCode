@@ -137,10 +137,16 @@ class HzRuntimeImpl implements HzRuntime {
     this.instanceApproval = typeof fn === "function" ? fn : undefined;
   }
 
+  /**
+   * The "always" answer (ruling 32 / docs/11 L7 reduced form): a session
+   * GRANT, not a lease. It allows nothing by itself; the kernel mints a fresh
+   * one-use lease for each effect the grant covers (see KernelClient.makeGrant).
+   * The name is kept for the TUI contract; the object is still Lease-shaped.
+   */
   async grantLease(kind: GuardKind, pattern: string, ttlMs: number = SESSION_LEASE_TTL_MS): Promise<Lease> {
-    const lease = await this.kernel.makeLease(kind, typeof pattern === "string" && pattern !== "" ? pattern : "*", ttlMs);
-    this.leases.push(lease);
-    return lease;
+    const grant = await this.kernel.makeGrant(kind, typeof pattern === "string" && pattern !== "" ? pattern : "*", ttlMs);
+    this.leases.push(grant);
+    return grant;
   }
 
   newSession(title = "New chat"): HzRuntime {
