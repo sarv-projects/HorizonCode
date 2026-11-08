@@ -73,6 +73,7 @@ if (!SCRIPT) {
   test.skip("chat bar: banner, an answer, /help and a tool card (needs util-linux `script`)", () => {});
   test.skip("chat bar: /model, /files and an unknown command (needs util-linux `script`)", () => {});
   test.skip("chat bar: a human denies once and approves the next time (needs util-linux `script`)", () => {});
+  test.skip("chat bar: /context reports the window and the estimated input (needs util-linux `script`)", () => {});
 } else {
   test(
     "prints the banner, answers a line, shows /help, then leaves on Ctrl-D with exit 0",
@@ -149,6 +150,39 @@ if (!SCRIPT) {
       expect(out).toMatch(/tools \(\d+\): .*shell/);
       expect(out.indexOf("\u00b7 model mock-1")).toBeLessThan(out.indexOf("tools ("));
       expect(out.indexOf("tools (")).toBeLessThan(out.indexOf("unknown command /nope"));
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "/context reports the window and the estimated input after a turn",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws);
+
+      // Before any dispatch there is nothing to report, and it says so.
+      proc.write("/context\n");
+      expect(await waitFor(proc, "no context snapshot yet")).toBe(true);
+
+      proc.write("hello\n");
+      expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
+
+      proc.write("/context\n");
+      expect(await waitFor(proc, "context \u00b7 model mock-1")).toBe(true);
+
+      proc.write("/exit\n");
+      const run = await proc.done;
+      const out = flatten(run.stdout);
+
+      expect(run.timedOut).toBe(false);
+      expect(run.code).toBe(0);
+      // Harness-side numbers, in one line: window, estimate, output cap, view.
+      // The pty may wrap the line, so each number is asserted on its own.
+      expect(out).toMatch(/window \d+ tok/);
+      expect(out).toMatch(/estimated input \d+ tok \(\d+%\)/);
+      expect(out).toMatch(/output cap \d+ tok/);
+      expect(out).toMatch(/\d+\/\d+ messages in view/);
+      expect(out.indexOf("no context snapshot yet")).toBeLessThan(out.indexOf("context \u00b7 model mock-1"));
     },
     PTY_TIMEOUT_MS + 5_000,
   );

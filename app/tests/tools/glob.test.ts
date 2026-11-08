@@ -103,6 +103,20 @@ describe("glob tool", () => {
     expect(ctx.approveCalls.length).toBe(1);
   });
 
+  test("an incomplete walk says so instead of presenting a partial list as complete", async () => {
+    // The walk stops after MAX_COLLECT (5000) matches; before the fix the marker only
+    // covered the display cap (MAX_RESULTS), so a partial list read as a full one
+    // (audit finding 8).
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 5001; i++) files[`bulk/f${String(i).padStart(5, "0")}.txt`] = `${i}\n`;
+    const ws = makeWorkspace(files);
+    const r = await globTool.execute({ pattern: "**/*.txt" }, mockToolContext({ cwd: ws }));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[incomplete: the walk stopped after collecting 5000 matches");
+    expect(r.output).toContain("NOT exhaustive");
+    expect(r.output).toContain("[truncated: first 300 of 5000 paths shown]");
+  }, 60000);
+
   test("reports a policy denial", async () => {
     const ws = makeWorkspace(TREE);
     const ctx = mockToolContext({ cwd: ws, decision: "deny", decisionReason: "no reads" });

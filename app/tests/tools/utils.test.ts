@@ -1,7 +1,7 @@
 /** `src/tools/helpers.ts` — truncation, path display and binary sniffing. */
 
 import { describe, expect, test } from "bun:test";
-import { isBinary, relPath, resolvePath, truncate } from "../../src/tools/helpers";
+import { isBinary, relPath, resolvePath, scrubEnv, truncate } from "../../src/tools/helpers";
 
 describe("truncate", () => {
   test("leaves short text untouched", () => {
@@ -37,6 +37,32 @@ describe("relPath", () => {
   test("keeps paths outside the base absolute", () => {
     expect(relPath("/work", "/etc/hosts")).toBe("/etc/hosts");
     expect(relPath("/work/sub", "/work/a.ts")).toBe("/work/a.ts");
+  });
+});
+
+describe("scrubEnv", () => {
+  test("drops credential-shaped names and DSN-shaped values, keeps harmless URLs", () => {
+    process.env.HZ_TEST_API_KEY = "sk-1";
+    process.env.HZ_TEST_DB_DSN = "postgres://u:p@h/db";
+    process.env.HZ_TEST_CREDENTIALS = "user:pass";
+    process.env.HZ_TEST_DATABASE_URL = "postgres://app:s3cr3t@db.internal:5432/app";
+    process.env.HZ_TEST_LOCAL_URL = "redis://127.0.0.1:6379";
+    process.env.HZ_TEST_INDEX_URL = "https://pypi.org/simple";
+    try {
+      const env = scrubEnv();
+      // Credentials by name and by value never reach a child process.
+      expect(env.HZ_TEST_API_KEY).toBeUndefined();
+      expect(env.HZ_TEST_DB_DSN).toBeUndefined();
+      expect(env.HZ_TEST_CREDENTIALS).toBeUndefined();
+      expect(env.HZ_TEST_DATABASE_URL).toBeUndefined();
+      // A credential-free URL is not a secret; a build tool may need it.
+      expect(env.HZ_TEST_LOCAL_URL).toBe("redis://127.0.0.1:6379");
+      expect(env.HZ_TEST_INDEX_URL).toBe("https://pypi.org/simple");
+    } finally {
+      for (const k of ["HZ_TEST_API_KEY", "HZ_TEST_DB_DSN", "HZ_TEST_CREDENTIALS", "HZ_TEST_DATABASE_URL", "HZ_TEST_LOCAL_URL", "HZ_TEST_INDEX_URL"]) {
+        delete process.env[k];
+      }
+    }
   });
 });
 

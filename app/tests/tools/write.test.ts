@@ -3,6 +3,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
+import { readTool } from "../../src/tools/read";
 import { writeTool } from "../../src/tools/write";
 import { makeWorkspace, mockToolContext, readFixture } from "./helpers";
 
@@ -16,9 +17,13 @@ describe("write tool", () => {
     expect(r.output).toMatch(/^Wrote 1 lines? \(3 bytes\) to a\/b\/c\/f\.txt$/);
   });
 
-  test("overwrites an existing file", async () => {
+  test("overwrites an existing file (after a read, per the read-before-write gate)", async () => {
     const ws = makeWorkspace({ "f.txt": "long original content\n" });
-    const r = await writeTool.execute({ path: "f.txt", content: "new\n" }, mockToolContext({ cwd: ws }));
+    const ctx = mockToolContext({ cwd: ws });
+    // A file this session has not read is refused (tests/tools/read-ledger.test.ts);
+    // the read is the flow the gate asks for.
+    expect((await readTool.execute({ path: "f.txt" }, ctx)).ok).toBe(true);
+    const r = await writeTool.execute({ path: "f.txt", content: "new\n" }, ctx);
     expect(r.ok).toBe(true);
     expect(readFixture(ws, "f.txt")).toBe("new\n");
     expect(r.output).toMatch(/^Wrote 1 lines? \(4 bytes\) to f\.txt$/);

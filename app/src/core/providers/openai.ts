@@ -7,6 +7,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 
 export interface OpenAiSettings {
@@ -101,17 +102,26 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
   else body.max_tokens = DEFAULT_MAX_TOKENS;
 
   let response: Response;
+  const retries: string[] = [];
   try {
-    response = await fetch(baseUrl + "/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${settings.apiKey}`,
-        accept: "text/event-stream",
+    response = await fetchWithRetry(
+      baseUrl + "/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${settings.apiKey}`,
+          accept: "text/event-stream",
+        },
+        body: JSON.stringify(body),
+        signal: req.signal,
       },
-      body: JSON.stringify(body),
-      signal: req.signal,
-    });
+      {
+        // Ride out a rate limit or an overloaded upstream instead of failing the
+        // whole turn; the notices below keep it visible rather than silent.
+        onRetry: (info) => retries.push(retryNotice("openai", info, DEFAULT_RETRY_ATTEMPTS)),
+      },
+    );
   } catch (err) {
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
@@ -120,6 +130,7 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
     yield { type: "error", message: `openai request failed: ${errorText(err)}` };
     return;
   }
+  for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");

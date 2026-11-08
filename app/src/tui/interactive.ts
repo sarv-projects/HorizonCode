@@ -10,7 +10,7 @@
 import * as readline from "node:readline";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { Runtime, ToolSpec } from "../contracts";
+import type { ContextUsage, Runtime, ToolSpec } from "../contracts";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
 import type { ApprovalUi } from "./approval";
@@ -25,6 +25,7 @@ const HISTORY_LIMIT = 500;
 type RuntimeWithExtras = Runtime & {
   newSession?: () => unknown;
   setModel?: (model: string) => unknown;
+  contextUsage?: () => ContextUsage | undefined;
 };
 
 const toolSpecs = (toolsModule as { toolSpecs?: () => ToolSpec[] }).toolSpecs;
@@ -116,6 +117,7 @@ function printHelp(r: Renderer): void {
     ["/new", "start a fresh session"],
     ["/model [name]", "show or switch the model"],
     ["/files", "tools the assistant can use"],
+    ["/context", "what the next request will carry"],
     ["/exit", "leave (Ctrl+D also works)"],
   ];
   const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
@@ -311,6 +313,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   };
 
+  const showContext = (): void => {
+    const usage = (runtime as RuntimeWithExtras).contextUsage?.();
+    if (!usage) {
+      renderer.notice("no context snapshot yet \u2014 send a message first, then ask again");
+      return;
+    }
+    const percent = usage.window > 0 ? Math.round((usage.estimatedInput / usage.window) * 100) : 0;
+    renderer.notice(
+      `context \u00b7 model ${usage.model} \u00b7 window ${usage.window} tok \u00b7 estimated input ${usage.estimatedInput} tok (${percent}%) \u00b7 output cap ${usage.maxOutput} tok \u00b7 ${usage.messages}/${usage.historyLimit} messages in view`,
+    );
+  };
+
   const runSlash = async (text: string): Promise<void> => {
     const body = text.slice(1).trim();
     const spaceAt = body.search(/\s/);
@@ -339,6 +353,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break;
       case "files":
         showTools(renderer);
+        break;
+      case "context":
+        showContext();
         break;
       default:
         renderer.notice(`unknown command /${name} \u2014 try /help`);

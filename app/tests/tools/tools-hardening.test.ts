@@ -25,6 +25,7 @@ import { kernelStateDir } from "../../src/core/paths";
 import { SessionStore } from "../../src/core/session";
 import { editTool } from "../../src/tools/edit";
 import { previewTool, stopAllPreviews } from "../../src/tools/preview";
+import { readTool } from "../../src/tools/read";
 import { writeTool } from "../../src/tools/write";
 import { mockToolContext, tempRoot } from "./helpers";
 
@@ -438,10 +439,11 @@ describe("write verifies where the effect lands, not where the path pointed", ()
     stateDirOf(ws);
     writeFileSync(path.join(ws, "real.txt"), "real\n");
     symlinkSync(path.join(ws, "real.txt"), path.join(ws, "link.txt"));
-    const r = await writeTool.execute(
-      { path: "link.txt", content: "through the link\n" },
-      mockToolContext({ cwd: ws, workspace: ws }),
-    );
+    const ctx = mockToolContext({ cwd: ws, workspace: ws });
+    // Read first: the gate refuses an unread existing target (read-ledger test),
+    // and a read through the link marks its realpath.
+    expect((await readTool.execute({ path: "link.txt" }, ctx)).ok).toBe(true);
+    const r = await writeTool.execute({ path: "link.txt", content: "through the link\n" }, ctx);
     expect(r.ok).toBe(true);
     expect(readFileSync(path.join(ws, "real.txt"), "utf8")).toBe("through the link\n");
   });

@@ -90,6 +90,15 @@ interface MessageRow {
   meta: string | null;
 }
 
+/** A full message row, as the mid-turn repair reads and rewrites it. */
+interface RepairRow {
+  id: string;
+  role: string;
+  content: string | null;
+  ts: string;
+  meta: string | null;
+}
+
 interface SessionRow extends SessionInfo {}
 
 interface MessageMeta {
@@ -143,6 +152,32 @@ function isToolCall(value: unknown): value is ToolCall {
   if (value === null || typeof value !== "object") return false;
   const call = value as Partial<ToolCall>;
   return typeof call.id === "string" && typeof call.name === "string";
+}
+
+/**
+ * What a repaired (interrupted) tool call tells the model.
+ *
+ * A crash or SIGKILL between "append the assistant message with its tool calls"
+ * and "append the tool result" leaves the transcript with a call that is never
+ * answered. Every real provider refuses to replay that history — OpenAI answers
+ * `Invalid 'messages': assistant tool_call 'c1' (shell) has no following tool
+ * message`, Anthropic rejects a `tool_use` with no `tool_result` — so the
+ * session is permanently unusable: every later turn fails the same way, and the
+ * only escape is abandoning it.
+ *
+ * The repair states the honest answer rather than a convenient one. The effect
+ * may genuinely have happened (the process could have died after the write
+ * landed), so the result is UNKNOWN — the same vocabulary the run exit already
+ * uses — and the model is told to verify rather than to assume either way.
+ * Fabricating "the tool failed" would be as wrong as fabricating a success.
+ */
+export function interruptedToolResult(toolName: string): string {
+  const name = typeof toolName === "string" && toolName !== "" ? toolName : "the tool";
+  return (
+    `UNKNOWN: the run was interrupted while ${name} was executing (the process died), so no result was recorded. ` +
+    `The effect may or may not have happened. Check the actual state (re-read the file, re-run the command, inspect the diff) before relying on it, ` +
+    `and do not assume ${name} did or did not run.`
+  );
 }
 
 /** Rows -> ChatMsg, restoring the fields the providers need to replay a turn. */
@@ -320,6 +355,100 @@ export class SessionStore {
       .query("SELECT role, content, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC")
       .all(sessionId) as MessageRow[];
     return rows.map(rowToChatMsg);
+  }
+
+  /**
+   * Repair a transcript left mid-turn by a crash, an OOM kill or a SIGKILL: an
+   * assistant message whose tool calls were never answered (see
+   * `interruptedToolResult` for why this bricks the session).
+   *
+   * One synthetic UNKNOWN tool result is inserted per unanswered call, in the
+   * assistant's declared call order, immediately after that assistant message —
+   * which is what the providers require. Answered calls keep their real results
+   * and their position; nothing is ever deleted. Idempotent: a call that already
+   * has a result is left alone, so running this on every open is safe.
+   *
+   * Ordering note: SQLite assigns a fresh rowid on insert, so a repair that only
+   * appended the synthetic rows would sort them after every later message and
+   * leave the pairing broken again. The affected session's rows are therefore
+   * rewritten in order inside one transaction, preserving every `id`, `content`
+   * and `ts` exactly — only rowids change, and `history()` orders by rowid.
+   */
+  repairDanglingToolCalls(sessionId: string): { repaired: number; calls: string[] } {
+    const rows = this.db
+      .query("SELECT id, role, content, ts, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC")
+      .all(sessionId) as RepairRow[];
+    if (rows.length === 0) return { repaired: 0, calls: [] };
+
+    const ordered: RepairRow[] = [];
+    const inserted: string[] = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i] as RepairRow;
+      ordered.push(row);
+      if (row.role !== "assistant") continue;
+      const calls = (parseMeta(row.meta).toolCalls ?? []).filter(isToolCall);
+      if (calls.length === 0) continue;
+
+      // The tool rows that immediately follow this assistant message answer it.
+      const following: RepairRow[] = [];
+      let j = i + 1;
+      while (j < rows.length && (rows[j] as RepairRow).role === "tool") {
+        following.push(rows[j] as RepairRow);
+        j += 1;
+      }
+      const byCallId = new Map<string, RepairRow>();
+      for (const toolRow of following) {
+        const callId = parseMeta(toolRow.meta).toolCallId;
+        if (typeof callId === "string" && callId !== "" && !byCallId.has(callId)) byCallId.set(callId, toolRow);
+      }
+
+      const consumed = new Set<string>();
+      for (const call of calls) {
+        const answered = byCallId.get(call.id);
+        if (answered !== undefined) {
+          ordered.push(answered);
+          consumed.add(call.id);
+          continue;
+        }
+        // Unanswered: the honest UNKNOWN, positioned where the result belongs.
+        ordered.push({
+          id: newId(),
+          role: "tool",
+          content: interruptedToolResult(call.name),
+          // The interruption happened in this turn, not at repair time.
+          ts: row.ts,
+          meta: JSON.stringify({ toolCallId: call.id, toolName: call.name, interrupted: true }),
+        });
+        inserted.push(`${call.name}#${call.id}`);
+      }
+      // A tool row that answers no call of this assistant message is preserved
+      // rather than dropped: a repair must never lose a recorded result.
+      for (const toolRow of following) {
+        const callId = parseMeta(toolRow.meta).toolCallId;
+        if (typeof callId === "string" && consumed.has(callId)) continue;
+        ordered.push(toolRow);
+      }
+      i = j - 1;
+    }
+
+    if (inserted.length === 0) return { repaired: 0, calls: [] };
+
+    const rewrite = this.db.transaction(() => {
+      this.db.run("DELETE FROM messages WHERE session_id = ?", [sessionId]);
+      for (const row of ordered) {
+        this.db.run("INSERT INTO messages (id, session_id, role, content, ts, meta) VALUES (?, ?, ?, ?, ?, ?)", [
+          row.id,
+          sessionId,
+          row.role,
+          row.content ?? "",
+          row.ts,
+          row.meta,
+        ]);
+      }
+    });
+    rewrite();
+    this.touchSession(sessionId);
+    return { repaired: inserted.length, calls: inserted };
   }
 
   messageCount(sessionId: string): number {

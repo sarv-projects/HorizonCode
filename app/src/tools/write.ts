@@ -1,41 +1,41 @@
 /**
  * `write` — create or overwrite a file.
  *
- * Effect-time verification (wave-13 audit finding 10). The guard classifies the
- * REQUESTED path; between that decision and the bytes landing, a racer can swap
- * a path component for a symlink into the kernel state directory
- * (`.hz/state/kernel`, where policy.json, leases and receipts live) — the guard
- * would have decided on a harmless path while the write follows the swap. So the
- * effect goes through an open file descriptor that is re-verified BEFORE any
- * byte is written: on Linux `/proc/self/fd/<fd>` names where the descriptor
- * really points, and that target is classified with the same function the guard
- * uses (`protectedPathRefusal`). A refusal closes the descriptor and writes
- * nothing.
+ * The effect goes through `atomic-write.ts` (temp file in the same directory,
+ * fsync, rename, post-rename identity proof) and the descriptor it writes to is
+ * re-verified against the kernel state directory before a byte lands — see the
+ * header of ./verified-open.ts for why, and for the named residuals.
  *
- * Symlink policy for `write` (and `edit`): VERIFY-THEN-ALLOW. Writing THROUGH a
- * file-level symlink to a legitimate target keeps working, as it did before this
- * check; the classification follows the link to where the descriptor points and
- * only the kernel state directory is refused. Off Linux there is no
- * `/proc/self/fd`, so the fallback is weaker: the last component is pinned with
- * `O_NOFOLLOW` when the path is not already a symlink, and the descriptor is
- * compared by device+inode against the path plus classified through the same
- * helper. Residual there: an intermediate path component swapped inside the
- * window between classification and the effect. The general fix is
- * kernel-executed effects (NF-016).
+ * Two guards exist because this is the most destructive tool in the set:
  *
- * One more residual, on every platform: the open itself uses `O_CREAT` when the
- * path did not exist, so a racer that points the path into the state directory
- * can make this tool create an EMPTY file there. No bytes are written and an
- * existing file is never truncated — the refusal is `HZ_PRECONDITION_FAILED`,
- * naming both the requested and the resolved path.
+ *   - STALENESS across the approval window: the target's identity is snapshotted
+ *     before the guard/approval and re-checked immediately before the effect. A
+ *     file a human (or another tool) changed while the approval prompt was up is
+ *     a `HZ_PRECONDITION_FAILED` refusal, never a silent overwrite. This is the
+ *     same TOCTOU that `edit` closes with a sha256 preimage; `write` has no
+ *     preimage of its own (it may be creating the file), so identity + mtime +
+ *     size is the evidence. Named residual: a same-second, same-size edit on a
+ *     coarse-mtime filesystem is not distinguishable here.
+ *   - BINARY / NON-UTF-8 refusal: overwriting a PNG, an artifact or a Latin-1
+ *     source file with UTF-8 text destroys bytes nothing can restore. Both checks
+ *     are bypassable with `force: true`, which is the caller taking
+ *     responsibility for the replacement.
  */
 
-import { constants } from "node:fs";
-import { lstat, mkdir, open, readlink, stat, type FileHandle } from "node:fs/promises";
+import { readFile, mkdir, stat, type Stats } from "node:fs/promises";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
-import { kernelStateDir, realpathish } from "../core/paths";
-import { relPath, resolvePath } from "./helpers";
+import { sha256Hex } from "../core/canon";
+import { realpathish } from "../core/paths";
+import { writeAtomic } from "./atomic-write";
+import { recordChange } from "./change-journal";
+import { isBinary, relPath, resolvePath } from "./helpers";
+import { noteRead, wasRead } from "./read-ledger";
+import { protectedTargetRefusal } from "./verified-open";
+
+// Re-exported so existing importers keep working after the verification code was
+// split into its own module (`verified-open.ts`).
+export { openVerifiedWrite, type VerifiedWrite } from "./verified-open";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -51,99 +51,32 @@ export function countLines(content: string): number {
   return content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
 }
 
-/** Where an open descriptor really points, or undefined without /proc (non-Linux). */
-async function fdTarget(fd: number): Promise<string | undefined> {
-  if (process.platform !== "linux") return undefined;
-  try {
-    return await readlink(`/proc/self/fd/${fd}`);
-  } catch {
-    return undefined;
-  }
+/** The staleness snapshot: what the path named before anyone was asked to approve. */
+interface Snapshot {
+  exists: boolean;
+  dev?: number;
+  ino?: number;
+  size?: number;
+  mtimeMs?: number;
 }
 
-/**
- * The guard's own protected-path classifier, fetched lazily.
- *
- * `core/kernel.ts` (and `core/loop.ts` behind it) reaches back into `tools/` at
- * module scope, so a STATIC import from a tool would close a module cycle whose
- * evaluation order breaks for any entry that loads a tool first — which the test
- * suite does (`tests/tools/write.test.ts` imports this file directly). A dynamic
- * import at call time resolves to the very same exported function, so the
- * classification stays byte-identical to the guard's without the cycle.
- */
-async function protectedClassifier(): Promise<(action: GuardAction, stateDir: string) => string | undefined> {
-  const { protectedPathRefusal } = await import("../core/kernel");
-  return protectedPathRefusal;
+async function snapshot(resolved: string): Promise<Snapshot> {
+  const st: Stats | undefined = await stat(resolved).catch(() => undefined);
+  if (st === undefined) return { exists: false };
+  return { exists: true, dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
 }
 
-/** The typed refusal for a descriptor that lands inside the kernel state dir. */
-function protectedRefusal(requested: string, openedAs: string, stateDir: string): string {
-  return (
-    `HZ_PRECONDITION_FAILED: write refused at effect time: requested ${requested} ` +
-    `opened as ${openedAs}, inside the kernel state directory (${stateDir}); nothing was written`
-  );
+/** A human-readable description of what moved, for the refusal message. */
+function describeChange(before: Snapshot, after: Snapshot): string {
+  if (!before.exists && after.exists) return "created by another process while awaiting approval";
+  if (before.exists && !after.exists) return "deleted while awaiting approval";
+  if (before.ino !== after.ino) return "replaced by another process while awaiting approval";
+  return `modified while awaiting approval (${String(before.size)} -> ${String(after.size)} bytes)`;
 }
 
-export interface VerifiedWrite {
-  /** The open, verified descriptor; the caller writes through it and closes it. */
-  handle: FileHandle;
-  /** The path the classification ran on (where the descriptor really points). */
-  openedAs: string;
-}
-
-/**
- * Open `resolved` for writing and re-verify — before any byte is written — that
- * the descriptor does not land inside the kernel state directory. Returns the
- * descriptor, or a typed refusal; on refusal nothing was written and the
- * descriptor is closed.
- */
-export async function openVerifiedWrite(resolved: string, ctx: ToolContext): Promise<VerifiedWrite | { refusal: string }> {
-  const stateDir = kernelStateDir(ctx.workspace);
-  const pre = await lstat(resolved).catch(() => undefined);
-  // No /proc: pin the last component where the tool's semantics allow it (the
-  // path is not already a symlink) and check the descriptor's identity below.
-  const noFollow = process.platform !== "linux" && (pre === undefined || !pre.isSymbolicLink());
-  const flags =
-    (pre === undefined ? constants.O_WRONLY | constants.O_CREAT : constants.O_WRONLY) |
-    (noFollow ? constants.O_NOFOLLOW : 0);
-
-  let handle: FileHandle;
-  try {
-    handle = await open(resolved, flags, 0o666);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ELOOP") {
-      return { refusal: `HZ_PRECONDITION_FAILED: write refused: ${resolved} became a symlink while being opened; nothing was written` };
-    }
-    throw err;
-  }
-
-  try {
-    const byFd = await fdTarget(handle.fd);
-    let classified: string;
-    if (byFd !== undefined) {
-      classified = byFd;
-    } else {
-      // Weaker fallback (non-Linux): the descriptor cannot name its own path, so
-      // the evidence is the path's resolution plus "the path and the descriptor
-      // are the same file". An intermediate-component swap inside the window is
-      // the named residual (see the header).
-      const viaPath = await stat(resolved).catch(() => undefined);
-      const viaFd = await handle.stat();
-      if (viaPath === undefined || viaPath.dev !== viaFd.dev || viaPath.ino !== viaFd.ino) {
-        await handle.close();
-        return { refusal: `HZ_PRECONDITION_FAILED: write refused: ${resolved} changed while being opened; nothing was written` };
-      }
-      classified = realpathish(resolved);
-    }
-    if ((await protectedClassifier())({ kind: "fs.write", target: classified }, stateDir) !== undefined) {
-      await handle.close();
-      return { refusal: protectedRefusal(resolved, classified, stateDir) };
-    }
-    return { handle, openedAs: classified };
-  } catch (err) {
-    await handle.close().catch(() => undefined);
-    throw err;
-  }
+/** True when the buffer is valid UTF-8: decode and re-encode must be lossless. */
+function isUtf8(buf: Uint8Array): boolean {
+  return Buffer.from(buf.toString("utf8"), "utf8").equals(Buffer.from(buf));
 }
 
 export const writeTool: Tool = {
@@ -154,6 +87,10 @@ export const writeTool: Tool = {
     properties: {
       path: { type: "string", description: "File path to write." },
       content: { type: "string", description: "Full file content." },
+      force: {
+        type: "boolean",
+        description: "Overwrite a binary or non-UTF-8 file. Without it such a target is refused.",
+      },
     },
     required: ["path", "content"],
   },
@@ -165,6 +102,7 @@ export const writeTool: Tool = {
     try {
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
       if (typeof args.content !== "string") return fail("content is required");
+      const force = args.force === true;
 
       const content = args.content;
       const resolved = resolvePath(ctx.cwd, args.path);
@@ -173,6 +111,7 @@ export const writeTool: Tool = {
       const bytes = Buffer.byteLength(content, "utf8");
 
       const action: GuardAction = { kind: "fs.write", target: resolved };
+      const beforeGuard = await snapshot(resolved);
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -189,18 +128,89 @@ export const writeTool: Tool = {
         if (!approved) return fail("declined by user");
       }
 
-      await mkdir(path.dirname(resolved), { recursive: true });
-      const opened = await openVerifiedWrite(resolved, ctx);
-      if ("refusal" in opened) return fail(opened.refusal);
-      try {
-        // Truncate + write through the verified descriptor: never through the
-        // requested path again (that is where the racer acts).
-        await opened.handle.truncate(0);
-        await opened.handle.write(content, 0, "utf8");
-      } finally {
-        await opened.handle.close().catch(() => undefined);
+      // Where the effect would land, decided AFTER the approval window and before
+      // anything is read or written. A racer that swapped a path component for a
+      // symlink into the kernel state directory is caught here, and the refusal
+      // names both the requested path and the resolved target.
+      const refused = await protectedTargetRefusal(resolved, realpathish(resolved), ctx);
+      if (refused !== undefined) return fail(refused);
+
+      // Staleness across the window in which the user was deciding (docs/09 §8.2's
+      // rule, extended to `write`): a concurrent change is a Conflict, not a
+      // silent overwrite with "success".
+      const afterApproval = await snapshot(resolved);
+      if (
+        beforeGuard.exists !== afterApproval.exists ||
+        beforeGuard.ino !== afterApproval.ino ||
+        beforeGuard.size !== afterApproval.size ||
+        beforeGuard.mtimeMs !== afterApproval.mtimeMs
+      ) {
+        return fail(
+          `HZ_PRECONDITION_FAILED: write refused: preimage changed: ${rel} ` +
+            `(${describeChange(beforeGuard, afterApproval)}; re-read the file and retry)`,
+        );
       }
 
+      // Read-before-write (audit finding 2): a file that already exists is only
+      // replaced when this session has read it. `write` keeps no preimage of its
+      // own, so without this the model can destroy content it never saw.
+      if (beforeGuard.exists && !force && !wasRead(ctx, resolved)) {
+        return fail(
+          `HZ_PRECONDITION_FAILED: write refused: ${rel} already exists and this session has not read it; ` +
+            `read it first, or pass force:true to replace it wholesale`,
+        );
+      }
+
+      // What the overwrite would destroy, and what undo would restore. Only the
+      // pre-existing content matters; the create path has nothing to lose.
+      let preimageText: string | null = null;
+      let preimageUnreadable = false;
+      if (beforeGuard.exists) {
+        let preimage: Buffer | undefined;
+        try {
+          preimage = await readFile(resolved);
+        } catch {
+          preimage = undefined; // unreadable (a directory, a device, permissions)
+        }
+        if (preimage !== undefined) {
+          const binary = isBinary(preimage);
+          if (binary || !isUtf8(preimage)) {
+            if (!force) {
+              return fail(
+                binary
+                  ? `binary file (contains a NUL byte): ${rel}; pass force:true to overwrite it`
+                  : `not valid UTF-8: ${rel}; overwriting would corrupt the encoding — pass force:true to proceed`,
+              );
+            }
+            preimageUnreadable = true;
+          } else {
+            preimageText = preimage.toString("utf8");
+          }
+        } else {
+          // Unreadable (a directory, a device, permissions): the checks never ran
+          // here, the write proceeds, and undo records that bytes cannot come back.
+          preimageUnreadable = true;
+        }
+      }
+
+      await mkdir(path.dirname(resolved), { recursive: true });
+      const outcome = await writeAtomic(resolved, content, ctx);
+      if (!outcome.ok) return fail(outcome.refusal);
+
+      recordChange(ctx.sessionId, {
+        path: resolved,
+        rel,
+        before: preimageText,
+        ...(preimageUnreadable ? { beforeUnreadable: true } : {}),
+        afterSha256: sha256Hex(content),
+        at: Date.now(),
+        tool: "write",
+      });
+
+      // The session authored (and verified, by re-reading) this content, so the
+      // path counts as known: overwriting your own work is not the "never saw
+      // it" hazard the gate targets.
+      noteRead(ctx, resolved);
       return { ok: true, output: `Wrote ${lines} lines (${bytes} bytes) to ${rel}` };
     } catch (e) {
       return fail(msg(e));

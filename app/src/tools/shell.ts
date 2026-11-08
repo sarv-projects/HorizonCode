@@ -14,6 +14,12 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 /** How long to keep draining output pipes after the direct child has exited. */
 const DRAIN_GRACE_MS = 500;
+/**
+ * How long a terminated command gets to exit on SIGTERM before SIGKILL. Test
+ * runners and build tools flush and clean up on SIGTERM; SIGKILL-only denied
+ * them that chance (audit finding 10 — `preview` already did SIGTERM first).
+ */
+const KILL_GRACE_MS = 2000;
 
 /** Programs that need a terminal to be usable at all (NF-074 interception). */
 const INTERACTIVE_BLOCKLIST = new Set(["vim", "vi", "nano", "emacs", "pico", "less", "more", "man", "top", "htop", "watch", "tmux", "screen"]);
@@ -299,7 +305,8 @@ export const shellTool: Tool = {
       let aborted = false;
       const decoder = new TextDecoder();
 
-      const kill = (): void => {
+      /** SIGKILL to the child's process group and to the child itself. */
+      const hardKill = (): void => {
         try {
           process.kill(-proc.pid, "SIGKILL"); // the child's process group (see `detached`)
         } catch {
@@ -310,6 +317,28 @@ export const shellTool: Tool = {
         } catch {
           /* already gone */
         }
+      };
+
+      /**
+       * Terminate the tree the way `preview` does: SIGTERM to the process group
+       * first so a test runner, coverage writer or package manager can flush and
+       * clean up, then SIGKILL if it is still alive after the grace period.
+       * SIGKILL immediately (the previous behaviour) allowed no cleanup at all.
+       */
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      const kill = (): void => {
+        try {
+          process.kill(-proc.pid, "SIGTERM");
+        } catch {
+          try {
+            proc.kill("SIGTERM");
+          } catch {
+            /* already gone */
+          }
+        }
+        graceTimer = setTimeout(hardKill, KILL_GRACE_MS);
+        // A pending grace timer must never hold the process open by itself.
+        if (typeof (graceTimer as { unref?: () => void }).unref === "function") (graceTimer as { unref: () => void }).unref();
       };
 
       const timer = setTimeout(() => {
@@ -358,6 +387,7 @@ export const shellTool: Tool = {
         }
       } finally {
         clearTimeout(timer);
+        if (graceTimer !== undefined) clearTimeout(graceTimer);
         ctx.signal.removeEventListener("abort", onAbort);
       }
 

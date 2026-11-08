@@ -9,6 +9,7 @@
 
 import readline from "node:readline";
 import type { RunExit, Runtime } from "../contracts";
+import { exitCodeFor } from "../core/loop";
 import { createRenderer } from "./render";
 import { bold, cyan, errorMessage, sanitizeText, setColorEnabled } from "./style";
 
@@ -21,16 +22,12 @@ export interface HeadlessOptions {
 }
 
 /**
- * NF-073: budget stops are exit 5, a format-error cap is exit 1 (docs/14 §3.2,
- * the canonical table). Everything else keeps the historical exit-0 behaviour
- * until the wider headless exit contract lands.
+ * Exit codes come from the canonical table and from nowhere else (docs/14
+ * §3.2, S16 — a surface MUST NOT restate it). This function used to be a
+ * second, partial table that returned 0 for `failed`, so `hzcode | CI`
+ * reported success for a run that had lost its audit trail or died on a
+ * provider error. Any non-success terminal is now a non-zero exit.
  */
-function exitCodeForRun(exit: RunExit | undefined): number {
-  if (!exit) return 0;
-  if (exit.terminal === "budget_exhausted" || exit.terminal === "timeout") return 5;
-  if (exit.terminal === "failed" && exit.detail === "format_errors") return 1;
-  return 0;
-}
 
 export async function runHeadless(opts: HeadlessOptions): Promise<number> {
   // Plain text only: stdout here is usually a pipe. Colour is forced off so a
@@ -65,6 +62,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
   // There is no one to prompt here: an interrupted run must still leave cleanly.
   let lastExit: RunExit | undefined;
   let interruptSignal: "SIGINT" | null = null;
+  let terminateSignal = false;
   const stop = (): void => {
     try {
       opts.runtime.abort();
@@ -84,7 +82,13 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
     stop();
   };
   process.on("SIGINT", onSigint);
-  process.on("SIGTERM", stop);
+  // SIGTERM is its own code (143), not a success: a supervisor that stops a run
+  // must be able to tell that it stopped it.
+  const onSigterm = (): void => {
+    terminateSignal = true;
+    stop();
+  };
+  process.on("SIGTERM", onSigterm);
 
   const answer = async (raw: string): Promise<void> => {
     const text = sanitizeText(raw).trim();
@@ -94,7 +98,10 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
       const result = await opts.runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
       lastExit = result.exit ?? lastExit;
     } catch (err) {
+      // A throw here is an internal error, not a success. Recording it keeps the
+      // process exit honest when the failure never reached a run outcome.
       renderer.error(`request failed: ${errorMessage(err)}`);
+      lastExit = { terminal: "failed", detail: "internal_error" };
     }
     renderer.ensureLineStart();
   };
@@ -115,7 +122,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
     }
   } finally {
     process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGTERM", stop);
+    process.removeListener("SIGTERM", onSigterm);
     try {
       rl.close();
     } catch {
@@ -123,6 +130,8 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
     }
     renderer.ensureLineStart();
   }
+  // A signal is more specific than the run outcome it produced.
   if (interruptSignal === "SIGINT") return 130;
-  return exitCodeForRun(lastExit);
+  if (terminateSignal) return 143;
+  return exitCodeFor(lastExit);
 }
