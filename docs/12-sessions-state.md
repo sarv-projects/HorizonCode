@@ -261,6 +261,7 @@ export interface ClaimStateV1 {
 | `$XDG_STATE_HOME/horizon/user.db` | Trust records, model registry cache, price table, user-scope settings projections | Rollback journal safety rules apply here too. |
 | `$XDG_STATE_HOME/horizon/memory/<workspace_digest>.db` (+ a `.vec` sidecar) | Per-workspace user-scope memory store (`memory.read` / `memory.write`) | This is the path scheme `10-cognition.md` §4.2 cites; the same rollback-journal rules apply, and doc 11 §7.3.1 step 7 admits this root for `memory.*` and `artifact.write`. |
 | `<workspace>/.hz/state/kernel/` | Kernel authority state: `ownerlog/`, `effect-journal/`, `leases/`, `budget/`, `verifier/`, `worktrees/`, `trusted-state/` | Owner-only permissions (D12); not written by the TS side. |
+| `<workspace>/.hz/state/spills/`, `.hz/state/skills/`, `.hz/state/history` | Shipped v0.1 stores mirrored under the canonical state root: capped tool-output spills (`<sha256>.txt`), workspace skills (`*.md`), chat history | Owner-only modes; a legacy `<workspace>/.hzcode/` workspace keeps the shipped relative names in place — never split (RC-17). |
 | `<workspace>/.hz/state/snapshots/<checkpointId>/` | Snapshot artifacts (when enabled) | Bounded per §2.7 S-47. |
 | `<workspace>/.hz/state/host.json` | Host guard: host id, mount class, last heartbeat | Read before any write on shared-media mounts (§2.10 S-76). |
 | `<workspace>/.hz/state/exports/` | Default output directory for `.hzs` archives | Excluded from quota accounting once written. |

@@ -11,12 +11,12 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import * as path from "node:path";
-import type { EventEnvelope, GuardAction, PolicyScope, Receipt } from "../../src/contracts";
+import type { EventEnvelope, GuardAction, Lease, PolicyScope, Receipt } from "../../src/contracts";
 import { EventTypes, canonicalJson } from "../../src/contracts";
-import { KernelClient, resolveKernelBinary } from "../../src/core/kernel";
+import { KernelClient, LocalKernel, loadPolicy, resolveKernelBinary } from "../../src/core/kernel";
 import {
   assertEventChain,
   assertReceiptChain,
@@ -332,8 +332,14 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     }
     expect((await rust.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("allow");
     expect((await local.checkGuard({ kind: "fs.read", target: path.join(workspace, "a.txt") }, "workspace")).decision).toBe("allow");
-    expect((await rust.checkGuard({ kind: "ssh.exec" as GuardAction["kind"], target: "x" }, "*")).decision).toBe("ask");
-    expect((await local.checkGuard({ kind: "ssh.exec" as GuardAction["kind"], target: "x" }, "*")).decision).toBe("ask");
+    // An unknown kind is refused before evaluation in both implementations — a
+    // typed HZ_PRECONDITION_FAILED naming the kind, never a policy answer.
+    const unknownKind = { kind: "ssh.exec" as GuardAction["kind"], target: "x" };
+    await expect(rust.checkGuard(unknownKind, "*")).rejects.toThrow(/HZ_PRECONDITION_FAILED: unknown action kind/);
+    const unknownLocal = await local.checkGuard(unknownKind, "*");
+    expect(unknownLocal.decision).toBe("deny");
+    expect(unknownLocal.reason ?? "").toContain("HZ_PRECONDITION_FAILED");
+    expect(unknownLocal.reason ?? "").toContain("ssh.exec");
 
     // The same lease shape unlocks the same command in both implementations.
     const rustLease = await rust.makeLease("shell.exec", "echo *", 60_000);
@@ -682,5 +688,335 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     } finally {
       setEnv({ HZ_ANCHOR_KEY: undefined, HZ_ACCEPT_LEGACY_ANCHORS: undefined });
     }
+  });
+
+  test("a write through a dangling symlink into the state dir is refused by both implementations", async () => {
+    const workspace = tempDir("hz-ws-link-i-");
+    const stateDir = path.join(tempDir("hz-state-link-i-"), "kernel");
+    mkdirSync(stateDir, { recursive: true });
+    // the exact repro: a dangling link to <state>/policy.json
+    const link = path.join(workspace, "link");
+    symlinkSync(path.join(stateDir, "policy.json"), link);
+    const action: GuardAction = { kind: "fs.write", target: link };
+
+    const local = await localClient(stateDir, workspace);
+    const rust = await trustedClient(stateDir, workspace);
+    // Both KernelClients — one per transport — surface the same typed refusal.
+    await expect(local.checkGuard(action, "workspace")).rejects.toThrow(/kernel-state-protected/);
+    await expect(rust.checkGuard(action, "workspace")).rejects.toThrow(/kernel-state-protected/);
+    // The Rust kernel refuses it on its own side too (a deny decision, the
+    // kernel's own vocabulary for "the guard answered no").
+    const raw = runKernelNdjson(
+      [{ id: 1, method: "guard.check", params: { action, scope: "workspace" } }],
+      stateDir,
+    );
+    const decision = replyResult<{ decision: string; reason?: string }>(raw.replies, 1);
+    expect(decision.decision).toBe("deny");
+    expect(decision.reason ?? "").toContain("kernel-state-protected");
+    // Nothing was created behind the link: the refusal precedes any write.
+    expect(existsSync(path.join(stateDir, "policy.json"))).toBe(false);
+    await local.close();
+    await rust.close();
+  });
+
+  test("leases are owner-scoped identically in both implementations", async () => {
+    const workspace = tempDir("hz-ws-owner-i-");
+    const stateDir = path.join(tempDir("hz-state-owner-i-"), "kernel");
+
+    // Rust over the raw protocol: sessionId rides guard.lease and guard.check.
+    const minted = runKernelNdjson(
+      [
+        {
+          id: 1,
+          method: "guard.lease",
+          params: { kind: "shell.exec", pattern: "echo *", ttlMs: 60_000, sessionId: "parent" },
+        },
+        {
+          id: 2,
+          method: "guard.check",
+          params: { action: { kind: "shell.exec", target: "echo hi" }, sessionId: "parent" },
+        },
+        {
+          id: 3,
+          method: "guard.check",
+          params: { action: { kind: "shell.exec", target: "echo hi" }, sessionId: "child" },
+        },
+        {
+          id: 4,
+          method: "guard.lease",
+          params: { kind: "shell.exec", pattern: "echo hi", ttlMs: 60_000 },
+        },
+        {
+          id: 5,
+          method: "guard.check",
+          params: { action: { kind: "shell.exec", target: "echo hi" }, sessionId: "child" },
+        },
+      ],
+      stateDir,
+    );
+    const rustLease = replyResult<Lease & { owner?: string }>(minted.replies, 1);
+    expect(rustLease.owner).toBe("parent");
+    const rustParent = replyResult<{ decision: string; leaseId?: string }>(minted.replies, 2);
+    expect(rustParent.decision).toBe("allow");
+    expect(rustParent.leaseId).toBe(rustLease.leaseId);
+    expect(replyResult<{ decision: string }>(minted.replies, 3).decision).toBe("ask");
+    const rustLegacy = replyResult<Lease & { owner?: string }>(minted.replies, 4);
+    expect(rustLegacy.owner).toBeUndefined();
+    expect(replyResult<{ decision: string }>(minted.replies, 5).decision).toBe("allow");
+
+    // The fallback, minted and checked with the same session ids.
+    const local = await localClient(stateDir, workspace);
+    const localLease = (await local.makeLease("shell.exec", "echo *", 60_000, "parent")) as Lease & {
+      owner?: string;
+    };
+    expect(localLease.owner).toBe("parent");
+    expect((await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "parent")).decision).toBe(
+      "allow",
+    );
+    expect((await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "child")).decision).toBe(
+      "ask",
+    );
+    const localLegacy = (await local.makeLease("shell.exec", "echo hi", 60_000)) as Lease & { owner?: string };
+    expect(localLegacy.owner).toBeUndefined();
+    expect((await local.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [], "child")).decision).toBe(
+      "allow",
+    );
+    await local.close();
+  });
+
+  test("a malformed policy.json is refused by both implementations, never silently reduced", async () => {
+    const malformed = JSON.stringify([
+      { kind: "fs.write", scope: "workspace", decision: "allow" },
+      { kind: "fs.write", decision: "deny" }, // the scope-less deny rule
+    ]);
+    const localDir = path.join(tempDir("hz-state-badpol-ts-"), "kernel");
+    const rustDir = path.join(tempDir("hz-state-badpol-rs-"), "kernel");
+    mkdirSync(localDir, { recursive: true });
+    mkdirSync(rustDir, { recursive: true });
+    writeFileSync(path.join(localDir, "policy.json"), malformed, "utf8");
+    writeFileSync(path.join(rustDir, "policy.json"), malformed, "utf8");
+
+    // TS: the loader and the kernel both refuse, naming rule 1 — the deny rule
+    // is never dropped, so nothing it denies can slip through.
+    expect(() => loadPolicy(localDir)).toThrow(/HZ_PRECONDITION_FAILED: policy\.json rule 1/);
+    expect(() => new LocalKernel({ stateDir: localDir })).toThrow(/rule 1 is malformed/);
+
+    // Rust: a kernel told to serve it refuses to start (exit 2, same wording).
+    const run = runKernelNdjson(
+      [{ id: 1, method: "guard.check", params: { action: { kind: "fs.write", target: "/x" }, scope: "workspace" } }],
+      rustDir,
+    );
+    expect(run.replies.length).toBe(0);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain("HZ_PRECONDITION_FAILED: policy.json rule 1 is malformed");
+  });
+
+  test("an unreadable chain refuses appends in both implementations and keeps the bytes", async () => {
+    const workspace = tempDir("hz-ws-unreadable-i-");
+    const stateDir = path.join(tempDir("hz-state-unreadable-i-"), "kernel");
+    const stream = "session:unreadable-i";
+    const chain = eventFilePath(stateDir, stream);
+
+    // Rust writes the chain (its own files, its own modes).
+    const written = runKernelNdjson(
+      [
+        { id: 1, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.sessionStart, { n: 1 }, "u-1") } },
+        { id: 2, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.messageEnd, { n: 2 }, "u-2") } },
+      ],
+      stateDir,
+    );
+    expect(written.status).toBe(0);
+    const before = readFileSync(chain, "utf8");
+
+    chmodSync(chain, 0o200); // write-only: appendFile is fine, read is not
+    try {
+      // The fallback refuses with the same shape of error the Rust kernel uses.
+      const local = await localClient(stateDir, workspace);
+      await expect(local.appendEvent(stream, seedFor(stream, EventTypes.error, { n: 3 }, "u-3"))).rejects.toThrow(
+        /cannot read/,
+      );
+      await local.close();
+      const refused = runKernelNdjson(
+        [{ id: 3, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.error, { n: 3 }, "u-3") } }],
+        stateDir,
+      );
+      expect(refused.replies[0]?.error?.message ?? "").toContain("cannot read");
+    } finally {
+      chmodSync(chain, 0o600);
+    }
+    // Byte-level parity: neither implementation touched the chain it could not read.
+    expect(readFileSync(chain, "utf8")).toBe(before);
+    expect(readLines(chain).length).toBe(2);
+  });
+});
+
+describe("additional-hardening parity", () => {
+  test("a hardlinked policy is refused by both implementations until the link is gone", async () => {
+    const workspace = tempDir("hz-ws-hardlink-i-");
+    const stateDir = path.join(tempDir("hz-state-hardlink-i-"), "kernel");
+    mkdirSync(stateDir, { recursive: true });
+    const policy = path.join(stateDir, "policy.json");
+    writeFileSync(policy, JSON.stringify([{ kind: "fs.write", scope: "*", decision: "allow" }]), "utf8");
+    const action: GuardAction = { kind: "fs.write", target: path.join(workspace, "x.txt") };
+    const rustCheck = () =>
+      runKernelNdjson([{ id: 1, method: "guard.check", params: { action, scope: "workspace" } }], stateDir);
+
+    // A single-link policy serves both transports normally.
+    const local = await localClient(stateDir, workspace);
+    expect((await local.checkGuard(action, "workspace")).decision).toBe("allow");
+    expect(replyResult<{ decision: string }>(rustCheck().replies, 1).decision).toBe("allow");
+
+    // The attack: `ln <state>/policy.json <ws>/pol-link.json`. A plain write
+    // through that name would rewrite the policy in place — no path check can
+    // see a hard link — so both implementations must refuse to serve it.
+    const link = path.join(workspace, "pol-link.json");
+    linkSync(policy, link);
+    const before = readFileSync(policy, "utf8");
+    await expect(local.checkGuard(action, "workspace")).rejects.toThrow(/policy\.json must have exactly one link/);
+    // The Rust kernel re-validates the policy before every check, so it refuses
+    // here too: pointed at the hardlinked policy it fails closed (exit 2, the
+    // same typed message) rather than serving decisions from it.
+    const refused = rustCheck();
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("policy.json must have exactly one link");
+    expect(readFileSync(policy, "utf8")).toBe(before);
+
+    // Removing the extra link restores service on both sides.
+    rmSync(link);
+    expect((await local.checkGuard(action, "workspace")).decision).toBe("allow");
+    expect(replyResult<{ decision: string }>(rustCheck().replies, 1).decision).toBe("allow");
+    await local.close();
+  });
+
+  test("ttlMs<=0 behaves identically on both transports (finding 13)", async () => {
+    const workspace = tempDir("hz-ws-ttl-i-");
+    const command = "echo hi";
+    const mintedAt = Date.now();
+
+    // TS: ttlMs=0 mints an ALREADY-EXPIRED lease; negative is refused.
+    const local = await localClient(path.join(tempDir("hz-state-ttl-ts-"), "kernel"), workspace);
+    const localLease = await local.makeLease("shell.exec", command, 0);
+    expect(Math.abs(Date.parse(localLease.expiry) - mintedAt)).toBeLessThan(1_000);
+    expect((await local.checkGuard({ kind: "shell.exec", target: command }, "*")).decision).toBe("ask");
+    await expect(local.makeLease("shell.exec", command, -1)).rejects.toThrow(/ttlMs must be a number/);
+    await local.close();
+
+    // Rust: the same request over the raw protocol mints the same expired lease
+    // (and the same refusal for a negative TTL).
+    const rust = runKernelNdjson(
+      [
+        { id: 1, method: "guard.lease", params: { kind: "shell.exec", pattern: command, ttlMs: 0 } },
+        { id: 2, method: "guard.check", params: { action: { kind: "shell.exec", target: command }, scope: "*" } },
+        { id: 3, method: "guard.lease", params: { kind: "shell.exec", pattern: command, ttlMs: -1 } },
+      ],
+      path.join(tempDir("hz-state-ttl-rs-"), "kernel"),
+    );
+    const rustLease = replyResult<Lease>(rust.replies, 1);
+    expect(Math.abs(Date.parse(rustLease.expiry) - mintedAt)).toBeLessThan(5_000);
+    // Expired on issue, so the next check of that command is policy-decided.
+    expect(replyResult<{ decision: string }>(rust.replies, 2).decision).toBe("ask");
+    expect(rust.replies.find((reply) => reply.id === 3)?.error?.message ?? "").toContain(
+      "guard.lease.ttlMs must be a number",
+    );
+  });
+
+  test("a caller-supplied lease object unlocks nothing on either transport (finding 15b)", async () => {
+    const workspace = tempDir("hz-ws-fab-i-");
+    const command = "echo hi";
+    const fabricated = {
+      leaseId: "caller-wild",
+      kind: "shell.exec",
+      pattern: command,
+      expiry: "2099-01-01T00:00:00.000Z",
+    } as Lease;
+
+    const local = await localClient(path.join(tempDir("hz-state-fab-ts-"), "kernel"), workspace);
+    expect((await local.checkGuard({ kind: "shell.exec", target: command }, "*", [fabricated])).decision).toBe("ask");
+    const issued = await local.makeLease("shell.exec", command, 60_000);
+    expect((await local.checkGuard({ kind: "shell.exec", target: command }, "*")).leaseId).toBe(issued.leaseId);
+    await local.close();
+
+    // Rust over the raw protocol: the `leases` a client sends are not authority;
+    // only leases the kernel itself issued are consulted.
+    const rust = runKernelNdjson(
+      [
+        {
+          id: 1,
+          method: "guard.check",
+          params: { action: { kind: "shell.exec", target: command }, scope: "*", leases: [fabricated] },
+        },
+        { id: 2, method: "guard.lease", params: { kind: "shell.exec", pattern: command, ttlMs: 60_000 } },
+        { id: 3, method: "guard.check", params: { action: { kind: "shell.exec", target: command }, scope: "*" } },
+      ],
+      path.join(tempDir("hz-state-fab-rs-"), "kernel"),
+    );
+    expect(replyResult<{ decision: string }>(rust.replies, 1).decision).toBe("ask");
+    const allowed = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 3);
+    const minted = replyResult<Lease>(rust.replies, 2);
+    expect(allowed.decision).toBe("allow");
+    expect(allowed.leaseId).toBe(minted.leaseId);
+  });
+
+  test("a traversing stream name is refused by both implementations (finding 15d)", async () => {
+    const workspace = tempDir("hz-ws-stream-i-");
+    const stream = "session:../../evil";
+    const localDir = path.join(tempDir("hz-state-stream-ts-"), "kernel");
+    const local = await localClient(localDir, workspace);
+    await expect(local.appendEvent(stream, seedFor(stream, EventTypes.sessionStart, { n: 1 }, "st-1"))).rejects.toThrow(
+      /stream name is not allowed/,
+    );
+    // Nothing was created: not the traversal target, and not a sanitized file
+    // under the events dir that would silently be a DIFFERENT stream.
+    const namesUnder = (dir: string): string[] =>
+      existsSync(dir)
+        ? readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+            entry.isDirectory() ? namesUnder(path.join(dir, entry.name)) : [entry.name],
+          )
+        : [];
+    expect(namesUnder(path.dirname(localDir)).some((name) => name.includes("evil"))).toBe(false);
+    expect(namesUnder(localDir).some((name) => name.includes("evil"))).toBe(false);
+    await local.close();
+
+    const rust = runKernelNdjson(
+      [{ id: 1, method: "log.append", params: { stream, event: seedFor(stream, EventTypes.sessionStart, { n: 1 }, "st-1") } }],
+      path.join(tempDir("hz-state-stream-rs-"), "kernel"),
+    );
+    expect(rust.replies[0]?.error?.message ?? "").toContain("stream name is not allowed");
+  });
+
+  test("a raw client cannot smuggle an unknown kind past the guard (finding 14)", async () => {
+    // The audit's exact repro: kind "fs.edit" + a client-supplied lease, aimed
+    // at the policy file itself, came back ALLOW because only "fs.write" is
+    // keyed into the structural state-dir rule and "fs.edit" was unknown, not
+    // refused. Both transports must refuse the KIND before evaluating.
+    const stateDir = path.join(tempDir("hz-state-kind-rs-"), "kernel");
+    const rust = runKernelNdjson(
+      [
+        {
+          id: 1,
+          method: "guard.check",
+          params: {
+            action: { kind: "fs.edit", target: path.join(stateDir, "policy.json") },
+            scope: "outside",
+            leases: [{ leaseId: "own", kind: "fs.edit", pattern: "*", expiry: "2099-01-01T00:00:00.000Z" }],
+          },
+        },
+        { id: 2, method: "guard.lease", params: { kind: "fs.edit", pattern: "*", ttlMs: 60_000 } },
+      ],
+      stateDir,
+    );
+    expect(rust.replies[0]?.error?.message ?? "").toContain('unknown action kind "fs.edit"');
+    expect(rust.replies[1]?.error?.message ?? "").toContain('unknown action kind "fs.edit"');
+
+    // The fallback refuses the same request with the same typed message.
+    const workspace = tempDir("hz-ws-kind-i-");
+    const local = await localClient(path.join(tempDir("hz-state-kind-ts-"), "kernel"), workspace);
+    const refused = await local.checkGuard(
+      { kind: "fs.edit", target: path.join(workspace, "..", "policy.json") } as unknown as GuardAction,
+      "outside",
+    );
+    expect(refused.decision).toBe("deny");
+    expect(refused.reason ?? "").toContain('unknown action kind "fs.edit"');
+    await local.close();
   });
 });

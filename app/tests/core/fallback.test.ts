@@ -7,12 +7,12 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import * as path from "node:path";
-import type { EventEnvelope, KernelMode, Receipt } from "../../src/contracts";
+import type { EventEnvelope, GuardAction, KernelMode, Receipt } from "../../src/contracts";
 import { EventTypes, canonicalJson } from "../../src/contracts";
-import { KernelClient } from "../../src/core/kernel";
+import { KernelClient, LocalKernel } from "../../src/core/kernel";
 import {
   assertEventChain,
   assertReceiptChain,
@@ -446,4 +446,99 @@ test("a malformed HZ_ANCHOR_KEY is refused, never silently unkeyed (fallback)", 
   } finally {
     setEnv({ HZ_ANCHOR_KEY: undefined });
   }
+});
+
+test("the fallback tightens a pre-existing loose state dir to 0700/0600 (Unix)", async () => {
+  if (process.platform === "win32") return;
+  const stateDir = path.join(tempDir("hz-state-modes-fb-"), "kernel");
+  const eventsDir = path.join(stateDir, "events");
+  const stream = "session:modes-fallback";
+  const chain = eventFilePath(stateDir, stream);
+  // A state dir left world-readable by an earlier tool (or an older build): the
+  // fallback must tighten it, not inherit its laxity.
+  mkdirSync(eventsDir, { recursive: true });
+  chmodSync(stateDir, 0o755);
+  chmodSync(eventsDir, 0o755);
+  writeFileSync(chain, "", "utf8");
+  chmodSync(chain, 0o644);
+
+  const kernel = new KernelClient({ workspace: tempDir("hz-ws-modes-fb-"), stateDir });
+  try {
+    expect(await kernel.start()).toBe("untrusted");
+    await kernel.appendEvent(stream, seedFor(stream, EventTypes.sessionStart, { n: 1 }, "md-1"));
+    await kernel.issueReceipt({
+      action: "tool.execute",
+      tool: "read",
+      argsDigest: "aa".repeat(32),
+      resultDigest: "bb".repeat(32),
+    });
+  } finally {
+    await kernel.close();
+  }
+  const mode = (file: string): number => statSync(file).mode & 0o777;
+  expect(mode(stateDir), "state dir").toBe(0o700);
+  expect(mode(eventsDir), "events dir").toBe(0o700);
+  expect(mode(chain), "event stream").toBe(0o600);
+  expect(mode(`${chain}.head`), "event anchor").toBe(0o600);
+  expect(mode(receiptsFilePath(stateDir)), "receipts").toBe(0o600);
+  expect(mode(`${receiptsFilePath(stateDir)}.head`), "receipts anchor").toBe(0o600);
+});
+
+test("an unreadable receipts chain refuses the append and leaves the bytes alone", async () => {
+  const stateDir = path.join(tempDir("hz-state-rread-fb-"), "kernel");
+  const workspace = tempDir("hz-ws-rread-fb-");
+  const receipts = receiptsFilePath(stateDir);
+  const writer = new KernelClient({ workspace, stateDir });
+  expect(await writer.start()).toBe("untrusted");
+  await writer.issueReceipt({
+    action: "tool.execute",
+    tool: "read",
+    argsDigest: "cc".repeat(32),
+    resultDigest: "dd".repeat(32),
+  });
+  const before = readFileSync(receipts, "utf8");
+
+  chmodSync(receipts, 0o200);
+  try {
+    const reader = new KernelClient({ workspace, stateDir });
+    expect(await reader.start()).toBe("untrusted");
+    await expect(
+      reader.issueReceipt({ action: "tool.execute", tool: "grep", argsDigest: "ee".repeat(32), resultDigest: "ff".repeat(32) }),
+    ).rejects.toThrow(/cannot read/);
+    await reader.close();
+  } finally {
+    chmodSync(receipts, 0o600);
+  }
+  expect(readFileSync(receipts, "utf8")).toBe(before);
+  expect(readJsonl<Receipt>(receipts).map((receipt) => receipt.seq)).toEqual([1]);
+  await writer.close();
+});
+
+test("the local kernel reloads policy.json per check and refuses unknown kinds (findings 12/14)", async () => {
+  const stateDir = path.join(tempDir("hz-state-lk-fb-"), "kernel");
+  const workspace = tempDir("hz-ws-lk-fb-");
+  mkdirSync(stateDir, { recursive: true });
+  const policy = path.join(stateDir, "policy.json");
+  const kernel = new LocalKernel({ stateDir, workspace });
+  const target = path.join(workspace, "a.txt");
+
+  expect((await kernel.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+  // Tighten the policy mid-session: the next check must see it (the local
+  // kernel used to cache policy.json at construction while Rust reloads it
+  // before every check — a deny-vs-allow divergence in fallback mode).
+  writeFileSync(policy, JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny" }]), "utf8");
+  expect((await kernel.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("deny");
+  rmSync(policy);
+  expect((await kernel.checkGuard({ kind: "fs.write", target }, "workspace")).decision).toBe("allow");
+
+  // A kind outside the closed TS vocabulary is refused BEFORE evaluation: the
+  // structural state-dir rule is keyed to fs.write, so an unknown mutating
+  // spelling must never fall through the policy to "allow".
+  const unknown = await kernel.checkGuard(
+    { kind: "fs.edit", target: path.join(stateDir, "policy.json") } as unknown as GuardAction,
+    "outside",
+  );
+  expect(unknown.decision).toBe("deny");
+  expect(unknown.reason ?? "").toMatch(/HZ_PRECONDITION_FAILED: unknown action kind "fs\.edit"/);
+  await kernel.close();
 });

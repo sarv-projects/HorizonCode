@@ -43,6 +43,7 @@ import { makeProvider } from "./providers";
 import { SessionStore, type SessionInfo } from "./session";
 import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
 import { runNested } from "./subagent";
+import { stopAllPreviews } from "../tools/preview";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -290,6 +291,9 @@ class HzRuntimeImpl implements HzRuntime {
     this.closed = true;
     this.abort();
     await this.sendQueue.catch(() => undefined);
+    // Previews are process-global (tools/preview.ts): stop every live one, from
+    // any session, so no dev server outlives the runtime that started it.
+    await stopAllPreviews();
     await this.logSessionEnd(this.session.id);
     await this.kernel.close();
     this.store.close();

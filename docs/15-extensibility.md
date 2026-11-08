@@ -552,7 +552,7 @@ Two placement rules that exist for safety rather than tidiness:
 | Artifact | Discovery order (first match wins per name) | Namespacing | Trust gate |
 |---|---|---|---|
 | Plugins | session `--plugin-dir` → workspace `.hz/plugins/plugin.lock` → user `installed_plugins.json` → managed policy | none (id is unique) | install + enable require consent |
-| Skills | workspace `.hz/skills/` → user `~/.config/horizon/skills/` → plugin `skills/` → bundled → MCP-derived — first match wins **within one namespace**; across namespaces the full namespaced id decides, so a workspace skill never shadows a user skill by bare name (`S7`) | `project:`, `user:`, `plugin:<id>:`, `builtin:`, `mcp:<server>:` | workspace skills require a trust record |
+| Skills | workspace `.hz/state/skills/` (legacy `.hzcode/skills` in place — RC-17) → user `~/.config/horizon/skills/` → plugin `skills/` → bundled → MCP-derived — first match wins **within one namespace**; across namespaces the full namespaced id decides, so a workspace skill never shadows a user skill by bare name (`S7`) | `project:`, `user:`, `plugin:<id>:`, `builtin:`, `mcp:<server>:` | workspace skills require a trust record |
 | Commands | built-ins → user → plugin → workspace → MCP prompts | `builtin`(bare), `user:`, `plugin:<id>:`, `project:`, `mcp:<server>:` | workspace commands require trust for any capability they name |
 | Agents | workspace `.hz/agents/` → user → plugin → built-in modes | `project:`, `user:`, `plugin:<id>:` | workspace profiles require trust |
 | Hooks | managed → user → plugin → workspace (all merged, §4.6 ordering rules) | n/a | every hook program requires a trust record |

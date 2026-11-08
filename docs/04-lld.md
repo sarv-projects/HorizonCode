@@ -304,7 +304,7 @@ $XDG_RUNTIME_DIR/horizon/         # default /run/user/<uid>/horizon/
   hzk.sock, hzk.pid            # supervisor lease + ABI socket (§6.1)
 ```
 
-Nothing outside this list is written by HorizonCode. A path under `.hz/` is workspace data; a path under `$XDG_STATE_HOME` is machine data; the two are never mixed in one file, because one is copyable with the repository and the other is not. `12-sessions-state.md` §4.1 owns the canonical layout; this tree MUST match it.
+Nothing outside this list is written by HorizonCode. A path under `.hz/` is workspace data; a path under `$XDG_STATE_HOME` is machine data; the two are never mixed in one file, because one is copyable with the repository and the other is not. `12-sessions-state.md` §4.1 owns the canonical layout; this tree MUST match it. Shipped-v0.1 wrinkle, ruled by RC-17: an existing legacy `<workspace>/.hzcode/` tree (or `~/.hzcode/` config dir) is honoured in place, and fresh workspaces/user configs use the `.hz/state/...` and `~/.config/horizon/` forms above.
 
 ### 4.4 Blob / CAS layout
 

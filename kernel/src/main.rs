@@ -75,6 +75,13 @@ fn run() -> i32 {
     // Event payloads and receipts are not world-readable material.
     permm::private_dir(&dir);
 
+    // A present-but-malformed policy refuses service: serving it would mean
+    // silently dropping rules (a dropped `deny` is a fail-open).
+    if let Err(e) = guard::validate_policy(&dir) {
+        eprintln!("error: {}", e);
+        return 2;
+    }
+
     // Keyed anchors: HZ_ANCHOR_KEY (hex) flips anchors to HMAC-SHA256; a
     // malformed key is refused outright rather than silently left unkeyed.
     let anchor = match eventlog::AnchorConfig::from_env() {

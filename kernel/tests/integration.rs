@@ -1209,7 +1209,10 @@ fn guard_default_policy_matrix() {
         ("net.fetch", "https://example.com", Some("workspace"), "ask"),
         ("net.fetch", "https://example.com", Some("outside"), "ask"),
         ("spawn", "node", Some("workspace"), "ask"),
-        ("unknown.kind", "anything", Some("workspace"), "ask"),
+        // an unknown kind is refused before evaluation now (typed
+        // HZ_PRECONDITION_FAILED — see
+        // guard_rejects_unknown_action_kinds_before_evaluation), never answered
+        // by the policy.
         // scope absent is treated as "*": only wildcard-scope rules can match
         ("shell.exec", "echo hi", None, "ask"),
         ("fs.write", "src/main.rs", None, "ask"),
@@ -1329,16 +1332,85 @@ fn guard_policy_json_override_and_deny_precedence() {
         );
     }
 
-    // malformed policy.json falls back to the built-in policy
+    // A malformed policy.json is refused, never silently replaced by defaults:
+    // a parsed-away rule could be the deny keeping a target closed.
     fs::write(dir.path().join("policy.json"), "{not json").unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "fs.write", "target": "src/x.rs" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("policy.json"), "{}", message);
+    // ...and a rule missing its scope names the rule instead of dropping it.
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "fs.write", "scope": "workspace", "decision": "allow" },
+            { "kind": "fs.write", "decision": "deny" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "fs.write", "target": "src/x.rs" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("rule 1"), "{}", message);
+}
+
+/// A malformed policy is refused per check while a kernel is running, and a
+/// kernel asked to serve it from startup refuses to start (exit 2).
+#[test]
+fn malformed_policy_fails_closed_at_check_and_at_startup() {
+    let dir = TempDir::new("guard-policy-bad");
+    let malformed = serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "workspace", "decision": "allow" },
+        { "kind": "fs.write", "decision": "deny" },
+    ]))
+    .unwrap();
+
+    // (1) a running kernel (started with no policy) refuses every check once
+    // the malformed policy lands, naming the bad rule index... The ping first
+    // proves startup validation completed before the bad policy was written.
+    let mut kernel = Kernel::start(dir.path());
+    assert!(!kernel.ok("ping", json!({}))["version"].as_str().unwrap_or("").is_empty());
+    fs::write(dir.path().join("policy.json"), &malformed).unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "fs.write", "target": "src/x.rs" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(
+        message.contains("rule 1 is malformed"),
+        "the bad rule index must be named: {}",
+        message
+    );
+    // The kernel is still alive and serves a valid policy again once written.
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "fs.write", "scope": "workspace", "decision": "allow" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         guard_decision(&mut kernel, "fs.write", "src/x.rs", Some("workspace"), None),
         "allow"
     );
-    assert_eq!(
-        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
-        "ask"
-    );
+
+    // Startup refuses to serve the malformed policy (exit 2, naming the rule).
+    fs::write(dir.path().join("policy.json"), &malformed).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hz-kernel"))
+        .arg("--state-dir")
+        .arg(dir.path())
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS")
+        .output()
+        .expect("spawn with a malformed policy");
+    assert_eq!(output.status.code(), Some(2), "malformed policy must exit 2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rule 1"), "stderr: {}", stderr);
 }
 
 #[test]
@@ -1404,29 +1476,14 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
     assert_eq!(decision["decision"], json!("allow"));
     assert_eq!(decision["leaseId"], star["leaseId"]);
 
-    // caller-supplied leases work statelessly
-    let caller_lease = json!({
-        "leaseId": "caller-lease-1",
+    // A caller-supplied lease is a claim, not a mint: only leases this kernel
+    // issued (the held table) are honoured. A raw client inventing
+    // {leaseId, kind, pattern, expiry} must not unlock anything.
+    let fabricated = json!({
+        "leaseId": "caller-wild",
         "kind": "fs.write",
         "pattern": "/tmp/*",
         "expiry": "2999-01-01T00:00:00.000Z",
-    });
-    let decision = guard_check(
-        &mut kernel,
-        "fs.write",
-        "/tmp/scratch.txt",
-        Some("outside"),
-        Some(json!([caller_lease])),
-    );
-    assert_eq!(decision["decision"], json!("allow"));
-    assert_eq!(decision["leaseId"], json!("caller-lease-1"));
-
-    // an expired caller-supplied lease grants nothing
-    let expired = json!({
-        "leaseId": "caller-lease-2",
-        "kind": "fs.write",
-        "pattern": "/tmp/*",
-        "expiry": "2000-01-01T00:00:00.000Z",
     });
     assert_eq!(
         guard_decision(
@@ -1434,11 +1491,22 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
             "fs.write",
             "/tmp/scratch.txt",
             Some("outside"),
-            Some(json!([expired])),
+            Some(json!([fabricated])),
         ),
-        "ask"
+        "ask",
+        "a fabricated caller-supplied lease must be ignored, not honoured"
     );
-    // an unparseable expiry never grants authority
+    // ...while a kernel-issued lease for the same surface IS honoured.
+    let issued = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "fs.write", "pattern": "/tmp/*", "ttlMs": 60_000 }),
+    );
+    let decision = guard_check(&mut kernel, "fs.write", "/tmp/scratch.txt", Some("outside"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["leaseId"], issued["leaseId"]);
+
+    // The same rule covers a lease that happens to be malformed or expired:
+    // caller-supplied entries are never authority, so nothing changes.
     let unparseable = json!({
         "leaseId": "caller-lease-3",
         "kind": "fs.write",
@@ -1449,7 +1517,7 @@ fn guard_leases_match_exactly_or_by_prefix_and_expire() {
         guard_decision(
             &mut kernel,
             "fs.write",
-            "/tmp/scratch.txt",
+            "/var/hz-caller-check.txt",
             Some("outside"),
             Some(json!([unparseable])),
         ),
@@ -1600,7 +1668,416 @@ fn guard_denies_writes_inside_the_state_dir_even_when_policy_allows() {
     );
 }
 
+/// The confirmed bypass: `ln -s <state>/policy.json ws/link` (a dangling link)
+/// used to be allowed because canonicalize of the link failed and the
+/// resolution fell back to the link's own spelling. The lexical walk resolves
+/// the chain without requiring any target to exist, so every path through it
+/// is denied — while ordinary workspace writes stay governed by policy.
+#[cfg(unix)]
+#[test]
+fn guard_denies_writes_through_dangling_and_chained_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("guard-links-state");
+    let workspace = TempDir::new("guard-links-ws");
+    let mut kernel = Kernel::start(dir.path());
+
+    // A permissive override: only the structural rule can produce a deny below.
+    let permissive = serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "*", "decision": "allow" },
+    ]))
+    .unwrap();
+    fs::write(dir.path().join("policy.json"), &permissive).unwrap();
+
+    let deny = |kernel: &mut Kernel, target: &str| {
+        let decision = guard_check(kernel, "fs.write", target, Some("workspace"), None);
+        assert_eq!(decision["decision"], json!("deny"), "{}", decision);
+        assert!(
+            decision["reason"]
+                .as_str()
+                .unwrap()
+                .contains("kernel-state-protected"),
+            "{}",
+            decision
+        );
+    };
+
+    // 1. the exact repro: a dangling link to <state>/policy.json
+    let link = workspace.path().join("link");
+    symlink(dir.path().join("policy.json"), &link).unwrap();
+    deny(&mut kernel, link.to_str().unwrap());
+
+    // 2. a two-hop link chain, both hops dangling
+    let hop1 = workspace.path().join("hop1");
+    let hop2 = workspace.path().join("hop2");
+    symlink(&hop2, &hop1).unwrap();
+    symlink(dir.path().join("events").join("tail.jsonl"), &hop2).unwrap();
+    deny(&mut kernel, hop1.to_str().unwrap());
+
+    // 3. a symlink to the state dir itself
+    let alias = workspace.path().join("state-alias");
+    symlink(dir.path(), &alias).unwrap();
+    deny(&mut kernel, alias.to_str().unwrap());
+
+    // 4. a symlinked middle component
+    deny(&mut kernel, alias.join("policy.json").to_str().unwrap());
+
+    // 5. a relative link target: ws/sub/rel -> ../../<state-name>/policy.json
+    let nested = workspace.path().join("sub");
+    fs::create_dir_all(&nested).unwrap();
+    let relative = nested.join("rel");
+    let state_name = dir.path().file_name().expect("state dir name");
+    symlink(
+        PathBuf::from("..")
+            .join("..")
+            .join(state_name)
+            .join("policy.json"),
+        &relative,
+    )
+    .unwrap();
+    deny(&mut kernel, relative.to_str().unwrap());
+
+    // 6. a link loop is refused (the walk fails closed), not resolved
+    let loop_a = workspace.path().join("loop-a");
+    let loop_b = workspace.path().join("loop-b");
+    symlink(&loop_b, &loop_a).unwrap();
+    symlink(&loop_a, &loop_b).unwrap();
+    deny(&mut kernel, loop_a.to_str().unwrap());
+
+    // The rule is still scoped: an ordinary workspace write — including one
+    // through a symlink that resolves inside the workspace — follows policy.
+    let inside_link = workspace.path().join("inside-link");
+    symlink(workspace.path().join("notes.txt"), &inside_link).unwrap();
+    assert_eq!(
+        guard_decision(
+            &mut kernel,
+            "fs.write",
+            inside_link.to_str().unwrap(),
+            Some("workspace"),
+            None,
+        ),
+        "allow"
+    );
+    // ...and reads are not covered by the rule (the permissive policy above has
+    // no fs.read rule, so the fallback is ask).
+    let read = guard_check(
+        &mut kernel,
+        "fs.read",
+        dir.path().join("policy.json").to_str().unwrap(),
+        Some("workspace"),
+        None,
+    );
+    assert_ne!(read["decision"], json!("deny"));
+}
+
+/// owner-scoped guard.check: sessionId rides the request; a lease minted for a
+/// session only covers checks carrying the same id.
+fn guard_decision_with_session(
+    kernel: &mut Kernel,
+    kind: &str,
+    target: &str,
+    session: Option<&str>,
+) -> String {
+    let mut params = json!({ "action": { "kind": kind, "target": target } });
+    if let Some(session) = session {
+        params["sessionId"] = json!(session);
+    }
+    let decision = kernel.ok("guard.check", params);
+    decision["decision"]
+        .as_str()
+        .expect("decision string")
+        .to_string()
+}
+
+/// A lease minted with a sessionId is owner-scoped: a check carrying a different
+/// session id never sees it (a subagent child re-enters approval), the owning
+/// session does, and an owner-less lease (older clients) stays globally
+/// consultable — the documented legacy path.
+#[test]
+fn guard_lease_owner_scoping() {
+    let dir = TempDir::new("guard-lease-owner");
+    let mut kernel = Kernel::start(dir.path());
+
+    let lease = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo *", "ttlMs": 60_000, "sessionId": "parent" }),
+    );
+    assert_eq!(lease["owner"], json!("parent"));
+
+    // the owning session is covered
+    let decision = kernel.ok(
+        "guard.check",
+        json!({
+            "action": { "kind": "shell.exec", "target": "echo hi" },
+            "sessionId": "parent",
+        }),
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["leaseId"], lease["leaseId"]);
+
+    // a different session (the child) must ask again — and so must a caller
+    // that carries no session id at all.
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "echo hi", Some("child")),
+        "ask"
+    );
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "echo hi", None),
+        "ask"
+    );
+
+    // a caller-supplied copy of the parent's lease is equally invisible to the
+    // child: passing the lease object does not widen it.
+    let decision = kernel.ok(
+        "guard.check",
+        json!({
+            "action": { "kind": "shell.exec", "target": "echo hi" },
+            "sessionId": "child",
+            "leases": [lease],
+        }),
+    );
+    assert_eq!(decision["decision"], json!("ask"));
+
+    // a legacy owner-less lease is still globally consultable (documented).
+    let legacy = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 60_000 }),
+    );
+    assert!(
+        legacy.get("owner").is_none(),
+        "owner must be omitted for a legacy lease: {}",
+        legacy
+    );
+    let decision = kernel.ok(
+        "guard.check",
+        json!({
+            "action": { "kind": "shell.exec", "target": "echo hi" },
+            "sessionId": "child",
+        }),
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+    assert_eq!(decision["leaseId"], legacy["leaseId"]);
+}
+
+/// A raw client used to reach the state-dir rule under an unrecognised spelling:
+/// kind "fs.edit" + its own lease was ALLOWed into the state dir. The protocol
+/// now refuses any kind outside the five the guard knows, before evaluation.
+#[test]
+fn guard_rejects_unknown_action_kinds_before_evaluation() {
+    let dir = TempDir::new("guard-kinds");
+    let mut kernel = Kernel::start(dir.path());
+
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "fs.edit", "target": "/etc/passwd" } }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("fs.edit"), "{}", message);
+    assert!(message.contains("unknown action kind"), "{}", message);
+
+    // Minting a lease for a kind the guard does not know is refused too: it
+    // could never be consulted, and it is the other half of the verified repro.
+    let message = kernel.err(
+        "guard.lease",
+        json!({ "kind": "fs.edit", "pattern": "*", "ttlMs": 60_000 }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("fs.edit"), "{}", message);
+
+    // Every known kind still evaluates (a decision, never the vocabulary error).
+    for (kind, target) in [
+        ("fs.read", "/some/where.txt"),
+        ("fs.write", "/some/where.txt"),
+        ("shell.exec", "echo hi"),
+        ("net.fetch", "https://example.invalid"),
+        ("spawn", "agent task"),
+    ] {
+        let decision = guard_check(&mut kernel, kind, target, Some("workspace"), None);
+        assert!(
+            decision["decision"].as_str().is_some(),
+            "kind {} must still be evaluated: {}",
+            kind,
+            decision
+        );
+    }
+}
+
+/// A hardlink is the one bypass a path check cannot see: `ln <state>/policy.json
+/// ws/pol-link.json` makes a plain, policy-allowed workspace write rewrite the
+/// policy in place. The policy loader refuses a file with nlink > 1 (typed),
+/// every decision while the link exists fails closed, and removing the extra
+/// link restores service. The residual class (other state files rely on chain
+/// detection; the OS-level fix is NF-016) is recorded for the docs.
+#[cfg(unix)]
+#[test]
+fn hardlinked_policy_is_refused_until_the_extra_link_is_removed() {
+    let dir = TempDir::new("policy-hardlink-state");
+    let workspace = TempDir::new("policy-hardlink-ws");
+    let mut kernel = Kernel::start(dir.path());
+    let target = workspace.path().join("x.txt");
+    let target = target.to_str().expect("utf8 target");
+
+    // A permissive policy: without the hardlink every write is simply allowed.
+    fs::write(
+        dir.path().join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "fs.write", "scope": "*", "decision": "allow" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        guard_decision(&mut kernel, "fs.write", target, Some("workspace"), None),
+        "allow"
+    );
+
+    let link = workspace.path().join("pol-link.json");
+    fs::hard_link(dir.path().join("policy.json"), &link).expect("hard link");
+    let before = fs::read_to_string(dir.path().join("policy.json")).unwrap();
+
+    // Every decision now refuses, with a typed message naming the policy path.
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "fs.write", "target": target }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("policy.json must have exactly one link"), "{}", message);
+    assert!(message.contains("policy.json"), "{}", message);
+    // The refusal means no decision answered the write: the policy is intact.
+    assert_eq!(fs::read_to_string(dir.path().join("policy.json")).unwrap(), before);
+
+    // Removing the extra link restores service.
+    fs::remove_file(&link).unwrap();
+    assert_eq!(
+        guard_decision(&mut kernel, "fs.write", target, Some("workspace"), None),
+        "allow"
+    );
+}
+
+/// ttlMs=0 mints an already-expired lease (never a 15-minute substitute), and a
+/// negative TTL is refused — the two implementations must observe the same
+/// lease for the same request.
+#[test]
+fn zero_ttl_lease_is_already_expired_and_negative_is_refused() {
+    let dir = TempDir::new("guard-ttl");
+    let mut kernel = Kernel::start(dir.path());
+
+    let zero = kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 0 }),
+    );
+    assert!(
+        is_iso_utc(zero["expiry"].as_str().unwrap_or("")),
+        "expiry must be ISO-8601 UTC: {}",
+        zero
+    );
+    // Expired on issue: the same action falls back to the policy (ask).
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
+        "ask"
+    );
+
+    // Control: the same surface with a positive TTL is covered.
+    kernel.ok(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo hi", "ttlMs": 60_000 }),
+    );
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
+        "allow"
+    );
+
+    // A negative TTL is not a number the protocol mints with.
+    let message = kernel.err(
+        "guard.lease",
+        json!({ "kind": "shell.exec", "pattern": "echo x", "ttlMs": -1 }),
+    );
+    assert!(message.contains("ttlMs"), "{}", message);
+}
+
+/// Stream names that traverse are refused, not sanitized into something else:
+/// the name appears in the error, and nothing was created outside the events dir.
+#[test]
+fn traversing_stream_names_are_refused_by_the_protocol() {
+    let dir = TempDir::new("stream-traversal");
+    let mut kernel = Kernel::start(dir.path());
+
+    let message = kernel.err(
+        "log.append",
+        json!({ "stream": "session:../../evil", "event": { "type": "t" } }),
+    );
+    assert!(message.contains("stream name is not allowed"), "{}", message);
+    assert!(message.contains("session:../../evil"), "{}", message);
+
+    let message = kernel.err("log.read", json!({ "stream": "session:../../evil" }));
+    assert!(message.contains("stream name is not allowed"), "{}", message);
+
+    let message = kernel.err("log.append", json!({ "stream": "..", "event": { "type": "t" } }));
+    assert!(message.contains("stream name is not allowed"), "{}", message);
+
+    assert!(!dir.path().join("evil").exists());
+    assert!(!dir.path().parent().unwrap().join("evil").exists());
+
+    // A normal stream still appends and verifies (the refusal is not a freeze).
+    let stream = "session:traversal-control";
+    kernel.ok(
+        "log.append",
+        json!({ "stream": stream, "event": { "type": "t" } }),
+    );
+    assert_eq!(kernel.ok("log.verify", json!({ "stream": stream }))["ok"], json!(true));
+}
+
 /* --------------------------------- 6. protocol --------------------------------- */
+
+/// Two alive kernels appending to one stream in turn: each grows the file behind
+/// the other's back, so every append after the first crosses the tail cache's
+/// delta path (stat says "grew", the cached tail must chain the new records).
+/// The chain must stay a single verifiable chain, and a third, cold process
+/// must agree.
+#[test]
+fn two_kernels_appending_in_turn_keep_one_cached_chain() {
+    let dir = TempDir::new("tail-cache-turn");
+    let stream = "session:cache-turn";
+    let mut a = Kernel::start(dir.path());
+    let mut b = Kernel::start(dir.path());
+
+    let mut seq = 0u64;
+    let append = |kernel: &mut Kernel, label: &str, n: u64| {
+        let event = kernel.ok(
+            "log.append",
+            json!({ "stream": stream, "event": {
+                "type": "message.delta",
+                "actor": { "kind": "agent", "id": label },
+                "payload": { "n": n },
+            }}),
+        );
+        assert_eq!(event["seq"], json!(n), "seq must continue across processes");
+    };
+    seq += 1;
+    append(&mut a, "a1", seq);
+    seq += 1;
+    append(&mut a, "a2", seq);
+    seq += 1;
+    append(&mut b, "b1", seq);
+    seq += 1;
+    append(&mut b, "b2", seq);
+    seq += 1;
+    append(&mut a, "a3", seq);
+    seq += 1;
+    append(&mut b, "b3", seq);
+
+    // Both warm processes agree, and so does a cold third one.
+    let report = a.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report["ok"], json!(true), "{}", report);
+    assert_eq!(report["count"], json!(6));
+    let report = b.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report["ok"], json!(true), "{}", report);
+    assert_eq!(report["count"], json!(6));
+    let mut cold = Kernel::start(dir.path());
+    let report = cold.ok("log.verify", json!({ "stream": stream }));
+    assert_eq!(report["ok"], json!(true), "{}", report);
+    assert_eq!(report["count"], json!(6));
+}
 
 #[test]
 fn protocol_survives_malformed_and_unknown_requests() {

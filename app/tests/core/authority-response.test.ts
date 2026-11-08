@@ -130,9 +130,9 @@ async function runScripted(
 
   const seen: GuardAction[] = [];
   const originalCheck = client.checkGuard.bind(client);
-  client.checkGuard = async (action, scope, leases) => {
+  client.checkGuard = async (action, scope, leases, sessionId) => {
     seen.push(action);
-    return originalCheck(action, scope, leases);
+    return originalCheck(action, scope, leases, sessionId);
   };
 
   const approvals: string[] = [];
@@ -368,5 +368,28 @@ describe("approval binding (full operation intent)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  test("the same command in a different cwd asks again: an approval is bound to its cwd", async () => {
+    const run = await runScripted(
+      "untrusted",
+      ({ workspace }) => {
+        mkdirSync(path.join(workspace, "cwd-a"), { recursive: true });
+        mkdirSync(path.join(workspace, "cwd-b"), { recursive: true });
+        return [
+          calls({ name: "shell", args: { command: "echo hello", cwd: "cwd-a" } }),
+          calls({ name: "shell", args: { command: "echo hello", cwd: "cwd-b" } }),
+          DONE,
+        ];
+      },
+      // The first command is approved; the same command in another cwd must ask
+      // (this used to ride the cwd=a approval), and is declined here.
+      { answer: (_title, count) => count === 1 },
+    );
+
+    expect(run.approvals.length).toBe(2);
+    const shells = run.toolMessages("shell");
+    expect(shells.length).toBe(2);
+    expect(shells[1]).toContain("DECLINED by the user");
   });
 });

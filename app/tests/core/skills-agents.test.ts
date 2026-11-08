@@ -28,6 +28,7 @@ import {
 import { clampSteps, runNested } from "../../src/core/subagent";
 import { agentTool } from "../../src/tools/agent";
 import { BASE_TOOL_NAMES, getTool } from "../../src/tools";
+import { hasRustKernel, rustKernelPath, setEnv } from "./helpers";
 
 /* ------------------------------- fixtures ------------------------------- */
 
@@ -325,6 +326,75 @@ describe("delegation end to end", () => {
       store.close();
     }
   });
+
+  // The kernel-held shape of the same rule: the parent's "always" lives in the
+  // kernel's own lease table (owner-scoped), so a *different* session — the
+  // child's — must re-enter approval in both transports.
+  for (const mode of ["trusted", "untrusted"] as const) {
+    test.skipIf(mode === "trusted" && !hasRustKernel)(
+      `${mode}: a parent's kernel-held 'always' lease does not answer the child's checks`,
+      async () => {
+        const previous = process.env.HZ_KERNEL_BIN;
+        setEnv({
+          HZ_KERNEL_BIN: mode === "trusted" ? rustKernelPath : path.join(tmpdir(), "hz-no-such-bin", "hz-kernel"),
+        });
+        const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+        const store = new SessionStore(workspace);
+        const outside = mkdtempSync(path.join(tmpdir(), "hz-subagent-owned-"));
+        const target = path.join(outside, "owned.txt");
+        const approvals: string[] = [];
+        let turn = 0;
+        const provider = {
+          name: "scripted-owned",
+          async *stream() {
+            const current = turn;
+            turn += 1;
+            if (current === 0) {
+              yield { type: "tool_call" as const, id: "w1", name: "write", arguments: JSON.stringify({ path: target, content: "child data" }) };
+              yield { type: "done" as const, stopReason: "tool_use" as const };
+            } else {
+              yield { type: "text" as const, text: "reported" };
+              yield { type: "done" as const, stopReason: "end" as const };
+            }
+          },
+        };
+        try {
+          expect(await kernel.start()).toBe(mode);
+          const parentSession = store.createSession("parent").id;
+          const parentLease = await kernel.makeLease("fs.write", target, 15 * 60_000, parentSession);
+          // The lease is live FOR THE PARENT — so the child's ask below is about
+          // owner scoping, not about a dead grant.
+          const forParent = await kernel.checkGuard({ kind: "fs.write", target }, "outside", [], parentSession);
+          expect(forParent.decision).toBe("allow");
+          expect(forParent.leaseId).toBe(parentLease.leaseId);
+
+          const result = await runNested({
+            workspace,
+            task: "write the owned file",
+            model: "scripted-1",
+            provider,
+            kernel,
+            store,
+            signal: new AbortController().signal,
+            sessionLeases: [],
+            approve: async (req) => {
+              approvals.push(req.title);
+              return true;
+            },
+          });
+          expect(result.ok).toBe(true);
+          expect(approvals.length).toBe(1);
+          expect(approvals[0]).toContain("owned.txt");
+          expect(readFileSync(target, "utf8")).toBe("child data");
+        } finally {
+          store.close();
+          rmSync(outside, { recursive: true, force: true });
+          await kernel.close();
+          setEnv({ HZ_KERNEL_BIN: previous });
+        }
+      },
+    );
+  }
 
   test("an aborted signal ends the nested run without throwing", async () => {
     const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });

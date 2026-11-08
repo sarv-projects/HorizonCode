@@ -85,7 +85,10 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // is the user-visible surface, so no events are forwarded upward.
     callbacks: { onEvent: () => undefined },
     // R-tools-32: the child inherits no parent leases — only the parent's
-    // approval handler, so its own effects can ask.
+    // approval handler, so its own effects can ask. Combined with the child's
+    // own session id below, an owner-scoped 'always' lease minted for the
+    // parent (kernel.ts/kernel guard.rs) does not answer the child's checks
+    // either: the child re-enters approval in both transports.
     sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
     systemOverride: SUBAGENT_SYSTEM_PROMPT,

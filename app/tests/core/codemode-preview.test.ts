@@ -236,6 +236,33 @@ describe("code_mode", () => {
     expect(afterResult).not.toContain("forged");
   });
 
+  test("a 20 MB newline-free flood keeps the parent bounded and still completes", async () => {
+    const ws = tempWorkspace();
+    const { ctx } = makeCtx(ws);
+    const before = process.memoryUsage().rss;
+    const result = await codemodeTool.execute(
+      {
+        code: [
+          'const chunk = "x".repeat(1024 * 1024);',
+          "for (let i = 0; i < 20; i++) {",
+          "  process.stdout.write(chunk);",
+          "  await new Promise((r) => setTimeout(r, 10)); // let the parent drain",
+          "}",
+          'return "flood-complete";',
+        ].join("\n"),
+        timeout_ms: 60000,
+      },
+      ctx,
+    );
+    const delta = process.memoryUsage().rss - before;
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain('"flood-complete"');
+    expect(result.output).toContain("[truncated]"); // the 20 KB output cap now says so
+    // The deterministic buffer-bound assertion lives in codemode-frames.test.ts;
+    // this is the end-to-end sanity that 20 MB in did not accumulate in the parent.
+    expect(delta).toBeLessThan(96 * 1024 * 1024);
+  }, 60000);
+
   test("actionForCall mirrors the loop's guardActionFor case by case", () => {
     const ws = tempWorkspace();
     const cases: Array<[string, Record<string, unknown>]> = [

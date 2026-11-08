@@ -1,8 +1,8 @@
 # HorizonCode — Specification Index
 
-> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-16 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
+> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-17 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
 >
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-16).
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-17).
 
 This directory is the authoritative specification for HorizonCode, a coding agent designed as the strict superset of the state of the art, with an execution constitution: model reasoning is separated from the authority to mutate.
 
@@ -36,7 +36,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 28 | [`28-implementation-status.md`](./28-implementation-status.md) | **Implemented-vs-designed map with evidence commands — the single source of truth for implementation status** |
 | 29 | [`29-final-audit.md`](./29-final-audit.md) | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
 | 30 | [`30-steal-list.md`](./30-steal-list.md) | Adoption shortlist: the consolidated steal list across aider, mini-swe-agent, hermes-agent and oh-my-pi (pass-3 audits) + the action queue — adopted by RC-15 (NF-071…NF-075; A.9 sources) |
-| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-16)** |
+| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-17)** |
 
 ---
 

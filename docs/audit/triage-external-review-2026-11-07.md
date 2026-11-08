@@ -84,6 +84,15 @@ Integrator-run evidence for the closures: `bun test` 438 pass / 0 fail (41 files
 
 ---
 
+## 7. Postscript — distrust-reaudit response (2026-11-08, wave 12)
+
+- **Preview `close()` → CLOSED** — previews are a process-global registry; `status` (no args) lists every preview in the process, `stop` accepts an id from any session, and `close()` stops every live preview (`tests/tools/tools-hardening.test.ts`).
+- **`logEvent` swallow → CLOSED** (supersedes that half of the section-6 row) — event-append failures notify once, are counted, and force the run's exit off `succeeded`; receipt-issuance failures carry the same guarantee (`tests/core/logging-hardening.test.ts`). A transcript-append failure after a tool effect marks the card failed, notices the effect, attempts the receipt, and exits typed. The durable transcript↔kernel bridge itself remains open.
+- Still OPEN as listed in section 6: finding 4's one-use consumption + kernel-issued tokens, finding 3's receipt postimage, the kernel-absent fail-closed posture, and the TUI workstream.
+- Wave 12's own confirmed findings (dangling-symlink closure, effect-time descriptor verification incl. the TOCTOU repro, lease owner scoping, exact-command grants, policy fail-closed loading, the kernel append tail cache, and the state/tools hardening) are recorded in `docs/audit/reaudit-2026-11-08.md`; the competitive gap map and roadmap in `docs/audit/competitive-viability-audit-2026-11-08.md`. Integrator-run evidence: `bun test` 607 pass / 0 fail (48 files); `cargo test` 9 + 31; `hz-kernel --selftest` 18 checks; `ops/gates.sh` 6/6.
+
+---
+
 *Related documents: [`docs/28`](../28-implementation-status.md) §4 (gap records), [`docs/30`](../30-steal-list.md)
 §4 (execution queue), [`docs/29`](../29-final-audit.md), [`docs/11`](../11-authority-safety.md) (the contracts the
 confirmed divergences fall short of).*

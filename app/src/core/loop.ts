@@ -10,7 +10,7 @@
  */
 
 import * as path from "node:path";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import type {
   ActorRef,
   ApprovalHandler,
@@ -45,12 +45,18 @@ import {
   windowForModel,
 } from "./output-budget";
 import type { KernelClient } from "./kernel";
+import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import { realpathish, spillDir as workspaceSpillDir } from "./paths";
 import type { SessionStore } from "./session";
 
 // The symlink-aware resolution moved to paths.ts (the single state-path
 // resolver); re-exported so every existing `from "./loop"` import keeps working.
 export { realpathish };
+
+// The lexical symlink walk lives in kernel.ts, next to the protected-path rule
+// that depends on it (one implementation, no import cycle through the tool
+// registry); re-exported so every existing `from "./loop"` import keeps working.
+export { resolvedInside, resolveSymlinkChain };
 
 /** Hard ceiling on provider calls inside a single send(). */
 export const MAX_PROVIDER_CALLS = 25;
@@ -149,15 +155,15 @@ function escapes(root: string, target: string): boolean {
 
 /**
  * True when `target` resolves inside the workspace root. Both sides are
- * resolved through symlinks first: a link inside the workspace pointing outside
- * must be classified by where it actually lands, not by its spelling.
+ * resolved through the lexical symlink walk first, so a link inside the
+ * workspace pointing outside is classified by where it actually lands, not by
+ * its spelling — including a dangling link, whose target need not exist. A
+ * walk that cannot complete (a loop) classifies as outside, the stricter scope.
  */
 export function pathInsideWorkspace(target: string, workspace: string): boolean {
   if (typeof target !== "string" || target === "") return false;
-  const root = realpathish(workspace);
-  const resolved = realpathish(path.resolve(workspace, target));
-  if (resolved === root) return true;
-  return !escapes(root, resolved);
+  const root = path.resolve(workspace);
+  return resolvedInside(path.resolve(root, target), root) === true;
 }
 
 /**
@@ -269,10 +275,17 @@ export function admissionFor(name: string, args: Record<string, unknown>, worksp
 /**
  * Bind an action to the full operation intent: the canonical digest of the
  * call's arguments rides in `detail.argsDigest`, so the approval cache can tell
- * one write of X (content A) from another (content B) — see GuardGate.
+ * one write of X (content A) from another (content B) — see GuardGate. The
+ * effective cwd also rides along (`detail.cwd`): a digest-less tool-level check
+ * of the same kind+target must not inherit an admission made for a different
+ * working directory (`npm run dev` in a vs the same command in b).
  */
-function withCallIntent(action: GuardAction, args: Record<string, unknown>): GuardAction {
-  return { ...action, detail: { ...(action.detail ?? {}), argsDigest: sha256Hex(canonicalJson(args)) } };
+function withCallIntent(action: GuardAction, args: Record<string, unknown>, workspace: string): GuardAction {
+  const explicit = typeof args.cwd === "string" && args.cwd.trim() !== "" ? path.resolve(workspace, args.cwd) : path.resolve(workspace);
+  return {
+    ...action,
+    detail: { ...(action.detail ?? {}), argsDigest: sha256Hex(canonicalJson(args)), cwd: explicit },
+  };
 }
 
 /**
@@ -357,6 +370,77 @@ export function streamFor(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
+/** lstat that answers undefined for "nothing there", throwing on anything else. */
+function lstatOrUndefined(file: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+/**
+ * Persist a planned spill WITHOUT ever following a link. The file name is
+ * `sha256(full output)` — model-chosen content, so the model can predict the
+ * name and plant a dangling symlink there; a plain writeFileSync (which
+ * follows links) then creates the link's target anywhere — the confirmed
+ * out-of-workspace `.bashrc` write. The rules:
+ *
+ *  - lstat first (it sees a dangling link; existsSync does not): anything that
+ *    is not a regular file is refused with a typed notice and the run goes on
+ *    (spilling is best-effort);
+ *  - create with O_CREAT|O_EXCL|O_NOFOLLOW, 0600: even a race that lands
+ *    between the lstat and the open cannot follow a link into another path;
+ *  - EEXIST re-checks with lstat: an existing regular file under the same
+ *    sha256 name already holds exactly these bytes (dedupe, skip); anything
+ *    else is refused.
+ *
+ * Returns the refusal notice, or undefined when the spill was written or
+ * already present as a regular file.
+ */
+export function writeSpillSafely(file: string, contents: string): string | undefined {
+  const refusal = `refusing to spill: ${file} is not a regular file`;
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+  } catch (err) {
+    return `could not spill the full output: ${errorMessage(err)}`;
+  }
+  let existing: ReturnType<typeof lstatSync> | undefined;
+  try {
+    existing = lstatOrUndefined(file);
+  } catch (err) {
+    return `could not spill the full output: ${errorMessage(err)}`;
+  }
+  if (existing !== undefined) {
+    // A regular file under this name is the same bytes by construction: dedupe.
+    return existing.isFile() ? undefined : refusal;
+  }
+  try {
+    const fd = openSync(file, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, 0o600);
+    try {
+      writeSync(fd, contents, undefined, "utf8");
+    } finally {
+      closeSync(fd);
+    }
+    return undefined;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EEXIST" || code === "ELOOP") {
+      // Something appeared between the lstat and the open. Re-check: a regular
+      // file is the dedupe case; a link or anything else is refused.
+      try {
+        const raced = lstatOrUndefined(file);
+        if (raced !== undefined && raced.isFile()) return undefined;
+        return refusal;
+      } catch (again) {
+        return `could not spill the full output: ${errorMessage(again)}`;
+      }
+    }
+    return `could not spill the full output: ${errorMessage(err)}`;
+  }
+}
+
 /** The spill directory as the marker shows it: relative to the workspace. */
 function displaySpillPath(workspace: string): string {
   const relative = path.relative(path.resolve(workspace), workspaceSpillDir(workspace));
@@ -366,17 +450,36 @@ function displaySpillPath(workspace: string): string {
 /* ------------------------------- guard gate ------------------------------- */
 
 /**
+ * The approval handler as the gate calls it: the plain ApprovalHandler plus the
+ * context the human side needs to scope a grant — the action (its target), the
+ * kernel client (to mint a session-scoped lease) and the session id the check
+ * speaks for. Extra arguments are invisible to handlers that do not know them.
+ */
+type ApprovalWithContext = (
+  req: ApprovalRequest,
+  action?: GuardAction,
+  kernel?: KernelClient,
+  sessionId?: string,
+) => Promise<boolean>;
+
+/**
  * The one place approvals are decided for a turn. Guessing twice about the same
  * action is bad manners (and two prompts for one shell command is a bug), so an
  * action that was allowed stays allowed for the rest of the turn. Under NF-072
  * concurrent batch siblings share this gate, so every decision is serialized
  * and an approval names the action it answers.
+ *
+ * The cache key is the action's full context: kind + target + the effective cwd
+ * it was admitted for (or the scope, when no cwd is attached). A digest-less
+ * tool-level check never inherits an approval from a different cwd — it either
+ * rides the loop decision of the call it belongs to (`check(action, parent)`)
+ * or matches an entry recorded under its own context.
  */
 export class GuardGate {
   /**
-   * family (`kind\0target`) -> intent digest -> decision. The digest is the
-   * call's canonical arguments digest; "" is a tool-level check (the tool
-   * admitting the call the loop already decided).
+   * family (`kind\0target\0context`) -> intent digest -> decision. The intent
+   * digest is the call's canonical arguments digest; "" is a tool-level check
+   * (the tool admitting the call the loop already decided).
    */
   private readonly resolved = new Map<string, Map<string, { leaseId?: string }>>();
   private pending: GuardAction | null = null;
@@ -388,10 +491,23 @@ export class GuardGate {
     private readonly kernel: KernelClient,
     private readonly leases: Lease[],
     private readonly handler: () => ApprovalHandler,
+    /** The session every check from this gate speaks for (owner-scoped leases). */
+    private readonly sessionId?: string,
   ) {}
 
-  private static familyOf(action: GuardAction): string {
-    return `${action.kind}\u0000${action.target}`;
+  private familyOf(action: GuardAction): string {
+    return `${action.kind}\u0000${action.target}\u0000${this.contextOf(action)}`;
+  }
+
+  /**
+   * The effective context of a check: the cwd the action is admitted for when
+   * the caller attached one, else the action's scope. Two checks that differ
+   * only in cwd therefore never share a cached approval.
+   */
+  private contextOf(action: GuardAction): string {
+    const cwd = action.detail?.cwd;
+    if (typeof cwd === "string" && cwd !== "") return `cwd:${cwd}`;
+    return `scope:${scopeFor(action, this.workspace)}`;
   }
 
   /** The full-intent digest the caller attached; "" when it attached none. */
@@ -401,24 +517,23 @@ export class GuardGate {
   }
 
   /**
-   * A cached decision for the action: an exact (family, intent) match, or — for
-   * a tool-level check that carries no digest of its own — any admission of the
-   * family this turn, because the loop already decided that call's full intent
-   * before the tool ran. A different intent on the same family must re-ask.
+   * A cached decision for the action, under an EXACT (family, intent) match.
+   * A digest-less check (intent "") matches only an entry recorded for a
+   * digest-less check of the same kind+target+context — it never inherits an
+   * admission made for different arguments. That inheritance was the finding:
+   * approving a write of f.txt with content A let a digest-less write of f.txt
+   * with content B run with no ask (the code_mode bridge calls ctx.guard with
+   * no digest). A check that knows its arguments must carry their canonical
+   * digest; a check that does not gets a fresh evaluation.
    */
   private cached(action: GuardAction): { leaseId?: string } | undefined {
-    const family = this.resolved.get(GuardGate.familyOf(action));
+    const family = this.resolved.get(this.familyOf(action));
     if (family === undefined) return undefined;
-    const intent = GuardGate.intentOf(action);
-    const exact = family.get(intent);
-    if (exact !== undefined) return exact;
-    if (intent !== "") return undefined;
-    for (const entry of family.values()) return entry;
-    return undefined;
+    return family.get(GuardGate.intentOf(action));
   }
 
   private remember(action: GuardAction, entry: { leaseId?: string }): void {
-    const family = GuardGate.familyOf(action);
+    const family = this.familyOf(action);
     let bucket = this.resolved.get(family);
     if (bucket === undefined) {
       bucket = new Map();
@@ -436,13 +551,28 @@ export class GuardGate {
     return run;
   }
 
-  async check(action: GuardAction): Promise<GuardDecision> {
+  /**
+   * Decide one action. A tool-level check passes the loop action it belongs to
+   * as `parent`: the decision for that exact full-intent admission is reused
+   * when the check admits the SAME kind and target, so a sibling — or a stale
+   * entry from another cwd — can never answer for this call, and a different
+   * action can never ride it. Without a matching parent, a check answers only
+   * for its own exact intent (see cached): no digest, no reuse.
+   */
+  async check(action: GuardAction, parent?: GuardAction): Promise<GuardDecision> {
     return this.serialize(async () => {
-      const cached = this.cached(action);
+      // A tool-level check rides the loop decision only for the action the loop
+      // actually admitted: same kind AND same target. A check for a different
+      // action is never answered by the parent's admission — that is the same
+      // class of inheritance the family cache must not allow (finding 11), and
+      // it is how a code_mode bridge call is decided on its own merits.
+      const rides =
+        parent !== undefined && parent.kind === action.kind && parent.target === action.target ? parent : undefined;
+      const cached = (rides !== undefined ? this.cached(rides) : undefined) ?? this.cached(action);
       if (cached) return { decision: "allow" as const, reason: "already allowed in this turn", leaseId: cached.leaseId };
       let decision: GuardDecision;
       try {
-        decision = await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases);
+        decision = await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.sessionId);
       } catch (err) {
         // Fail closed: an unreachable guard is a deny, never a silent allow.
         return { decision: "deny" as const, reason: `guard unavailable: ${errorMessage(err)}` };
@@ -467,7 +597,10 @@ export class GuardGate {
     const waiting = action ?? this.pending ?? undefined;
     let ok = false;
     try {
-      ok = await this.handler()(req);
+      // The handler sees the action so an "always" answer can be scoped to its
+      // target, and the kernel client so the lease is minted for THIS session:
+      // a child session's checks never inherit it (docs/09 R-tools-32).
+      ok = await (this.handler() as unknown as ApprovalWithContext)(req, waiting, this.kernel, this.sessionId);
     } catch {
       ok = false;
     }
@@ -656,22 +789,94 @@ interface AssistantTurn {
   error?: string;
 }
 
-async function logEvent(deps: LoopDeps, type: string, payload: unknown, actor: ActorRef = { kind: "agent", id: "hzcode" }): Promise<void> {
-  try {
-    const stream = streamFor(deps.sessionId);
-    await deps.kernel.appendEvent(stream, { id: newId(), ts: nowIso(), stream, type, actor, payload });
-  } catch {
-    // SQLite holds the transcript; the hash-chained log is the audit trail. A log
-    // failure is worth reporting one day, but it must never take the chat down.
+/**
+ * Per-run failure bookkeeping (wave-12 findings: the swallowed event-log
+ * failure and the swallowed tool-result transcript failure). A run that lost
+ * audit-trail events, receipts or transcript rows must never report
+ * `succeeded`; each class is counted here and folded into ONE run-level failure
+ * when the turn ends — the exit detail stays the machine-readable
+ * `internal_error`, while the failure message names every count and its first
+ * underlying error.
+ */
+class RunFaults {
+  private eventLogCount = 0;
+  private eventLogFirst = "";
+  private receiptCount = 0;
+  private receiptFirst = "";
+  private transcriptCount = 0;
+  private transcriptFirst = "";
+
+  /** Record one failed event-log append; true exactly on the first failure. */
+  noteEventLog(err: unknown): boolean {
+    this.eventLogCount += 1;
+    if (this.eventLogFirst === "") {
+      this.eventLogFirst = errorMessage(err);
+      return true;
+    }
+    return false;
+  }
+
+  /** Record one failed receipt issuance (its caller keeps the per-call notice). */
+  noteReceipt(err: unknown): void {
+    this.receiptCount += 1;
+    if (this.receiptFirst === "") this.receiptFirst = errorMessage(err);
+  }
+
+  /** Record one failed tool-result transcript write; `tool` names the call. */
+  noteTranscript(tool: string, err: unknown): void {
+    this.transcriptCount += 1;
+    if (this.transcriptFirst === "") this.transcriptFirst = `${tool}: ${errorMessage(err)}`;
+  }
+
+  /** The one run-level failure message, or undefined on a clean run. */
+  failureMessage(): string | undefined {
+    const parts: string[] = [];
+    if (this.eventLogCount > 0) parts.push(`event log append failed ${this.eventLogCount} time(s): ${this.eventLogFirst}`);
+    if (this.receiptCount > 0) parts.push(`receipt issuance failed ${this.receiptCount} time(s): ${this.receiptFirst}`);
+    if (this.transcriptCount > 0)
+      parts.push(`transcript write failed ${this.transcriptCount} time(s) after the effect ran: ${this.transcriptFirst}`);
+    return parts.length > 0 ? parts.join("; ") : undefined;
   }
 }
 
-async function beginUserTurn(deps: LoopDeps, prompt: string): Promise<void> {
+/**
+ * A tool result that could not be written to the transcript after the tool's
+ * effect already happened. The run must stop at this boundary: replaying a
+ * step whose tool results are not in the history would continue from a
+ * transcript that no longer matches what ran.
+ */
+class TranscriptAppendError extends Error {}
+
+async function logEvent(
+  deps: LoopDeps,
+  faults: RunFaults,
+  type: string,
+  payload: unknown,
+  actor: ActorRef = { kind: "agent", id: "hzcode" },
+): Promise<void> {
+  try {
+    const stream = streamFor(deps.sessionId);
+    await deps.kernel.appendEvent(stream, { id: newId(), ts: nowIso(), stream, type, actor, payload });
+  } catch (err) {
+    // SQLite holds the transcript; the hash-chained log is the audit trail. A
+    // log failure must never take the chat down, but it must not pass silently
+    // either: the FIRST failure is named once, and the run stops reporting
+    // success — the final exit carries the count and the underlying error.
+    if (faults.noteEventLog(err)) {
+      emit(deps.callbacks, {
+        type: "notice",
+        message: `event log append failed: ${errorMessage(err)} — the audit trail is incomplete; this run will not report success`,
+      });
+    }
+  }
+}
+
+async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string): Promise<void> {
   if (prompt === "") return;
   const first = deps.store.messageCount(deps.sessionId) === 0;
   deps.store.appendMessage(deps.sessionId, { role: "user", content: prompt });
-  await logEvent(deps, EventTypes.messageStart, { role: "user" }, { kind: "human", id: "user" });
-  await logEvent(deps, EventTypes.messageEnd, { role: "user", text: prompt }, { kind: "human", id: "user" });
+  await logEvent(deps, faults, EventTypes.messageStart, { role: "user" }, { kind: "human", id: "user" });
+  await logEvent(deps, faults, EventTypes.messageEnd, { role: "user", text: prompt }, { kind: "human", id: "user" });
   if (first) deps.store.touchSession(deps.sessionId, titleFromText(prompt));
 }
 
@@ -743,6 +948,7 @@ async function executeTool(
   gate: GuardGate,
   call: ToolCall,
   parsed: { args: Record<string, unknown>; error?: string },
+  faults: RunFaults,
 ): Promise<{ result: ToolResult; leaseId?: string }> {
   if (parsed.error) {
     return {
@@ -762,8 +968,10 @@ async function executeTool(
     return { result: { ok: false, output: message, error: message } };
   }
   let leaseId: string | undefined;
+  let admitted: GuardAction | undefined;
   if (admission.kind === "guard") {
-    const action = withCallIntent(admission.action, parsed.args);
+    const action = withCallIntent(admission.action, parsed.args, deps.workspace);
+    admitted = action;
     const decision = await gate.check(action);
     leaseId = decision.leaseId ?? gate.leaseFor(action);
     if (decision.decision === "deny") {
@@ -774,6 +982,7 @@ async function executeTool(
       const request = approvalRequestFor(call.name, action, deps.workspace);
       await logEvent(
         deps,
+        faults,
         EventTypes.approvalRequest,
         { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
         { kind: "system", id: "hz-guard" },
@@ -781,6 +990,7 @@ async function executeTool(
       const approved = await gate.approve(request, action);
       await logEvent(
         deps,
+        faults,
         EventTypes.approvalDecision,
         { callId: call.id, tool: call.name, kind: action.kind, decision: approved ? "approved" : "declined" },
         { kind: "human", id: "user" },
@@ -797,7 +1007,10 @@ async function executeTool(
     workspace: deps.workspace,
     sessionId: deps.sessionId,
     signal: deps.signal,
-    guard: (a: GuardAction) => gate.check(a),
+    // A tool-level check rides exactly the loop decision for this call when it
+    // admits the same action; it is never answered by a sibling's cache entry
+    // or by a stale entry from a different cwd (see GuardGate.check).
+    guard: (a: GuardAction) => gate.check(a, admitted),
     approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
     delegate: deps.delegate,
@@ -811,13 +1024,49 @@ async function executeTool(
   }
 }
 
-async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Promise<number> {
+/**
+ * Issue one tool receipt and, best-effort, log its issuance. Returns true on
+ * success; on failure the per-call notice is kept and the run-level fault is
+ * recorded, so a run that lost a receipt can never report success.
+ */
+async function issueToolReceipt(
+  deps: LoopDeps,
+  faults: RunFaults,
+  call: ToolCall,
+  parsed: { args: Record<string, unknown> },
+  result: ToolResult,
+  leaseId: string | undefined,
+): Promise<boolean> {
+  try {
+    const receipt = await deps.kernel.issueReceipt({
+      action: "tool.execute",
+      tool: call.name,
+      argsDigest: sha256Hex(canonicalJson(parsed.args)),
+      resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+      leaseId,
+    });
+    await logEvent(
+      deps,
+      faults,
+      EventTypes.receiptIssued,
+      { receiptId: receipt.id, seq: receipt.seq, tool: call.name, callId: call.id },
+      { kind: "system", id: "hz-kernel" },
+    );
+    return true;
+  } catch (err) {
+    faults.noteReceipt(err);
+    emit(deps.callbacks, { type: "notice", message: `could not issue a receipt: ${errorMessage(err)}` });
+    return false;
+  }
+}
+
+async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall, faults: RunFaults): Promise<number> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
   emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
-  await logEvent(deps, EventTypes.toolCall, { callId: call.id, name: call.name, args: parsed.args }, { kind: "tool", id: call.name });
+  await logEvent(deps, faults, EventTypes.toolCall, { callId: call.id, name: call.name, args: parsed.args }, { kind: "tool", id: call.name });
 
-  const executed = await executeTool(deps, gate, call, parsed);
+  const executed = await executeTool(deps, gate, call, parsed, faults);
   const result = executed.result;
   // NF-074(b): cap the model-facing result and spill the full text. The
   // receipt digest below stays the digest of the FULL output — the cap is a
@@ -827,18 +1076,54 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
     displaySpillDir: displaySpillPath(deps.workspace),
   });
   if (plan.spill) {
-    try {
-      mkdirSync(path.dirname(plan.spill.file), { recursive: true });
-      if (!existsSync(plan.spill.file)) writeFileSync(plan.spill.file, plan.spill.contents, "utf8");
-    } catch (err) {
-      emit(deps.callbacks, { type: "notice", message: `could not spill the full output: ${errorMessage(err)}` });
-    }
+    const refusal = writeSpillSafely(plan.spill.file, plan.spill.contents);
+    if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
   }
   const content = toolMessageContent(result, plan.text);
 
-  deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
+  try {
+    deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
+  } catch (err) {
+    // The tool already ran through executeTool: for an effectful tool the
+    // effect is real (the marker file, the command's side effect) while the
+    // transcript row is missing. The card must not stay "running", the result
+    // is still audited and its receipt still attempted (best-effort), and the
+    // run stops from the batch with a typed error — never a bare
+    // "failed unexpectedly" notice.
+    faults.noteTranscript(call.name, err);
+    const message = `tool ${call.name}: the effect already ran; the transcript write failed (${call.name}: ${errorMessage(err)})`;
+    emit(deps.callbacks, { type: "notice", message });
+    await logEvent(
+      deps,
+      faults,
+      EventTypes.toolResult,
+      {
+        callId: call.id,
+        name: call.name,
+        ok: result.ok,
+        output: truncateForEvent(plan.text, 4000),
+        error: result.error,
+        ms: Date.now() - started,
+        leaseId: executed.leaseId,
+        transcriptWriteFailed: true,
+      },
+      { kind: "tool", id: call.name },
+    );
+    await issueToolReceipt(deps, faults, call, parsed, result, executed.leaseId);
+    emit(deps.callbacks, {
+      type: "tool.card",
+      callId: call.id,
+      name: call.name,
+      args: parsed.args,
+      status: "error",
+      summary: firstLine(message),
+    });
+    throw new TranscriptAppendError(message);
+  }
+
   await logEvent(
     deps,
+    faults,
     EventTypes.toolResult,
     {
       callId: call.id,
@@ -853,23 +1138,7 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall): Pro
   );
 
   // The receipt is the durable proof of what ran, with what arguments, to what result.
-  try {
-    const receipt = await deps.kernel.issueReceipt({
-      action: "tool.execute",
-      tool: call.name,
-      argsDigest: sha256Hex(canonicalJson(parsed.args)),
-      resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
-      leaseId: executed.leaseId,
-    });
-    await logEvent(
-      deps,
-      EventTypes.receiptIssued,
-      { receiptId: receipt.id, seq: receipt.seq, tool: call.name, callId: call.id },
-      { kind: "system", id: "hz-kernel" },
-    );
-  } catch (err) {
-    emit(deps.callbacks, { type: "notice", message: `could not issue a receipt: ${errorMessage(err)}` });
-  }
+  await issueToolReceipt(deps, faults, call, parsed, result, executed.leaseId);
 
   emit(deps.callbacks, {
     type: "tool.card",
@@ -893,13 +1162,18 @@ export async function runTurn(
 ): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
   let text = "";
   let aborted = false;
+  // Wave-12: one per-run failure ledger. Audit-trail, receipt and transcript
+  // failures all prevent a `succeeded` exit; the terminal outcome is decided
+  // once, at the end (the exit shape itself is unchanged).
+  const faults = new RunFaults();
+  let fatal = false;
   // NF-073: one terminal outcome per run, in the RC-7 vocabulary.
   let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
   try {
     const prompt = typeof userText === "string" ? userText.trim() : "";
-    await beginUserTurn(deps, prompt);
+    await beginUserTurn(deps, faults, prompt);
 
-    const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler());
+    const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
     // NF-073: one ledger for the run tree (the main turn and every subagent it
     // spawns); a caller that passes its own ledger shares one ceiling.
     const ledger =
@@ -942,7 +1216,7 @@ export async function runTurn(
       await ledger.chargeStep();
 
       const history = trimHistory(deps.store.history(deps.sessionId));
-      await logEvent(deps, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
+      await logEvent(deps, faults, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
       const turn = await collectAssistant(deps, history, {
         budgetLine: budgetCountdownLine(ledger.countdown()),
         corrective,
@@ -968,7 +1242,7 @@ export async function runTurn(
           toolCalls: turn.toolCalls.length > 0 ? turn.toolCalls : undefined,
         });
       }
-      await logEvent(deps, EventTypes.messageEnd, {
+      await logEvent(deps, faults, EventTypes.messageEnd, {
         role: "assistant",
         stopReason: deps.signal.aborted ? "abort" : turn.stopReason,
         text: turn.text,
@@ -979,7 +1253,7 @@ export async function runTurn(
 
       if (turn.error) {
         emit(deps.callbacks, { type: "error", message: turn.error });
-        await logEvent(deps, EventTypes.error, { message: turn.error });
+        await logEvent(deps, faults, EventTypes.error, { message: turn.error });
         exit = { terminal: "failed", detail: "provider_error" };
         break;
       }
@@ -1002,15 +1276,29 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call)
+            runToolCall(deps, gate, call, faults)
               .then((tokens) => {
                 appendedTokens += tokens;
               })
               .catch((err) => {
+                if (err instanceof TranscriptAppendError) {
+                  // The tool's effect already happened while its result is not
+                  // in the transcript: stop at this boundary instead of
+                  // replaying a history that no longer matches what ran. The
+                  // fault (named for the run by faults.failureMessage at the
+                  // end) is already recorded and noticed in runToolCall.
+                  fatal = true;
+                  return;
+                }
                 emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
               }),
           ),
         );
+        if (fatal) break;
+      }
+      if (fatal) {
+        exit = { terminal: "failed", detail: "internal_error" };
+        break;
       }
       if (aborted) break;
 
@@ -1037,7 +1325,7 @@ export async function runTurn(
             type: "error",
             message: `stopping: ${MAX_CONSECUTIVE_FORMAT_ERRORS} consecutive turns of invalid tool arguments`,
           });
-          await logEvent(deps, EventTypes.error, { message: "format_error_cap", count: consecutiveFormatErrors });
+          await logEvent(deps, faults, EventTypes.error, { message: "format_error_cap", count: consecutiveFormatErrors });
           break;
         }
       } else if (cleanCalls > 0) {
@@ -1047,8 +1335,18 @@ export async function runTurn(
     }
   } catch (err) {
     emit(deps.callbacks, { type: "error", message: `runtime error: ${errorMessage(err)}` });
-    await logEvent(deps, EventTypes.error, { message: errorMessage(err) });
+    await logEvent(deps, faults, EventTypes.error, { message: errorMessage(err) });
     exit = { terminal: "failed", detail: "internal_error" };
+  }
+  // Wave-12: one run-level failure for every class of loss — a run that dropped
+  // events, receipts or transcript rows never reports `succeeded`, and the
+  // failure message names each count and its first underlying error. The exit
+  // detail stays the machine-readable `internal_error` (RunExit's closed
+  // vocabulary); the message is where the count and the error are named.
+  const failure = faults.failureMessage();
+  if (failure !== undefined) {
+    if (exit.terminal === "succeeded") exit = { terminal: "failed", detail: "internal_error" };
+    emit(deps.callbacks, { type: "error", message: failure });
   }
   emit(deps.callbacks, { type: "turn.done" });
   return { text, aborted: aborted || deps.signal.aborted, exit };

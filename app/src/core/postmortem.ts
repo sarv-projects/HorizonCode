@@ -28,6 +28,9 @@
  * `corrupt: true`, and "the record is unreadable" is never reported as "no
  * post-mortems". An unreadable *directory* is an error, never an empty history.
  *
+ * Records are owner-only (docs/03 D12): the directory is chmod 0700 and each
+ * written file 0600 (Unix, umask-proof, best-effort post-create chmod).
+ *
  * Not wired: nothing in the loop calls `recordPostmortem` yet — no loop path
  * writes a post-mortem on a failed run; the proposed wiring text lives in the
  * docs/28 ruling draft for this slice (the `docs/30` §4 item 8 remainder).
@@ -35,7 +38,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { RunExit, TerminalState } from "../contracts";
 import { digestOf, sha256Hex } from "./canon";
@@ -167,6 +170,22 @@ export function postmortemPath(stateDir: string, id: string): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+const isUnix = process.platform !== "win32";
+
+/**
+ * Post-create chmod so the mode is exact regardless of umask. Best-effort: a
+ * target that vanished between the write and the chmod is not an error, and on
+ * non-Unix the call is a no-op (POSIX modes do not exist there).
+ */
+async function setOwnerOnly(target: string, mode: number): Promise<void> {
+  if (!isUnix) return;
+  try {
+    await chmod(target, mode);
+  } catch {
+    /* best effort */
+  }
 }
 
 function requireNonEmpty(value: unknown, what: string): string {
@@ -304,6 +323,8 @@ export async function recordPostmortem(input: RecordPostmortemInput): Promise<Po
     typeof input.now === "number" && Number.isSafeInteger(Math.floor(input.now)) ? Math.floor(input.now) : Date.now();
 
   await mkdir(postmortemsDir(stateDir), { recursive: true });
+  // Docs/03 D12: the records live owner-only — dir 0700, files 0600.
+  await setOwnerOnly(postmortemsDir(stateDir), 0o700);
 
   const base = {
     sessionId,
@@ -327,7 +348,10 @@ export async function recordPostmortem(input: RecordPostmortemInput): Promise<Po
     const record: PostmortemRecord = { id, ...base };
     const file = postmortemPath(stateDir, id);
     try {
-      await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      // Applied after the create: umask-proof, and a loose file cannot be
+      // overwritten here anyway (the write is create-exclusive).
+      await setOwnerOnly(file, 0o600);
       return record;
     } catch (err) {
       if ((err as NodeJS.ErrnoException | null)?.code === "EEXIST") continue;
