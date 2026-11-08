@@ -74,7 +74,7 @@ was written), REFUTED (not reproduced), PENDING (in a file the in-flight workstr
 | Blocker: `agent` mapping | **CLOSED** — `agent` → `spawn`; unmapped tools fail closed. |
 | Blocker: shell `shared` class | **CLOSED** — `shell` is `exclusive`; serialization pinned in `batch.test.ts`. |
 | Blocker: session pragmas | **CLOSED** — WAL + `synchronous=FULL`, verified by PRAGMA read-back across reopen. |
-| Finding 4 approval reuse | **PART** — approval binding CLOSED (full-intent key); one-use consumption + kernel-issued tokens remain open (needs a ruling + kernel work). |
+| Finding 4 approval reuse | **PART** — approval binding CLOSED (full-intent key); kernel-issued tokens CLOSED (wave 12, ruling 29); one-use lease consumption CLOSED (ruling 32, §8 below). |
 | Finding 3 (receipts) | **OPEN** — post-hoc records with caller-supplied digests; independent postimage observation is V2 authority work. |
 | `logEvent` swallow + durable bridge | **OPEN** — recorded; the durable transcript↔kernel bridge owns them. |
 | Preview `close()` | **OPEN** — env half fixed (wave 8); `close()` still does not stop session previews. |
@@ -88,8 +88,23 @@ Integrator-run evidence for the closures: `bun test` 438 pass / 0 fail (41 files
 
 - **Preview `close()` → CLOSED** — previews are a process-global registry; `status` (no args) lists every preview in the process, `stop` accepts an id from any session, and `close()` stops every live preview (`tests/tools/tools-hardening.test.ts`).
 - **`logEvent` swallow → CLOSED** (supersedes that half of the section-6 row) — event-append failures notify once, are counted, and force the run's exit off `succeeded`; receipt-issuance failures carry the same guarantee (`tests/core/logging-hardening.test.ts`). A transcript-append failure after a tool effect marks the card failed, notices the effect, attempts the receipt, and exits typed. The durable transcript↔kernel bridge itself remains open.
-- Still OPEN as listed in section 6: finding 4's one-use consumption + kernel-issued tokens, finding 3's receipt postimage, the kernel-absent fail-closed posture, and the TUI workstream.
+- Still OPEN as listed in section 6: finding 3's receipt postimage, the kernel-absent fail-closed posture, and the TUI workstream. (Finding 4's one-use consumption closed in §8, ruling 32; its kernel-issued-token half closed in wave 12, ruling 29.)
 - Wave 12's own confirmed findings (dangling-symlink closure, effect-time descriptor verification incl. the TOCTOU repro, lease owner scoping, exact-command grants, policy fail-closed loading, the kernel append tail cache, and the state/tools hardening) are recorded in `docs/audit/reaudit-2026-11-08.md`; the competitive gap map and roadmap in `docs/audit/competitive-viability-audit-2026-11-08.md`. Integrator-run evidence: `bun test` 607 pass / 0 fail (48 files); `cargo test` 9 + 31; `hz-kernel --selftest` 18 checks; `ops/gates.sh` 6/6.
+
+---
+
+## 8. Postscript — one-use leases and session grants (ruling 32)
+
+Finding 4's remaining half is CLOSED, in the reduced form the ruling states:
+
+- **Leases are one-use (docs/11 L1).** A `guard.check` that allows by a held lease takes it OUT of the held table and cites it; a second identical action falls back to policy (`ask`) — never to the spent lease. Proven in `kernel/tests/integration.rs` (`guard_lease_is_consumed_at_most_once`) and both TS transports (`tests/core/kernel-hardening.test.ts`, `tests/core/kernel-trusted.test.ts`, `tests/core/fallback.test.ts`, and the cross-implementation pin in `tests/core/interop.test.ts`).
+- **"Always" is a session GRANT (docs/11 L7).** `guard.grant` mints a bounded pre-authorisation that allows nothing by itself: where a check would ask, it mints a fresh one-use lease BOUND to that exact action (pattern = resolved target, TTL `min(120 s, grant expiry)`), and that mint — never the grant — is what the decision returns and the receipt cites. The mint is deliberately NOT added to the consultable table: its one use is the decision that returned it (holding it would let one approval admit two effects — the first draft did, and the kernel test caught it). The TUI's "always" and the runtime's `grantLease()` now mint grants (`src/tui/approval.ts`, `src/core/index.ts`).
+- **Precedence is unchanged:** deny > held lease > grant > ask > allow. A grant fires only where the answer would otherwise be `ask`; it never defeats a deny rule and never fabricates a lease where an allow rule answered (`guard_grant_never_beats_deny_and_never_fires_on_allow`).
+- **Residuals, named:** grants and leases are in-memory (a kernel restart loses them — the next check asks, the fail-closed direction); the durable CAS that would make consumption survive a crash lands with the effect host (NF-016). Owner-less legacy grants stay globally consultable, as owner-less legacy leases do (ruling 29).
+
+Also fixed by this wave's verification itself: `ops/gates.sh`'s kernel-selftest gate now ALWAYS rebuilds the release binary — the TS interop suite resolves `kernel/target/release/hz-kernel` first, so a stale binary silently validated old kernel behaviour (this wave's first interop run passed against a kernel without consumption).
+
+Integrator-run evidence: `bun test` 709 pass / 0 fail (60 files); `cargo test` 9 + 34; `ops/gates.sh` 6/6.
 
 ---
 

@@ -341,6 +341,13 @@ function leaseActive(lease: Lease, now: number): boolean {
 }
 
 /**
+ * docs/11 L3 reduced form: a lease the guard mints from a grant lives for at
+ * most this long, and never past the grant it came from. The Rust kernel's
+ * `BOUND_LEASE_MS` is the same number, so both transports agree byte for byte.
+ */
+const BOUND_LEASE_MS = 120_000;
+
+/**
  * A lease plus its owner: the session it was minted for. An owner-less lease
  * (the legacy wire shape, and every caller-supplied lease from a client that
  * carries no session id) stays globally consultable; an owned lease only speaks
@@ -429,6 +436,13 @@ export class LocalKernel {
     { seq: number; hash: string; record: Record<string, unknown>; stamp: string | undefined }
   >();
   private readonly leases = new Map<string, Lease>();
+  /**
+   * Session grants: the ruling-32 shape of "always". A grant allows nothing by
+   * itself — a matching check mints a fresh one-use lease for its exact action
+   * (never stored, see mintBoundLease). Kept apart from the lease table so a
+   * grant is never consumed like a token.
+   */
+  private readonly grants = new Map<string, Lease>();
   private readonly anchorKey: Buffer | undefined;
   private readonly acceptLegacy: boolean;
   /** An explicit policy injection (tests); absence means "read policy.json". */
@@ -869,7 +883,11 @@ export class LocalKernel {
     // Rust kernel made the same move (guard.rs::check).
     void leases;
     const now = Date.now();
-    const active = [...this.leases.values()].filter(
+    // docs/11 L1 reduced form (ruling 32): a lease admits ONE effect. The first
+    // matching check takes the lease OUT of the table and cites it; a second
+    // identical action finds no lease and falls back to policy (ask) or a
+    // grant — never to the spent lease. The Rust kernel consumes identically.
+    const heldMatch = [...this.leases.values()].find(
       (lease) =>
         lease &&
         lease.kind === action.kind &&
@@ -877,8 +895,43 @@ export class LocalKernel {
         leaseVisibleTo(lease, sessionId) &&
         patternMatches(lease.pattern, action.target),
     );
-    const best = active[0];
-    if (best) return { decision: "allow", leaseId: best.leaseId };
+    if (heldMatch) {
+      this.leases.delete(heldMatch.leaseId);
+      return {
+        decision: "allow",
+        leaseId: heldMatch.leaseId,
+        reason: `lease ${heldMatch.leaseId} (${heldMatch.pattern}) covers ${action.kind} on ${action.target} (consumed)`,
+      };
+    }
+
+    // docs/11 L7 reduced form (ruling 32): the grant fires only where the answer
+    // would otherwise be `ask` (deny won above; a matching allow rule below is
+    // untouched), and it mints a fresh one-use lease for THIS effect — the
+    // decision returns it and the receipt cites it; it is never held.
+    const needsAsk =
+      matching.some((rule) => rule.decision === "ask") ||
+      !matching.some((rule) => rule.decision === "allow");
+    if (needsAsk) {
+      // Newest grant first (the Rust kernel's `next_back` on insertion order).
+      const grant = [...this.grants.values()]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate &&
+            candidate.kind === action.kind &&
+            leaseActive(candidate, now) &&
+            leaseVisibleTo(candidate, sessionId) &&
+            patternMatches(candidate.pattern, action.target),
+        );
+      if (grant) {
+        const bound = this.mintBoundLease(action.kind, action.target, grant, now);
+        return {
+          decision: "allow",
+          leaseId: bound.leaseId,
+          reason: `grant ${grant.leaseId} covers ${action.kind} on ${action.target} (minted one-use lease ${bound.leaseId})`,
+        };
+      }
+    }
 
     const ask = matching.find((rule) => rule.decision === "ask");
     if (ask) {
@@ -924,10 +977,59 @@ export class LocalKernel {
     return lease;
   }
 
+  /**
+   * Mint a session grant (ruling 32 / docs/11 L7, reduced form). Same
+   * validation and window rules as makeLease — the Rust protocol validates
+   * guard.grant identically — but its own table: a grant is a
+   * pre-authorisation, never consumed; each check it covers mints a fresh
+   * one-use lease via mintBoundLease.
+   */
+  async makeGrant(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
+    if (typeof pattern !== "string" || pattern === "") throw new Error("grant pattern must be a non-empty string");
+    if (!(KNOWN_GUARD_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(unknownKindRefusal(kind));
+    }
+    if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs < 0) {
+      throw new Error("guard.grant.ttlMs must be a number");
+    }
+    const ttl = Math.floor(ttlMs);
+    const grant: OwnedLease = {
+      leaseId: newId(),
+      kind,
+      pattern,
+      expiry: new Date(Date.now() + ttl).toISOString(),
+    };
+    if (typeof sessionId === "string" && sessionId !== "") grant.owner = sessionId;
+    this.grants.set(grant.leaseId, grant);
+    return grant;
+  }
+
+  /**
+   * The one-use lease a grant authorises for one exact effect: bound to the
+   * action's kind and resolved target, expiring at min(now + 120 s, grant
+   * expiry) (docs/11 L3 reduced form). NOT stored — its one use is the decision
+   * that returns it (the receipt cites it); if it were held, a second check
+   * would consult it and one approval would admit two effects. The Rust kernel
+   * mints identically (`mint_bound_lease`).
+   */
+  private mintBoundLease(kind: GuardKind, target: string, grant: Lease, now: number): Lease {
+    const grantRemaining = Date.parse(grant.expiry) - now;
+    const ttl = Math.min(BOUND_LEASE_MS, Number.isFinite(grantRemaining) ? Math.max(0, grantRemaining) : 0);
+    const lease: Lease = {
+      leaseId: newId(),
+      kind,
+      pattern: target,
+      expiry: new Date(now + ttl).toISOString(),
+    };
+    if (grant.owner !== undefined) lease.owner = grant.owner;
+    return lease;
+  }
+
   async close(): Promise<void> {
     this.locks.clear();
     this.tails.clear();
     this.leases.clear();
+    this.grants.clear();
   }
 }
 
@@ -1273,6 +1375,13 @@ export class KernelClient {
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      case "guard.grant":
+        return this.local.makeGrant(
+          p.kind as GuardKind,
+          String(p.pattern ?? "*"),
+          typeof p.ttlMs === "number" ? p.ttlMs : 0,
+          typeof p.sessionId === "string" ? p.sessionId : undefined,
+        ) as unknown as Promise<KernelRequestMap[M]["result"]>;
       default:
         return Promise.reject(new Error(`unsupported kernel method: ${String(method)}`));
     }
@@ -1350,6 +1459,19 @@ export class KernelClient {
     return this.rpc(
       "guard.lease",
       { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.lease"]["params"],
+    );
+  }
+
+  /**
+   * Mint a session grant — the ruling-32 shape of "always". One-use leases are
+   * the lease table's business; a grant only ever answers a check that would
+   * otherwise `ask`, by minting a fresh bound lease for that exact effect. Both
+   * transports accept the additive field.
+   */
+  async makeGrant(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
+    return this.rpc(
+      "guard.grant",
+      { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.grant"]["params"],
     );
   }
 

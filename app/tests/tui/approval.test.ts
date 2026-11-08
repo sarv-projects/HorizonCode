@@ -148,12 +148,14 @@ describe("approvals at the chat bar", () => {
     expect(h.text()).toContain("approved (this time)");
   });
 
-  test("always mints a session-scoped lease for the target through the kernel", async () => {
+  test("always mints a session-scoped grant for the target through the kernel", async () => {
     const calls: Array<{ kind: string; pattern: string; ttlMs: number; sessionId?: string }> = [];
     const kernel = {
-      makeLease: async (kind: string, pattern: string, ttlMs: number, sessionId?: string) => {
+      // Ruling 32: "always" is a grant, not a lease — it mints a fresh one-use
+      // lease per covered effect instead of being spent by the first check.
+      makeGrant: async (kind: string, pattern: string, ttlMs: number, sessionId?: string) => {
         calls.push({ kind, pattern, ttlMs, sessionId });
-        return { leaseId: "lease-1", kind, pattern, expiry: new Date(Date.now() + ttlMs).toISOString() };
+        return { leaseId: "grant-1", kind, pattern, expiry: new Date(Date.now() + ttlMs).toISOString() };
       },
     };
     const h = harness({ interactive: true, answer: "always" });
@@ -166,13 +168,13 @@ describe("approvals at the chat bar", () => {
     ) => Promise<boolean>;
 
     expect(await gated({ kind: "fs.write", title: "write A.txt" }, action, kernel, "session-7")).toBe(true);
-    // The lease carries the target AND the gate's session id: a child session's
+    // The grant carries the target AND the gate's session id: a child session's
     // checks are not answered by the parent's "always" (docs/09 R-tools-32).
     expect(calls).toEqual([{ kind: "fs.write", pattern: "/ws/A.txt", ttlMs: 15 * 60_000, sessionId: "session-7" }]);
     expect(h.text()).toContain("in this session for 15 minutes");
   });
 
-  test("always still approves this once when the lease cannot be remembered", async () => {
+  test("always still approves this once when the grant cannot be remembered", async () => {
     const h = harness({ interactive: true, answer: "a" });
     h.ui.runtime = leaseRuntime("throw");
 

@@ -144,6 +144,24 @@ impl Kernel {
                 serde_json::to_value(lease).map_err(|e| format!("cannot serialize lease: {}", e))
             }
 
+            // docs/11 L7 reduced form (ruling 32): "always" mints a session
+            // GRANT, not a reusable lease. Same validation and wire shape as
+            // guard.lease; the guard consults grants only where the answer
+            // would be `ask`, and each matching check mints a fresh one-use
+            // lease bound to that exact effect (the receipt cites that lease).
+            "guard.grant" => {
+                let kind = string_param(params, "kind")?;
+                if !guard::known_kind(&kind) {
+                    return Err(guard::unknown_kind_refusal(&kind));
+                }
+                let pattern = string_param(params, "pattern")?;
+                let ttl_ms = number_param(params, "ttlMs")
+                    .ok_or_else(|| "guard.grant.ttlMs must be a number".to_string())?;
+                let owner = session_param(params);
+                let grant = self.guard.issue_grant(&kind, &pattern, ttl_ms, owner);
+                serde_json::to_value(grant).map_err(|e| format!("cannot serialize grant: {}", e))
+            }
+
             other => Err(format!("unknown method: {}", other)),
         }
     }

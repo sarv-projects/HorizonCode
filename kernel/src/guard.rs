@@ -49,6 +49,10 @@ pub const DEFAULT_POLICY: [Rule; 7] = [
 ];
 
 const MAX_LEASES: usize = 1024;
+const MAX_GRANTS: usize = 256;
+/// docs/11 L3 reduced form: a lease the guard itself mints from a grant lives
+/// for at most this long, and never past the grant it came from.
+const BOUND_LEASE_MS: i64 = 120_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +67,24 @@ pub struct Lease {
     /// the pre-owner wire shape, documented as legacy here on purpose. A lease
     /// with an owner is only honoured for checks carrying that same session id,
     /// so a subagent child cannot inherit its parent session's "always" grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
+/// A session **grant**: the "always" answer, in the shape docs/11 L7 gives it —
+/// a bounded pre-authorisation, never a bypass. A matching grant does not allow
+/// anything by itself; it mints a fresh ONE-USE lease for the exact effect
+/// (kind + resolved target) on the spot, and that lease is what the decision
+/// returns and the receipt cites. Same fields as a lease, same owner scoping,
+/// same 15-minute window the TUI states; kept in its own table so a grant can
+/// never be consumed like a lease.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Grant {
+    pub lease_id: String,
+    pub kind: String,
+    pub pattern: String,
+    pub expiry: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
 }
@@ -94,6 +116,15 @@ impl Lease {
         match parse_iso_millis(&self.expiry) {
             Some(expiry) => expiry <= now_ms,
             None => true, // unparseable expiry never grants authority
+        }
+    }
+}
+
+impl Grant {
+    pub fn is_expired(&self, now_ms: i64) -> bool {
+        match parse_iso_millis(&self.expiry) {
+            Some(expiry) => expiry <= now_ms,
+            None => true,
         }
     }
 }
@@ -136,10 +167,16 @@ pub fn pattern_matches(pattern: &str, target: &str) -> bool {
     }
 }
 
+/// The lease/grant TTL ceiling (366 days), shared by both tables.
+fn clamped_ttl(ttl_ms: u64) -> i64 {
+    ttl_ms.min(366 * 24 * 60 * 60 * 1_000) as i64
+}
+
 pub struct Guard {
     policy_path: PathBuf,
     state_dir: PathBuf,
     leases: Mutex<Vec<Lease>>,
+    grants: Mutex<Vec<Grant>>,
 }
 
 impl Guard {
@@ -148,6 +185,7 @@ impl Guard {
             policy_path: state_dir.join("policy.json"),
             state_dir: state_dir.to_path_buf(),
             leases: Mutex::new(Vec::new()),
+            grants: Mutex::new(Vec::new()),
         }
     }
 
@@ -227,21 +265,40 @@ impl Guard {
         // compatibility (the protocol still validates its shape) and is
         // deliberately ignored here.
         let _ = caller_leases;
-        let held = self.active_leases(now_ms);
-        let lease = held.iter().find(|lease| {
-            lease_visible_to(lease, session_id)
-                && lease.kind == action.kind
-                && pattern_matches(&lease.pattern, &action.target)
-        });
-        if let Some(lease) = lease {
+        // docs/11 L1 reduced form: a lease is consumed at most once. The first
+        // matching check takes the lease OUT of the held table and returns its
+        // id with the allow; a second identical action finds no lease and falls
+        // back to policy (ask) or a grant — never to the spent lease.
+        if let Some(lease) = self.take_matching_lease(action, session_id, now_ms) {
             return Ok(GuardDecision {
                 decision: "allow".to_string(),
                 reason: format!(
-                    "lease {} ({}) covers {} on {}",
+                    "lease {} ({}) covers {} on {} (consumed)",
                     lease.lease_id, lease.pattern, action.kind, action.target
                 ),
-                lease_id: Some(lease.lease_id.clone()),
+                lease_id: Some(lease.lease_id),
             });
+        }
+
+        // docs/11 L7 reduced form: the grant is a pre-authorisation, never a
+        // bypass. It fires only where the answer would otherwise be `ask`, and
+        // it mints a fresh one-use lease for THIS effect — which is what the
+        // decision returns and the receipt cites. deny still wins above; a
+        // matching allow rule below is untouched.
+        let needs_ask = matching.iter().any(|rule| rule.decision == "ask")
+            || !matching.iter().any(|rule| rule.decision == "allow");
+        if needs_ask {
+            if let Some(grant) = self.matching_grant(action, session_id, now_ms) {
+                let lease = self.mint_bound_lease(&action.kind, &action.target, &grant, now_ms);
+                return Ok(GuardDecision {
+                    decision: "allow".to_string(),
+                    reason: format!(
+                        "grant {} covers {} on {} (minted one-use lease {})",
+                        grant.lease_id, action.kind, action.target, lease.lease_id
+                    ),
+                    lease_id: Some(lease.lease_id),
+                });
+            }
         }
 
         if let Some(ask) = matching.iter().find(|rule| rule.decision == "ask") {
@@ -282,12 +339,11 @@ impl Guard {
     /// is the session the lease is minted for; a `None` owner mints a legacy
     /// owner-less lease that stays globally consultable (see `Lease::owner`).
     pub fn issue_lease(&self, kind: &str, pattern: &str, ttl_ms: u64, owner: Option<String>) -> Lease {
-        let ttl = ttl_ms.min(366 * 24 * 60 * 60 * 1_000) as i64;
         let lease = Lease {
             lease_id: Uuid::new_v4().to_string(),
             kind: kind.to_string(),
             pattern: pattern.to_string(),
-            expiry: iso_from_unix_millis(now_millis() + ttl),
+            expiry: iso_from_unix_millis(now_millis() + clamped_ttl(ttl_ms)),
             owner,
         };
         if let Ok(mut held) = self.leases.lock() {
@@ -301,14 +357,77 @@ impl Guard {
         lease
     }
 
-    fn active_leases(&self, now_ms: i64) -> Vec<Lease> {
-        match self.leases.lock() {
-            Ok(held) => held
-                .iter()
-                .filter(|lease| !lease.is_expired(now_ms))
-                .cloned()
-                .collect(),
-            Err(_) => Vec::new(),
+    /// Create and remember a session grant (docs/11 L7 reduced form). Same
+    /// validation and window as `issue_lease`; its own table, so it is never
+    /// consumed by a check.
+    pub fn issue_grant(&self, kind: &str, pattern: &str, ttl_ms: u64, owner: Option<String>) -> Grant {
+        let grant = Grant {
+            lease_id: Uuid::new_v4().to_string(),
+            kind: kind.to_string(),
+            pattern: pattern.to_string(),
+            expiry: iso_from_unix_millis(now_millis() + clamped_ttl(ttl_ms)),
+            owner,
+        };
+        if let Ok(mut held) = self.grants.lock() {
+            let now_ms = now_millis();
+            held.retain(|g| !g.is_expired(now_ms));
+            if held.len() >= MAX_GRANTS {
+                held.remove(0);
+            }
+            held.push(grant.clone());
+        }
+        grant
+    }
+
+    /// Take the first active, visible, matching lease OUT of the held table and
+    /// return it (docs/11 L1: consumed at most once). A poisoned lock returns
+    /// `None` — the fail-closed direction (ask), matching `active_leases`.
+    fn take_matching_lease(&self, action: &GuardAction, session_id: Option<&str>, now_ms: i64) -> Option<Lease> {
+        let mut held = self.leases.lock().ok()?;
+        held.retain(|lease| !lease.is_expired(now_ms));
+        let index = held.iter().position(|lease| {
+            lease_visible_to(lease, session_id)
+                && lease.kind == action.kind
+                && pattern_matches(&lease.pattern, &action.target)
+        })?;
+        Some(held.remove(index))
+    }
+
+    /// The newest active, visible, matching grant, if any. Grants are never
+    /// removed by a check — they are pre-authorisations, not tokens.
+    fn matching_grant(&self, action: &GuardAction, session_id: Option<&str>, now_ms: i64) -> Option<Grant> {
+        let held = self.grants.lock().ok()?;
+        held.iter()
+            .filter(|grant| {
+                !grant.is_expired(now_ms)
+                    && grant_visible_to(grant, session_id)
+                    && grant.kind == action.kind
+                    && pattern_matches(&grant.pattern, &action.target)
+            })
+            .next_back()
+            .cloned()
+    }
+
+    /// Mint the one-use lease a grant authorises for one exact effect: bound to
+    /// the action's kind and RESOLVED TARGET (pattern = target), expiring at
+    /// `min(now + 120 s, grant expiry)` (docs/11 L3 reduced form).
+    ///
+    /// The mint is NOT added to the consultable table: its one use is the very
+    /// decision that returns it (the receipt cites it). If it were held, a
+    /// second check for the same target would take it and admit a second
+    /// effect — one approval, two effects. Every covered effect therefore gets
+    /// its own mint, and a mint is never authority on its own again.
+    fn mint_bound_lease(&self, kind: &str, target: &str, grant: &Grant, now_ms: i64) -> Lease {
+        let grant_remaining = parse_iso_millis(&grant.expiry)
+            .map(|expiry| expiry - now_ms)
+            .unwrap_or(0);
+        let ttl = BOUND_LEASE_MS.min(grant_remaining.max(0));
+        Lease {
+            lease_id: Uuid::new_v4().to_string(),
+            kind: kind.to_string(),
+            pattern: target.to_string(),
+            expiry: iso_from_unix_millis(now_ms + ttl),
+            owner: grant.owner.clone(),
         }
     }
 }
@@ -453,6 +572,14 @@ fn default_policy() -> Vec<PolicyRule> {
 /// R-tools-32: children re-enter approval).
 fn lease_visible_to(lease: &Lease, session_id: Option<&str>) -> bool {
     match &lease.owner {
+        None => true,
+        Some(owner) => session_id.map(|id| id == owner).unwrap_or(false),
+    }
+}
+
+/// The same visibility rule for grants (see `lease_visible_to`).
+fn grant_visible_to(grant: &Grant, session_id: Option<&str>) -> bool {
+    match &grant.owner {
         None => true,
         Some(owner) => session_id.map(|id| id == owner).unwrap_or(false),
     }

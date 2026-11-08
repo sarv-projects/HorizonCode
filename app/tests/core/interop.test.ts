@@ -957,6 +957,54 @@ describe("additional-hardening parity", () => {
     expect(allowed.leaseId).toBe(minted.leaseId);
   });
 
+  test("a lease is spent by one effect and a grant mints per effect, identically (ruling 32)", async () => {
+    const workspace = tempDir("hz-ws-ruling32-i-");
+    const stateDir = path.join(tempDir("hz-state-ruling32-i-"), "kernel");
+    const command = "echo hi";
+
+    // Rust over the raw protocol, all in one kernel process: one lease admits
+    // exactly one effect, and a grant mints a fresh lease per effect.
+    const rust = runKernelNdjson(
+      [
+        { id: 1, method: "guard.lease", params: { kind: "shell.exec", pattern: command, ttlMs: 60_000 } },
+        { id: 2, method: "guard.check", params: { action: { kind: "shell.exec", target: command }, scope: "*" } },
+        { id: 3, method: "guard.check", params: { action: { kind: "shell.exec", target: command }, scope: "*" } },
+        { id: 4, method: "guard.grant", params: { kind: "shell.exec", pattern: command, ttlMs: 60_000 } },
+        { id: 5, method: "guard.check", params: { action: { kind: "shell.exec", target: command }, scope: "*" } },
+        { id: 6, method: "guard.check", params: { action: { kind: "shell.exec", target: command }, scope: "*" } },
+      ],
+      stateDir,
+    );
+    const lease = replyResult<Lease>(rust.replies, 1);
+    const first = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 2);
+    expect(first.decision).toBe("allow");
+    expect(first.leaseId).toBe(lease.leaseId);
+    // ...and the spent lease answers nothing a second time.
+    expect(replyResult<{ decision: string }>(rust.replies, 3).decision).toBe("ask");
+    const grant = replyResult<Lease>(rust.replies, 4);
+    const mint1 = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 5);
+    const mint2 = replyResult<{ decision: string; leaseId?: string }>(rust.replies, 6);
+    expect(mint1.decision).toBe("allow");
+    expect(mint2.decision).toBe("allow");
+    expect(mint1.leaseId).not.toBe(grant.leaseId);
+    expect(mint2.leaseId).not.toBe(mint1.leaseId);
+
+    // The fallback tells the same story with the same calls.
+    const local = await localClient(stateDir, workspace);
+    const localLease = await local.makeLease("shell.exec", command, 60_000);
+    const l1 = await local.checkGuard({ kind: "shell.exec", target: command }, "*");
+    expect(l1.decision).toBe("allow");
+    expect(l1.leaseId).toBe(localLease.leaseId);
+    expect((await local.checkGuard({ kind: "shell.exec", target: command }, "*")).decision).toBe("ask");
+    await local.makeGrant("shell.exec", command, 60_000);
+    const g1 = await local.checkGuard({ kind: "shell.exec", target: command }, "*");
+    const g2 = await local.checkGuard({ kind: "shell.exec", target: command }, "*");
+    expect(g1.decision).toBe("allow");
+    expect(g2.decision).toBe("allow");
+    expect(g1.leaseId).not.toBe(g2.leaseId);
+    await local.close();
+  });
+
   test("a traversing stream name is refused by both implementations (finding 15d)", async () => {
     const workspace = tempDir("hz-ws-stream-i-");
     const stream = "session:../../evil";

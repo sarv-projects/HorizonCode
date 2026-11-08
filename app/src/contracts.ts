@@ -345,6 +345,7 @@ export interface KernelRequestMap {
   "receipt.verify": { params: Record<string, never>; result: { ok: boolean; count: number; brokenAt?: number } };
   "guard.check": { params: { action: GuardAction; scope?: PolicyScope; leases?: Lease[] }; result: GuardDecision };
   "guard.lease": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
+  "guard.grant": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
 }
 
 export type KernelMethod = keyof KernelRequestMap;
@@ -357,6 +358,7 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "receipt.verify",
   "guard.check",
   "guard.lease",
+  "guard.grant",
 ];
 
 /* ------------------------------ Hashing ------------------------------ */

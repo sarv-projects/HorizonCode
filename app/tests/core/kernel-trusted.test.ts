@@ -246,10 +246,10 @@ describe.skipIf(!hasRustKernel)("KernelClient (trusted, Rust kernel)", () => {
     expect(held.decision).toBe("allow");
     expect(held.leaseId).toBe(lease.leaseId);
 
-    // ...and honoured when the caller passes it explicitly.
-    const passed = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [lease]);
-    expect(passed.decision).toBe("allow");
-    expect(passed.leaseId).toBe(lease.leaseId);
+    // ...and the lease is spent by that allow (ruling 32): passing it explicitly
+    // (or as a fresh identical check) admits nothing a second time.
+    const spent = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [lease]);
+    expect(spent.decision).toBe("ask");
 
     // A command outside the pattern is still an ask.
     expect((await client.checkGuard({ kind: "shell.exec", target: "rm -rf /tmp" }, "*", [lease])).decision).toBe("ask");

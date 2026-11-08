@@ -174,9 +174,11 @@ test("guard.check applies DEFAULT_POLICY and guard.lease unlocks a command", asy
   const held = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*");
   expect(held.decision).toBe("allow");
   expect(held.leaseId).toBe(lease.leaseId);
-  const passed = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [lease]);
-  expect(passed.decision).toBe("allow");
-  expect(passed.leaseId).toBe(lease.leaseId);
+  // Ruling 32: the lease is spent by that one allow — a second identical check
+  // is not admitted by it, whether held or echoed back as a caller-supplied
+  // claim (the claim was already never authority).
+  const spent = await client.checkGuard({ kind: "shell.exec", target: "echo hi" }, "*", [lease]);
+  expect(spent.decision).toBe("ask");
   expect((await client.checkGuard({ kind: "shell.exec", target: "rm -rf /tmp" }, "*", [lease])).decision).toBe("ask");
 });
 

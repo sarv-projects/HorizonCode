@@ -287,13 +287,17 @@ describe("lease owner scoping (finding 3)", () => {
 
   test("an owner-less lease stays globally consultable (documented legacy)", async () => {
     const { client } = await fallbackClientFixture("hz-lease-legacy-");
-    const legacy = await client.makeLease("fs.write", TARGET, 60_000);
-    expect((legacy as Lease & { owner?: string }).owner).toBeUndefined();
-
+    // A fresh legacy lease per check: leases are one-use (ruling 32), and the
+    // point here is VISIBILITY — an owner-less lease answers for ANY session.
     for (const session of ["session-a", "session-b", undefined]) {
+      const minted = await client.makeLease("fs.write", TARGET, 60_000);
+      expect((minted as Lease & { owner?: string }).owner).toBeUndefined();
       const decision = await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], session);
       expect(decision.decision, `legacy lease for session ${String(session)}`).toBe("allow");
+      expect(decision.leaseId).toBe(minted.leaseId);
     }
+    // ...and each of those mints is spent by its single allow: a repeat asks.
+    expect((await client.checkGuard({ kind: "fs.write", target: TARGET }, "outside", [], "session-a")).decision).toBe("ask");
     await client.close();
   });
 

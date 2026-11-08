@@ -53,12 +53,14 @@ function leaseMinutes(): number {
  * target is the grant — a target that was already a directory-scoped pattern
  * keeps that scope verbatim, never broadened.
  *
- * The lease is minted through the kernel client with the session id when both
+ * The GRANT is minted through the kernel client with the session id when both
  * are available, so owner scoping applies: a subagent child's checks carry the
  * child's session id and re-enter approval (docs/09 R-tools-32). A runtime that
- * exposes only grantLease() falls back to the legacy owner-less lease (globally
+ * exposes only grantLease() falls back to the legacy owner-less shape (globally
  * consultable — documented in kernel.ts); no target at all means there is
  * nothing narrower than everything to grant, so the answer stays "this time".
+ * Ruling 32: the minted object is a grant, not a lease — it authorises a fresh
+ * one-use lease per covered effect (a lease would be spent by its first use).
  */
 async function rememberAlways(
   ui: ApprovalUi,
@@ -78,7 +80,10 @@ async function rememberAlways(
   if (target.endsWith("*")) return false;
   try {
     if (ctx.kernel !== undefined && typeof ctx.sessionId === "string" && ctx.sessionId !== "") {
-      await ctx.kernel.makeLease(kind as GuardKind, target, SESSION_LEASE_TTL_MS, ctx.sessionId);
+      // Ruling 32: "always" mints a session GRANT — a bounded pre-authorisation
+      // that mints a fresh one-use lease per effect it covers (a lease would be
+      // spent by its first use, turning "always" into "once").
+      await ctx.kernel.makeGrant(kind as GuardKind, target, SESSION_LEASE_TTL_MS, ctx.sessionId);
       return true;
     }
     const runtime = ui.runtime as RuntimeWithExtras | undefined;
