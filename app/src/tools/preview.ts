@@ -1,12 +1,13 @@
 /**
  * `preview` — start, stop, or check a local preview server for the project.
  *
- * A preview is a long-running dev process owned by a chat session: `start`
- * resolves a command (explicit, else the package.json `dev`/`start` script),
- * asks the guard like any shell command would, spawns it detached with output
- * captured to a ring buffer, and scans that output for the URL to show the
- * human. `stop` kills the process group — previews never outlive their chat
- * session by accident, because stop is one message away.
+ * A preview is a long-running dev process: `start` resolves a command (explicit,
+ * else the package.json `dev`/`start` script), confines the working directory to
+ * the workspace, asks the guard like any shell command would, spawns it detached
+ * with output captured to a ring buffer, and scans that output for the URL to
+ * show the human. The registry is process-global — any session's `status` sees
+ * every preview and any session's `stop` can kill one by id — and the runtime's
+ * `close()` stops everything that is still live.
  */
 
 import { readFileSync } from "node:fs";
@@ -14,24 +15,32 @@ import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { newId } from "../contracts";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
+import { realpathish } from "../core/paths";
 import { scrubEnv } from "./helpers";
 
 const OUTPUT_CAP = 4096;
 const URL_WAIT_MS = 12_000;
+/** How much of a package.json script body an approval names. */
+const SCRIPT_HEAD_CHARS = 200;
 
 interface PreviewEntry {
   id: string;
   pid: number;
   cmd: string;
   cwd: string;
+  sessionId: string;
   url?: string;
   startedAt: number;
   proc: OwnedProc;
   output: string; // ring buffer, OUTPUT_CAP bytes
 }
 
-/** One registry per chat session; a session owns its own set of previews. */
-const PREVIEWS = new Map<string, PreviewEntry[]>();
+/**
+ * The process-global preview registry: one entry per started preview, whatever
+ * session started it. `status` lists everything, `stop` takes any id, and the
+ * runtime's close() drains it (stopAllPreviews).
+ */
+const PREVIEWS = new Map<string, PreviewEntry>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -102,15 +111,54 @@ function scanUrl(text: string, port: number | undefined): string | undefined {
   return urls.find((url) => /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(url)) ?? urls[0];
 }
 
-function resolveCwd(ctx: ToolContext, args: Record<string, unknown>): string {
+/**
+ * True when `target` resolves inside the workspace root. This mirrors
+ * core/loop.ts `pathInsideWorkspace` (same `realpathish` resolution, so a
+ * symlink out of the workspace is classified by where it lands); it lives here
+ * because a tool importing core/loop would close the cycle tools → loop → tools.
+ */
+function insideWorkspace(workspace: string, target: string): boolean {
+  const root = realpathish(workspace);
+  const resolved = realpathish(target);
+  if (resolved === root) return true;
+  const rel = path.relative(root, resolved);
+  return rel !== "" && !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel));
+}
+
+/**
+ * The preview working directory, confined to the workspace: a cwd resolving
+ * outside it (through `..` or a symlink) is refused with a typed error naming
+ * both paths, before any command resolution or guard interaction.
+ */
+function resolveCwd(ctx: ToolContext, args: Record<string, unknown>): { cwd: string } | { error: string } {
   const value = typeof args.cwd === "string" ? args.cwd.trim() : "";
-  return value === "" ? ctx.cwd : path.resolve(ctx.cwd, value);
+  const resolved = value === "" ? ctx.cwd : path.resolve(ctx.cwd, value);
+  if (!insideWorkspace(ctx.workspace, resolved)) {
+    return {
+      error: `HZ_PRECONDITION_FAILED: preview cwd is outside the workspace: ${resolved} is not inside ${ctx.workspace}`,
+    };
+  }
+  return { cwd: resolved };
+}
+
+interface ResolvedCommand {
+  command: string;
+  /** The package.json script name, when the command was auto-detected. */
+  script?: string;
+  /** The script's shell body, so the approval shows what will actually run. */
+  scriptBody?: string;
+}
+
+/** One flat line, truncated to a sane head for an approval. */
+function head(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}\u2026` : flat;
 }
 
 /** Explicit command, else package.json `dev`, else `start`, else undefined. */
-function resolveCommand(cwd: string, args: Record<string, unknown>): string | undefined {
+function resolveCommand(cwd: string, args: Record<string, unknown>): ResolvedCommand | undefined {
   const explicit = typeof args.command === "string" ? args.command.trim() : "";
-  if (explicit !== "") return explicit;
+  if (explicit !== "") return { command: explicit };
   try {
     const parsed: unknown = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));
     const scripts =
@@ -119,33 +167,27 @@ function resolveCommand(cwd: string, args: Record<string, unknown>): string | un
         : {};
     const hasBun = typeof Bun !== "undefined" && typeof Bun.which === "function" && Bun.which("bun") !== null;
     const runner = hasBun ? "bun" : "npm";
-    if (typeof scripts.dev === "string") return `${runner} run dev`;
-    if (typeof scripts.start === "string") return `${runner} run start`;
+    if (typeof scripts.dev === "string") return { command: `${runner} run dev`, script: "dev", scriptBody: scripts.dev };
+    if (typeof scripts.start === "string") return { command: `${runner} run start`, script: "start", scriptBody: scripts.start };
   } catch {
     /* no package.json or unreadable: only an explicit command can work */
   }
   return undefined;
 }
 
-function entriesFor(sessionId: string): PreviewEntry[] {
-  let list = PREVIEWS.get(sessionId);
-  if (!list) {
-    list = [];
-    PREVIEWS.set(sessionId, list);
-  }
-  return list;
-}
-
 async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-  const cwd = resolveCwd(ctx, args);
-  const command = resolveCommand(cwd, args);
-  if (command === undefined) {
+  const resolvedCwd = resolveCwd(ctx, args);
+  if ("error" in resolvedCwd) return { ok: false, output: resolvedCwd.error, error: resolvedCwd.error };
+  const cwd = resolvedCwd.cwd;
+  const resolvedCommand = resolveCommand(cwd, args);
+  if (resolvedCommand === undefined) {
     return {
       ok: false,
       output: "No command to start: pass `command`, or add a `dev` or `start` script to package.json.",
       error: "no preview command",
     };
   }
+  const command = resolvedCommand.command;
   const portNumber = typeof args.port === "number" && Number.isFinite(args.port) ? Math.floor(args.port) : undefined;
 
   // The same guard path a shell command would take.
@@ -162,9 +204,15 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     return { ok: false, output: `DENIED by policy: ${reason}`, error: `DENIED by policy: ${reason}` };
   }
   if (decision.decision === "ask") {
+    // Show what will actually run and where: the resolved cwd, the resolved
+    // command, and — for an auto-detected script — the script body itself.
+    const detail = [`cwd: ${cwd}`, `command: ${command}`];
+    if (resolvedCommand.script !== undefined && resolvedCommand.scriptBody !== undefined) {
+      detail.push(`package.json script "${resolvedCommand.script}": ${head(resolvedCommand.scriptBody, SCRIPT_HEAD_CHARS)}`);
+    }
     let approved = false;
     try {
-      approved = await ctx.approve({ title: `start preview: ${command}`, detail: command, kind: "shell.exec" }, action);
+      approved = await ctx.approve({ title: `start preview: ${command}`, detail: detail.join("\n"), kind: "shell.exec" }, action);
     } catch {
       approved = false;
     }
@@ -199,12 +247,12 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     pid,
     cmd: command,
     cwd,
+    sessionId: ctx.sessionId,
     startedAt: Date.now(),
     proc,
     output: "",
   };
-  const entries = entriesFor(ctx.sessionId);
-  entries.push(entry);
+  PREVIEWS.set(entry.id, entry);
 
   // Keep draining the pipes for the life of the entry: a full pipe would
   // otherwise stall the server. This also feeds the ring buffer and URL scan.
@@ -220,8 +268,7 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
     }
     if (proc.exitCode !== null || proc.signalCode !== null) {
       await killEntry(entry);
-      const index = entries.indexOf(entry);
-      if (index >= 0) entries.splice(index, 1);
+      PREVIEWS.delete(entry.id);
       return {
         ok: false,
         output: `Preview command exited (code ${proc.exitCode ?? "signal"}) before announcing a URL\n--- output ---\n${tail(entry)}`,
@@ -240,20 +287,43 @@ async function startPreview(args: Record<string, unknown>, ctx: ToolContext): Pr
   }
 }
 
-async function stopPreviews(ctx: ToolContext): Promise<ToolResult> {
-  const entries = PREVIEWS.get(ctx.sessionId) ?? [];
+/**
+ * Stop every preview this process knows about (the runtime's close() hook).
+ * Returns how many were stopped; a preview already gone still comes out of the
+ * registry.
+ */
+export async function stopAllPreviews(): Promise<number> {
+  const entries = [...PREVIEWS.values()];
+  for (const entry of entries) {
+    await killEntry(entry);
+    PREVIEWS.delete(entry.id);
+  }
+  return entries.length;
+}
+
+async function stopPreviews(args: Record<string, unknown>): Promise<ToolResult> {
+  const id = typeof args.id === "string" ? args.id.trim() : "";
+  if (id !== "") {
+    // Any session may stop any preview by id (the registry is process-global).
+    const entry = PREVIEWS.get(id);
+    if (!entry) return { ok: true, output: `No preview with id ${id}.` };
+    await killEntry(entry);
+    PREVIEWS.delete(entry.id);
+    return { ok: true, output: `Stopped preview ${entry.id} (pid ${entry.pid}) — ${entry.cmd}` };
+  }
+  const entries = [...PREVIEWS.values()];
   if (entries.length === 0) return { ok: true, output: "No previews to stop." };
   const lines: string[] = [];
-  for (const entry of [...entries]) {
+  for (const entry of entries) {
     await killEntry(entry);
+    PREVIEWS.delete(entry.id);
     lines.push(`Stopped preview ${entry.id} (pid ${entry.pid}) — ${entry.cmd}`);
   }
-  PREVIEWS.delete(ctx.sessionId);
   return { ok: true, output: lines.join("\n") };
 }
 
-function statusPreviews(ctx: ToolContext): ToolResult {
-  const entries = PREVIEWS.get(ctx.sessionId) ?? [];
+function statusPreviews(): ToolResult {
+  const entries = [...PREVIEWS.values()];
   if (entries.length === 0) return { ok: true, output: "No previews." };
   const lines = entries.map((entry) => {
     const up = Math.max(0, Math.round((Date.now() - entry.startedAt) / 1000));
@@ -272,7 +342,8 @@ export const previewTool: Tool = {
     properties: {
       action: { type: "string", enum: ["start", "stop", "status"], description: "Preview operation." },
       command: { type: "string", description: "Explicit command to run (defaults to the package.json dev or start script)." },
-      cwd: { type: "string", description: "Working directory for the server (defaults to the workspace)." },
+      cwd: { type: "string", description: "Working directory for the server, inside the workspace (defaults to the workspace)." },
+      id: { type: "string", description: "Preview id to stop (from `status`; any session may stop any preview)." },
       port: { type: "number", description: "Expected port, used to spot the URL in the server output." },
     },
     required: ["action"],
@@ -288,8 +359,8 @@ export const previewTool: Tool = {
         return { ok: false, output: "", error: `unknown action: ${String(action)} (expected start, stop or status)` };
       }
       if (action === "start") return await startPreview(args, ctx);
-      if (action === "stop") return await stopPreviews(ctx);
-      return statusPreviews(ctx);
+      if (action === "stop") return await stopPreviews(args);
+      return statusPreviews();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, output: `preview failed: ${message}`, error: message };

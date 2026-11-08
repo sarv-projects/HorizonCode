@@ -6,7 +6,11 @@
  * the RC-7 vocabulary applied to a queue:
  *
  *   - an input is admitted ONCE — `admit` dedupes on the admission id, so
- *     re-delivery cannot insert a second row and cannot reset state;
+ *     re-delivery cannot insert a second row and cannot reset state. The id is
+ *     scoped to a session: the SAME session re-admitting an id is the
+ *     documented silent no-op, while an id already owned by a DIFFERENT session
+ *     is refused with a typed `AdmissionIdCollisionError` (an id that named two
+ *     sessions' inputs would alias their histories);
  *   - `queued` → `running` → one of `done`/`failed`/`unknown`;
  *   - an `unknown` row HALTS its followers: `nextRunnable` returns the oldest
  *     queued row only while no earlier row is unknown. A halted queue is a
@@ -85,6 +89,32 @@ function requireText(value: unknown, name: string): string {
 }
 
 /**
+ * Raised by `admit` when the id already belongs to another session. The caller
+ * passed an id that names a different session's accepted input; reporting it as
+ * its own admission would alias two sessions' histories, so it is refused with
+ * the id and both sessions named.
+ */
+export class AdmissionIdCollisionError extends Error {
+  /** The id both sessions tried to use. */
+  readonly id: string;
+  /** The session that already owns the row. */
+  readonly existingSessionId: string;
+  /** The session the refused caller admitted for. */
+  readonly sessionId: string;
+
+  constructor(id: string, existingSessionId: string, sessionId: string) {
+    super(
+      `admission: id ${JSON.stringify(id)} is already admitted in session ${JSON.stringify(existingSessionId)}; ` +
+        `it cannot also be this session's input (session ${JSON.stringify(sessionId)})`,
+    );
+    this.name = "AdmissionIdCollisionError";
+    this.id = id;
+    this.existingSessionId = existingSessionId;
+    this.sessionId = sessionId;
+  }
+}
+
+/**
  * The admission FIFO over one SessionStore. Construct it with a store —
  * `new AdmissionQueue(store)` — and construct a new one after reopening the
  * store; the rows live in the store's database, not in this object.
@@ -99,10 +129,13 @@ export class AdmissionQueue {
   /**
    * Admit one input. Returns the admission id.
    *
-   * Dedupe is by id ONLY: passing the same id twice inserts nothing the second
-   * time and leaves the existing row (and its state) untouched. A caller that
-   * wants a fresh admission passes no id (one is generated) or a new one; the
-   * input text is deliberately not an identity.
+   * Dedupe is by id ONLY, and the id is scoped to its session: passing an id
+   * already admitted by the SAME session inserts nothing the second time and
+   * leaves the existing row (and its state) untouched. An id already admitted
+   * by a DIFFERENT session is refused with `AdmissionIdCollisionError` (the id
+   * and both sessions are named) — it must never be reported as this caller's
+   * admission. A caller that wants a fresh admission passes no id (one is
+   * generated) or a new one; the input text is deliberately not an identity.
    */
   admit(sessionId: string, input: string, id: string = newId()): string {
     requireText(sessionId, "sessionId");
@@ -114,6 +147,15 @@ export class AdmissionQueue {
         "VALUES (?, ?, ?, 'queued', ?, ?, NULL)",
       [id, sessionId, input, now, now],
     );
+    // Read back the row the insert-or-ignore settled on. A same-session row is
+    // the idempotent no-op; a row owned by another session means this id was
+    // never admitted for this session, and it is never silently reported as so
+    // (this read-back also closes the concurrent double-admit race: whichever
+    // insert lost sees the winner's session here).
+    const row = this.byId(id);
+    if (row && row.sessionId !== sessionId) {
+      throw new AdmissionIdCollisionError(id, row.sessionId, sessionId);
+    }
     return id;
   }
 

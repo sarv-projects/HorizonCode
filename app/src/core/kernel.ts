@@ -19,8 +19,8 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type {
   EventEnvelope,
@@ -39,8 +39,96 @@ import type {
 } from "../contracts";
 import { DEFAULT_POLICY, hashEnvelope, hashReceipt, newId, nowIso } from "../contracts";
 import { canonicalJson, sha256Hex } from "./canon";
-import { pathInsideWorkspace } from "./loop";
 import { kernelStateDir } from "./paths";
+
+/** Refuse a symlink walk after this many hops (a loop, or an absurd chain). */
+const SYMLINK_HOP_LIMIT = 40;
+
+/** True when `target` (absolute) is not inside `root` (absolute). */
+function escapesRoot(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel !== "" && (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel));
+}
+
+/**
+ * Resolve `target` to where it lexically lands, walking every path component
+ * and replacing each symlink with its target WITHOUT requiring any target to
+ * exist: a dangling link resolves to what a write through it would actually
+ * create (the confirmed kernel-state bypass was exactly a dangling link whose
+ * realpath failed and whose own spelling was used instead). Relative link
+ * targets resolve against the link's own directory; `..` is applied after each
+ * hop and never rises above the root. Returns undefined when the walk cannot
+ * be completed (a loop beyond the hop limit, an unreadable component) — every
+ * caller must fail closed on undefined.
+ *
+ * This lives here, in the kernel client, so the protection rule and the walk it
+ * depends on share one module: `loop.ts` re-exports both for its callers, and
+ * no import cycle runs through the tool registry.
+ */
+export function resolveSymlinkChain(target: string): string | undefined {
+  const absolute = path.resolve(target);
+  const root = path.parse(absolute).root;
+  let out = root;
+  const pending: string[] = absolute
+    .slice(root.length)
+    .split(/[\\/]+/)
+    .filter((part) => part !== "");
+  let hops = 0;
+  while (pending.length > 0) {
+    const name = pending.shift() as string;
+    if (name === "..") {
+      const parent = path.dirname(out);
+      out = parent === out ? out : parent;
+      continue;
+    }
+    const candidate = path.join(out, name);
+    let stat;
+    try {
+      stat = lstatSync(candidate);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        out = candidate; // not created yet: the rest of the path is lexical
+        continue;
+      }
+      return undefined; // unreadable component: fail closed
+    }
+    if (!stat.isSymbolicLink()) {
+      out = candidate;
+      continue;
+    }
+    hops += 1;
+    if (hops > SYMLINK_HOP_LIMIT) return undefined; // a link loop
+    let link: string;
+    try {
+      link = readlinkSync(candidate);
+    } catch {
+      return undefined;
+    }
+    if (path.isAbsolute(link)) {
+      // An absolute target restarts the walk at the filesystem root.
+      const targetRoot = path.parse(link).root;
+      out = targetRoot;
+      pending.unshift(...link.slice(targetRoot.length).split(/[\\/]+/).filter((part) => part !== ""));
+    } else {
+      pending.unshift(...link.split(/[\\/]+/).filter((part) => part !== ""));
+    }
+  }
+  return out;
+}
+
+/**
+ * True when `target` resolves inside `root`; `undefined` when either walk
+ * cannot complete. Protected-path callers must treat `undefined` as a refusal
+ * (fail closed); scope classification treats it as outside.
+ */
+export function resolvedInside(target: string, root: string): boolean | undefined {
+  const resolvedTarget = resolveSymlinkChain(target);
+  const resolvedRoot = resolveSymlinkChain(root);
+  if (resolvedTarget === undefined || resolvedRoot === undefined) return undefined;
+  if (resolvedTarget === resolvedRoot) return true;
+  return !escapesRoot(resolvedRoot, resolvedTarget);
+}
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -110,6 +198,21 @@ export function sanitizeStream(stream: string): string {
 }
 
 /**
+ * The Rust kernel's stream-name refusal (eventlog.rs::sanitize), byte for byte:
+ * a name that sanitizes to something containing ".." is refused with the name
+ * in the message, and an empty name is refused as such. The fallback must
+ * REFUSE, not sanitize into a different stream — sanitizing here would silently
+ * write a chain the Rust kernel would have rejected.
+ */
+export function streamNameRefusal(stream: string): string | undefined {
+  const trimmed = typeof stream === "string" ? stream.trim() : "";
+  if (trimmed === "") return "stream must be a non-empty string";
+  const sanitized = trimmed.replace(/:/g, "__").replace(/[/\\\u0000]|[\p{Cc}]/gu, "_");
+  if (sanitized.includes("..")) return `stream name is not allowed: ${String(stream)}`;
+  return undefined;
+}
+
+/**
  * Lease patterns are exact, or a trailing `*` wildcard prefix.
  *
  * Byte-for-byte the Rust kernel's rule (guard.rs::pattern_matches). The fallback
@@ -123,31 +226,92 @@ export function patternMatches(pattern: string, target: string): boolean {
   return t === p;
 }
 
+/**
+ * The action kinds the guard vocabulary knows (guard.rs::KNOWN_KINDS). A check
+ * for anything else is refused before evaluation: the structural state-dir rule
+ * is keyed to the exact mutating kind, so an unrecognised spelling must never
+ * reach the policy as an unknown rule. Keep in step with contracts' GuardKind.
+ */
+export const KNOWN_GUARD_KINDS = ["fs.read", "fs.write", "shell.exec", "net.fetch", "spawn"] as const;
+
+/** The typed refusal for a kind this kernel does not know. */
+export function unknownKindRefusal(kind: string): string {
+  return `HZ_PRECONDITION_FAILED: unknown action kind ${JSON.stringify(kind)}; known kinds are ${KNOWN_GUARD_KINDS.join(", ")}`;
+}
+
+/**
+ * A malformed policy.json is a typed refusal (the same marker class as the Rust
+ * kernel's `PolicyError`): silently dropping a rule could drop a `deny`.
+ */
+function policyError(index: number | undefined, detail: string): Error {
+  const where = index === undefined ? "policy.json" : `policy.json rule ${index}`;
+  return new Error(`HZ_PRECONDITION_FAILED: ${where} is malformed: ${detail}`);
+}
+
 function isPolicyRule(value: unknown): value is PolicyRule {
   if (value === null || typeof value !== "object") return false;
   const rule = value as Partial<PolicyRule>;
+  const kinds = KNOWN_GUARD_KINDS as readonly string[];
+  const kindOk = rule.kind === "*" || (typeof rule.kind === "string" && kinds.includes(rule.kind));
   return (
-    (rule.kind === "*" || typeof rule.kind === "string") &&
+    kindOk &&
     (rule.scope === "*" || rule.scope === "workspace" || rule.scope === "outside") &&
     (rule.decision === "allow" || rule.decision === "ask" || rule.decision === "deny")
   );
 }
 
-/** <state-dir>/policy.json when it exists and parses, otherwise the built-in policy. */
+/**
+ * <state-dir>/policy.json when it exists and parses, otherwise the built-in
+ * policy. A present-but-malformed policy throws instead of reducing silently —
+ * the fallback refuses to serve it, exactly as the Rust kernel refuses to start
+ * on (or answer with) a policy whose rules it cannot trust.
+ */
 export function loadPolicy(stateDir: string): PolicyRule[] {
+  const file = path.join(stateDir, "policy.json");
+  let text: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path.join(stateDir, "policy.json"), "utf8"));
-    const list = Array.isArray(parsed)
-      ? parsed
-      : parsed !== null && typeof parsed === "object" && Array.isArray((parsed as { rules?: unknown }).rules)
-        ? ((parsed as { rules: unknown[] }).rules as unknown[])
-        : [];
-    const rules = list.filter(isPolicyRule);
-    if (rules.length > 0) return rules;
-  } catch {
-    /* absent or unreadable: the built-in policy applies */
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    if (isFileGone(err)) return DEFAULT_POLICY.slice();
+    throw policyError(undefined, `cannot be read: ${errorMessage(err)}`);
   }
-  return DEFAULT_POLICY.slice();
+  // The self-governance surface: a hardlinked policy.json is shared with another
+  // name, and a plain (policy-allowed) write through that name would rewrite the
+  // policy in place — no path check can see a hard link. Refuse to serve it while
+  // more than one link exists; removing the extra link restores service.
+  const meta = statSync(file);
+  if (typeof meta.nlink === "number" && meta.nlink > 1) {
+    throw new Error(
+      `HZ_PRECONDITION_FAILED: ${file}: policy.json must have exactly one link (metadata nlink = ${meta.nlink}); refusing to serve a policy another name can rewrite`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw policyError(undefined, `not valid JSON: ${errorMessage(err)}`);
+  }
+  const list = Array.isArray(parsed)
+    ? parsed
+    : parsed !== null && typeof parsed === "object" && Array.isArray((parsed as { rules?: unknown }).rules)
+      ? ((parsed as { rules: unknown[] }).rules as unknown[])
+      : undefined;
+  if (list === undefined) throw policyError(undefined, "expected a JSON array of rules");
+  const rules: PolicyRule[] = [];
+  list.forEach((item, index) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw policyError(index, "expected an object");
+    }
+    const fields = item as Record<string, unknown>;
+    for (const field of ["kind", "scope", "decision"]) {
+      if (typeof fields[field] !== "string" || fields[field] === "") {
+        throw policyError(index, `missing field \`${field}\``);
+      }
+    }
+    if (!isPolicyRule(item)) throw policyError(index, "unknown kind/scope/decision value");
+    rules.push(item);
+  });
+  return rules;
 }
 
 /**
@@ -163,13 +327,34 @@ export function protectedPathRefusal(action: GuardAction, stateDir: string): str
   if (action === null || typeof action !== "object" || action.kind !== "fs.write") return undefined;
   const target = typeof action.target === "string" ? action.target : "";
   if (target === "") return undefined;
-  if (!pathInsideWorkspace(path.resolve(target), stateDir)) return undefined;
+  // The chain walk resolves dangling links too: a link to `<state>/policy.json`
+  // that does not exist yet still lands inside the state dir. An unresolvable
+  // walk (a link loop) is a refusal as well — undefined must never widen a write.
+  const inside = resolvedInside(path.resolve(target), stateDir);
+  if (inside === false) return undefined;
   return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
 }
 
 function leaseActive(lease: Lease, now: number): boolean {
   const expiry = Date.parse(lease?.expiry ?? "");
   return Number.isFinite(expiry) && expiry > now;
+}
+
+/**
+ * A lease plus its owner: the session it was minted for. An owner-less lease
+ * (the legacy wire shape, and every caller-supplied lease from a client that
+ * carries no session id) stays globally consultable; an owned lease only speaks
+ * for checks carrying the same session id — a subagent child re-enters approval
+ * instead of inheriting its parent's "always" grant (docs/09 R-tools-32).
+ */
+interface OwnedLease extends Lease {
+  owner?: string;
+}
+
+function leaseVisibleTo(lease: Lease, sessionId: string | undefined): boolean {
+  const owner = (lease as OwnedLease).owner;
+  if (owner === undefined || owner === null || owner === "") return true;
+  return typeof sessionId === "string" && sessionId !== "" && owner === sessionId;
 }
 
 function ruleMatches(rule: PolicyRule, kind: GuardKind, scope: PolicyScope): boolean {
@@ -180,6 +365,35 @@ function ruleMatches(rule: PolicyRule, kind: GuardKind, scope: PolicyScope): boo
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** A genuine absence (ENOENT): the only read error that may mean "nothing there". */
+function isFileGone(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+/** Unix modes the fallback enforces on its own files and directories. */
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIR_MODE = 0o700;
+
+/** Post-create chmod 0600, umask-proof; a no-op off unix (mirrors permm.rs). */
+async function privateFile(file: string): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    await chmod(file, PRIVATE_FILE_MODE);
+  } catch {
+    /* best effort, exactly like the Rust kernel's permm helpers */
+  }
+}
+
+/** Post-create chmod 0700, umask-proof; a no-op off unix (mirrors permm.rs). */
+async function privateDir(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    await chmod(dir, PRIVATE_DIR_MODE);
+  } catch {
+    /* best effort, exactly like the Rust kernel's permm helpers */
+  }
 }
 
 /**
@@ -217,13 +431,31 @@ export class LocalKernel {
   private readonly leases = new Map<string, Lease>();
   private readonly anchorKey: Buffer | undefined;
   private readonly acceptLegacy: boolean;
-  private policy: PolicyRule[];
+  /** An explicit policy injection (tests); absence means "read policy.json". */
+  private readonly policyOverride?: PolicyRule[];
 
   constructor(opts: { stateDir: string; policy?: PolicyRule[] }) {
     this.stateDir = opts.stateDir;
-    this.policy = opts.policy ?? loadPolicy(opts.stateDir);
+    this.policyOverride = opts.policy;
+    // Fail fast: a policy that cannot be served refuses construction (the Rust
+    // kernel refuses to start). Every check then re-reads the file, so an edit
+    // — or a hardlinked policy — is noticed without a restart, exactly as the
+    // Rust guard reloads per check (see currentPolicy).
+    if (this.policyOverride === undefined) loadPolicy(opts.stateDir);
     this.anchorKey = anchorKeyFromEnv();
     this.acceptLegacy = acceptLegacyAnchorsFromEnv();
+  }
+
+  /**
+   * The policy this decision is made under. Re-read per check (Rust's guard
+   * reloads policy.json on every check): a mid-session tightening or relaxing
+   * applies to the very next decision, with no staleness window. The file is a
+   * few hundred bytes and guard checks are human-scale, so no cache is worth
+   * the window it would open.
+   */
+  private currentPolicy(): PolicyRule[] {
+    if (this.policyOverride !== undefined) return this.policyOverride;
+    return loadPolicy(this.stateDir);
   }
 
   /** Serialize writers per stream so seq/prevHash can never interleave. */
@@ -246,6 +478,11 @@ export class LocalKernel {
   }
 
   private streamPath(stream: string): string {
+    // The Rust kernel refuses a traversing or empty stream name; sanitizing it
+    // here would write a chain the kernel would have rejected (a workspace
+    // toggling transports would then disagree about what exists).
+    const refusal = streamNameRefusal(stream);
+    if (refusal !== undefined) throw new Error(refusal);
     return path.join(this.eventsDir(), sanitizeStream(stream) + ".jsonl");
   }
 
@@ -254,11 +491,17 @@ export class LocalKernel {
   }
 
   private async lines(file: string): Promise<string[]> {
+    let text: string;
     try {
-      return (await readFile(file, "utf8")).split("\n");
-    } catch {
-      return [];
+      text = await readFile(file, "utf8");
+    } catch (err) {
+      // A genuinely absent file is an empty chain. Any other read failure
+      // (EACCES, EIO, EISDIR) is unreadable material: refuse — treating it as
+      // empty would append a colliding seq 1 onto an existing chain.
+      if (isFileGone(err)) return [];
+      throw new Error(`cannot read ${file}: ${errorMessage(err)}`);
     }
+    return text.split("\n");
   }
 
   private headPath(file: string): string {
@@ -273,7 +516,9 @@ export class LocalKernel {
   private async writeHead(file: string, seq: number, hash: string): Promise<void> {
     const tmp = `${file}.head.tmp`;
     await writeFile(tmp, canonicalJson({ hash, seq }) + "\n", "utf8");
+    await privateFile(tmp);
     await rename(tmp, this.headPath(file));
+    await privateFile(this.headPath(file));
   }
 
   /** The anchor of `file`, "corrupt" when present but unreadable, undefined when absent. */
@@ -281,8 +526,12 @@ export class LocalKernel {
     let text: string;
     try {
       text = await readFile(this.headPath(file), "utf8");
-    } catch {
-      return undefined; // no anchor: a chain written before anchors existed
+    } catch (err) {
+      // Only a genuine ENOENT means "no anchor" (a chain written before anchors
+      // existed). An anchor that exists but cannot be read is a refusal: the
+      // anchor may be exactly what truncation detection depends on.
+      if (isFileGone(err)) return undefined;
+      throw new Error(`cannot read ${this.headPath(file)}: ${errorMessage(err)}`);
     }
     try {
       const parsed = JSON.parse(text.trim()) as { seq?: unknown; hash?: unknown };
@@ -452,6 +701,8 @@ export class LocalKernel {
     return this.withLock(`events:${stream}`, async () => {
       const file = this.streamPath(stream);
       await mkdir(this.eventsDir(), { recursive: true });
+      await privateDir(this.stateDir);
+      await privateDir(this.eventsDir());
       const tail = await this.tailOf(`events:${stream}`, file, () => this.readEnvelopes(stream));
       await this.ensureAnchorAligned(file, "event", tail);
       const base: Omit<EventEnvelope, "hash"> = {
@@ -466,6 +717,7 @@ export class LocalKernel {
       };
       const envelope: EventEnvelope = { ...base, hash: hashEnvelope(base) };
       await appendFile(file, canonicalJson(envelope) + "\n", "utf8");
+      await privateFile(file);
       await this.writeHead(file, envelope.seq, this.anchorDigest("event", envelope));
       this.tails.set(`events:${stream}`, {
         seq: envelope.seq,
@@ -523,6 +775,7 @@ export class LocalKernel {
     return this.withLock("receipts", async () => {
       const file = this.receiptsPath();
       await mkdir(this.stateDir, { recursive: true });
+      await privateDir(this.stateDir);
       const tail = await this.tailOf("receipts", file, () => this.readReceipts());
       await this.ensureAnchorAligned(file, "receipt", tail);
       const base: Omit<Receipt, "hash"> = {
@@ -538,6 +791,7 @@ export class LocalKernel {
       };
       const receipt: Receipt = { ...base, hash: hashReceipt(base) };
       await appendFile(file, canonicalJson(receipt) + "\n", "utf8");
+      await privateFile(file);
       await this.writeHead(file, receipt.seq, this.anchorDigest("receipt", receipt));
       this.tails.set("receipts", {
         seq: receipt.seq,
@@ -581,12 +835,20 @@ export class LocalKernel {
     return { ok: true, count };
   }
 
-  async checkGuard(action: GuardAction, scope?: PolicyScope, leases: Lease[] = []): Promise<GuardDecision> {
+  async checkGuard(action: GuardAction, scope?: PolicyScope, leases: Lease[] = [], sessionId?: string): Promise<GuardDecision> {
     if (action === null || typeof action !== "object" || typeof action.kind !== "string") {
       return { decision: "deny", reason: "malformed guard action" };
     }
+    // Fail closed before evaluation: an unknown kind must never reach the
+    // policy as an unrecognised action (guard.rs refuses it the same way, and
+    // the structural state-dir rule is keyed to the exact mutating kind).
+    if (!(KNOWN_GUARD_KINDS as readonly string[]).includes(action.kind)) {
+      return { decision: "deny", reason: unknownKindRefusal(action.kind) };
+    }
     // Structural, before policy and leases: the state directory holds the policy
     // this decision comes from, so it is never a legal fs.write target.
+    // NOTE: keyed to `fs.write`, the only mutating kind shipped; a future
+    // mutating kind must be added to protectedPathRefusal too.
     const refusal = protectedPathRefusal(action, this.stateDir);
     if (refusal !== undefined) throw new Error(refusal);
     // The kernel defaults a missing/empty scope to "*" (guard.rs: scope.filter(non-empty).unwrap_or("*")).
@@ -596,13 +858,24 @@ export class LocalKernel {
     // deny > lease > ask > allow (docs/11-authority-safety.md R1) — the exact
     // order guard.rs::check uses, so a decision can never widen or narrow when
     // the transport changes.
-    const matching = this.policy.filter((rule) => ruleMatches(rule, action.kind, effective));
+    const matching = this.currentPolicy().filter((rule) => ruleMatches(rule, action.kind, effective));
     const deny = matching.find((rule) => rule.decision === "deny");
     if (deny) return { decision: "deny", reason: `policy denies ${action.kind} for ${effective} targets` };
 
+    // Only leases this kernel issued (its own mint table) are honoured. A
+    // caller-supplied lease is a claim, not a mint: a fabricated
+    // {leaseId, kind, pattern, expiry} unlocks nothing. The `leases` parameter
+    // stays for wire/API compatibility and is deliberately ignored here — the
+    // Rust kernel made the same move (guard.rs::check).
+    void leases;
     const now = Date.now();
-    const active = [...leases, ...this.leases.values()].filter(
-      (lease) => lease && lease.kind === action.kind && leaseActive(lease, now) && patternMatches(lease.pattern, action.target),
+    const active = [...this.leases.values()].filter(
+      (lease) =>
+        lease &&
+        lease.kind === action.kind &&
+        leaseActive(lease, now) &&
+        leaseVisibleTo(lease, sessionId) &&
+        patternMatches(lease.pattern, action.target),
     );
     const best = active[0];
     if (best) return { decision: "allow", leaseId: best.leaseId };
@@ -620,17 +893,33 @@ export class LocalKernel {
     return { decision: "ask", reason: `no policy rule allows ${action.kind}` };
   }
 
-  async makeLease(kind: GuardKind, pattern: string, ttlMs: number): Promise<Lease> {
+  async makeLease(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
     // The Rust kernel refuses an empty pattern (string_param); mirror that here
     // instead of widening it to `*`, or one approval would mean two things.
     if (typeof pattern !== "string" || pattern === "") throw new Error("lease pattern must be a non-empty string");
-    const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? Math.floor(ttlMs) : 15 * 60_000;
-    const lease: Lease = {
+    // Same vocabulary rule as the Rust protocol (guard.lease validates too): a
+    // lease for a kind the guard does not know could never be consulted.
+    if (!(KNOWN_GUARD_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(unknownKindRefusal(kind));
+    }
+    // Byte-for-byte the Rust rule (protocol.rs number_param + guard.rs
+    // issue_lease): a negative or non-numeric TTL is refused ("ttlMs must be a
+    // number"), and ttlMs=0 mints an ALREADY-EXPIRED lease — never the old
+    // 15-minute substitute, which made the two transports disagree about the
+    // same request.
+    if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs < 0) {
+      throw new Error("guard.lease.ttlMs must be a number");
+    }
+    const ttl = Math.floor(ttlMs);
+    const lease: OwnedLease = {
       leaseId: newId(),
       kind,
       pattern,
       expiry: new Date(Date.now() + ttl).toISOString(),
     };
+    // A sessionId mints an owner-scoped lease; without one the lease keeps the
+    // legacy owner-less shape that stays globally consultable (documented).
+    if (typeof sessionId === "string" && sessionId !== "") lease.owner = sessionId;
     this.leases.set(lease.leaseId, lease);
     return lease;
   }
@@ -768,6 +1057,13 @@ export class KernelClient {
       const child = spawn(binary, ["--state-dir", this.stateDir], {
         cwd: this.workspace,
         stdio: ["pipe", "pipe", "pipe"],
+        // Explicit env snapshot at spawn: a runtime mutation of process.env
+        // (HZ_ANCHOR_KEY set just before start) must reach the child, and the
+        // child must never inherit anything else implicitly. Relying on the
+        // platform's default env handling diverged by runtime version (an
+        // auditor on bun 1.3.14 saw the mutation not reach the child while the
+        // in-process fallback read it live — divergent anchors).
+        env: { ...process.env },
       });
       this.child = child;
       this.wire(child);
@@ -968,12 +1264,14 @@ export class KernelClient {
           p.action as GuardAction,
           p.scope as PolicyScope | undefined,
           Array.isArray(p.leases) ? (p.leases as Lease[]) : [],
+          typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "guard.lease":
         return this.local.makeLease(
           p.kind as GuardKind,
           String(p.pattern ?? "*"),
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
+          typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
       default:
         return Promise.reject(new Error(`unsupported kernel method: ${String(method)}`));
@@ -1024,17 +1322,35 @@ export class KernelClient {
     return this.rpc("receipt.verify", {});
   }
 
-  async checkGuard(action: GuardAction, scope?: PolicyScope, leases?: Lease[]): Promise<GuardDecision> {
+  /**
+   * Guard decision, optionally scoped to the session that is asking: an
+   * owner-scoped lease only covers a check that carries the same sessionId.
+   * The field is additive on the wire (undefined is dropped by JSON.stringify),
+   * so a caller without a session keeps the legacy owner-less shape.
+   */
+  async checkGuard(action: GuardAction, scope?: PolicyScope, leases?: Lease[], sessionId?: string): Promise<GuardDecision> {
     // Structural, before any guard.check request: the trusted transport must
     // refuse a protected fs.write itself, and the Rust kernel refuses it again
     // on its side (defense in depth).
     const refusal = protectedPathRefusal(action, this.stateDir);
     if (refusal !== undefined) throw new Error(refusal);
-    return this.rpc("guard.check", { action, scope, leases });
+    return this.rpc(
+      "guard.check",
+      { action, scope, leases, sessionId } as unknown as KernelRequestMap["guard.check"]["params"],
+    );
   }
 
-  async makeLease(kind: GuardKind, pattern: string, ttlMs: number): Promise<Lease> {
-    return this.rpc("guard.lease", { kind, pattern, ttlMs });
+  /**
+   * Mint a lease. With a sessionId the lease is owned by that session (a
+   * subagent child's checks, carrying another id, will not see it); without
+   * one it keeps the legacy owner-less shape. Both transports accept the
+   * additive field.
+   */
+  async makeLease(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
+    return this.rpc(
+      "guard.lease",
+      { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.lease"]["params"],
+    );
   }
 
   /** Kill the kernel child (when any) and release the client. */

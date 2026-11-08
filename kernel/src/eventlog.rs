@@ -18,9 +18,11 @@
 //! can rewrite the log can also delete or rewrite the anchor) is recorded in
 //! docs/28 §4, narrowed by the keyed mode.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime};
 
@@ -268,6 +270,7 @@ impl EventLog {
         append_line(&path, &envelope)?;
         let anchor_hash = anchor_digest(ChainKind::Event, &envelope, self.anchor.key());
         write_head(&path, last_seq + 1, &anchor_hash)?;
+        note_appended(&path, &envelope);
         Ok(envelope)
     }
 
@@ -601,12 +604,158 @@ fn anchor_check(
 
 /// (seq, hash, last well-formed record) of the file, or (0, None, None) for an
 /// empty/absent file. The record itself is needed to recompute a keyed anchor.
+///
+/// A per-process cache keeps appends linear: appending to a chain used to read
+/// and parse every record on every append (measured 1.25 ms at 200 records →
+/// 12.3 ms at 2,200). The cache is keyed by path and stores the file state
+/// (len, mtime) it describes, the offset just past the last complete line, and
+/// the tail record. On a match the tail is returned without a read; when the
+/// file grew, only the delta from the cached offset is parsed and must chain
+/// (first new record's `prevHash` equals the cached hash); on shrink, rewrite,
+/// an unchainable delta or any read error the whole file is rescanned exactly
+/// as before. `note_appended` refreshes the entry after this process appends.
+/// The append lockfile still serializes writers, so the cache only ever skips
+/// work this process can prove is redundant.
 pub fn tail_of(path: &Path) -> Result<(u64, Option<String>, Option<Value>), String> {
+    let meta = match fs::metadata(path) {
+        Ok(meta) => Some(meta),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        // A chain that exists but cannot be stat'ed is unreadable material:
+        // refuse rather than pretending it is empty (fail closed).
+        Err(e) => return Err(format!("cannot read {}: {}", path.display(), e)),
+    };
+    let (len, mtime) = match &meta {
+        Some(meta) => (meta.len(), meta.modified().ok()),
+        None => (0, None),
+    };
+
+    if let Some(entry) = cache_get(path) {
+        // Nothing changed on disk: the cached tail is the file's tail.
+        if entry.len == len && entry.mtime == mtime {
+            return Ok((entry.seq, entry.hash.clone(), entry.record.clone()));
+        }
+        // The file grew: read only the new bytes; the delta must chain.
+        if meta.is_some() && entry.len < len {
+            if let Some(entry) = extend_tail_from_delta(path, &entry, len, mtime) {
+                cache_put(path, entry.clone());
+                return Ok((entry.seq, entry.hash, entry.record));
+            }
+        }
+    }
+
+    // Never seen, shrank, rewritten, unchainable or unreadable: full rescan.
+    let entry = full_tail_scan(path, len, mtime, meta.is_some())?;
+    cache_put(path, entry.clone());
+    Ok((entry.seq, entry.hash, entry.record))
+}
+
+/// One chain file's tail as of `len`/`mtime`; `line_end` is the offset just
+/// past the last complete (`\n`-terminated) line — where a delta starts.
+#[derive(Clone)]
+struct TailCacheEntry {
+    len: u64,
+    mtime: Option<SystemTime>,
+    line_end: u64,
+    seq: u64,
+    hash: Option<String>,
+    record: Option<Value>,
+}
+
+fn tail_cache() -> &'static Mutex<HashMap<PathBuf, TailCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, TailCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cache_get(path: &Path) -> Option<TailCacheEntry> {
+    tail_cache().lock().ok()?.get(path).cloned()
+}
+
+fn cache_put(path: &Path, entry: TailCacheEntry) {
+    if let Ok(mut cache) = tail_cache().lock() {
+        cache.insert(path.to_path_buf(), entry);
+    }
+}
+
+fn cache_drop(path: &Path) {
+    if let Ok(mut cache) = tail_cache().lock() {
+        cache.remove(path);
+    }
+}
+
+/// Remember the record this process just appended, so the next append can skip
+/// the file read entirely. If the file did not end at a line boundary before
+/// the append (a partial line from a crashed writer), the new record is glued
+/// to it and is not a complete line: drop the cache and let the next append
+/// rescan instead of inventing a tail.
+pub fn note_appended(path: &Path, record: &Value) {
+    let Ok(meta) = fs::metadata(path) else {
+        cache_drop(path);
+        return;
+    };
+    let ended_at_line_boundary = cache_get(path).map(|entry| entry.len == entry.line_end).unwrap_or(false);
+    if !ended_at_line_boundary {
+        cache_drop(path);
+        return;
+    }
+    cache_put(
+        path,
+        TailCacheEntry {
+            len: meta.len(),
+            mtime: meta.modified().ok(),
+            line_end: meta.len(),
+            seq: record.get("seq").and_then(|v| v.as_u64()).unwrap_or(0),
+            hash: record
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            record: Some(record.clone()),
+        },
+    );
+}
+
+/// Parse the whole file once; mirrors the historical `tail_of` walk exactly.
+fn full_tail_scan(
+    path: &Path,
+    len: u64,
+    mtime: Option<SystemTime>,
+    exists: bool,
+) -> Result<TailCacheEntry, String> {
+    if !exists {
+        return Ok(TailCacheEntry {
+            len: 0,
+            mtime: None,
+            line_end: 0,
+            seq: 0,
+            hash: None,
+            record: None,
+        });
+    }
+    let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let text =
+        String::from_utf8(bytes).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let (seq, hash, record) = tail_from_text(&text);
+    let line_end = match text.rfind('\n') {
+        Some(index) => index as u64 + 1,
+        None => 0,
+    };
+    Ok(TailCacheEntry {
+        len,
+        mtime,
+        line_end,
+        seq,
+        hash,
+        record,
+    })
+}
+
+/// The last well-formed record of a full chain text: exact port of the old
+/// per-append walk (`seq >= last_seq` means a later same-seq record wins).
+fn tail_from_text(text: &str) -> (u64, Option<String>, Option<Value>) {
     let mut last_seq = 0u64;
     let mut last_hash = None;
     let mut last_record = None;
-    for line in read_lines(path)? {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+    for line in text.split('\n') {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         if let Some(seq) = value.get("seq").and_then(|v| v.as_u64()) {
@@ -620,7 +769,82 @@ pub fn tail_of(path: &Path) -> Result<(u64, Option<String>, Option<Value>), Stri
             }
         }
     }
-    Ok((last_seq, last_hash, last_record))
+    (last_seq, last_hash, last_record)
+}
+
+/// Extend a cached tail by reading only `[entry.line_end, len)`. Returns `None`
+/// when the delta cannot be trusted (open/read error, non-UTF-8, an unparseable
+/// first line, or a first record that does not chain onto the cached hash), in
+/// which case the caller falls back to a full rescan.
+fn extend_tail_from_delta(
+    path: &Path,
+    entry: &TailCacheEntry,
+    len: u64,
+    mtime: Option<SystemTime>,
+) -> Option<TailCacheEntry> {
+    if entry.line_end > len {
+        return None;
+    }
+    let mut file = File::open(path).ok()?;
+    file.seek(SeekFrom::Start(entry.line_end)).ok()?;
+    let mut buf = vec![0u8; (len - entry.line_end) as usize];
+    file.read_exact(&mut buf).ok()?;
+    let text = String::from_utf8(buf).ok()?;
+
+    let mut seq = entry.seq;
+    let mut hash = entry.hash.clone();
+    let mut record = entry.record.clone();
+    let mut first = true;
+    let mut delta_line_end = 0u64;
+    let mut offset = 0u64;
+    for line in text.split_inclusive('\n') {
+        let complete = line.ends_with('\n');
+        let body = if complete { &line[..line.len() - 1] } else { line };
+        if complete {
+            delta_line_end = offset + line.len() as u64;
+        }
+        offset += line.len() as u64;
+        if body.is_empty() {
+            continue; // blank separators are not records
+        }
+        let Ok(value) = serde_json::from_str::<Value>(body) else {
+            if first {
+                return None; // cannot prove the chain continues: rescan
+            }
+            continue; // mirror the full walk: malformed lines are skipped
+        };
+        let Some(value_seq) = value.get("seq").and_then(|v| v.as_u64()) else {
+            if first {
+                return None;
+            }
+            continue;
+        };
+        if first {
+            let prev = value.get("prevHash").cloned().unwrap_or(Value::Null);
+            let chains = match (&entry.hash, &prev) {
+                (None, Value::Null) => true,
+                (Some(expected), Value::String(actual)) => expected == actual,
+                _ => false,
+            };
+            if !chains || value_seq != entry.seq + 1 {
+                return None; // the delta does not continue this chain: rescan
+            }
+            first = false;
+        }
+        if value_seq >= seq {
+            seq = value_seq;
+            hash = value.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string());
+            record = Some(value);
+        }
+    }
+    Some(TailCacheEntry {
+        len,
+        mtime,
+        line_end: entry.line_end + delta_line_end,
+        seq,
+        hash,
+        record,
+    })
 }
 
 pub fn read_lines(path: &Path) -> Result<Vec<String>, String> {
@@ -713,5 +937,85 @@ fn is_stale(lock_path: &Path) -> bool {
             .map(|age| age > LOCK_STALE_AFTER)
             .unwrap_or(false),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hz-eventlog-{}-{}", tag, Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// The tail cache must not change semantics at scale: 20k appends through
+    /// one EventLog (cache warm after every one) still form a verifiable chain.
+    #[test]
+    fn tail_cache_keeps_a_20k_chain_verifiable() {
+        let dir = scratch("cache-20k");
+        let log = EventLog::new_with_anchor(&dir, AnchorConfig::default());
+        let stream = "session:cache-20k";
+        for i in 0..20_000u64 {
+            log.append(
+                stream,
+                &json!({ "type": "message.delta", "payload": { "i": i } }),
+            )
+            .unwrap_or_else(|e| panic!("append {} failed: {}", i, e));
+        }
+        let report = log.verify(stream).expect("verify");
+        assert!(report.ok, "20k chain must verify: {:?}", report.to_json());
+        assert_eq!(report.count, 20_000);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A warm cache must not hide a truncated tail: the append still refuses.
+    #[test]
+    fn warm_cache_still_refuses_a_truncated_tail() {
+        let dir = scratch("cache-truncate");
+        let log = EventLog::new_with_anchor(&dir, AnchorConfig::default());
+        let stream = "session:cache-truncate";
+        for i in 0..3u64 {
+            log.append(stream, &json!({ "type": "message.delta", "payload": { "i": i } }))
+                .expect("append");
+        }
+        let path = log.stream_path(stream).expect("stream path");
+        let text = fs::read_to_string(&path).expect("read chain");
+        let lines: Vec<&str> = text.lines().collect();
+        let truncated = format!("{}\n", lines[..lines.len() - 1].join("\n"));
+        fs::write(&path, &truncated).expect("truncate");
+
+        let err = log
+            .append(stream, &json!({ "type": "message.delta", "payload": { "i": 9 } }))
+            .expect_err("a truncated tail must not be extended");
+        assert!(err.contains("anchor"), "unexpected refusal: {}", err);
+        assert_eq!(fs::read_to_string(&path).unwrap(), truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A warm cache must not hide a rewritten tail: appending is still refused.
+    #[test]
+    fn warm_cache_still_refuses_a_rewritten_tail() {
+        let dir = scratch("cache-rewrite");
+        let log = EventLog::new_with_anchor(&dir, AnchorConfig::default());
+        let stream = "session:cache-rewrite";
+        for i in 0..3u64 {
+            log.append(stream, &json!({ "type": "message.delta", "payload": { "i": i } }))
+                .expect("append");
+        }
+        let path = log.stream_path(stream).expect("stream path");
+        let text = fs::read_to_string(&path).expect("read chain");
+        let mut lines: Vec<String> = text.lines().map(|line| line.to_string()).collect();
+        let mut forged: Value = serde_json::from_str(&lines[2]).expect("parse last record");
+        forged["hash"] = json!("deadbeef".repeat(8));
+        lines[2] = serde_json::to_string(&forged).expect("serialize");
+        fs::write(&path, format!("{}\n", lines.join("\n"))).expect("rewrite tail");
+
+        let err = log
+            .append(stream, &json!({ "type": "message.delta", "payload": { "i": 9 } }))
+            .expect_err("a rewritten tail must not be extended");
+        assert!(err.contains("anchor"), "unexpected refusal: {}", err);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

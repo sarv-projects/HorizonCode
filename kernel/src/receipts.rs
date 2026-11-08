@@ -99,6 +99,7 @@ impl Receipts {
         append_line(&self.path, &receipt)?;
         let anchor_hash = anchor_digest(ChainKind::Receipt, &receipt, self.anchor.key());
         crate::eventlog::write_head(&self.path, last_seq + 1, &anchor_hash)?;
+        crate::eventlog::note_appended(&self.path, &receipt);
         Ok(receipt)
     }
 

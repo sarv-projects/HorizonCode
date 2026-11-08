@@ -9,10 +9,11 @@
  */
 
 import { Database } from "bun:sqlite";
-import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ToolCall } from "../../src/contracts";
+import { AdmissionIdCollisionError, AdmissionQueue } from "../../src/core/admission";
 import { SessionStore, rowToChatMsg } from "../../src/core/session";
 import { cleanupTemps, tempDir } from "./helpers";
 
@@ -177,4 +178,192 @@ test("another workspace has its own database and no sessions", () => {
   } finally {
     other.close();
   }
+});
+
+/* --------------------------- corruption quarantine --------------------------- */
+
+/** Quarantine-named files in the canonical state directory of `workspace`. */
+function quarantinedFiles(workspace: string): string[] {
+  return readdirSync(path.join(workspace, ".hz", "state")).filter((name) => name.includes(".corrupt-"));
+}
+
+function zeroByteDbWorkspace(): { workspace: string; dbPath: string } {
+  const workspace = tempDir("hz-ws-zero-");
+  const dbPath = path.join(workspace, ".hz", "state", "hzcode.db");
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  writeFileSync(dbPath, "");
+  return { workspace, dbPath };
+}
+
+describe("database corruption quarantine", () => {
+  test("a 0-byte database is quarantined, a fresh one takes its place, and recovered names the old file", () => {
+    const { workspace, dbPath } = zeroByteDbWorkspace();
+
+    const recovered = new SessionStore(workspace);
+    try {
+      // The confirmed loss shape: SQLite silently recreates the schema over a
+      // truncated file. The store must say so instead.
+      expect(recovered.recovered).not.toBeNull();
+      const quarantined = recovered.recovered?.quarantined ?? "";
+      expect(quarantined.startsWith(dbPath)).toBe(true);
+      expect(path.basename(quarantined)).toMatch(/^hzcode\.db\.corrupt-\d+$/);
+      expect(existsSync(quarantined)).toBe(true);
+      expect(statSync(quarantined).size).toBe(0); // the old bytes (none) survive in the renamed file
+
+      // A fresh, usable database took its place: the schema exists and accepts a session.
+      expect(existsSync(dbPath)).toBe(true);
+      const session = recovered.createSession("after recovery");
+      expect(recovered.getSession(session.id)).not.toBeNull();
+      expect(recovered.messageCount(session.id)).toBe(0);
+    } finally {
+      recovered.close();
+    }
+  });
+
+  test("a garbage file is quarantined with its bytes preserved, and the reopened store is usable", () => {
+    const workspace = tempDir("hz-ws-garbage-");
+    const dbPath = path.join(workspace, ".hz", "state", "hzcode.db");
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const garbage = Buffer.from("HZCODE IS NOT SQLITE\n\u0000\u0001\u0002 not a header\n", "utf8");
+    writeFileSync(dbPath, garbage);
+
+    const recovered = new SessionStore(workspace);
+    try {
+      expect(recovered.recovered).not.toBeNull();
+      const quarantined = recovered.recovered?.quarantined ?? "";
+      expect(path.basename(quarantined)).toMatch(/^hzcode\.db\.corrupt-\d+$/);
+      // The bytes are preserved for inspection — quarantined, never dropped.
+      expect(readFileSync(quarantined).equals(garbage)).toBe(true);
+      expect(existsSync(dbPath)).toBe(true);
+      const session = recovered.createSession("fresh after garbage");
+      expect(recovered.history(session.id)).toEqual([]);
+    } finally {
+      recovered.close();
+    }
+  });
+
+  test("a file SQLite reports as malformed (junk in page 1) is quarantined too", () => {
+    const workspace = tempDir("hz-ws-malformed-");
+    const first = new SessionStore(workspace);
+    try {
+      first.createSession("to be damaged");
+    } finally {
+      first.close();
+    }
+    const dbPath = path.join(workspace, ".hz", "state", "hzcode.db");
+    const bytes = readFileSync(dbPath);
+    // Keep the SQLite magic, trash page 1's b-tree header: a real database
+    // file SQLite rejects with "database disk image is malformed".
+    for (let i = 100; i < bytes.length; i += 1) bytes[i] = 0xee;
+    writeFileSync(dbPath, bytes);
+
+    const damaged = new SessionStore(workspace);
+    try {
+      expect(damaged.recovered).not.toBeNull();
+      const quarantined = damaged.recovered?.quarantined ?? "";
+      expect(readFileSync(quarantined).equals(bytes)).toBe(true);
+      expect(damaged.createSession("fresh after malformed").id.length).toBeGreaterThan(10);
+    } finally {
+      damaged.close();
+    }
+  });
+
+  test("a corrupt database's -wal/-shm sidecars are renamed alongside it", () => {
+    const workspace = tempDir("hz-ws-sidecars-");
+    const dbPath = path.join(workspace, ".hz", "state", "hzcode.db");
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, "");
+    writeFileSync(`${dbPath}-wal`, "wal bytes");
+    writeFileSync(`${dbPath}-shm`, "shm bytes");
+
+    const store = new SessionStore(workspace);
+    try {
+      const quarantined = store.recovered?.quarantined ?? "";
+      expect(quarantined).not.toBe("");
+      expect(readFileSync(`${quarantined}-wal`, "utf8")).toBe("wal bytes");
+      expect(readFileSync(`${quarantined}-shm`, "utf8")).toBe("shm bytes");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a healthy database reopens with no quarantine (recovered stays null)", () => {
+    const workspace = tempDir("hz-ws-healthy-");
+    const first = new SessionStore(workspace);
+    let sessionId = "";
+    try {
+      expect(first.recovered).toBeNull();
+      const session = first.createSession("healthy");
+      sessionId = session.id;
+      first.appendMessage(session.id, { role: "user", content: "kept" });
+    } finally {
+      first.close();
+    }
+
+    const reopened = new SessionStore(workspace);
+    try {
+      expect(reopened.recovered).toBeNull();
+      expect(reopened.history(sessionId)).toEqual([{ role: "user", content: "kept" }]);
+    } finally {
+      reopened.close();
+    }
+    expect(quarantinedFiles(workspace)).toEqual([]);
+  });
+
+  test("a normal fresh create never quarantines", () => {
+    const workspace = tempDir("hz-ws-fresh-");
+    const fresh = new SessionStore(workspace);
+    try {
+      expect(fresh.recovered).toBeNull();
+      expect(existsSync(fresh.dbPath)).toBe(true);
+    } finally {
+      fresh.close();
+    }
+    expect(quarantinedFiles(workspace)).toEqual([]);
+  });
+});
+
+/* ----------------------------- admission order ----------------------------- */
+
+describe("admission ids are scoped to a session", () => {
+  test("a cross-session id collision is refused, typed, naming the id and both sessions", () => {
+    const workspace = tempDir("hz-ws-adm-");
+    const admissionStore = new SessionStore(workspace);
+    try {
+      const queue = new AdmissionQueue(admissionStore);
+      expect(queue.admit("session-a", "first input", "adm-shared")).toBe("adm-shared");
+
+      let collision: AdmissionIdCollisionError | undefined;
+      try {
+        queue.admit("session-b", "other input", "adm-shared");
+      } catch (err) {
+        expect(err).toBeInstanceOf(AdmissionIdCollisionError);
+        collision = err as AdmissionIdCollisionError;
+      }
+      expect(collision).toBeDefined();
+      expect(collision?.name).toBe("AdmissionIdCollisionError");
+      expect(collision?.id).toBe("adm-shared");
+      expect(collision?.existingSessionId).toBe("session-a");
+      expect(collision?.sessionId).toBe("session-b");
+      expect(collision?.message).toContain("adm-shared");
+      expect(collision?.message).toContain("session-a");
+      expect(collision?.message).toContain("session-b");
+
+      // Nothing was admitted for session-b, and session-a's row is untouched.
+      expect(queue.list("session-b")).toEqual([]);
+      const rows = queue.list("session-a");
+      expect(rows.length).toBe(1);
+      expect(rows[0]?.input).toBe("first input");
+      expect(rows[0]?.state).toBe("queued");
+
+      // Same-session re-admit remains the documented silent no-op.
+      expect(queue.admit("session-a", "a different text", "adm-shared")).toBe("adm-shared");
+      const after = queue.list("session-a");
+      expect(after.length).toBe(1);
+      expect(after[0]?.input).toBe("first input");
+      expect(after[0]?.state).toBe("queued");
+    } finally {
+      admissionStore.close();
+    }
+  });
 });

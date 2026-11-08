@@ -11,7 +11,12 @@
  *    to `<workspace>/.hz/state/spills/<sha256>.txt` (canonical) or
  *    `<workspace>/.hzcode/spills/<sha256>.txt` (legacy, in place) — the reduced
  *    v0.1 stand-in for the `hz://artifact/...` pointer (no artifact store exists
- *    yet); the caller resolves the directory (paths.ts).
+ *    yet); the caller resolves the directory (paths.ts). When `spillDir` is
+ *    given, `planToolOutputCap` materialises the spill through
+ *    `writeSpillFile`: the directory is created 0700 and the file written
+ *    0600 (Unix, umask-proof; docs/03 D12), and an already-loose file is
+ *    tightened. The shipped loop writes only when the file is absent, so the
+ *    bytes land once, owner-only.
  *  - Truncation is lossless-resumable in shape: `nextOffset` names the byte
  *    offset of the kept prefix, so the following slice can start there.
  *
@@ -20,6 +25,7 @@
  */
 
 import * as path from "node:path";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { sha256Hex } from "./canon";
 import type { ChatMsg } from "../contracts";
 
@@ -102,11 +108,55 @@ export interface ToolOutputPlan {
   spill?: { file: string; contents: string };
 }
 
+const isUnix = process.platform !== "win32";
+
+/**
+ * Post-create chmod so the mode is exact regardless of umask. Best-effort: a
+ * target that vanished between the write and the chmod is not an error, and on
+ * non-Unix the call is a no-op (POSIX modes do not exist there).
+ */
+function setOwnerOnly(target: string, mode: number): void {
+  if (!isUnix) return;
+  try {
+    chmodSync(target, mode);
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * Materialise one planned spill, owner-only (docs/03 D12): the directory is
+ * chmod 0700 and the file 0600 after the create, umask-proof, and an existing
+ * loose-mode file is tightened. Never throws — spilling is best-effort by
+ * contract, and a caller that cannot spill still serves the capped text. The
+ * write is create-exclusive (`wx`): an existing spill under the same sha256
+ * name already holds exactly these bytes.
+ */
+export function writeSpillFile(spill: { file: string; contents: string }): void {
+  const dir = path.dirname(spill.file);
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* the caller's own write may still succeed */
+  }
+  setOwnerOnly(dir, 0o700);
+  try {
+    writeFileSync(spill.file, spill.contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch {
+    /* exists already, or the caller's own persist attempt will report it */
+  }
+  // Always applied: covers the file just created and tightens a pre-existing
+  // loose one the caller is about to reuse.
+  setOwnerOnly(spill.file, 0o600);
+}
+
 /**
  * NF-074(b): cap a tool result for the model. Under the cap, the text is
  * returned untouched (byte-identical). Over it, a line-aware prefix is kept
  * (≤ maxBytes AND ≤ maxTokens on the byte/4 estimate) and the full text is
  * offered for spill; the marker carries what R-tools-43 requires in spirit.
+ * When `spillDir` is set, the offered spill is materialised too, owner-only
+ * (see `writeSpillFile`).
  */
 export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {}): ToolOutputPlan {
   const text = typeof output === "string" ? output : "";
@@ -153,6 +203,10 @@ export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {
     const display = opts.displaySpillDir !== undefined && opts.displaySpillDir !== "" ? opts.displaySpillDir : opts.spillDir;
     spillPath = path.join(display, `${hash}.txt`);
     spill = { file: path.join(opts.spillDir, `${hash}.txt`), contents: text };
+    // Persist it now, owner-only. The shipped loop writes a spill only when the
+    // file is absent, so the full output lands exactly once, under a 0700
+    // directory, at 0600.
+    writeSpillFile(spill);
   }
 
   const parts = [

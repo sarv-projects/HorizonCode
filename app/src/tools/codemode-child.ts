@@ -19,7 +19,10 @@
  * writes to fd 1 itself therefore cannot end the run early or invent a result:
  * without the key those bytes are output, not a frame. Frames go through the
  * stdout writer captured at load time, so replacing process.stdout.write later
- * cannot silence or redirect the control channel either.
+ * cannot silence or redirect the control channel either — and through the
+ * serializer and object primitives captured at load time too, so replacing
+ * JSON.stringify (or adding an `Object.prototype.toJSON`) cannot rewrite what a
+ * frame *says* either.
  *
  * Two keys, and why:
  *   - The BOOTSTRAP nonce arrives in the environment (HZ_CODEMODE_FRAME_KEY),
@@ -51,10 +54,14 @@
  *     bytes, which is why tests/core/codemode-frames.test.ts pins "a program
  *     cannot read back what it wrote to fd 1".
  *   - The environment: the bootstrap nonce is delivered in the environment, and
- *     the OS keeps the initial environment block readable (on Linux,
- *     /proc/self/environ) for the life of the process. That is exactly why it
- *     frames one line and is retired; reading it back later yields nothing. The
- *     run key never enters the environment, argv or any file.
+ *     Linux keeps the initial environment block readable (during the whole
+ *     process life at /proc/self/environ) even after `delete process.env[...]`
+ *     — verified in this runtime, and docs/28 ruling 25 records the same fact.
+ *     The nonce is therefore treated as *readable*, not secret: it
+ *     authenticates exactly one line (the handshake) and is retired the moment
+ *     the parent accepts it, so a replay with the recovered nonce is ignored by
+ *     the parent (tests/core/codemode-frames.test.ts pins the replay). The run
+ *     key never enters the environment, argv or any file.
  *   - In-process reflection: the run key lives in this process's memory, so a
  *     runtime facility that can inspect live frames or module scope could
  *     recover it. Only process isolation closes that (NF-016).
@@ -99,6 +106,69 @@ function newFrameKey(): string {
 type StdoutWrite = (text: string, callback?: () => void) => unknown;
 const writeStdout = process.stdout.write.bind(process.stdout) as unknown as StdoutWrite;
 
+/**
+ * The frame path's primitives, captured at load, before any model code exists.
+ *
+ * The program runs in this process, so every global here is writable by it: a
+ * program that replaces `JSON.stringify` before the shim emits its done frame
+ * could otherwise turn a thrown error into a validly keyed forged `done:true`
+ * (the wave-13 audit repro). The frame path uses these captured references
+ * exclusively. The envelope is additionally built on a NULL prototype so an
+ * `Object.prototype.toJSON` added by the program cannot rewrite the frame's own
+ * fields (`done`, `error`, `log`, …) — it can only shape the payload it carries,
+ * which is the program's own data either way.
+ */
+const stringify = JSON.stringify;
+const parseJson = JSON.parse;
+const createObject = Object.create;
+const objectKeys = Object.keys;
+
+/**
+ * The JSON body of one control frame, serialized with the captured primitives.
+ *
+ * A serialization failure (even the captured `stringify` can throw on a hostile
+ * payload) falls back to a minimal hand-built body that reports the run as
+ * FAILED: the one outcome a program must never be able to produce by corrupting
+ * the serializer is a success. The fallback interpolates no program-controlled
+ * text, so it needs no escaping.
+ */
+function frameJson(message: Record<string, unknown>): string {
+  try {
+    const envelope = createObject(null) as Record<string, unknown>;
+    for (const key of objectKeys(message)) envelope[key] = message[key];
+    const text = stringify(envelope);
+    if (typeof text === "string" && text.startsWith("{") && text.endsWith("}")) return text;
+  } catch {
+    /* fall through to the minimal body */
+  }
+  return '{"done":false,"error":"frame serialization failed"}';
+}
+
+/**
+ * The last byte the program wrote to stdout (undefined: nothing written yet).
+ * The tracking wrapper below keeps it current; a control frame after a write
+ * that did not end with a newline is then prefixed with one, so the parent can
+ * never see the program's bytes and the frame glue into one line. (A program
+ * that replaces process.stdout.write, or writes to fd 1 directly, stops the
+ * tracking — the parent's key-anchored frame detection still finds the frame.)
+ */
+let lastStdoutByte: string | undefined;
+
+try {
+  const trackingWrite = (chunk: unknown, ...rest: unknown[]): boolean => {
+    if (typeof chunk === "string") {
+      if (chunk.length > 0) lastStdoutByte = chunk[chunk.length - 1] as string;
+    } else if (ArrayBuffer.isView(chunk)) {
+      const bytes = chunk as unknown as Uint8Array;
+      if (bytes.length > 0) lastStdoutByte = String.fromCharCode(bytes[bytes.length - 1] as number);
+    }
+    return (writeStdout as unknown as (...args: unknown[]) => boolean)(chunk, ...rest);
+  };
+  process.stdout.write = trackingWrite as unknown as typeof process.stdout.write;
+} catch {
+  /* an unwritable process.stdout: frames still go through the captured writer */
+}
+
 // Read the bootstrap nonce, then scrub it: both happen before any model code.
 const bootstrapKey = process.env[FRAME_KEY_ENV] ?? "";
 delete process.env[FRAME_KEY_ENV];
@@ -123,10 +193,12 @@ if (!FRAME_KEY_RE.test(bootstrapKey)) {
 /** This run's frame key: in-process only (see the boundary note above). */
 const runKey = newFrameKey();
 
-/** One control frame: `<key> <json>`, through the captured writer. */
-function writeFrame(message: unknown, key: string = runKey): void {
+/** One control frame: `<key> <json>`, through the captured writer and serializer. */
+function writeFrame(message: Record<string, unknown>, key: string = runKey): void {
   try {
-    writeStdout(`${key} ${JSON.stringify(message)}\n`);
+    const prefix = lastStdoutByte !== undefined && lastStdoutByte !== "\n" ? "\n" : "";
+    writeStdout(`${prefix}${key} ${frameJson(message)}\n`);
+    lastStdoutByte = "\n";
   } catch {
     /* parent gone; the exit below will finish the job */
   }
@@ -175,12 +247,13 @@ function callTool(name: unknown, args: unknown): Promise<RpcResult> {
 /* ------------------------------ logging ------------------------------ */
 
 let logBytes = 0;
+let logTruncated = false;
 
 function fmt(value: unknown): string {
   if (typeof value === "string") return value;
   if (value instanceof Error) return value.message;
   try {
-    const json = JSON.stringify(value);
+    const json = stringify(value);
     return json === undefined ? String(value) : json;
   } catch {
     return String(value);
@@ -189,7 +262,14 @@ function fmt(value: unknown): string {
 
 /** A console line is a tagged control frame to the parent; capped in total. */
 function logLine(parts: unknown[]): void {
-  if (logBytes >= LOG_CAP) return;
+  if (logBytes >= LOG_CAP) {
+    // Name the cap once instead of dropping console output silently.
+    if (!logTruncated) {
+      logTruncated = true;
+      writeFrame({ log: "[truncated]" });
+    }
+    return;
+  }
   const text = parts.map(fmt).join(" ");
   const slice = text.slice(0, LOG_CAP - logBytes);
   logBytes += slice.length + 1;
@@ -209,7 +289,7 @@ const captureConsole = {
 function handleLine(line: string): void {
   let message: { init?: { code?: unknown }; rpcId?: unknown; result?: unknown };
   try {
-    message = JSON.parse(line) as typeof message;
+    message = parseJson(line) as typeof message;
   } catch {
     return; // not ours; stay quiet
   }
@@ -244,7 +324,9 @@ async function runProgram(code: string): Promise<void> {
   }
   let safe: unknown = result === undefined ? null : result;
   try {
-    JSON.stringify(safe);
+    // Captured serializer: the probe must mean what it says even after a
+    // program has replaced JSON.stringify (see the frame-path note above).
+    stringify(safe);
   } catch {
     safe = "(unserializable result)";
   }

@@ -19,10 +19,29 @@
  * a long-lived child, the same happens. A ledger that cannot be parsed is
  * QUARANTINED (renamed aside) and reported `corrupt: true`; it is never read as
  * "no spawns", because "the record is unreadable" and "nothing was spawned"
- * are different facts and callers must surface the difference.
+ * are different facts and callers must surface the difference. A single torn
+ * trailing line (a crash mid-append) is instead skipped and reported
+ * `torn: true` while the intact earlier rows are kept.
+ *
+ * Failure kills are tree-aware, without pretending to be bulletproof. A
+ * detached child leads its own process group, so the group kill reaches its
+ * whole tree (unchanged). A non-detached child (`longLived: false`; today the
+ * grep/rg path) shares the runtime's process group, so `kill(-pid)` cannot
+ * reach it: before the child dies, its descendants are snapshotted from /proc
+ * in one pass (ppid read after the last ')'), killed deepest-first, then the
+ * child, and a short-grace sweep re-kills snapshot members that were reparented.
+ * A descendant that forks inside the final window can still escape — a stated
+ * residual; the OS-level fix is NF-016, not this best-effort sweep.
+ *
+ * The state directory and the ledger are owner-only (docs/03 D12): on Unix the
+ * directory has its group/other bits stripped and the ledger is chmod 0600
+ * after every append (umask-proof), so a ledger that already existed with a
+ * loose mode is tightened on the next append — while a deliberately read-only
+ * directory stays read-only instead of being silently made writable.
  */
 
-import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
+import { readFileSync, readdirSync } from "node:fs";
+import { appendFile, chmod, mkdir, readFile, rename, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { kernelStateDir as resolveKernelStateDir } from "./paths";
 import { birthIdentityOf, readProcessFacts, type ProcessIdentity } from "./worker-identity";
@@ -78,6 +97,12 @@ export interface SpawnLedgerRead {
    * "no spawns".
    */
   corrupt: boolean;
+  /**
+   * True when a malformed FINAL line with no trailing newline was skipped as a
+   * torn append (a crash mid-write). The intact earlier rows are still in
+   * `entries` and the file is NOT quarantined. Additive: absent on a clean read.
+   */
+  torn?: boolean;
   /** Where the corrupt file was moved (`<file>.corrupt-<epochMillis>`). */
   quarantinedTo?: string;
   /** Why it was quarantined (a parse failure or a structurally invalid row). */
@@ -118,12 +143,187 @@ function isSpawnLedgerEntry(value: unknown): value is SpawnLedgerEntry {
   );
 }
 
+const isUnix = process.platform !== "win32";
+
+/**
+ * Post-create chmod so the mode is exact regardless of umask. Best-effort: a
+ * target that vanished between the write and the chmod is not an error, and on
+ * non-Unix the call is a no-op (POSIX modes do not exist there).
+ */
+async function setOwnerOnly(target: string, mode: number): Promise<void> {
+  if (!isUnix) return;
+  try {
+    await chmod(target, mode);
+  } catch {
+    /* best effort */
+  }
+}
+
 async function appendLedgerRow(stateDir: string, entry: SpawnLedgerEntry): Promise<void> {
   const file = spawnLedgerPath(stateDir);
-  await mkdir(path.dirname(file), { recursive: true });
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true });
+  // Docs/03 D12: the state directory is owner-only. Strip group/other bits only
+  // — never grant owner write to a directory that deliberately lacks it, so the
+  // append below still fails honestly on a read-only state dir.
+  if (isUnix) {
+    try {
+      const current = (await stat(dir)).mode & 0o777;
+      await chmod(dir, current & 0o700);
+    } catch {
+      /* best effort: the append below reports anything fatal */
+    }
+  }
   // One append of one line: whole lines only, so a crash cannot interleave the
   // rows of two concurrent spawns beyond what O_APPEND already prevents.
   await appendFile(file, JSON.stringify(entry) + "\n", "utf8");
+  // Applied after the append, so an existing loose-mode ledger is tightened too.
+  await setOwnerOnly(file, 0o600);
+}
+
+/** Bound on the /proc ancestor-chain walk; deeper trees are left to NF-016. */
+const MAX_DESCENDANT_DEPTH = 64;
+/** Pause between snapshot rounds (lets a just-started child finish forking). */
+const KILL_ROUND_PAUSE_MS = 10;
+/** Bound on snapshot rounds before the child is killed (~100 ms worst case). */
+const MAX_KILL_ROUNDS = 10;
+/** Grace before the sweep re-kills reparented survivors of a failed spawn. */
+const KILL_SWEEP_GRACE_MS = 30;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** True while the pid exists (a zombie still counts); false when it is gone. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The ppid of /proc/<pid>/stat. `comm` can contain spaces and parentheses, so
+ * the numeric fields are everything after the LAST ')': state, then ppid.
+ * Undefined when the process is gone or /proc is unavailable (non-Linux).
+ */
+function readPpid(pid: number): number | undefined {
+  try {
+    const statText = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = statText.lastIndexOf(")");
+    if (close < 0) return undefined;
+    const fields = statText.slice(close + 1).trim().split(/\s+/);
+    const ppid = Number.parseInt(fields[1] ?? "", 10);
+    return Number.isInteger(ppid) ? ppid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The descendants of `rootPid` as pid → depth (1 = direct child), from ONE
+ * pass over /proc (every numeric entry's ppid, read after the last ')')
+ * plus a BFS from the root, bounded at MAX_DESCENDANT_DEPTH. /proc absence
+ * yields an empty map: this walk is best-effort, and NF-016 owns the
+ * OS-level fix.
+ */
+function descendantDepths(rootPid: number): Map<number, number> {
+  const children = new Map<number, number[]>();
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc");
+  } catch {
+    return new Map();
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number.parseInt(entry, 10);
+    const ppid = readPpid(pid);
+    if (ppid === undefined) continue;
+    const siblings = children.get(ppid);
+    if (siblings === undefined) children.set(ppid, [pid]);
+    else siblings.push(pid);
+  }
+  const depths = new Map<number, number>();
+  const queue: number[] = [rootPid];
+  depths.set(rootPid, 0);
+  while (queue.length > 0) {
+    const current = queue.shift() as number;
+    const depth = depths.get(current) as number;
+    if (depth >= MAX_DESCENDANT_DEPTH) continue;
+    for (const child of children.get(current) ?? []) {
+      if (depths.has(child)) continue;
+      depths.set(child, depth + 1);
+      queue.push(child);
+    }
+  }
+  depths.delete(rootPid);
+  return depths;
+}
+
+function killPid(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    /* already gone, or not ours to signal */
+  }
+}
+
+/** Kill a snapshot deepest-first: a dying parent must not reparent the rest. */
+function killDeepestFirst(depths: Map<number, number>): void {
+  const ordered = [...depths.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [pid] of ordered) killPid(pid);
+}
+
+/**
+ * Kill a NON-detached child and its descendants. The child shares this
+ * process's group, so `kill(-pid)` cannot reach its tree; instead the tree is
+ * snapshotted from /proc (ONE pass per round), killed deepest-first so the
+ * child cannot reparent a descendant mid-kill, and only then is the child
+ * killed. A just-started shell may not have forked anything when the append
+ * fails, so rounds pause briefly (bounded: MAX_KILL_ROUNDS) until no new
+ * descendants appear — the child still anchors the ancestor chain while it
+ * lives. After a short grace, every pid ever seen in a snapshot is re-killed if
+ * still alive — reparented survivors whose ppid was the child before it died.
+ * Stated residual: a descendant that forks inside the final window (last
+ * snapshot → child death) can escape; NF-016 owns the OS-level fix.
+ */
+async function killNonDetachedTree(pid: number, proc: OwnedProc): Promise<void> {
+  const seen = new Set<number>();
+  let emptyRounds = 0;
+  for (let round = 0; round < MAX_KILL_ROUNDS; round += 1) {
+    const depths = descendantDepths(pid);
+    for (const descendant of depths.keys()) seen.add(descendant);
+    killDeepestFirst(depths);
+    emptyRounds = depths.size === 0 ? emptyRounds + 1 : 0;
+    // Two quiet rounds in a row: the tree is static (a sleeping descendant does
+    // not fork), so nothing more is observable while the child anchors it.
+    if (emptyRounds >= 2) break;
+    if (round < MAX_KILL_ROUNDS - 1) await sleep(KILL_ROUND_PAUSE_MS);
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  await sleep(KILL_SWEEP_GRACE_MS);
+  for (const survivor of seen) {
+    if (isAlive(survivor)) killPid(survivor);
+  }
+}
+
+/**
+ * The failure-path kill, by spawn shape. A detached child leads its own
+ * process group, so the existing group kill reaches its whole tree. A
+ * non-detached child shares the runtime's group: its descendants are walked
+ * and killed individually first (see `killNonDetachedTree`).
+ */
+async function killOwnedTree(pid: number, proc: OwnedProc, detached: boolean): Promise<void> {
+  if (detached) {
+    killTree(pid, proc);
+    return;
+  }
+  await killNonDetachedTree(pid, proc);
 }
 
 function killTree(pid: number, proc: OwnedProc): void {
@@ -203,8 +403,10 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
   try {
     await appendLedgerRow(opts.stateDir, entry);
   } catch (err) {
-    killTree(pid, proc);
-    throw new Error(`spawnOwned(${opts.label}): cannot write the spawn ledger (${errorMessage(err)}); child killed`);
+    await killOwnedTree(pid, proc, detached);
+    throw new Error(
+      `spawnOwned(${opts.label}): cannot write the spawn ledger (${errorMessage(err)}); child killed (pid ${pid})`,
+    );
   }
 
   if (longLived) {
@@ -222,12 +424,17 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
 /**
  * Read the spawn ledger.
  *
- * A missing file is empty and healthy (`corrupt: false`). A file that cannot be
- * read or parsed is quarantined — atomically renamed to
- * `spawns.jsonl.corrupt-<epochMillis>` — and reported `corrupt: true` with no
- * entries. The quarantine keeps the bytes for inspection and lets the next
- * spawn start a clean ledger, while the caller sees a refusal state instead of
- * an empty history.
+ * A missing file is empty and healthy (`corrupt: false`). A malformed FINAL
+ * line with no trailing newline is a torn append (the writer emits whole
+ * `row\n` lines, so a crash can only leave a partial last one): it is skipped,
+ * the intact earlier rows are returned, and the result carries `torn: true` —
+ * the file is NOT quarantined, because a crash mid-append must not cost the
+ * whole history. Any other failure to read or parse — mid-file garbage, or a
+ * malformed line the writer did terminate with `\n` — quarantines the file:
+ * atomically renamed to `spawns.jsonl.corrupt-<epochMillis>` and reported
+ * `corrupt: true` with no entries. The quarantine keeps the bytes for
+ * inspection and lets the next spawn start a clean ledger, while the caller
+ * sees a refusal state instead of an empty history.
  */
 export async function readSpawnLedger(stateDir: string): Promise<SpawnLedgerRead> {
   const file = spawnLedgerPath(stateDir);
@@ -243,6 +450,9 @@ export async function readSpawnLedger(stateDir: string): Promise<SpawnLedgerRead
 
   const entries: SpawnLedgerEntry[] = [];
   const lines = text.split("\n");
+  // Only the final line of a file whose bytes do NOT end in "\n" can be torn;
+  // a clean read ends with the newline that closed the last whole line.
+  const tornIndex = text !== "" && !text.endsWith("\n") ? lines.length - 1 : -1;
   for (let i = 0; i < lines.length; i += 1) {
     const line = (lines[i] as string).trim();
     if (line === "") continue;
@@ -250,9 +460,11 @@ export async function readSpawnLedger(stateDir: string): Promise<SpawnLedgerRead
     try {
       parsed = JSON.parse(line);
     } catch (err) {
+      if (i === tornIndex) return { entries, corrupt: false, torn: true };
       return quarantine(file, `line ${i + 1} is not JSON (${errorMessage(err)})`);
     }
     if (!isSpawnLedgerEntry(parsed)) {
+      if (i === tornIndex) return { entries, corrupt: false, torn: true };
       return quarantine(file, `line ${i + 1} is not a spawn row`);
     }
     entries.push(parsed);

@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::canon::error_response;
 use crate::eventlog::{AnchorConfig, EventLog};
-use crate::guard::{Guard, GuardAction, Lease};
+use crate::guard::{self, Guard, GuardAction, Lease};
 use crate::receipts::Receipts;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -92,6 +92,13 @@ impl Kernel {
                     .filter(|s| !s.is_empty())
                     .ok_or_else(|| "guard.check.action.kind must be a non-empty string".to_string())?
                     .to_string();
+                // Fail closed before evaluation: an unknown kind (a raw
+                // client's "fs.edit") must never reach the policy as an
+                // unrecognised action (guard.rs keeps the structural state-dir
+                // rule keyed to the exact mutating kind).
+                if !guard::known_kind(&kind) {
+                    return Err(guard::unknown_kind_refusal(&kind));
+                }
                 let target = action
                     .get("target")
                     .and_then(|v| v.as_str())
@@ -101,23 +108,39 @@ impl Kernel {
                     .get("scope")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                // Additive sessionId: when present, owner-scoped leases only
+                // cover checks carrying the same id (a subagent child's check
+                // must not inherit its parent session's "always" grant).
+                let session_id = session_param(params);
                 let leases = lease_list(params.get("leases"))?;
-                Ok(self
+                let decision = self
                     .guard
                     .check(
                         &GuardAction { kind, target },
                         scope.as_deref(),
                         &leases,
+                        session_id.as_deref(),
                     )
-                    .to_json())
+                    .map_err(|e| e.to_string())?;
+                Ok(decision.to_json())
             }
 
             "guard.lease" => {
                 let kind = string_param(params, "kind")?;
+                // The same vocabulary rule as guard.check: a lease for a kind
+                // the guard does not know could never be consulted, so minting
+                // one is refused rather than silently held.
+                if !guard::known_kind(&kind) {
+                    return Err(guard::unknown_kind_refusal(&kind));
+                }
                 let pattern = string_param(params, "pattern")?;
                 let ttl_ms = number_param(params, "ttlMs")
                     .ok_or_else(|| "guard.lease.ttlMs must be a number".to_string())?;
-                let lease = self.guard.issue_lease(&kind, &pattern, ttl_ms);
+                // Additive: a client that supplies sessionId mints a lease owned
+                // by that session; one that does not mints a legacy owner-less
+                // lease, which stays globally consultable (documented legacy).
+                let owner = session_param(params);
+                let lease = self.guard.issue_lease(&kind, &pattern, ttl_ms, owner);
                 serde_json::to_value(lease).map_err(|e| format!("cannot serialize lease: {}", e))
             }
 
@@ -140,6 +163,17 @@ fn number_param(params: &Value, key: &str) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_f64().filter(|f| f.is_finite() && *f >= 0.0).map(|f| f as u64))
+}
+
+/// The optional `sessionId` an owner-scoped method may carry; absent, null or
+/// an empty/blank string all mean "no session" (legacy, owner-less semantics).
+fn session_param(params: &Value) -> Option<String> {
+    params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
 }
 
 fn lease_list(value: Option<&Value>) -> Result<Vec<Lease>, String> {

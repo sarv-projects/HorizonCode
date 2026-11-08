@@ -1,7 +1,11 @@
 /** `shell` — run one bash command in the workspace. */
 
+import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
+import { sha256Hex } from "../core/canon";
+import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
+import { spillDir } from "../core/paths";
 import { resolvePath, scrubEnv, truncate } from "./helpers";
 import { readTool } from "./read";
 
@@ -21,21 +25,87 @@ export type ShellPlan =
   | { action: "refuse"; reason: string }
   | { action: "intercept-read"; path: string };
 
+/** `VAR=…` word, as bash prefixes a command line with. */
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Tokens that run another command: the real head is what follows them. */
+const WRAPPER = new Set(["env", "command", "builtin", "exec", "nice", "ionice", "nohup", "stdbuf", "timeout"]);
+/** `timeout`'s duration argument: `5`, `5s`, `0.5m`, … */
+const TIMEOUT_DURATION = /^[0-9]+(?:\.[0-9]+)?[smhd]?$/;
+/**
+ * Characters that give an operand semantics beyond a literal file name — glob
+ * syntax (`* ? [ {`), quoting/expansion (`$ \` " ' \\`) and every shell
+ * operator. `cat` is intercepted only for a single plain literal operand.
+ */
+const SHELL_METACHARACTER = /[*?\[\]{}()<>;&|$`"'\\!#~]/;
+
+/** Strip exactly one layer of matching quotes from an operand token. */
+function stripOneQuoteLayer(token: string): string {
+  if (token.length >= 2) {
+    const first = token[0];
+    if ((first === "'" || first === '"') && token[token.length - 1] === first) return token.slice(1, -1);
+  }
+  return token;
+}
+
 /**
  * NF-074(d): dedicated-tool interception and the interactive blocklist, applied
  * BEFORE Guard — an interception narrows (shell.exec → the read tool's own
  * fs.read admission), so there is no widened path. Byte-stable decisions.
+ *
+ * Wrapper tokens (`env`, `timeout`, `nice`, …) hide the real command from a
+ * head-only check, so they are skipped — together with their fixed arguments —
+ * before the blocklist, the REPL rules and the `cat` interception are applied
+ * to the real head.
  */
 export function classifyShellCommand(command: string, allowInteractive = false): ShellPlan {
   if (allowInteractive) return { action: "run" };
   const parts = (typeof command === "string" ? command : "").trim().split(/\s+/).filter((p) => p !== "");
   let i = 0;
-  while (i < parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i] as string)) i += 1;
+  const skipAssignments = (): void => {
+    while (i < parts.length && ASSIGNMENT.test(parts[i] as string)) i += 1;
+  };
+  skipAssignments();
+  for (;;) {
+    const base = (parts[i] ?? "").split("/").pop() ?? "";
+    if (base === "env") {
+      i += 1;
+      skipAssignments(); // `env VAR=1 cmd`
+      continue;
+    }
+    if (base === "nice") {
+      i += 1;
+      if (parts[i] === "-n" && i + 1 < parts.length) i += 2; // `nice -n 5 cmd`
+      continue;
+    }
+    if (base === "stdbuf") {
+      i += 1;
+      while (i < parts.length && /^(?:-[ioeIOE]|--(?:input|output|error))/.test(parts[i] as string)) i += 1;
+      continue;
+    }
+    if (base === "timeout") {
+      i += 1;
+      while (i < parts.length && (parts[i] as string).startsWith("-")) {
+        const flag = parts[i] as string;
+        i += 1;
+        if (flag === "-s" || flag === "-k") i += 1; // the option's value
+      }
+      if (i < parts.length && TIMEOUT_DURATION.test(parts[i] as string)) i += 1; // the duration
+      continue;
+    }
+    if (WRAPPER.has(base)) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
   const head = parts[i] ?? "";
   const base = head.split("/").pop() ?? head;
   const rest = parts.slice(i + 1);
   if (base === "cat" && rest.length === 1 && !(rest[0] as string).startsWith("-")) {
-    return { action: "intercept-read", path: rest[0] as string };
+    // One layer of quotes is syntax, not part of the name; globs and other
+    // metacharacters make the operand dynamic, so the shell must run it.
+    const operand = stripOneQuoteLayer(rest[0] as string);
+    if (operand !== "" && !SHELL_METACHARACTER.test(operand)) return { action: "intercept-read", path: operand };
   }
   if (INTERACTIVE_BLOCKLIST.has(base)) return { action: "refuse", reason: `${base} needs a terminal` };
   if (base === "tail" && rest.some((t) => t === "-f" || t === "-F" || /^-[0-9]*[fF]$/.test(t))) {
@@ -51,24 +121,49 @@ const ANSI_OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 const ANSI_ESC = /\x1b[@-Z\\-_]/g;
 const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+/**
+ * Invisible reordering characters: bidi embeddings and overrides
+ * (U+202A–U+202E), bidi isolate controls (U+2066–U+2069) and zero-widths
+ * (U+200B–U+200D). They are not ANSI escapes, but they let command output
+ * reverse or hide rendered names and paths on a terminal a human is reading
+ * (the wave-13 audit finding: `printf 'cleanred\u202EdlroW olleh\u200Btail'`
+ * printed cleanly while the model saw the control characters). Script
+ * characters are never touched — this is the control set, no more: CJK text and
+ * emoji pass through byte-for-byte.
+ */
+const INVISIBLE_REORDER = /[\u200B-\u200D\u202A-\u202E\u2066-\u2069]/g;
 
 /**
  * NF-074(c): the shell-output minimiser, on by default. Strips ANSI/OSC
  * sequences and control characters, resolves carriage-return progress lines
  * to their final state, trims trailing whitespace and collapses blank runs.
  * Returns the text unchanged (and changed:false) when there is nothing to do.
+ *
+ * Only a BARE carriage return (`\r`, not followed by `\n`) is a progress
+ * overwrite. A CRLF pair is a line ending and survives byte-for-byte: the `\r`
+ * is carried through the per-line pass and re-joined as-is. Invisible reordering
+ * characters (bidi embeddings/overrides, isolates, zero-widths) are stripped
+ * with the other controls; Unicode script characters are kept.
  */
 export function minimiseShellOutput(raw: string): { text: string; changed: boolean } {
   const input = typeof raw === "string" ? raw : "";
-  const text = input
+  const lines = input
     .replace(ANSI_OSC, "")
     .replace(ANSI_CSI, "")
     .replace(ANSI_ESC, "")
-    .split("\n")
-    .map((line) => {
-      const at = line.lastIndexOf("\r");
-      const settled = at === -1 ? line : line.slice(at + 1);
-      return settled.replace(CONTROL, "").replace(/[ \t]+$/, "");
+    .split("\n");
+  const text = lines
+    .map((line, index) => {
+      // A trailing `\r` is the CR of a CRLF when a `\n` followed it (every
+      // segment but the last); at the very end of the stream it is a bare CR.
+      const crlf = index < lines.length - 1 && line.endsWith("\r");
+      let body = crlf ? line.slice(0, -1) : line;
+      // Trailing bare CRs only move the cursor back: the visible text stays.
+      if (!crlf) body = body.replace(/\r+$/, "");
+      const at = body.lastIndexOf("\r");
+      const settled = at === -1 ? body : body.slice(at + 1);
+      const cleaned = settled.replace(CONTROL, "").replace(INVISIBLE_REORDER, "").replace(/[ \t]+$/, "");
+      return crlf ? `${cleaned}\r` : cleaned;
     })
     .join("\n")
     .replace(/\n{3,}/g, "\n\n");
@@ -98,6 +193,32 @@ function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
 function numberOr(value: unknown, fallback: number): number {
   const n = typeof value === "string" ? Number(value) : value;
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * NF-074(b): the loop caps an over-budget tool result and spills its text to
+ * `<spill dir>/<sha256(text)>.txt` via `planToolOutputCap` (core/loop.ts, which
+ * materialises the spill with `writeSpillFile`). When this tool minimised its
+ * output, the model-facing text is the minimised one but the spill must stay
+ * the ORIGINAL bytes — so the raw capture is written here first, under the
+ * exact path and hash the loop will compute: the spill write is
+ * create-exclusive, so the loop cannot replace it. Best effort: a failed write
+ * leaves the loop's own (minimised) spill as the fallback.
+ */
+function spillRawBeforeCap(ctx: ToolContext, modelText: string, raw: string, minimised: boolean): string {
+  if (!minimised || raw === modelText) return modelText;
+  try {
+    // Plan without a spill directory: planToolOutputCap materialises a spill
+    // when one is given, which must not happen before the raw bytes are in
+    // place. `truncated` marks the over-cap result the loop will spill for.
+    const plan = planToolOutputCap(modelText);
+    if (!plan.truncated) return modelText; // under the model cap: nothing spills
+    const file = path.join(spillDir(ctx.workspace), `${sha256Hex(modelText)}.txt`);
+    writeSpillFile({ file, contents: raw });
+  } catch {
+    /* the loop's own spill remains the fallback */
+  }
+  return modelText;
 }
 
 export const shellTool: Tool = {
@@ -245,15 +366,20 @@ export const shellTool: Tool = {
         ? `\n[output minimised: ${Buffer.byteLength(out, "utf8")} \u2192 ${Buffer.byteLength(minimised.text, "utf8")} bytes]`
         : "";
       const body = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "") + flag;
-      if (aborted) return { ok: false, output: body, error: "aborted" };
+      const modelText = (text: string): string => spillRawBeforeCap(ctx, text, out, minimised.changed);
+      if (aborted) return { ok: false, output: modelText(body), error: "aborted" };
       if (timedOut) {
-        return { ok: false, output: `${body}\n[timed out after ${timeoutMs}ms]`, error: `timed out after ${timeoutMs}ms` };
+        return {
+          ok: false,
+          output: modelText(`${body}\n[timed out after ${timeoutMs}ms]`),
+          error: `timed out after ${timeoutMs}ms`,
+        };
       }
 
       const code = proc.exitCode;
       const signal = proc.signalCode;
       const tail = `exit ${code === null ? "null" : code}${signal ? ` (signal ${signal})` : ""}`;
-      return { ok: true, output: body === "" ? tail : `${body}\n${tail}` };
+      return { ok: true, output: modelText(body === "" ? tail : `${body}\n${tail}`) };
     } catch (e) {
       return fail(msg(e));
     }

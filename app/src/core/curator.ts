@@ -36,7 +36,9 @@
  * (`CuratorError: store-corrupt`) rather than read the history as empty — the
  * owned-spawn ledger's rule, that "unreadable" and "nothing recorded" are
  * different facts. Never applied: no code path here writes a skill, a memory, a
- * prompt or a session (ADR-010 — proposals are proposals).
+ * prompt or a session (ADR-010 — proposals are proposals). The store is
+ * owner-only (docs/03 D12): the directory is chmod 0700 and the file 0600 on
+ * every touch (Unix, umask-proof), so a loose older file is tightened.
  *
  * Canonical JSON. Rows and the dedupe digest use `core/canon.ts`
  * (`canonicalJson` = keys sorted by UTF-8 bytes, compact; `digestOf` =
@@ -52,7 +54,7 @@
  * in that weaker, stated sense (a residual, recorded).
  */
 
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { canonicalJson, digestOf } from "./canon";
 import {
@@ -379,6 +381,22 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+const isUnix = process.platform !== "win32";
+
+/**
+ * Post-create chmod so the mode is exact regardless of umask. Best-effort: a
+ * target that vanished between the write and the chmod is not an error, and on
+ * non-Unix the call is a no-op (POSIX modes do not exist there).
+ */
+function setOwnerOnly(target: string, mode: number): void {
+  if (!isUnix) return;
+  try {
+    chmodSync(target, mode);
+  } catch {
+    /* best effort */
+  }
+}
+
 /**
  * Read the store's digests. A missing file is an empty history (healthy). A file
  * whose bytes cannot be read or parsed is a REFUSAL — never an empty history,
@@ -440,6 +458,11 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
     throw new CuratorError("invalid-store", `stateDir must be a non-empty absolute path (got ${JSON.stringify(store?.stateDir)})`);
   }
   const file = proposalsFilePath(store.stateDir);
+  // Docs/03 D12: any curate call touches the store, so a pre-existing
+  // loose-mode file is tightened here — before the read, so even a refusal
+  // (store-corrupt) leaves the bytes owner-only (a missing file is not an
+  // error: nothing to tighten until a row is appended).
+  setOwnerOnly(file, 0o600);
   const seen = new Set(readStoreDigests(file));
   const transcript: ProposalEvidenceContext = { transcriptIds: store.transcriptIds ?? [] };
   const now = typeof store.now === "function" ? store.now : () => new Date().toISOString();
@@ -475,9 +498,12 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
 
   if (lines.length > 0) {
     mkdirSync(path.dirname(file), { recursive: true });
+    // The directory is owner-only too (docs/03 D12).
+    setOwnerOnly(path.dirname(file), 0o700);
     // One append of whole lines: a crash cannot interleave two curators' rows
     // beyond what O_APPEND already prevents, and prior bytes are never rewritten.
     appendFileSync(file, lines.map((line) => `${line}\n`).join(""), "utf8");
+    setOwnerOnly(file, 0o600);
   }
   return result;
 }

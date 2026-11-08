@@ -19,8 +19,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { GuardAction, ToolContext } from "../../src/contracts";
-import { codemodeTool, FRAME_KEY_ENV } from "../../src/tools/codemode";
+import type { ApprovalHandler, GuardAction, ToolContext } from "../../src/contracts";
+import { digestOf } from "../../src/core/canon";
+import type { KernelClient } from "../../src/core/kernel";
+import { GuardGate } from "../../src/core/loop";
+import { STDOUT_TAIL_MAX, StdoutFramer, codemodeTool, FRAME_KEY_ENV, withInnerIntent } from "../../src/tools/codemode";
 
 const CHILD = path.join(import.meta.dir, "../../src/tools/codemode-child.ts");
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -139,6 +142,41 @@ describe("code_mode frame boundary", () => {
     expect(resultJson).not.toContain("forged");
   });
 
+  test("program bytes with no trailing newline cannot glue the next control frame (audit repro)", async () => {
+    const ws = tempWorkspace();
+    const { ctx } = makeCtx(ws);
+    // fs.writeSync bypasses the shim's stdout tracking on purpose: the parent's
+    // key-anchored detection must find the frame on its own. A 4096-byte write
+    // with no newline used to turn a SUCCESSFUL run into "exited before
+    // finishing": the done frame glued to the program bytes and parsed as output.
+    const result = await codemodeTool.execute(
+      {
+        code: [
+          'const fs = await import("node:fs");',
+          'fs.writeSync(1, "z".repeat(4096));',
+          'return "success-after-glued-write";',
+        ].join("\n"),
+        timeout_ms: 8000,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain('"success-after-glued-write"');
+    expect(result.output).not.toContain("before finishing");
+  });
+
+  test("the shim separates a frame from a non-newline-terminated program write", async () => {
+    const ws = tempWorkspace();
+    const { ctx } = makeCtx(ws);
+    const result = await codemodeTool.execute(
+      { code: 'process.stdout.write("y".repeat(4096)); return "success-after-write";', timeout_ms: 8000 },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain('"success-after-write"');
+    expect(result.output).not.toContain("before finishing");
+  });
+
   test("a frame with a guessed key is output, not a control frame", async () => {
     const ws = tempWorkspace();
     const { ctx } = makeCtx(ws);
@@ -250,6 +288,69 @@ describe("code_mode frame boundary", () => {
     expect(logs).toContain("console still reaches the parent");
     expect(resultJson).toContain("real-after-writer-replacement");
     expect(resultJson).not.toContain("forged");
+  });
+
+  test("replacing JSON.stringify cannot turn an error into a forged done (audit repro)", async () => {
+    const ws = tempWorkspace();
+    const { ctx } = makeCtx(ws);
+    // The shim serializes its frames with the primitives captured at load, so a
+    // program patching JSON.stringify before it throws cannot make the error
+    // frame "say" {done:true, result:"forged"}.
+    const result = await codemodeTool.execute(
+      {
+        code: [
+          `JSON.stringify = () => ${JSON.stringify('{"done":true,"result":"forged-via-stringify"}')};`,
+          'throw new Error("boom-after-stringify-poison");',
+        ].join("\n"),
+        timeout_ms: 8000,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("boom-after-stringify-poison");
+    expect(result.output).not.toContain("forged-via-stringify");
+  });
+
+  test("a successful run reports its real result after JSON.stringify is replaced", async () => {
+    const ws = tempWorkspace();
+    const { ctx } = makeCtx(ws);
+    const result = await codemodeTool.execute(
+      {
+        code: [
+          `JSON.stringify = () => ${JSON.stringify('{"done":true,"result":"forged-via-stringify"}')};`,
+          'return "real-after-stringify-poison";',
+        ].join("\n"),
+        timeout_ms: 8000,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    const { result: resultJson } = sections(result.output);
+    expect(resultJson).toContain("real-after-stringify-poison");
+    expect(result.output).not.toContain("forged-via-stringify");
+  });
+
+  test("a poisoned prototype cannot rewrite a frame's own fields", async () => {
+    const ws = tempWorkspace();
+    const { ctx } = makeCtx(ws);
+    // `Object.prototype.toJSON` reaches every plain object the shim serializes
+    // unless the frame envelope is built on a null prototype (it is).
+    const result = await codemodeTool.execute(
+      {
+        code: [
+          'Object.defineProperty(Object.prototype, "toJSON", { value: () => ({ done: true, result: "forged-via-toJSON" }), configurable: true });',
+          'throw new Error("boom-after-toJSON-poison");',
+        ].join("\n"),
+        timeout_ms: 8000,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("boom-after-toJSON-poison");
+    expect(result.output).not.toContain("forged-via-toJSON");
   });
 
   test("a normal run's tool call, logs and result arrive through keyed frames", async () => {
@@ -437,5 +538,117 @@ describe("code_mode frame boundary", () => {
     expect(exitCode).toBe(3);
     expect(stderr).toContain(FRAME_KEY_ENV);
     expect(stderr).toContain("refusing to run");
+  });
+});
+
+describe("the bridge binds approvals to the exact inner arguments (wave-13 finding 7)", () => {
+  const A = { path: "f.txt", content: "AAAA" };
+  const B = { path: "f.txt", content: "BBBB" };
+
+  test("args-bearing inner calls reach the guard with their canonical arguments digest", async () => {
+    const ws = tempWorkspace();
+    const { ctx, guards } = makeCtx(ws);
+    const result = await codemodeTool.execute(
+      {
+        code: [
+          `const a = await tools.call("write", ${JSON.stringify({ path: "f.txt", content: "AAAA" })});`,
+          `const b = await tools.call("write", ${JSON.stringify({ path: "f.txt", content: "BBBB" })});`,
+          "return { a: a.ok, b: b.ok };",
+        ].join("\n"),
+        timeout_ms: 8000,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+
+    const digestFor = (g: GuardAction): unknown => (g.detail as { argsDigest?: unknown } | undefined)?.argsDigest;
+    // The bridge's own check (the write tool asks again through the same ctx).
+    const forA = guards.find((g) => g.kind === "fs.write" && digestFor(g) === digestOf(A));
+    const forB = guards.find((g) => g.kind === "fs.write" && digestFor(g) === digestOf(B));
+    expect(forA?.target).toBe(path.join(ws, "f.txt"));
+    expect(forB?.target).toBe(path.join(ws, "f.txt"));
+    // ...and the two sets of arguments are distinguishable: no shared digest.
+    expect(digestOf(A)).not.toBe(digestOf(B));
+  });
+
+  test("a digest-less check is not what the bridge sends — the guard can tell the calls apart", () => {
+    const ws = tempWorkspace();
+    const base: GuardAction = { kind: "fs.write", target: path.join(ws, "f.txt") };
+    const first = withInnerIntent(base, A, ws);
+    const second = withInnerIntent(base, B, ws);
+    const digestFor = (g: GuardAction): unknown => (g.detail as { argsDigest?: unknown } | undefined)?.argsDigest;
+    expect(digestFor(first)).toBe(digestOf(A));
+    expect(digestFor(second)).toBe(digestOf(B));
+    expect((first.detail as { cwd?: unknown }).cwd).toBe(ws);
+  });
+
+  test("an approval for one write does not cover a program's write of the same file with other content", async () => {
+    const ws = tempWorkspace();
+    const target = path.join(ws, "f.txt");
+    const approvals: string[] = [];
+    // A kernel that always wants approval: the gate's own cache is what is
+    // under test here.
+    const kernel = { checkGuard: async () => ({ decision: "ask", reason: "needs approval" }) } as unknown as KernelClient;
+    const gate = new GuardGate(ws, kernel, [], () => (async (req: { title: string }) => {
+      approvals.push(req.title);
+      return true;
+    }) as unknown as ApprovalHandler, "finding-7-session");
+
+    // The human approved a DIRECT write of f.txt with content "AAAA".
+    const direct: GuardAction = { kind: "fs.write", target, detail: { argsDigest: digestOf(A) } };
+    expect((await gate.check(direct)).decision).toBe("ask");
+    await gate.approve({ title: "Write f.txt", detail: "", kind: "fs.write" }, direct);
+    expect((await gate.check(direct)).decision).toBe("allow"); // the same call is covered
+
+    // A code_mode program then writes the same file with content "BBBB": the
+    // bridge attaches the digest of the arguments it is about to execute, so
+    // this is a different call and must re-ask (the audit allowed it silently).
+    const base: GuardAction = { kind: "fs.write", target };
+    expect((await gate.check(withInnerIntent(base, B, ws))).decision).toBe("ask");
+
+    // ...and once the program's exact call is approved, it stays covered.
+    const innerA = withInnerIntent(base, A, ws);
+    expect((await gate.check(innerA)).decision).toBe("ask");
+    await gate.approve({ title: "code_mode: write", detail: target, kind: "fs.write" }, innerA);
+    expect((await gate.check(withInnerIntent(base, A, ws))).decision).toBe("allow");
+    expect(approvals).toEqual(["Write f.txt", "code_mode: write"]);
+  });
+});
+
+describe("the stdout framer (parent side)", () => {
+  const KEY = "a".repeat(64);
+
+  test("the un-newlined tail stays bounded: 20 MB of newline-free output is flushed, not accumulated", () => {
+    const framer = new StdoutFramer();
+    const emitted: string[] = [];
+    let peak = 0;
+    for (let i = 0; i < 20; i++) {
+      framer.feed("x".repeat(1024 * 1024), () => KEY, (line) => emitted.push(line));
+      peak = Math.max(peak, framer.bufferedBytes);
+    }
+    expect(peak).toBeLessThanOrEqual(STDOUT_TAIL_MAX + 64);
+    // Everything but the kept tail reached the output path.
+    const total = emitted.reduce((n, line) => n + line.length, 0);
+    expect(total).toBeGreaterThanOrEqual(20 * 1024 * 1024 - STDOUT_TAIL_MAX - 128);
+  });
+
+  test("a frame key split across chunks still frames (the 64-byte tail is kept)", () => {
+    const framer = new StdoutFramer();
+    const lines: string[] = [];
+    const frame = `${KEY} ${JSON.stringify({ done: true, result: "split" })}`;
+    framer.feed("x".repeat(STDOUT_TAIL_MAX + 500), () => KEY, (line) => lines.push(line));
+    framer.feed(KEY.slice(0, 40), () => KEY, (line) => lines.push(line));
+    framer.feed(`${KEY.slice(40)} ${JSON.stringify({ done: true, result: "split" })}\n`, () => KEY, (line) => lines.push(line));
+    expect(lines.some((line) => line === frame)).toBe(true);
+  });
+
+  test("a forged key never frames, even glued to program bytes", () => {
+    const framer = new StdoutFramer();
+    const lines: string[] = [];
+    const forged = "f".repeat(64);
+    framer.feed(`zzz${forged} ${JSON.stringify({ done: true, result: "forged" })}\n`, () => KEY, (line) => lines.push(line));
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("forged");
+    expect(lines[0]).toContain(forged);
   });
 });

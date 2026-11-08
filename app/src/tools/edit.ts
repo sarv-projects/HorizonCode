@@ -1,8 +1,17 @@
-/** `edit` — exact replacement in one file, with the NF-069/A-1…A-5 repair ladder. */
+/**
+ * `edit` — exact replacement in one file, with the NF-069/A-1…A-5 repair ladder.
+ *
+ * Symlink policy (shared with `write`): verify-then-allow — an edit through a
+ * file-level symlink to a legitimate target keeps working, and the effect goes
+ * through an open descriptor re-verified against the kernel state directory
+ * before the write (see the header of ./write.ts for the residual).
+ */
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { sha256Hex } from "../core/canon";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { openVerifiedWrite } from "./write";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -282,10 +291,12 @@ export const editTool: Tool = {
       }
 
       let before: string;
+      let preimageSha256: string;
       try {
         const buf = await readFile(resolved);
         if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
         before = buf.toString("utf8");
+        preimageSha256 = sha256Hex(before); // docs/09 §8.2: the preimage this call read
       } catch {
         return fail(`file not found: ${rel}`);
       }
@@ -353,7 +364,34 @@ export const editTool: Tool = {
         if (!approved) return fail("declined by user");
       }
 
-      await writeFile(resolved, after, "utf8");
+      // docs/09 §8.2 (R-tools-48): the preimage is checked immediately before
+      // the write — a file changed during the guard/approval window is a
+      // `Conflict`, and nothing is written. A stale edit may not silently
+      // overwrite a human's (or a tool's) concurrent change with "success".
+      let actualSha256: string;
+      try {
+        actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+      } catch {
+        actualSha256 = "unreadable";
+      }
+      if (actualSha256 !== preimageSha256) {
+        return fail(
+          `HZ_PRECONDITION_FAILED: edit refused: preimage changed: ${rel} ` +
+            `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
+        );
+      }
+
+      // The effect: through a descriptor re-verified against the kernel state
+      // directory before a byte is written (same check, and same symlink policy,
+      // as `write` — see the header of ./write.ts).
+      const opened = await openVerifiedWrite(resolved, ctx);
+      if ("refusal" in opened) return fail(opened.refusal);
+      try {
+        await opened.handle.truncate(0);
+        await opened.handle.write(after, 0, "utf8");
+      } finally {
+        await opened.handle.close().catch(() => undefined);
+      }
 
       const verified = (await readFile(resolved)).toString("utf8") === after;
       if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);

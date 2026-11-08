@@ -143,6 +143,39 @@ describe("edit tool", () => {
     expect(readFixture(ws, "f.txt")).toBe("after\n");
   });
 
+  test("a concurrent write during the approval window is refused as a stale preimage", async () => {
+    const ws = makeWorkspace({ "f.txt": "one two\n" });
+    let raced = false;
+    const ctx = mockToolContext({
+      cwd: ws,
+      decision: "ask",
+      approve: () => {
+        raced = true;
+        writeFixture(ws, "f.txt", "ONE two\n"); // the concurrent writer wins the window
+        return true;
+      },
+    });
+    const r = await editTool.execute({ path: "f.txt", old: "one", new: "uno" }, ctx);
+    expect(r.ok).toBe(false);
+    // docs/09 §8.2's term: a `Conflict` with the preimage digests, no write.
+    expect(r.error).toContain("HZ_PRECONDITION_FAILED: edit refused: preimage changed");
+    expect(r.error).toContain("expected sha256");
+    expect(r.error).toContain("actual sha256");
+    expect(raced).toBe(true);
+    expect(ctx.approveCalls.length).toBe(1);
+    expect(readFixture(ws, "f.txt")).toBe("ONE two\n"); // no lost update
+  });
+
+  test("two sequential edits to the same file in one message both land (fresh preimage each)", async () => {
+    const ws = makeWorkspace({ "f.txt": "alpha beta gamma\n" });
+    const ctx = mockToolContext({ cwd: ws });
+    const first = await editTool.execute({ path: "f.txt", old: "alpha", new: "A" }, ctx);
+    const second = await editTool.execute({ path: "f.txt", old: "beta", new: "B" }, ctx);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(readFixture(ws, "f.txt")).toBe("A B gamma\n");
+  });
+
   test("reports a policy denial without editing", async () => {
     const ws = makeWorkspace({ "f.txt": "hello\n" });
     const ctx = mockToolContext({ cwd: ws, decision: "deny", decisionReason: "read-only workspace" });

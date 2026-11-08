@@ -4,7 +4,9 @@
  * The program runs in a Bun subprocess (codemode-child.ts). What confines it is
  * the contract, not the process boundary: the only way it reaches the tools is
  * `tools.call(name, args)`, every call comes back here, goes through the guard
- * (deny > ask > allow, with the regular approval prompt) and leaves a receipt
+ * (deny > ask > allow, with the regular approval prompt) carrying the canonical
+ * digest of the exact arguments it is about to execute — so an approval granted
+ * for one set of arguments never covers a different set — and leaves a receipt
  * exactly like a direct tool call would. The child inherits a scrubbed
  * environment, and every control frame it sends carries a per-run frame key
  * (grammar below) — so a logged JSON object, or a program writing
@@ -29,15 +31,21 @@
  * exactly one line — the handshake — after which it is retired; the run key is
  * generated inside the child and lives only there. The parent holds the program
  * back until it has accepted the handshake, so no model code runs, and no byte
- * a program writes is sent, before the run key is in force. Everything a
- * program writes itself has no key and is kept as output, never as a frame;
- * output shaped like a frame is annotated in the log so an attempt is visible.
+ * a program writes is sent, before the run key is in force. A frame needs the
+ * key in force, so the parent finds one by searching the stdout buffer for the
+ * key token: an occurrence is authentic (the key is secret — only the shim can
+ * write it), and everything before it is program output. A program write with
+ * no trailing newline therefore cannot glue the key to program bytes and hide
+ * the frame; the shim also newline-prefixes a frame after a non-newline-
+ * terminated program write (belt and braces). Everything a program writes
+ * itself has no key and is kept as output, never as a frame; output shaped like
+ * a frame is annotated in the log so an attempt is visible.
  */
 
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { GuardAction, GuardDecision, Tool, ToolContext, ToolResult } from "../contracts";
-import { canonicalJson, sha256Hex } from "../core/canon";
+import { canonicalJson, digestOf, sha256Hex } from "../core/canon";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
 import { scrubEnv } from "./helpers";
 import { editTool } from "./edit";
@@ -68,6 +76,14 @@ export const FRAME_KEY_ENV = "HZ_CODEMODE_FRAME_KEY";
 /** Frame keys are 32 random bytes as lowercase hex (64 characters). */
 const FRAME_KEY_BYTES = 32;
 const FRAME_KEY_RE = /^[0-9a-f]{64}$/;
+/** A frame key's length in characters. */
+const FRAME_KEY_CHARS = 64;
+/**
+ * How much un-newlined program output the parent holds before flushing the
+ * excess as opaque output. A frame key split across reads is at most 64 chars
+ * and is always kept back, so a real frame cannot be torn by the flush.
+ */
+export const STDOUT_TAIL_MAX = 64 * 1024;
 
 /** A fresh frame key. Kept in step with the copy in codemode-child.ts. */
 function newFrameKey(): string {
@@ -97,6 +113,61 @@ function looksLikeControlFrame(body: string): boolean {
 }
 
 const UNKEYED_FRAME_NOTICE = "[code_mode] line shaped like a control frame without the run key — kept as output: ";
+
+/**
+ * Splits the child's stdout into control-frame lines and program output.
+ *
+ * A control frame is `<key> <json>`, and the key is in force here — so the
+ * framer searches the buffer for the key token instead of requiring it at a
+ * line start: everything before an authentic key occurrence is program output,
+ * whether or not the program terminated that write with a newline. A line
+ * carrying only a guessed or forged key never matches and stays output.
+ *
+ * The un-newlined tail is bounded: once it exceeds STDOUT_TAIL_MAX, the excess
+ * is handed to `onLine` as opaque output, keeping the last FRAME_KEY_CHARS
+ * bytes so a key split across chunks can still complete.
+ */
+export class StdoutFramer {
+  private buffer = "";
+
+  /** Bytes currently held back (un-newlined output or a frame in flight). */
+  get bufferedBytes(): number {
+    return this.buffer.length;
+  }
+
+  feed(chunk: string, activeKey: () => string, onLine: (line: string) => void): void {
+    this.buffer += chunk;
+    for (;;) {
+      const keyAt = this.buffer.indexOf(`${activeKey()} `);
+      if (keyAt >= 0) {
+        const before = this.buffer.slice(0, keyAt);
+        if (before !== "") {
+          for (const line of before.split("\n")) if (line.trim() !== "") onLine(line);
+        }
+        this.buffer = this.buffer.slice(keyAt);
+        const end = this.buffer.indexOf("\n");
+        if (end < 0) return; // the frame line is still in flight
+        const frame = this.buffer.slice(0, end);
+        this.buffer = this.buffer.slice(end + 1);
+        onLine(frame);
+        continue;
+      }
+      const end = this.buffer.indexOf("\n");
+      if (end >= 0) {
+        const line = this.buffer.slice(0, end);
+        this.buffer = this.buffer.slice(end + 1);
+        if (line.trim() !== "") onLine(line);
+        continue;
+      }
+      if (this.buffer.length > STDOUT_TAIL_MAX + FRAME_KEY_CHARS) {
+        const flush = this.buffer.slice(0, this.buffer.length - FRAME_KEY_CHARS);
+        this.buffer = this.buffer.slice(-FRAME_KEY_CHARS);
+        if (flush !== "") onLine(flush);
+      }
+      return;
+    }
+  }
+}
 
 /** The tools a program may call. Base seven only — never code_mode itself. */
 const BASE_TOOLS = new Map<string, Tool>([
@@ -147,6 +218,34 @@ export function actionForCall(name: string, args: Record<string, unknown>, cwd: 
     default:
       return undefined;
   }
+}
+
+/**
+ * The bridge's guard action for one inner call: the mapped action PLUS the
+ * canonical digest of the exact arguments the bridge is about to execute.
+ *
+ * The digest rides in `detail.argsDigest`, the field GuardGate keys its
+ * same-turn approval cache on (loop.ts). Without it, a digest-less check fell
+ * back to "already allowed in this turn" for any same-(kind,target) action:
+ * approving a direct write of f.txt with content AAAA silently covered a
+ * code_mode program's inner write of f.txt with content BBBB (wave-13 audit
+ * finding 7). With it, only the exact (kind, target, args) approved before is
+ * reused; different arguments re-ask.
+ *
+ * The digest is best-effort by construction: an argument object that cannot be
+ * canonicalised (a cycle) keeps the digest off the action, and the guard then
+ * treats the call as not-previously-approved rather than as approved.
+ */
+export function withInnerIntent(action: GuardAction, args: Record<string, unknown>, cwd: string): GuardAction {
+  let argsDigest: string | undefined;
+  try {
+    argsDigest = digestOf(args);
+  } catch {
+    argsDigest = undefined;
+  }
+  // `cwd` is part of the identity of the call: the same relative path means a
+  // different file in a different working directory.
+  return { ...action, detail: { ...(action.detail ?? {}), cwd, argsDigest } };
 }
 
 function clampTimeout(value: unknown): number {
@@ -230,9 +329,9 @@ export const codemodeTool: Tool = {
       const child = proc;
       const logs: string[] = [];
       let logBytes = 0;
+      let logTruncated = false;
       let calls = 0;
       let settled = false;
-      let stdoutBuffer = "";
       let stderrTail = "";
       let rpcChain: Promise<void> = Promise.resolve();
       // The key in force: the bootstrap nonce until the handshake lands, the
@@ -342,9 +441,10 @@ export const codemodeTool: Tool = {
         const action = actionForCall(name, callArgs, ctx.cwd);
         let leaseId: string | undefined;
         if (action) {
+          const guarded = withInnerIntent(action, callArgs, ctx.cwd);
           let decision: GuardDecision;
           try {
-            decision = await ctx.guard(action);
+            decision = await ctx.guard(guarded);
           } catch (err) {
             const message2 = err instanceof Error ? err.message : String(err);
             reply(message.rpcId, { ok: false, output: `DENIED by policy: guard unavailable (${message2})`, error: "guard unavailable" });
@@ -358,7 +458,7 @@ export const codemodeTool: Tool = {
           if (decision.decision === "ask") {
             let approved = false;
             try {
-              approved = await ctx.approve({ title: `code_mode: ${name}`, detail: action.target, kind: action.kind }, action);
+              approved = await ctx.approve({ title: `code_mode: ${name}`, detail: action.target, kind: action.kind }, guarded);
             } catch {
               approved = false;
             }
@@ -466,12 +566,20 @@ export const codemodeTool: Tool = {
       };
 
       const pushLog = (line: string): void => {
-        if (logBytes >= LOG_CAP) return;
+        if (logBytes >= LOG_CAP) {
+          // The 20 KB output cap used to drop the rest silently; name it once.
+          if (!logTruncated) {
+            logTruncated = true;
+            logs.push("[truncated]");
+          }
+          return;
+        }
         const slice = line.slice(0, LOG_CAP - logBytes);
         logBytes += slice.length + 1;
         logs.push(slice);
       };
 
+      const framer = new StdoutFramer();
       const stdoutPump = (async (): Promise<void> => {
         const reader = child.stdout.getReader();
         const decoder = new TextDecoder();
@@ -480,14 +588,7 @@ export const codemodeTool: Tool = {
             const { done, value } = await reader.read();
             if (done) break;
             if (value === undefined) continue;
-            stdoutBuffer += decoder.decode(value, { stream: true });
-            let index = stdoutBuffer.indexOf("\n");
-            while (index >= 0) {
-              const line = stdoutBuffer.slice(0, index);
-              stdoutBuffer = stdoutBuffer.slice(index + 1);
-              handleLine(line);
-              index = stdoutBuffer.indexOf("\n");
-            }
+            framer.feed(decoder.decode(value, { stream: true }), () => activeKey, handleLine);
           }
         } catch {
           /* stream closed by a kill */

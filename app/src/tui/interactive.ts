@@ -8,7 +8,7 @@
  */
 
 import * as readline from "node:readline";
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { Runtime, ToolSpec } from "../contracts";
 import { historyFilePath } from "../core/paths";
@@ -41,7 +41,26 @@ export interface InteractiveOptions {
 
 /* ----------------------------- history file ----------------------------- */
 
-function loadHistory(file: string, rl: readline.Interface): void {
+const HISTORY_FILE_MODE = 0o600;
+const isUnix = process.platform !== "win32";
+
+/**
+ * The history file is owner-only (docs/03 D12): post-create chmod, exact mode
+ * regardless of umask, best-effort (a missing file is simply a first run) and a
+ * no-op on non-Unix. Exported with the two history writers below so the mode
+ * contract is testable without driving the interactive loop.
+ */
+function setHistoryOwnerOnly(file: string): void {
+  if (!isUnix) return;
+  try {
+    chmodSync(file, HISTORY_FILE_MODE);
+  } catch {
+    /* no history file yet: nothing to tighten */
+  }
+}
+
+/** Exported for tests; `runInteractive` wires it to the live readline instance. */
+export function loadHistory(file: string, rl: readline.Interface): void {
   try {
     mkdirSync(path.dirname(file), { recursive: true });
   } catch {
@@ -56,11 +75,16 @@ function loadHistory(file: string, rl: readline.Interface): void {
   } catch {
     /* first run: no history yet */
   }
+  // Tightens a pre-existing loose-mode file on every open (docs/03 D12).
+  setHistoryOwnerOnly(file);
 }
 
-function rememberHistory(file: string, text: string): void {
+/** Exported for tests; `runInteractive` wires it to the live readline instance. */
+export function rememberHistory(file: string, text: string): void {
   try {
     appendFileSync(file, text.replace(/\s+/g, " ") + "\n");
+    // Applied after the append: covers a fresh file and tightens a loose one.
+    setHistoryOwnerOnly(file);
     if (statSync(file).size > 512 * 1024) {
       const kept = readFileSync(file, "utf8")
         .split("\n")
@@ -68,6 +92,7 @@ function rememberHistory(file: string, text: string): void {
         .slice(-HISTORY_LIMIT)
         .join("\n");
       writeFileSync(file, kept + "\n");
+      setHistoryOwnerOnly(file);
     }
   } catch {
     /* history is a convenience, never a reason to fail */
