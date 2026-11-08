@@ -9,11 +9,16 @@
  * is cut to the token budget by binary search over the ranked file list.
  *
  * Reduced form, stated: no tree-sitter (no dependency; patterns are lexical),
- * no persistent index (the map is rebuilt per call; a bounded in-process memo
- * of per-file scan facts — absolute path keyed, `size:mtimeMs` stamped — only
- * skips recomputation and never changes the rendered bytes, so it is never
- * `stale`), and `tokens` is the runtime's bytes/4 estimate — the same estimate the
- * output-budget fit uses, never an accounting claim.
+ * and the per-file extraction facts are cached in two layers that never change
+ * the rendered map — a bounded in-process memo (absolute path keyed,
+ * `size:mtimeMs` stamped) and a persistent index at
+ * `<state root>/repo-map/index.json` (./repo-map-cache.ts; an entry is reused
+ * while `(size, mtimeMs)` both match the stored pair). The staleness residual:
+ * a file rewritten with identical size inside the same mtime millisecond is
+ * served stale; the durable compare-and-swap for that window belongs with the
+ * effect host (NF-016). `tokens` is the runtime's bytes/4 estimate — the same
+ * estimate the output-budget fit uses, never an accounting claim. The stats line
+ * carries this call's `cache: r reused, p parsed` counts.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -21,6 +26,16 @@ import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { estimateTokens } from "../core/output-budget";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import {
+  loadRepoMapIndex,
+  lookupRepoMapEntry,
+  mergeRepoMapEntries,
+  repoMapCachePath,
+  resetRepoMapIndexStats,
+  saveRepoMapIndex,
+  type RepoMapFileEntry,
+  type RepoMapIndexLoad,
+} from "./repo-map-cache";
 
 const DEFAULT_MAX_TOKENS = 4_000;
 const HARD_MAX_TOKENS = 16_000;
@@ -94,10 +109,8 @@ const LANGUAGE_OF: Record<string, keyof typeof DEF_PATTERNS> = {
   ".c": "generic", ".h": "generic", ".cc": "generic", ".cpp": "generic", ".hpp": "generic",
 };
 
-interface FileInfo {
+interface FileInfo extends RepoFileScan {
   rel: string;
-  defs: string[];
-  tokenCounts: Map<string, number>;
 }
 
 interface RankedFile {
@@ -125,13 +138,18 @@ export function isTestPath(rel: string): boolean {
   );
 }
 
-/** Definitions of one file's text: exported/`pub` surface first, then locals
- * (line order within each group), deduped. */
-export function extractDefs(text: string, ext: string): string[] {
+/** Definitions of one file's text, with a parallel exported flag: exported/`pub`
+ * declarations come first, then module locals (line order within each group),
+ * deduped. */
+function extractDefsWithFlags(text: string, ext: string): { defs: string[]; exported: boolean[] } {
   const patterns = DEF_PATTERNS[LANGUAGE_OF[ext] ?? "generic"] ?? { exported: [], local: [] };
   const seen = new Set<string>();
   const defs: string[] = [];
-  for (const group of [patterns.exported, patterns.local]) {
+  const exported: boolean[] = [];
+  for (const [isExported, group] of [
+    [true, patterns.exported],
+    [false, patterns.local],
+  ] as const) {
     for (const pattern of group) {
       const re = new RegExp(pattern.source, pattern.flags);
       for (const match of text.matchAll(re)) {
@@ -139,11 +157,18 @@ export function extractDefs(text: string, ext: string): string[] {
         if (name && !seen.has(name)) {
           seen.add(name);
           defs.push(name);
+          exported.push(isExported);
         }
       }
     }
   }
-  return defs;
+  return { defs, exported };
+}
+
+/** Definitions of one file's text: exported/`pub` surface first, then locals
+ * (line order within each group), deduped. */
+export function extractDefs(text: string, ext: string): string[] {
+  return extractDefsWithFlags(text, ext).defs;
 }
 
 /** Whole-identifier occurrence counts for one file's text. */
@@ -158,7 +183,31 @@ export function countIdents(text: string): Map<string, number> {
 /** What one file's text contributes to the map scan. Pure, deterministic. */
 export interface RepoFileScan {
   defs: string[];
+  /** Parallel to `defs`: true when the def matched an exported/`pub` pattern. */
+  exported: boolean[];
   tokenCounts: Map<string, number>;
+}
+
+/** One file's text, as the extraction phase reads it (defs + flags + counts). */
+function scanText(text: string, ext: string): RepoFileScan {
+  const { defs, exported } = extractDefsWithFlags(text, ext);
+  return { defs, exported, tokenCounts: countIdents(text) };
+}
+
+/** One scan as the persisted entry (./repo-map-cache.ts): the exact facts, plus the file's stamp. */
+function entryOf(stat: { size: number; mtimeMs: number }, facts: RepoFileScan): RepoMapFileEntry {
+  return {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    defs: facts.defs,
+    exported: facts.exported,
+    refs: Object.fromEntries(facts.tokenCounts),
+  };
+}
+
+/** A persisted entry as the in-process scan shape (entry ref order is irrelevant). */
+function scanOf(entry: RepoMapFileEntry): RepoFileScan {
+  return { defs: entry.defs, exported: entry.exported, tokenCounts: new Map(Object.entries(entry.refs)) };
 }
 
 /**
@@ -167,10 +216,10 @@ export interface RepoFileScan {
  * reused, so a write by this or any other process is noticed without a
  * restart.
  */
-function fileStamp(abs: string): string | undefined {
+function fileStat(abs: string): { size: number; mtimeMs: number } | undefined {
   try {
     const stat = statSync(abs);
-    return `${stat.size}:${stat.mtimeMs}`;
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
   } catch {
     return undefined;
   }
@@ -218,7 +267,7 @@ export class RepoFileScanCache {
 
   set(abs: string, stamp: string, facts: RepoFileScan): void {
     this.entries.delete(abs);
-    this.entries.set(abs, { stamp, defs: facts.defs, tokenCounts: facts.tokenCounts });
+    this.entries.set(abs, { stamp, defs: facts.defs, exported: facts.exported, tokenCounts: facts.tokenCounts });
     while (this.entries.size > this.max) {
       const oldest = this.entries.keys().next().value;
       if (oldest === undefined) break;
@@ -256,11 +305,14 @@ export function repoMapCacheStats(): { size: number; max: number; hits: number; 
   };
 }
 
-/** Empty the process-wide scan cache and its counters (tests: cold-start a measurement). */
+/** Empty the process-wide scan cache and zero its counters, the persistent
+ * index's counters included (tests: cold-start a measurement). The index file
+ * on disk is untouched. */
 export function resetRepoMapCache(): void {
   repoFileScanCache.clear();
   repoFileScanCache.hits = 0;
   repoFileScanCache.misses = 0;
+  resetRepoMapIndexStats();
 }
 
 /**
@@ -364,6 +416,11 @@ interface RepoMapOptions {
   focus?: string[];
   includeTests?: boolean;
   maxTokens?: number;
+  /**
+   * Persistent per-file index file (./repo-map-cache.ts, at
+   * `<state root>/repo-map/index.json`); absent = the in-process memo only.
+   */
+  indexFile?: string;
 }
 
 export interface RepoMapResult {
@@ -372,9 +429,14 @@ export interface RepoMapResult {
   filesIncluded: number;
   filesOmitted: number;
   truncated: boolean;
+  /** Files this call served from the memo or the persistent index. */
+  cacheReused: number;
+  /** Files this call re-extracted from source text. */
+  cacheParsed: number;
 }
 
-/** Build the map. Deterministic for the same tree and params (byte-stable). */
+/** Build the map. Deterministic for the same tree and params (byte-stable body; the
+ * stats line's cache counts describe how this call obtained its facts). */
 export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: true } {
   const maxTokens = Math.max(64, Math.min(opts.maxTokens ?? DEFAULT_MAX_TOKENS, HARD_MAX_TOKENS));
   const focusSet = new Set(
@@ -383,9 +445,19 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
       .filter((f) => f !== "" && f !== "."),
   );
 
+  const indexFile = opts.indexFile;
+  let indexLoad: RepoMapIndexLoad | undefined;
+  // The persistent index is read once per call, on first need, so a call whose
+  // facts all come from the in-process memo never pays for the read.
+  const index = (): RepoMapIndexLoad => (indexLoad ??= loadRepoMapIndex(indexFile as string));
+
   const infos: FileInfo[] = [];
+  /** This walk's per-file entries, keyed by displayed rel path. */
+  const walked = new Map<string, RepoMapFileEntry>();
   const seen = new Set<string>();
   let walkComplete = true;
+  let reused = 0;
+  let parsed = 0;
   const walk = (dir: string): void => {
     if (infos.length >= MAX_FILES) {
       walkComplete = false;
@@ -411,12 +483,26 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
         seen.add(abs);
         const rel = relPath(opts.cwd, abs);
         if (!opts.includeTests && isTestPath(rel)) continue;
-        const stamp = fileStamp(abs);
-        if (stamp === undefined) continue;
-        const cached = repoFileScanCache.get(abs, stamp);
-        if (cached !== undefined) {
-          infos.push({ rel, defs: cached.defs, tokenCounts: cached.tokenCounts });
+        const stat = fileStat(abs);
+        if (stat === undefined) continue;
+        const stamp = `${stat.size}:${stat.mtimeMs}`;
+        const memo = repoFileScanCache.get(abs, stamp);
+        if (memo !== undefined) {
+          reused++;
+          infos.push({ rel, ...memo });
+          if (indexFile !== undefined) walked.set(rel, entryOf(stat, memo));
           continue;
+        }
+        if (indexFile !== undefined) {
+          const hit = lookupRepoMapEntry(index().entries, rel, stat);
+          if (hit !== undefined) {
+            reused++;
+            const scan = scanOf(hit);
+            repoFileScanCache.set(abs, stamp, scan);
+            infos.push({ rel, ...scan });
+            walked.set(rel, hit);
+            continue;
+          }
         }
         let buf: Buffer;
         try {
@@ -427,10 +513,11 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
         if (buf.length > MAX_FILE_BYTES || isBinary(buf)) continue;
         const text = buf.toString("utf8");
         // Files without definitions still participate as reference sources.
-        const defs = extractDefs(text, path.extname(entry.name));
-        const tokenCounts = countIdents(text);
-        repoFileScanCache.set(abs, stamp, { defs, tokenCounts });
-        infos.push({ rel, defs, tokenCounts });
+        const scan = scanText(text, path.extname(entry.name));
+        parsed++;
+        repoFileScanCache.set(abs, stamp, scan);
+        infos.push({ rel, ...scan });
+        if (indexFile !== undefined) walked.set(rel, entryOf(stat, scan));
       }
     }
   };
@@ -438,6 +525,20 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
   // Only a complete walk is evidence about what no longer exists: it drops the
   // facts of files under this root it did not see (deleted, moved, filtered).
   if (walkComplete) repoFileScanCache.pruneUnder(opts.root, seen);
+
+  if (indexFile !== undefined && (walkComplete || walked.size > 0)) {
+    // The persistent index mirrors this walk: seen entries replace their loaded
+    // ones, and a complete walk over the whole scope also drops loaded entries
+    // it did not see — a deleted file is pruned from the persistent layer too.
+    // A partial walk (the file cap, an unreadable directory) only adds; a write
+    // failure leaves the old file in place.
+    const loaded = index();
+    const rootRel = path.relative(opts.cwd, opts.root);
+    const insideCwd = rootRel === "" || (rootRel !== ".." && !rootRel.startsWith(`..${path.sep}`) && !path.isAbsolute(rootRel));
+    const dropPrefix = walkComplete && insideCwd ? (rootRel === "" ? "" : `${rootRel}${path.sep}`) : undefined;
+    const next = mergeRepoMapEntries(loaded.entries, walked, { dropPrefix });
+    saveRepoMapIndex(indexFile, next, { raw: loaded.kind === "valid" ? loaded.raw : undefined });
+  }
 
   if (infos.length === 0) return { empty: true };
 
@@ -476,7 +577,7 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
   const body = renderMap(renderable, count);
   const omitted = renderable.length - count;
 
-  const stats = `[repo_map: ${count} file${count === 1 ? "" : "s"}, ~${tokens} tokens${omitted > 0 ? `, ${omitted} omitted` : ""}]`;
+  const stats = `[repo_map: ${count} file${count === 1 ? "" : "s"}, ~${tokens} tokens${omitted > 0 ? `, ${omitted} omitted` : ""}, cache: ${reused} reused, ${parsed} parsed]`;
   const marker = omitted > 0 ? `\n[truncated: showing ${count} of ${renderable.length} files within ${maxTokens} tokens; raise maxTokens (hard ${HARD_MAX_TOKENS}) or pass focus]` : "";
 
   return {
@@ -485,6 +586,8 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
     filesIncluded: count,
     filesOmitted: omitted,
     truncated: omitted > 0,
+    cacheReused: reused,
+    cacheParsed: parsed,
   };
 }
 
@@ -524,7 +627,7 @@ export const repoMapTool: Tool = {
       const includeTests = args.includeTests === true;
       const maxTokens = typeof args.maxTokens === "number" && args.maxTokens > 0 ? args.maxTokens : undefined;
 
-      const result = buildRepoMap({ root, cwd: ctx.cwd, focus, includeTests, maxTokens });
+      const result = buildRepoMap({ root, cwd: ctx.cwd, focus, includeTests, maxTokens, indexFile: repoMapCachePath(ctx.workspace) });
       if ("empty" in result) return fail("empty workspace");
       return { ok: true, output: result.map };
     } catch (e) {
