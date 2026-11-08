@@ -244,14 +244,20 @@ describe("anthropic tool use", () => {
 });
 
 describe("anthropic failures and aborts", () => {
-  test("HTTP 429 with a JSON error body yields exactly one error event", async () => {
+  test("HTTP 429 with a JSON error body yields retry notices then exactly one error event", async () => {
     const payload = { type: "error", error: { type: "rate_limit_error", message: "Number of request tokens has exceeded your per-minute rate limit" } };
 
     await withServer(() => jsonResponse(payload, 429), async (server) => {
       const result = await collect(providerFor(server));
       expect(result.thrown).toBeNull();
-      expect(result.events).toHaveLength(1);
-      const error = asError(result.events[0]);
+      // 429 is retryable: the adapter announces each attempt (providers/retry.ts), then
+      // surfaces exactly one terminal error carrying the server's detail. Retrying is the
+      // fix for the audit finding that a single transient rate-limit killed the turn.
+      const errors = result.events.filter((event) => event.type === "error");
+      expect(errors).toHaveLength(1);
+      expect(result.events[result.events.length - 1]).toBe(errors[0]);
+      expect(result.events.some((event) => event.type === "notice")).toBe(true);
+      const error = asError(errors[0]);
       expect(error.message).toContain("429");
       expect(error.message).toContain("rate_limit_error");
       expect(error.message).toContain("per-minute rate limit");
@@ -263,8 +269,10 @@ describe("anthropic failures and aborts", () => {
       () => new Response("upstream\n\n exploded", { status: 500, headers: { "content-type": "text/plain" } }),
       async (server) => {
         const result = await collect(providerFor(server));
-        expect(result.events).toHaveLength(1);
-        const error = asError(result.events[0]);
+        // 500 is retryable, so notices precede the one terminal error (providers/retry.ts).
+        const errors = result.events.filter((event) => event.type === "error");
+        expect(errors).toHaveLength(1);
+        const error = asError(errors[0]);
         expect(error.message).toContain("anthropic HTTP 500");
         expect(error.message).toContain("upstream exploded");
       },

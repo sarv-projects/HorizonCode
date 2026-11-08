@@ -226,14 +226,18 @@ describe("openai tool calls", () => {
 });
 
 describe("openai failures and aborts", () => {
-  test("HTTP 500 with a JSON body yields exactly one error event", async () => {
+  test("HTTP 500 with a JSON body yields retry notices then exactly one error event", async () => {
     const payload = { error: { message: "The server had an error processing your request", type: "server_error" } };
 
     await withServer(() => jsonResponse(payload, 500), async (server) => {
       const result = await collect(providerFor(server));
       expect(result.thrown).toBeNull();
-      expect(result.events).toHaveLength(1);
-      const error = asError(result.events[0]);
+      // 500 is retryable, so retry notices precede one terminal error (providers/retry.ts).
+      const errors = result.events.filter((event) => event.type === "error");
+      expect(errors).toHaveLength(1);
+      expect(result.events[result.events.length - 1]).toBe(errors[0]);
+      expect(result.events.some((event) => event.type === "notice")).toBe(true);
+      const error = asError(errors[0]);
       expect(error.message).toContain("openai HTTP 500");
       expect(error.message).toContain("server_error");
       expect(error.message).toContain("processing your request");

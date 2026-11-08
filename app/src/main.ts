@@ -203,7 +203,9 @@ async function main(): Promise<number> {
     process.stderr.write("hzcode: this build has no approval hook \u2014 actions that need a yes will be refused\n");
   }
 
-  // SIGTERM -> graceful shutdown: stop the current turn, close the session, exit 0.
+  // SIGTERM -> graceful shutdown: stop the current turn, close the session, and
+  // exit 143 (docs/14 §3.2) — a supervisor that stopped the run must be able to
+  // tell it did, so this is not 0.
   const stop = (): void => {
     try {
       runtime.abort();
@@ -213,7 +215,7 @@ async function main(): Promise<number> {
     void Promise.resolve(runtime.close()).catch(() => {
       /* closing on the way out */
     });
-    const timer = setTimeout(() => process.exit(0), 300);
+    const timer = setTimeout(() => process.exit(143), 300);
     if (typeof (timer as { unref?: () => void }).unref === "function") (timer as { unref: () => void }).unref();
   };
   process.once("SIGTERM", stop);

@@ -318,7 +318,7 @@ export function summarizeEvalSet(cases: readonly PostmortemEvalCase[]): EvalSetS
     }
   });
 
-  const population = `${cases.length} post-mortem-derived eval case(s) in this set (local candidate form, core/evals.ts; this is a case-population summary — run results are published by runEvalSet)`;
+  const population = `${cases.length} eval case(s) in this set (local candidate form, core/evals.ts; this is a case-population summary — run results are published by runEvalSet)`;
   const anchor = "none — first measurement (no prior eval set or run to compare against)";
   const excludes =
     "eval runs and their outcomes — this summary is case-population, not results; run outcomes are published by runEvalSet";
@@ -646,7 +646,7 @@ export async function runEvalSet(
 
   const passed = results.filter((result) => result.passed).length;
   const failed = results.length - passed;
-  const population = `${results.length} post-mortem-derived eval case(s) run through the injected executor (core/evals.ts runEvalSet; the executor is caller-supplied — no loop or provider wiring)`;
+  const population = `${results.length} eval case(s) run through the injected executor (core/evals.ts runEvalSet; the executor is caller-supplied — no loop or provider wiring)`;
   const anchor = "none — first eval run in this repository (no prior run of this set to compare against)";
   const excludes =
     "none — every case in the set produced a graded result (a case-side refusal refuses the whole set before its first execution; an executor throw is graded as executor_error)";

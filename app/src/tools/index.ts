@@ -11,12 +11,14 @@ import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
 import { shellTool } from "./shell";
 import { todoTool } from "./todo";
+import { undoTool } from "./undo";
 import { writeTool } from "./write";
 
 export const tools: Tool[] = [
   readTool,
   writeTool,
   editTool,
+  undoTool,
   grepTool,
   globTool,
   repoMapTool,

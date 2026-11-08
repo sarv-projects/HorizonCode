@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { editTool } from "../../src/tools/edit";
+import { readTool } from "../../src/tools/read";
 import { makeWorkspace, mockToolContext, readFixture, tempRoot, writeFixture } from "./helpers";
 
 describe("edit tool", () => {
@@ -43,7 +44,11 @@ describe("edit tool", () => {
 
   test("fails when the old string is not found and leaves the file alone", async () => {
     const ws = makeWorkspace({ "f.txt": "hello world\n" });
-    const r = await editTool.execute({ path: "f.txt", old: "absent", new: "x" }, mockToolContext({ cwd: ws }));
+    // The fuzzy rungs need a prior read (read-before-write); this asserts the
+    // failure FEEDBACK for a session that has read the file.
+    const ctx = mockToolContext({ cwd: ws });
+    expect((await readTool.execute({ path: "f.txt" }, ctx)).ok).toBe(true);
+    const r = await editTool.execute({ path: "f.txt", old: "absent", new: "x" }, ctx);
     expect(r.ok).toBe(false);
     expect(r.output).toBe("");
     // NF-069 ladder: the failure is diff-shaped feedback now, pinned in full by

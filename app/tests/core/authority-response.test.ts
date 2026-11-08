@@ -262,6 +262,7 @@ describe("every tool passes an admission", () => {
       repo_map: {},
       shell: { command: "echo hi" },
       todo: { action: "list" },
+      undo: {},
       agent: { task: "do it" },
       code_mode: { code: "return 1" },
       preview: { action: "start", command: "true" },

@@ -3,6 +3,7 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { noteRead } from "./read-ledger";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 200 * 1024;
@@ -79,7 +80,10 @@ export const readTool: Tool = {
       if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
 
       const text = buf.toString("utf8");
-      if (text === "") return { ok: true, output: `(empty file) ${rel}` };
+      if (text === "") {
+        noteRead(ctx, resolved); // an empty file is a fact worth remembering too
+        return { ok: true, output: `(empty file) ${rel}` };
+      }
 
       const all = text.split("\n");
       if (all.length > 1 && all[all.length - 1] === "") all.pop(); // trailing newline
@@ -89,6 +93,7 @@ export const readTool: Tool = {
       const limit = Math.min(wanted, MAX_LINES);
 
       if (start >= all.length) {
+        noteRead(ctx, resolved);
         return { ok: true, output: `(no lines at offset ${start + 1}; file has ${all.length} lines) ${rel}` };
       }
 
@@ -125,6 +130,9 @@ export const readTool: Tool = {
       } else if (shown < all.length) {
         body += `\n[truncated: lines ${start + 1}-${shown} of ${all.length}; use offset/limit to continue]`;
       }
+      // Only the read tool writes the ledger: whatever the model does next with
+      // this file (`write` over it, `edit` with a fuzzy rung), it has now seen it.
+      noteRead(ctx, resolved);
       return { ok: true, output: body };
     } catch (e) {
       return fail(msg(e));

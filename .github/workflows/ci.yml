@@ -1,0 +1,58 @@
+# HorizonCode CI.
+#
+# Payload, not the live workflow: the automation identity's GitHub App token
+# has no `workflow` scope, so nothing under .github/workflows/ can be pushed
+# by it. `bash ops/install-ci.sh` copies this file to .github/workflows/ci.yml;
+# commit and push that with an identity that has the workflow scope.
+#
+# The job installs the two toolchains and then hands the whole verification to
+# ops/gates.sh — the same entry point a developer runs locally, so a green run
+# here and a green run there are the same set of checks (and the same honesty
+# about the twelve docs/24 §3.5 rows that are still design-only: see
+# ops/gate-catalogue.md). No secrets and no network beyond the installs: the
+# e2e gates pin the provider to `mock` under a throwaway HOME.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same ref makes the previous run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    # Generous on purpose: the local run is ~15s, but a cold runner downloads a
+    # toolchain and compiles the kernel from scratch.
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      # Build the kernel first: kernel-selftest runs the release binary, and a
+      # cold cache needs the dependency graph fetched and compiled anyway.
+      # --locked keeps the committed Cargo.lock authoritative.
+      - name: Build the kernel (release)
+        working-directory: kernel
+        run: cargo build --release --locked
+
+      # app/ has no dependencies, so there is no bun install step: the suite
+      # runs straight from the checkout.
+      - name: Run the gate suite
+        run: bash ops/gates.sh

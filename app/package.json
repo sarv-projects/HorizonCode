@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/main.ts",
+    "eval": "bun run src/eval-run.ts",
     "check": "bun build src/main.ts --target=bun --outdir=/tmp/hz-b-app"
   }
 }

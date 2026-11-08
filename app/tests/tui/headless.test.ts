@@ -125,7 +125,10 @@ describe("headless mode (stdin is a pipe)", () => {
     );
 
     expect(run.timedOut).toBe(false);
-    expect(run.code).toBe(0);
+    // A run that could not execute is not a success: the canonical exit table
+    // (core/loop.ts exitCodeFor, docs/14 §3.2) maps failed/provider_error to 1, so
+    // CI can tell "no key" from "ran and produced an answer".
+    expect(run.code).toBe(1);
     expect(run.stdout).toContain(`${PROMPT} hello`);
     expect(run.stdout).toContain("No API key for anthropic");
     expect(run.stdout).toContain("--mock");

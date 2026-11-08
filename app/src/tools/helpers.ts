@@ -30,16 +30,33 @@ export function relPath(base: string, p: string): string {
 
 /** Environment names that must never reach a child process. */
 const SECRET_ENV = /(key|token|secret|password)$/i;
+/**
+ * Names that are credentials by convention even though the suffix rule misses
+ * them: `*_DSN`, `*_CREDENTIALS`, `*_PASS`, `*_PWD`, `*_CONNECTION_STRING`
+ * (audit finding 17).
+ */
+const SECRET_ENV_NAME = /(_dsn|_credentials|_pass|_passwd|_pwd|connection_string)$/i;
+/**
+ * A URL whose authority carries credentials: `scheme://user:password@host`.
+ * This catches `DATABASE_URL`, `REDIS_URL` and friends WITHOUT dropping
+ * credential-free URLs a build tool legitimately needs (`PIP_INDEX_URL`).
+ */
+const CREDENTIAL_IN_URL = /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+:[^/@\s]*@/i;
 
 /**
  * Inherit the environment, minus anything that looks like a credential.
  * Every tool that spawns a child process (shell, code_mode, preview) must use
  * this, so one code path cannot silently leak what another one scrubs.
+ *
+ * Three rules, because a suffix deny-list alone leaked the common modern
+ * shapes: the name rule, the credential-name rule above, and the value rule
+ * for connection strings.
  */
 export function scrubEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined || SECRET_ENV.test(k)) continue;
+    if (v === undefined) continue;
+    if (SECRET_ENV.test(k) || SECRET_ENV_NAME.test(k) || CREDENTIAL_IN_URL.test(v)) continue;
     env[k] = v;
   }
   // NF-074 / docs/09 §2.10 item 3: env-taming defaults for the child — the

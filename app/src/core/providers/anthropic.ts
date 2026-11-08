@@ -8,6 +8,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolCall, ToolSpec } from "../../contracts";
+import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 
 export interface AnthropicSettings {
@@ -130,18 +131,27 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
   if (Array.isArray(req.tools) && req.tools.length > 0) body.tools = toAnthropicTools(req.tools);
 
   let response: Response;
+  const retries: string[] = [];
   try {
-    response = await fetch(baseUrl + "/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": settings.apiKey,
-        "anthropic-version": API_VERSION,
-        accept: "text/event-stream",
+    response = await fetchWithRetry(
+      baseUrl + "/v1/messages",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": settings.apiKey,
+          "anthropic-version": API_VERSION,
+          accept: "text/event-stream",
+        },
+        body: JSON.stringify(body),
+        signal: req.signal,
       },
-      body: JSON.stringify(body),
-      signal: req.signal,
-    });
+      {
+        // 429 (rate limit) and 529 (overloaded) are routine on this API; a turn
+        // must ride them out rather than die on the first one.
+        onRetry: (info) => retries.push(retryNotice("anthropic", info, DEFAULT_RETRY_ATTEMPTS)),
+      },
+    );
   } catch (err) {
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
@@ -150,6 +160,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
     yield { type: "error", message: `anthropic request failed: ${errorText(err)}` };
     return;
   }
+  for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");

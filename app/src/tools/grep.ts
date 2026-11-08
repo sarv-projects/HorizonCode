@@ -5,9 +5,12 @@ import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { gitIgnoredPaths } from "./ignore";
 
 const MAX_RESULTS = 200;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+/** Candidate files the JS fallback collects before filtering/searching. */
+const MAX_CANDIDATES = 50_000;
 // `.hz` (canonical) and `.hzcode` (legacy) hold runtime state (kernel files, the
 // NF-071 spawn ledger, the session database), never source: searching them would
 // both waste results and let the ledger self-match a query — the same exclusion
@@ -134,8 +137,18 @@ async function rgSearch(
   return results;
 }
 
-/** Plain recursive walk: regex (or literal substring) per line, binary files skipped. */
-function jsSearch(pattern: string, root: string, globFilter: string | undefined, cwd: string): string[] {
+/**
+ * Plain recursive walk: regex (or literal substring) per line, binary files
+ * skipped. Git-ignored candidates are filtered the same way ripgrep filters
+ * them (ignore.ts), so the fallback and the ripgrep path answer alike.
+ */
+async function jsSearch(
+  pattern: string,
+  root: string,
+  globFilter: string | undefined,
+  cwd: string,
+  stateDir: string,
+): Promise<{ matches: string[]; note?: string }> {
   let re: RegExp;
   try {
     re = new RegExp(pattern);
@@ -172,8 +185,10 @@ function jsSearch(pattern: string, root: string, globFilter: string | undefined,
     }
   };
 
+  const candidates: string[] = [];
+  let capped = false;
   const walk = (dir: string): void => {
-    if (results.length >= MAX_RESULTS) return;
+    if (capped) return;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -181,13 +196,16 @@ function jsSearch(pattern: string, root: string, globFilter: string | undefined,
       return;
     }
     for (const entry of entries) {
-      if (results.length >= MAX_RESULTS) return;
+      if (candidates.length >= MAX_CANDIDATES) {
+        capped = true;
+        return;
+      }
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
         walk(abs);
       } else if (entry.isFile()) {
-        scanFile(abs, relPath(cwd, abs));
+        candidates.push(abs);
       }
     }
   };
@@ -196,11 +214,23 @@ function jsSearch(pattern: string, root: string, globFilter: string | undefined,
   try {
     rootIsFile = statSync(root).isFile();
   } catch {
-    return results;
+    return { matches: results };
   }
-  if (rootIsFile) scanFile(root, relPath(cwd, root));
+  if (rootIsFile) candidates.push(root);
   else walk(root);
-  return results;
+
+  const ignored = await gitIgnoredPaths(cwd, candidates, stateDir);
+  for (const abs of candidates) {
+    if (results.length >= MAX_RESULTS) break;
+    if (ignored.has(abs)) continue;
+    scanFile(abs, relPath(cwd, abs));
+  }
+  return {
+    matches: results,
+    note: capped
+      ? `[incomplete: stopped after ${MAX_CANDIDATES} candidate files; this search is NOT exhaustive — narrow the path]`
+      : undefined,
+  };
 }
 
 export const grepTool: Tool = {
@@ -230,14 +260,20 @@ export const grepTool: Tool = {
       const rg = Bun.which("rg");
       const stateDir = kernelStateDir(ctx.workspace);
       let results = rg ? await rgSearch(rg, pattern, root, globFilter, ctx.cwd, stateDir) : null;
-      if (results === null) results = jsSearch(pattern, root, globFilter, ctx.cwd);
+      let incomplete: string | undefined;
+      if (results === null) {
+        const js = await jsSearch(pattern, root, globFilter, ctx.cwd, stateDir);
+        results = js.matches;
+        incomplete = js.note;
+      }
 
-      if (results.length === 0) return { ok: true, output: "No matches." };
+      if (results.length === 0 && incomplete === undefined) return { ok: true, output: "No matches." };
       const body = results.join("\n");
-      return {
-        ok: true,
-        output: results.length >= MAX_RESULTS ? `${body}\n[truncated: first ${MAX_RESULTS} matches shown]` : body,
-      };
+      const notices: string[] = [];
+      if (results.length >= MAX_RESULTS) notices.push(`[truncated: first ${MAX_RESULTS} matches shown]`);
+      if (incomplete !== undefined) notices.push(incomplete);
+      if (notices.length === 0) return { ok: true, output: body };
+      return { ok: true, output: body === "" ? notices.join("\n") : `${body}\n${notices.join("\n")}` };
     } catch (e) {
       return fail(msg(e));
     }

@@ -207,6 +207,7 @@ export interface Usage {
 export type ProviderEvent =
   | { type: "text"; text: string }
   | { type: "tool_call"; id: string; name: string; arguments: string }
+  | { type: "notice"; message: string }
   | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage }
   | { type: "error"; message: string };
 export interface ProviderRequest {
@@ -226,6 +227,25 @@ export interface Provider {
 
 export type KernelMode = "trusted" | "untrusted";
 
+/**
+ * The harness's estimate of what the next provider dispatch will carry — the
+ * `/context` report. Harness-side numbers only: no provider call decides them.
+ */
+export interface ContextUsage {
+  model: string;
+  /** The model's context window in tokens. */
+  window: number;
+  /** Estimated prompt tokens for the dispatch (whole-prompt estimate, or the
+   * newest provider usage anchor plus the locally counted tail). */
+  estimatedInput: number;
+  /** The output cap fitted to the remaining window for this dispatch. */
+  maxOutput: number;
+  /** Messages the dispatch carried (the compacted view's length). */
+  messages: number;
+  /** The dispatch window the history is fitted into (`HISTORY_LIMIT`). */
+  historyLimit: number;
+}
+
 export type RuntimeEvent =
   | { type: "assistant.delta"; text: string }
   | { type: "assistant.done"; text: string }
@@ -239,6 +259,7 @@ export type RuntimeEvent =
     }
   | { type: "notice"; message: string }
   | { type: "error"; message: string }
+  | ({ type: "context.usage" } & ContextUsage)
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {
@@ -302,7 +323,8 @@ export interface RunExit {
     | "steps"
     | "tokens"
     | "wall_clock"
-    | "format_errors";
+    | "format_errors"
+    | "unverified_completion";
 }
 
 /* --------------------------- Kernel protocol --------------------------- */

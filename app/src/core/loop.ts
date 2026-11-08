@@ -36,6 +36,10 @@ import type {
 import { EventTypes, newId, nowIso } from "../contracts";
 import { getTool, toolSpecs } from "../tools";
 import { canonicalJson, sha256Hex } from "./canon";
+// The window's compaction: one replacement for the silent slice, imported here
+// and nowhere else (compaction.ts holds the pinning, the summary and the
+// report; the loop only chooses the window size).
+import { COMPACTION_EVENT, compactHistory } from "./compaction";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -124,7 +128,12 @@ export function titleFromText(text: string): string {
   return line.length > 60 ? line.slice(0, 57) + "..." : line;
 }
 
-/** The system prompt is deliberately short: identity, place, day, tone. */
+/**
+ * The system prompt is deliberately short: identity, place, day, tone, and the one
+ * harness rule the model cannot infer from a tool description (the read-before-write
+ * gate in ./tools/read-ledger.ts refuses an unread target, and an unannounced
+ * refusal costs a round trip).
+ */
 export function systemPrompt(workspace: string, today: Date = new Date()): string {
   const stamp = Number.isNaN(today.getTime()) ? "" : today.toISOString().slice(0, 10);
   return [
@@ -132,6 +141,8 @@ export function systemPrompt(workspace: string, today: Date = new Date()): strin
     `Working directory: ${workspace}`,
     `Today's date: ${stamp}`,
     "Be concise. Use tools for real work.",
+    "Before replacing or fuzzy-editing a file that already exists, read it in this session: write and edit refuse a target they have not seen.",
+    "Finish with a check: before you report a task done — including marking your own last todo item done — run the repository's tests, typecheck or build in this same run. A run that changes files and runs no check is recorded as an unverified completion, never a success.",
   ].join("\n");
 }
 
@@ -236,6 +247,14 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       if (previewAction !== "start" || command === undefined) return undefined;
       return { kind: "shell.exec", target: command };
     }
+    case "undo": {
+      // The effect target is the journal's recorded change, which no argument
+      // names. A `path` argument admits as that file's fs.write; without one the
+      // call is session-state (below) and the tool guards the resolved entry
+      // itself, exactly like preview's start path.
+      const file = argString(args, "path", "file");
+      return file ? { kind: "fs.write", target: resolved(file) } : undefined;
+    }
     default:
       return undefined;
   }
@@ -252,9 +271,10 @@ export function taskHead(text: string, max = 120): string {
  * Tools that only touch session-scoped state (docs/09 R-tools-30's in-process
  * mirror): they are mapped — never silently unguarded — but need no kernel
  * guard action. `todo` is session state; `preview`'s spawn path is guarded as
- * described in the mapping above.
+ * described in the mapping above; `undo` reads the session's own change journal
+ * to find its target and guards that entry inside the tool.
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };
@@ -321,6 +341,38 @@ export function trimHistory(messages: ChatMsg[], limit = HISTORY_LIMIT): ChatMsg
   const out = list.slice(-limit);
   while (out.length > 0 && out[0]?.role !== "user") out.shift();
   return out;
+}
+
+/**
+ * The bound on the pinned task statement. A rail is a reminder, not a second
+ * copy of the conversation: what the session was asked to do, not everything
+ * said about it.
+ */
+export const PINNED_TASK_MAX_CHARS = 1200;
+
+/**
+ * The session's task statement, for the system rail.
+ *
+ * `trimHistory` keeps the NEWEST messages, so the turn that stated the task is
+ * the first thing to fall out of the window: after enough turns the request no
+ * longer carries the constraints it was given at all (measured on a 46-turn
+ * session — the final request held 80 messages beginning mid-conversation, and
+ * the task line was absent from the whole payload).
+ *
+ * The statement therefore rides the system rail — in context on every step,
+ * never a history rewrite — the same way the budget countdown does. It is read
+ * from the store rather than remembered in memory, so it survives a resume as
+ * well as a trim. The FIRST user turn is the task; later user turns are
+ * follow-ups and are deliberately not pinned.
+ */
+export function pinnedTaskStatement(messages: ChatMsg[]): string | undefined {
+  const first = (Array.isArray(messages) ? messages : []).find(
+    (msg) => msg.role === "user" && typeof msg.content === "string" && msg.content.trim() !== "",
+  );
+  if (first === undefined) return undefined;
+  const text = (first.content ?? "").trim();
+  const bounded = text.length <= PINNED_TASK_MAX_CHARS ? text : `${text.slice(0, PINNED_TASK_MAX_CHARS)}\u2026`;
+  return `Pinned task statement — the first user turn, kept in context after older turns are trimmed:\n${bounded}`;
 }
 
 function displayTarget(target: string, workspace: string): string {
@@ -733,7 +785,17 @@ export function budgetCountdownLine(countdown: BudgetCountdown): string {
   return parts.length === 0 ? "" : `Budget remaining: ${parts.join(", ")}.`;
 }
 
-/** Canonical exit code for a run outcome (docs/14 §3.2): budgets are 5, errors 1. */
+/**
+ * Canonical exit code for a run outcome (docs/14 §3.2) — the ONE table every
+ * surface maps through (S16 forbids restating it, so a surface that computes
+ * its own is a defect by construction).
+ *
+ *   0 success · 1 error · 2 usage · 3 fail-closed/UNKNOWN · 4 policy denial ·
+ *   5 budget exhaustion · 130 SIGINT · 143 SIGTERM
+ *
+ * The signal codes are the caller's to add: this maps a run outcome, and a run
+ * killed by a signal may not have produced one.
+ */
 export function exitCodeFor(exit: RunExit | undefined): number {
   if (!exit) return 0;
   switch (exit.terminal) {
@@ -745,7 +807,14 @@ export function exitCodeFor(exit: RunExit | undefined): number {
     case "cancelled":
     case "interrupted":
       return 130;
+    case "denied":
+      // Policy said no: distinct from an error, and never reported as success.
+      return 4;
+    case "unknown":
+      // Fail-closed: the effect cannot be proven to have happened or not.
+      return 3;
     default:
+      // failed — provider, tool, storage or internal error.
       return 1;
   }
 }
@@ -840,6 +909,89 @@ class RunFaults {
 }
 
 /**
+ * Per-run completion evidence (harness-engineering lecture 09: "done" must be an
+ * objective determination, not the model's own claim). Two halves:
+ *
+ * - Advisory: a run that changed files and never ran anything
+ *   verification-shaped gets a notice and an audit-trail event.
+ * - Blocking: when it ALSO marked its own declared work complete (a successful
+ *   `todo done`, nothing left open), the exit becomes `unknown` — the outcome
+ *   cannot be proven either way, and a completion claim with no check must not
+ *   report success (exit code 3, fail-closed).
+ *
+ * The command test is a HEURISTIC on the command line, deliberately broad: a
+ * false positive costs a missing warning, never a blocked run. Named residual: a
+ * verification invoked from inside a `code_mode` program is invisible to this
+ * counter, which sees only top-level tool calls.
+ */
+const VERIFICATION_SHAPE =
+  /(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun|deno|npx)\s+(?:run\s+)?(?:test|tests|lint|typecheck|type-check|check|build|tsc)|(?:^|[\s;&|(])(?:pytest|jest|vitest|mocha|cargo|go\s+test|make|tsc|eslint|ruff|mypy|flake8)\b/;
+
+/** Audit-trail event: a run changed files and ran nothing that verifies them. */
+export const UNVERIFIED_COMPLETION_EVENT = "run.unverified_completion";
+
+/** What one run changed, whether anything checked it, and what it claimed done. */
+class RunEvidence {
+  private readonly changed = new Set<string>();
+  private verified: string | undefined;
+  private todosAdded = 0;
+  private todosOpen = 0;
+  private todoClaims = 0;
+
+  /** A successful write/edit of `path`. */
+  noteMutation(path: unknown): void {
+    if (typeof path === "string" && path !== "") this.changed.add(path);
+  }
+
+  /**
+   * A shell command that RAN (the shell tool reports ok for any completed
+   * command, including a non-zero exit — a failing test run is still a check).
+   */
+  noteCommand(command: unknown): void {
+    if (this.verified === undefined && typeof command === "string" && VERIFICATION_SHAPE.test(command)) {
+      this.verified = command;
+    }
+  }
+
+  /**
+   * A successful `todo` call. `done` is the completion CLAIM the blocking half
+   * of the gate keys on — the model marking its own declared work complete
+   * (today the only claim surface that exists; `complete_step` is designed in
+   * docs/09-tools.md, not implemented).
+   */
+  noteTodoCall(action: unknown): void {
+    if (action === "add") {
+      this.todosAdded += 1;
+      this.todosOpen += 1;
+    } else if (action === "done") {
+      this.todoClaims += 1;
+      this.todosOpen = Math.max(0, this.todosOpen - 1);
+    }
+  }
+
+  /** The changed paths when nothing verified them, or undefined. */
+  unverified(): string[] | undefined {
+    return this.verified === undefined && this.changed.size > 0 ? [...this.changed] : undefined;
+  }
+
+  /**
+   * The blocking half of lecture 09: the changed paths when the run ALSO
+   * declared a work item complete (a successful `todo done`, with nothing left
+   * open) and ran no verification. A completion claim with no check is not a
+   * success; it is an outcome that cannot be proven either way — `unknown`.
+   */
+  claimWithoutVerification(): string[] | undefined {
+    if (this.todoClaims === 0 || this.todosOpen > 0) return undefined;
+    return this.unverified();
+  }
+
+  /** Declared work the run left open (the under-finished plan), for a notice. */
+  openPlan(): { open: number; added: number } | undefined {
+    return this.todosOpen > 0 && this.todosAdded > 0 ? { open: this.todosOpen, added: this.todosAdded } : undefined;
+  }
+}
+
+/**
  * A tool result that could not be written to the transcript after the tool's
  * effect already happened. The run must stop at this boundary: replaying a
  * step whose tool results are not in the history would continue from a
@@ -883,7 +1035,14 @@ async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string):
 async function collectAssistant(
   deps: LoopDeps,
   history: ChatMsg[],
-  rails?: { budgetLine?: string; corrective?: string; anchorBase?: number; appendedTokens?: number },
+  rails?: {
+    /** The task statement, pinned against trimming (see `pinnedTaskStatement`). */
+    pinned?: string;
+    budgetLine?: string;
+    corrective?: string;
+    anchorBase?: number;
+    appendedTokens?: number;
+  },
 ): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
   const basePrompt =
@@ -892,8 +1051,11 @@ async function collectAssistant(
       : systemPrompt(deps.workspace);
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
   // NF-073(b): the live budget countdown and the format corrective ride the
-  // system rail — in context on every step, never a history rewrite.
+  // system rail — in context on every step, never a history rewrite. The task
+  // statement rides it too, for the same reason: a history rewrite cannot keep
+  // it, because the window only ever keeps the newest messages.
   const railParts: string[] = [];
+  if (rails?.pinned !== undefined && rails.pinned !== "") railParts.push(rails.pinned);
   if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
@@ -905,10 +1067,24 @@ async function collectAssistant(
     rails?.anchorBase !== undefined
       ? rails.anchorBase + (rails.appendedTokens ?? 0)
       : estimatePromptTokens(basePrompt + extra + rail, history, JSON.stringify(specs));
+  const contextWindow = windowForModel(deps.model);
+  const maxTokens = fitMaxOutputTokens(inputEstimate, contextWindow);
+  // What the next dispatch will carry, as the harness computed it — the
+  // `/context` report (one event per dispatch; renderers that do not care
+  // ignore it, see render.ts's default arm).
+  emit(deps.callbacks, {
+    type: "context.usage",
+    model: deps.model,
+    window: contextWindow,
+    estimatedInput: inputEstimate,
+    maxOutput: maxTokens,
+    messages: history.length,
+    historyLimit: HISTORY_LIMIT,
+  });
   const request: ProviderRequest = {
     model: deps.model,
     system: basePrompt + extra + rail,
-    maxTokens: fitMaxOutputTokens(inputEstimate, windowForModel(deps.model)),
+    maxTokens,
     messages: history,
     tools: specs,
     signal: deps.signal,
@@ -924,6 +1100,10 @@ async function collectAssistant(
           name: event.name,
           arguments: typeof event.arguments === "string" ? event.arguments : "",
         });
+      } else if (event.type === "notice") {
+        // A retry on the way in, or any other provider-side fact the human should
+        // know: surface it rather than swallowing it into the transcript.
+        emit(deps.callbacks, { type: "notice", message: event.message });
       } else if (event.type === "done") {
         turn.stopReason = event.stopReason;
         turn.usage = event.usage;
@@ -1060,7 +1240,13 @@ async function issueToolReceipt(
   }
 }
 
-async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall, faults: RunFaults): Promise<number> {
+async function runToolCall(
+  deps: LoopDeps,
+  gate: GuardGate,
+  call: ToolCall,
+  faults: RunFaults,
+  evidence: RunEvidence,
+): Promise<number> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
   emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
@@ -1068,6 +1254,12 @@ async function runToolCall(deps: LoopDeps, gate: GuardGate, call: ToolCall, faul
 
   const executed = await executeTool(deps, gate, call, parsed, faults);
   const result = executed.result;
+  // Completion evidence: what this run changed, and whether anything checked it.
+  if (result.ok) {
+    if (call.name === "write" || call.name === "edit") evidence.noteMutation(parsed.args.path ?? parsed.args.file_path ?? parsed.args.file);
+    else if (call.name === "shell") evidence.noteCommand(parsed.args.command);
+    else if (call.name === "todo") evidence.noteTodoCall(parsed.args.action);
+  }
   // NF-074(b): cap the model-facing result and spill the full text. The
   // receipt digest below stays the digest of the FULL output — the cap is a
   // context budget, never an evidence change.
@@ -1166,12 +1358,17 @@ export async function runTurn(
   // failures all prevent a `succeeded` exit; the terminal outcome is decided
   // once, at the end (the exit shape itself is unchanged).
   const faults = new RunFaults();
+  const evidence = new RunEvidence();
   let fatal = false;
   // NF-073: one terminal outcome per run, in the RC-7 vocabulary.
   let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
   try {
     const prompt = typeof userText === "string" ? userText.trim() : "";
     await beginUserTurn(deps, faults, prompt);
+    // Read once per run, from the store: the task statement survives a trim and
+    // a resume alike, and it is the FIRST user turn that is the task — not the
+    // user turn this call is processing.
+    const pinned = pinnedTaskStatement(deps.store.history(deps.sessionId));
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
     // NF-073: one ledger for the run tree (the main turn and every subagent it
@@ -1190,6 +1387,9 @@ export async function runTurn(
     let calls = 0;
     let consecutiveFormatErrors = 0;
     let corrective: string | undefined;
+    // One report per run, not one per dispatch: the compaction numbers describe
+    // the view the run works from, and a notice per step would be a notice storm.
+    let compactionAnnounced = false;
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
@@ -1215,9 +1415,39 @@ export async function runTurn(
       // Charged before the call: a billed-but-failed turn still spends its step.
       await ledger.chargeStep();
 
-      const history = trimHistory(deps.store.history(deps.sessionId));
+      // The window is compacted, not sliced: the turn that stated the task, the
+      // constraints later turns stated and a labelled summary of what left the
+      // window ride with it (compaction.ts). The store is never rewritten — this
+      // view is re-derived from the rows on every dispatch, so a resume after a
+      // crash recomputes the same pinned block.
+      const view = compactHistory(deps.store.history(deps.sessionId));
+      const history = view.history;
+      if (view.compacted && !compactionAnnounced) {
+        // The elision is reported, never silent: a notice for the human of this
+        // run, and an audit-trail event with the counts for the log.
+        compactionAnnounced = true;
+        emit(deps.callbacks, { type: "notice", message: view.notice });
+        await logEvent(
+          deps,
+          faults,
+          COMPACTION_EVENT,
+          {
+            window: HISTORY_LIMIT,
+            dropped: view.dropped,
+            kept: view.kept,
+            elidedTokens: view.elidedTokens,
+            droppedByRole: view.droppedByRole,
+            scannedMessages: view.pinned?.scannedMessages ?? 0,
+            pinnedConstraints: view.pinned?.constraints.length ?? 0,
+            constraintsDropped: view.pinned?.constraintsDropped ?? 0,
+            taskStatementPinned: view.pinned !== null && view.pinned.taskStatement !== null,
+          },
+          { kind: "system", id: "hz-loop" },
+        );
+      }
       await logEvent(deps, faults, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
       const turn = await collectAssistant(deps, history, {
+        pinned,
         budgetLine: budgetCountdownLine(ledger.countdown()),
         corrective,
         anchorBase,
@@ -1276,7 +1506,7 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults)
+            runToolCall(deps, gate, call, faults, evidence)
               .then((tokens) => {
                 appendedTokens += tokens;
               })
@@ -1337,6 +1567,45 @@ export async function runTurn(
     emit(deps.callbacks, { type: "error", message: `runtime error: ${errorMessage(err)}` });
     await logEvent(deps, faults, EventTypes.error, { message: errorMessage(err) });
     exit = { terminal: "failed", detail: "internal_error" };
+  }
+  // Lecture 09: a run that changed files and verified nothing must not look
+  // like a measured success. The blocking half: when the run ALSO marked its
+  // own declared work complete (a successful `todo done`, nothing left open),
+  // the outcome cannot be proven either way — it exits `unknown` (exit 3,
+  // fail-closed), never `succeeded`. The audit event records the files and the
+  // claim. This runs BEFORE the fault fold, so a failed event-log write still
+  // downgrades the exit below.
+  const unverified = exit.terminal === "succeeded" ? evidence.unverified() : undefined;
+  const claimed = exit.terminal === "succeeded" ? evidence.claimWithoutVerification() : undefined;
+  if (claimed !== undefined) exit = { terminal: "unknown", detail: "unverified_completion" };
+  if (unverified !== undefined) {
+    const shown = unverified.slice(0, 5).join(", ");
+    const more = unverified.length > 5 ? ` and ${unverified.length - 5} more` : "";
+    emit(deps.callbacks, {
+      type: "notice",
+      message:
+        claimed !== undefined
+          ? `unverified completion: this run changed ${unverified.length} file(s) (${shown}${more}), marked its ` +
+            `declared work complete and ran nothing verification-shaped — recorded unknown (exit 3), not success`
+          : `unverified completion: this run changed ${unverified.length} file(s) (${shown}${more}) and ran nothing ` +
+            `verification-shaped — the result is the model's claim, not a measured one`,
+    });
+    await logEvent(
+      deps,
+      faults,
+      UNVERIFIED_COMPLETION_EVENT,
+      { files: unverified, claimed: claimed !== undefined },
+      { kind: "system", id: "hz-loop" },
+    );
+  }
+  // An under-finished plan is not a false success, but it must not pass
+  // silently either: the run declared items and left some open.
+  const open = exit.terminal === "succeeded" ? evidence.openPlan() : undefined;
+  if (open !== undefined) {
+    emit(deps.callbacks, {
+      type: "notice",
+      message: `this run left ${open.open} of ${open.added} declared todo item(s) open — the task may be unfinished`,
+    });
   }
   // Wave-12: one run-level failure for every class of loss — a run that dropped
   // events, receipts or transcript rows never reports `succeeded`, and the

@@ -3,7 +3,9 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { kernelStateDir } from "../core/owned-spawn";
 import { relPath, resolvePath } from "./helpers";
+import { gitIgnoredPaths } from "./ignore";
 
 const MAX_RESULTS = 300;
 const MAX_COLLECT = 5000;
@@ -77,27 +79,53 @@ export const globTool: Tool = {
 
       const found: string[] = [];
       let scanned = 0;
+      // Why the walk stopped, if it did: an incomplete scan reported as a complete
+      // file list is worse than a slow one (audit finding 8).
+      let stoppedBy: "scanned" | "collected" | undefined;
       try {
         const scan = glob.scanSync({ cwd: root, onlyFiles: true, dot: false, followSymlinks: false });
         for (const rel of scan) {
-          if (++scanned > MAX_SCANNED) break;
+          if (++scanned > MAX_SCANNED) {
+            stoppedBy = "scanned";
+            break;
+          }
           if (skipPath(rel)) continue;
           found.push(rel);
-          if (found.length >= MAX_COLLECT) break;
+          if (found.length >= MAX_COLLECT) {
+            stoppedBy = "collected";
+            break;
+          }
         }
       } catch (e) {
         return fail(msg(e));
       }
 
-      if (found.length === 0) return { ok: true, output: "No files matched." };
+      if (found.length === 0 && stoppedBy === undefined) return { ok: true, output: "No files matched." };
 
-      const paths = found.map((p) => relPath(ctx.cwd, path.resolve(root, p))).sort();
+      // Git's own ignore rules, the same ones grep obeys (audit: the two tools
+      // disagreed about what the repository contains). One batch call; a
+      // non-repo or a missing git filters nothing.
+      const absolutes = found.map((p) => path.resolve(root, p));
+      const ignored = await gitIgnoredPaths(ctx.cwd, absolutes, kernelStateDir(ctx.workspace));
+      const visible = found.filter((_, i) => !ignored.has(absolutes[i] as string));
+      if (visible.length === 0 && stoppedBy === undefined) return { ok: true, output: "No files matched." };
+
+      const paths = visible.map((p) => relPath(ctx.cwd, path.resolve(root, p))).sort();
       const shown = paths.slice(0, MAX_RESULTS);
+      const notices: string[] = [];
+      if (paths.length > MAX_RESULTS) notices.push(`[truncated: first ${MAX_RESULTS} of ${paths.length} paths shown]`);
+      if (stoppedBy === "scanned") {
+        notices.push(
+          `[incomplete: the walk stopped after ${MAX_SCANNED} entries; this list is NOT exhaustive — narrow the pattern or the path]`,
+        );
+      }
+      if (stoppedBy === "collected") {
+        notices.push(
+          `[incomplete: the walk stopped after collecting ${MAX_COLLECT} matches; this list is NOT exhaustive — narrow the pattern or the path]`,
+        );
+      }
       const body = shown.join("\n");
-      return {
-        ok: true,
-        output: paths.length > MAX_RESULTS ? `${body}\n[truncated: first ${MAX_RESULTS} of ${paths.length} paths shown]` : body,
-      };
+      return { ok: true, output: notices.length === 0 ? body : `${body}\n${notices.join("\n")}` };
     } catch (e) {
       return fail(msg(e));
     }

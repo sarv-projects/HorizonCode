@@ -16,6 +16,7 @@ import * as path from "node:path";
 import type {
   ApprovalHandler,
   ChatMsg,
+  ContextUsage,
   GuardKind,
   KernelMode,
   Lease,
@@ -58,6 +59,8 @@ export interface HzRuntime extends Runtime {
   setModel(model: string): string;
   history(): ChatMsg[];
   sessions(): SessionInfo[];
+  /** The most recent dispatch's context estimate, or undefined before one ran. */
+  contextUsage(): ContextUsage | undefined;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -83,6 +86,8 @@ class HzRuntimeImpl implements HzRuntime {
   private readonly queued: string[] = [];
   private sendQueue: Promise<unknown> = Promise.resolve();
   private closed = false;
+  /** The newest `context.usage` this runtime saw (the `/context` report). */
+  private lastContext: ContextUsage | undefined;
   /** NF-073: the resolved budget every turn tree draws from (0 = unlimited). */
   private readonly budget: RunBudget;
 
@@ -156,6 +161,10 @@ class HzRuntimeImpl implements HzRuntime {
 
   history(): ChatMsg[] {
     return this.store.history(this.session.id);
+  }
+
+  contextUsage(): ContextUsage | undefined {
+    return this.lastContext;
   }
 
   sessions(): SessionInfo[] {
@@ -237,6 +246,14 @@ class HzRuntimeImpl implements HzRuntime {
       // NF-073: one ledger per turn tree — the main turn and every subagent it
       // spawns share this ceiling; a fresh one starts with each send().
       const ledger = new BudgetLedger(this.budget);
+      // The context snapshot rides every dispatch: capture the newest one for
+      // `/context` while passing every event through untouched.
+      const callbacks: RuntimeCallbacks = {
+        onEvent: (event) => {
+          if (event.type === "context.usage") this.lastContext = event;
+          emit(cb, event);
+        },
+      };
       return await runTurn(
         {
           workspace: this.workspace,
@@ -246,7 +263,7 @@ class HzRuntimeImpl implements HzRuntime {
           kernel: this.kernel,
           store: this.store,
           signal: controller.signal,
-          callbacks: cb,
+          callbacks,
           sessionLeases: this.leases,
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
@@ -316,6 +333,13 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   if (opts?.continueSession) session = store.latestSession();
   if (!session) session = store.createSession();
 
+  // A run killed between "append the assistant message with its tool calls" and
+  // "append the tool result" leaves an unanswered call, and every real provider
+  // refuses to replay that history — which made a crash permanently brick the
+  // session. Repair it on open, for a resumed session and for a fresh one alike
+  // (a fresh session has no rows, so this is a no-op). Idempotent.
+  const repaired = store.repairDanglingToolCalls(session.id);
+
   let impl: HzRuntimeImpl | null = null;
   const kernel = new KernelClient({
     workspace,
@@ -342,6 +366,12 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     },
   });
   await impl.logSessionStart();
+  if (repaired.repaired > 0) {
+    impl.note(
+      `repaired ${repaired.repaired} interrupted tool call(s) left by a run that was killed mid-execution ` +
+        `(${repaired.calls.join(", ")}) — each was answered with UNKNOWN; verify the real state before trusting it`,
+    );
+  }
   return impl;
 }
 

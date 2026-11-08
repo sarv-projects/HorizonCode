@@ -10,8 +10,10 @@
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
+import { writeAtomic } from "./atomic-write";
+import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
-import { openVerifiedWrite } from "./write";
+import { noteRead, wasRead } from "./read-ledger";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -312,6 +314,16 @@ export const editTool: Tool = {
         }
         after = all ? replaceAll(before, oldStr, newStr) : replaceFirst(before, oldStr, newStr);
       } else {
+        // Read-before-write (audit finding 2), applied where the guesswork is: an
+        // exact-string edit carries its own preimage text, but a fuzzy rung
+        // RECONSTRUCTS a location and can splice a replacement into a region the
+        // model never inspected. That requires having read the file this session.
+        if (!wasRead(ctx, resolved)) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: edit refused: no exact match for the old text in ${rel}, and this session ` +
+              `has not read the file — so the fuzzy rungs cannot be trusted; read ${rel} and edit again`,
+          );
+        }
         // NF-069 ladder: exact found nothing — escalate, but only while the
         // reflection slot is unspent, and only ever to a UNIQUE match.
         const key = reflectionKey(ctx, resolved);
@@ -381,20 +393,28 @@ export const editTool: Tool = {
         );
       }
 
-      // The effect: through a descriptor re-verified against the kernel state
-      // directory before a byte is written (same check, and same symlink policy,
-      // as `write` — see the header of ./write.ts).
-      const opened = await openVerifiedWrite(resolved, ctx);
-      if ("refusal" in opened) return fail(opened.refusal);
-      try {
-        await opened.handle.truncate(0);
-        await opened.handle.write(after, 0, "utf8");
-      } finally {
-        await opened.handle.close().catch(() => undefined);
-      }
-
+      // The effect: an atomic replacement (temp file + fsync + rename, ./atomic-write.ts)
+      // through a descriptor re-verified against the kernel state directory before a
+      // byte is written (same check, and same symlink policy, as `write` — see the
+      // header of ./verified-open.ts). Not `truncate(0)` + `write`: a crash between
+      // those two calls left the file at ZERO BYTES with nothing able to restore it.
+      const outcome = await writeAtomic(resolved, after, ctx);
+      if (!outcome.ok) return fail(outcome.refusal);
       const verified = (await readFile(resolved)).toString("utf8") === after;
       if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
+
+      recordChange(ctx.sessionId, {
+        path: resolved,
+        rel,
+        before,
+        afterSha256: sha256Hex(after),
+        at: Date.now(),
+        tool: "edit",
+      });
+
+      // The session has now read this file (twice: the preimage and the
+      // post-write check), so later fuzzy rungs on it are legitimate.
+      noteRead(ctx, resolved);
 
       reflections.delete(reflectionKey(ctx, resolved));
       const suffix = rung === "exact" ? "" : ` (matched via ${rung})`;
