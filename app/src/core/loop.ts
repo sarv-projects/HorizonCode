@@ -40,6 +40,9 @@ import { canonicalJson, sha256Hex } from "./canon";
 // and nowhere else (compaction.ts holds the pinning, the summary and the
 // report; the loop only chooses the window size).
 import { COMPACTION_EVENT, compactHistory } from "./compaction";
+// The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
+// refusal and rendering live in instructions.ts; the loop only carries it.
+import { instructionPrompt, loadInstructionBlocks } from "./instructions";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -1042,13 +1045,15 @@ async function collectAssistant(
     corrective?: string;
     anchorBase?: number;
     appendedTokens?: number;
+    /** The project-instruction section (docs/10 R121-R123); "" when none. */
+    instructions?: string;
   },
 ): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
   const basePrompt =
     deps.systemOverride !== undefined && deps.systemOverride !== ""
       ? deps.systemOverride
-      : systemPrompt(deps.workspace);
+      : systemPrompt(deps.workspace) + (rails?.instructions ?? "");
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
   // NF-073(b): the live budget countdown and the format corrective ride the
   // system rail — in context on every step, never a history rewrite. The task
@@ -1370,6 +1375,25 @@ export async function runTurn(
     // user turn this call is processing.
     const pinned = pinnedTaskStatement(deps.store.history(deps.sessionId));
 
+    // Project memory (docs/10 R121-R123): the AGENTS.md/ZH.md hierarchy, loaded
+    // once per run so every dispatch carries the same bytes. A subagent's fixed
+    // prompt is deliberately not modified (`systemOverride` wins). Truncation,
+    // skips and AGENTS/ZH conflicts are reported, never silent.
+    const instructions = ((): string => {
+      if (deps.systemOverride !== undefined && deps.systemOverride !== "") return "";
+      const loaded = loadInstructionBlocks(deps.workspace);
+      const { report } = loaded;
+      if (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0) {
+        const parts = [`project instructions: ${report.files} file(s), ${report.totalBytes} bytes`];
+        if (report.conflicts > 0) parts.push(`${report.conflicts} AGENTS/ZH conflict(s)`);
+        if (report.truncated > 0) parts.push(`${report.truncated} truncated at the 32 KB cap`);
+        if (report.totalCapped) parts.push("the 128 KB total cap stopped the rest");
+        if (report.skipped.length > 0) parts.push(`skipped: ${report.skipped.join("; ")}`);
+        emit(deps.callbacks, { type: "notice", message: parts.join(" \u2014 ") });
+      }
+      return instructionPrompt(loaded.blocks, report);
+    })();
+
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
     // NF-073: one ledger for the run tree (the main turn and every subagent it
     // spawns); a caller that passes its own ledger shares one ceiling.
@@ -1452,6 +1476,7 @@ export async function runTurn(
         corrective,
         anchorBase,
         appendedTokens,
+        instructions,
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
