@@ -346,6 +346,14 @@ export interface RunExit {
     | "tokens"
     | "wall_clock"
     | "format_errors"
+    // SAFETY-RAILS: the loop-detection guard's hard stop at >= 5 consecutive
+    // identical tool calls (app/src/core/guards/loop-detection.ts). Terminal
+    // `failed`, so exitCodeFor's default arm already returns 1 — no change there.
+    | "tool_loop"
+    // SAFETY-RAILS: the mistake-tracker stop at the consecutive-mistake limit
+    // (app/src/core/guards/mistake-tracker.ts), a SEPARATE axis from the
+    // `format_errors` cap. Terminal `failed`, so exitCodeFor returns 1 by default.
+    | "consecutive_mistakes"
     | "unverified_completion";
 }
 
