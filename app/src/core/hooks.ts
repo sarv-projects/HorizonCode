@@ -147,6 +147,18 @@
  * ruling 35 / docs/28); in v1 a hook can only say no or annotate. `postTool`
  * output can never rewrite or undo the settled effect (H8).
  *
+ * CONFIG SHAPE NOTE (for callers of `loadHooks`). The `ready` variant carries
+ * its validated hooks under `points.<HookPoint>` (e.g. `config.points.preTool`),
+ * a per-point map — NOT flat top-level `preTool`/`postTool` fields. This is the
+ * shape every runner here reads; an external caller must index through `points`.
+ *
+ * TURN-END NOTE CAVEAT (for hook authors). A `context` note returned at
+ * `turnEnd` (step.end) is collected and recorded as an attributed fragment
+ * event, but the turn it ends is over, so it can never ride a provider request
+ * in that same turn. Return notes from `turnStart`/`postTool`/the other points
+ * if you need the model to see them on the next request; `turnEnd` is for
+ * observation/audit only.
+ *
  * WHERE IT SITS. The integrator runs `runPreToolHooks` AFTER the guard/approve
  * decision and BEFORE `tool.execute`: a hook deny returns the standard typed
  * tool-result shape; it can never turn a guard deny back into an allow. A
