@@ -161,6 +161,19 @@ describe("loadConfig resolves a registered provider", () => {
     expect(config.resolved?.credential).toEqual({ kind: "apiKey", value: "sk-test" });
   });
 
+  test("a modelless registered entry resolves to the empty-model sentinel, never mock-1", () => {
+    // `local-vllm` declares no models[]; with no HZ_MODEL/file model it must NOT
+    // inherit the mock's default id (forwarding "mock-1" to a real host is the
+    // opaque-400 silent-wrong-thing the fail-loud default exists to kill).
+    const config = loadConfig({ HZ_PROVIDER: "local-vllm" }, registryConfig());
+    expect(config.provider).toBe("local-vllm");
+    expect(config.model).toBe("");
+    expect(config.model).not.toBe("mock-1");
+    // An explicit HZ_MODEL still wins for the same entry.
+    const configured = loadConfig({ HZ_PROVIDER: "local-vllm", HZ_MODEL: "my-model" }, registryConfig());
+    expect(configured.model).toBe("my-model");
+  });
+
   test("an unknown, unregistered id still falls back to mock at the config layer", () => {
     // makeProvider owns the fail-loud default when handed one directly; the
     // config layer keeps the historic mock fallback for a bare typo.
@@ -205,9 +218,27 @@ describe("makeProvider with a registered provider", () => {
     expect(events[1]).toEqual({ type: "done", stopReason: "end" });
   });
 
+  test("a modelless registered provider fails loud instead of forwarding a placeholder model", async () => {
+    const file = homeWithConfig(JSON.stringify({ providers: [{ id: "local-vllm", baseUrl: "http://127.0.0.1:1" }] }));
+    const config = loadConfig({ HZ_PROVIDER: "local-vllm" }, file);
+    expect(config.model).toBe("");
+    const provider = makeProvider(config);
+    expect(provider.name).toBe("local-vllm");
+
+    const events = await collect(provider);
+    expect(events).toHaveLength(2);
+    const error = events[0]!;
+    if (error.type !== "error") throw new Error(`expected an error event, got ${JSON.stringify(error)}`);
+    expect(error.message).toContain("No model configured for \"local-vllm\"");
+    expect(error.message).toContain("HZ_MODEL");
+    expect(error.message).toContain("models[]");
+    expect(error.message).not.toContain("mock-1");
+    expect(events[1]).toEqual({ type: "done", stopReason: "end" });
+  });
+
   test("a keyless registered provider streams with no Authorization header", async () => {
     await withServer(() => sseResponse(compatibleTurn("from vllm")), async (server) => {
-      const file = homeWithConfig(JSON.stringify({ providers: [{ id: "local-vllm", baseUrl: server.baseUrl }] }));
+      const file = homeWithConfig(JSON.stringify({ providers: [{ id: "local-vllm", baseUrl: server.baseUrl, models: ["qwen2.5-coder"] }] }));
       const config = loadConfig({ HZ_PROVIDER: "local-vllm" }, file);
       const provider = makeProvider(config);
 
