@@ -29,7 +29,311 @@ const REPL_BLOCKLIST = new Set(["python", "python3", "ipython", "node", "irb", "
 export type ShellPlan =
   | { action: "run" }
   | { action: "refuse"; reason: string }
-  | { action: "intercept-read"; path: string };
+  | { action: "intercept-read"; path: string }
+  // A rule-table match that suggests a dedicated tool which has no first-class
+  // redirect-to path from shell.ts (grep->grep, find->glob). Unlike
+  // `intercept-read` (which re-runs the read tool inline), there is no safe way
+  // to translate arbitrary `grep`/`find` invocations into a dedicated-tool
+  // call, so the plan carries the rule's model-facing `message` and the name of
+  // the `tool` to prefer, and the shell tool surfaces that instead of running.
+  // This is a NEW ShellPlan variant (not `refuse`) so the message is the rule's
+  // own guidance, not the interactive-blocklist refusal wording.
+  | { action: "intercept-suggest"; tool: string; message: string };
+
+/**
+ * A configurable bash interceptor rule, ported from oh-my-pi's
+ * `BashInterceptorRule` (packages/coding-agent/src/exec/settings.ts). A rule
+ * matches when its compiled `pattern`/`flags` regex matches an interception
+ * candidate AND `tool` is one of the registry's available tool names; the model
+ * then sees `message` naming the dedicated tool to prefer.
+ */
+export interface BashInterceptorRule {
+  readonly pattern: string;
+  readonly flags?: string;
+  readonly tool: string;
+  readonly message: string;
+}
+
+/**
+ * HorizonCode's default bash interceptor rule table. Ported from oh-my-pi's
+ * DEFAULT_BASH_INTERCEPTOR_RULES but scoped to the dedicated tools this repo
+ * actually ships with a path-based equivalent. The `cat`/`head`/`tail` ->
+ * `read` rule is deliberately NOT in this table: the existing single-plain-
+ * operand cat->read interception (the `intercept-read` path above) owns that
+ * behaviour so its quote strip, SHELL_METACHARACTER guard and `cat a b` /
+ * `tail -n 5` pass-through all stay byte-stable. Rules here cover only commands
+ * with no first-class redirect path, so they resolve to `intercept-suggest`.
+ */
+export const DEFAULT_BASH_INTERCEPTOR_RULES: readonly BashInterceptorRule[] = [
+  {
+    pattern: "^\\s*(grep|rg|ripgrep|ag|ack)\\s+",
+    tool: "grep",
+    message: "Use the `grep` tool instead of grep/rg. It respects ignore rules and returns structured matches.",
+  },
+  {
+    pattern: "^\\s*(find|fd|locate)\\s+.*(-name|-iname|-type|--type|-glob)",
+    tool: "glob",
+    message: "Use the `glob` tool instead of find/fd. It respects ignore rules and is faster for glob patterns.",
+  },
+];
+
+/** A compiled interceptor rule; invalid-regex rules are dropped at compile. */
+interface CompiledRule {
+  readonly rule: BashInterceptorRule;
+  readonly regex: RegExp;
+}
+
+/** Compile interceptor rules into regexes, skipping any invalid pattern. */
+function compileRules(rules: readonly BashInterceptorRule[]): CompiledRule[] {
+  const compiled: CompiledRule[] = [];
+  for (const rule of rules) {
+    try {
+      compiled.push({ rule, regex: new RegExp(rule.pattern, rule.flags ?? "") });
+    } catch {
+      /* skip invalid regex patterns (oh-my-pi parity) */
+    }
+  }
+  return compiled;
+}
+
+/**
+ * Finds the end of a shell word from `start`, respecting single quotes, double
+ * quotes and backslash escapes; returns null when the syntax is incomplete (an
+ * unterminated quote, or a trailing backslash with nothing to escape). Ported
+ * verbatim from oh-my-pi's skipShellWord.
+ */
+function skipShellWord(command: string, start: number): number | null {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = start; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\\") {
+        if (i + 1 >= command.length) return null;
+        i++;
+        continue;
+      }
+      if (ch === '"') inDouble = false;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (ch === "\\") {
+      if (i + 1 >= command.length) return null;
+      i++;
+      continue;
+    }
+    if (ch === " " || ch === "\t") return i;
+  }
+  return inSingle || inDouble ? null : command.length;
+}
+
+/**
+ * Removes leading `NAME=value` assignments without interpreting shell syntax,
+ * so `FOO=bar grep x` also matches a `grep` rule. Returns null when nothing was
+ * stripped (no leading assignment) or the syntax is incomplete. Ported verbatim
+ * from oh-my-pi's withoutLeadingEnvironmentAssignments.
+ */
+function withoutLeadingEnvironmentAssignments(command: string): string | null {
+  let index = 0;
+  let foundAssignment = false;
+  while (index < command.length) {
+    while (command[index] === " " || command[index] === "\t") index++;
+    const assignmentStart = index;
+    if (!/[A-Za-z_]/.test(command[index] ?? "")) break;
+    let nameEnd = index + 1;
+    while (/[A-Za-z0-9_]/.test(command[nameEnd] ?? "")) nameEnd++;
+    if (command[nameEnd] !== "=") {
+      return foundAssignment ? command.slice(assignmentStart).trimStart() : null;
+    }
+    const wordEnd = skipShellWord(command, nameEnd + 1);
+    if (wordEnd === null) return null;
+    foundAssignment = true;
+    index = wordEnd;
+    if (index === command.length) return null;
+  }
+  if (!foundAssignment) return null;
+  const commandWithoutAssignments = command.slice(index).trimStart();
+  return commandWithoutAssignments.length > 0 ? commandWithoutAssignments : null;
+}
+
+/** A flat shell command segment with the context needed to decide interception. */
+interface FlatShellCommandSegment {
+  /** Original segment text with quoting and escaping preserved. */
+  readonly text: string;
+  /**
+   * True when this segment consumes the previous stage's stdout via an unquoted
+   * `|` or `|&`. Such a stage reads piped stdin, so no path-based dedicated tool
+   * (read/grep/glob) can replace it, so it is NOT an interception candidate.
+   */
+  readonly pipedStdin: boolean;
+}
+
+/**
+ * Splits a command into flat shell segments, preserving each segment's original
+ * text (quoting/escaping intact for regex matching) and flagging segments that
+ * receive piped stdin. Ported from oh-my-pi's extractFlatShellCommandSegments.
+ *
+ * Declines (returns []) on syntax whose execution context this small scanner
+ * cannot determine (heredocs, command substitution, backticks, grouping,
+ * malformed quoting); the caller still matches the whole command in that case.
+ */
+export function extractFlatShellCommandSegments(command: string): FlatShellCommandSegment[] {
+  const segments: FlatShellCommandSegment[] = [];
+  let segmentStart = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let atWordStart = true;
+  let currentPiped = false;
+
+  const pushSegment = (end: number): boolean => {
+    const segment = command.slice(segmentStart, end).trim();
+    if (segment.length === 0) return false;
+    segments.push({ text: segment, pipedStdin: currentPiped });
+    return true;
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\\") {
+        if (i + 1 >= command.length) return [];
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = false;
+        continue;
+      }
+      if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return [];
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      atWordStart = false;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      atWordStart = false;
+      continue;
+    }
+    if (ch === "\\") {
+      if (i + 1 >= command.length) return [];
+      i++;
+      atWordStart = false;
+      continue;
+    }
+    if (
+      ch === "`" ||
+      ch === "(" ||
+      ch === ")" ||
+      (ch === "$" && command[i + 1] === "(") ||
+      (ch === "$" && command[i + 1] === "{") ||
+      (ch === "<" && command[i + 1] === "<") ||
+      ((ch === "{" || ch === "}") && atWordStart && (command[i + 1] === undefined || /[ \t\n;]/.test(command[i + 1] as string)))
+    ) {
+      return [];
+    }
+    if (ch === "#" && atWordStart) {
+      const pushed = pushSegment(i);
+      const newline = command.indexOf("\n", i + 1);
+      if (newline === -1) return segments;
+      i = newline;
+      segmentStart = newline + 1;
+      atWordStart = true;
+      if (pushed) currentPiped = false;
+      continue;
+    }
+    const isRedirectionOperatorCharacter =
+      ch === "|"
+        ? command[i - 1] === ">"
+        : ch === "&"
+          ? command[i - 1] === ">" || command[i - 1] === "<" || command[i + 1] === ">"
+          : false;
+    if ((ch === "\n" || ch === ";" || ch === "|" || ch === "&") && !isRedirectionOperatorCharacter) {
+      const pushed = pushSegment(i);
+      const doubled = (ch === "|" || ch === "&") && command[i + 1] === ch;
+      const pipeStderr = ch === "|" && command[i + 1] === "&";
+      if (doubled || pipeStderr) i++;
+      // `|` and `|&` pipe into the next segment; other operators reset it.
+      if (pushed || ch !== "\n") currentPiped = ch === "|" && !doubled;
+      segmentStart = i + 1;
+      atWordStart = true;
+      continue;
+    }
+    atWordStart = ch === " " || ch === "\t";
+  }
+
+  if (inSingle || inDouble) return [];
+  pushSegment(command.length);
+  return segments;
+}
+
+/**
+ * The interception candidates for a command, ported from oh-my-pi:
+ * [the whole trimmed command, each flat segment that is NOT piped-stdin, and
+ * each such segment with its leading NAME=value env assignments stripped]. A
+ * piped-stdin segment (the `grep` in `cat x | grep y`) is excluded: no
+ * path-based dedicated tool can replace a stage that reads piped stdin.
+ */
+export function interceptionCandidates(command: string): string[] {
+  const candidates = [command.trim()];
+  for (const segment of extractFlatShellCommandSegments(command)) {
+    if (segment.pipedStdin) continue;
+    candidates.push(segment.text);
+    const withoutAssignments = withoutLeadingEnvironmentAssignments(segment.text);
+    if (withoutAssignments) candidates.push(withoutAssignments);
+  }
+  return candidates;
+}
+
+/**
+ * Run the bash interceptor rule table over a command's interception candidates.
+ * A rule fires only when its target `tool` is in `availableTools` (so a rule
+ * never steers toward an unregistered tool) and one of the candidates matches
+ * its regex. Returns the first matching rule, or null. Ported from oh-my-pi's
+ * checkBashInterception.
+ */
+export function checkBashInterception(
+  command: string,
+  availableTools: readonly string[],
+  rules: readonly BashInterceptorRule[] = DEFAULT_BASH_INTERCEPTOR_RULES,
+): BashInterceptorRule | null {
+  const compiled = compileRules(rules);
+  const candidates = interceptionCandidates(command);
+  for (const { rule, regex } of compiled) {
+    if (!availableTools.includes(rule.tool)) continue;
+    for (const candidate of candidates) {
+      regex.lastIndex = 0; // a global/sticky regex carries state across calls
+      if (regex.test(candidate)) return rule;
+    }
+  }
+  return null;
+}
+
+/**
+ * Tool names the interceptor assumes available when a caller does not thread a
+ * registry view in. These are HorizonCode's base path-based tools, so the
+ * default-arg call sites (including the existing classifyShellCommand tests)
+ * behave as if the real registry is present. Threading an explicit
+ * `availableTools` keeps a rule from ever blocking toward an absent tool.
+ */
+const DEFAULT_AVAILABLE_TOOLS: readonly string[] = ["read", "write", "edit", "grep", "glob", "shell", "todo"];
 
 /** `VAR=…` word, as bash prefixes a command line with. */
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -62,8 +366,17 @@ function stripOneQuoteLayer(token: string): string {
  * head-only check, so they are skipped — together with their fixed arguments —
  * before the blocklist, the REPL rules and the `cat` interception are applied
  * to the real head.
+ *
+ * The configurable bash interceptor rule table (checkBashInterception) runs
+ * LAST, around all of the above: it only reaches commands none of the existing
+ * paths claimed, and a rule fires only when its target tool is available in
+ * `availableTools`, so an absent-tool rule is transparent.
  */
-export function classifyShellCommand(command: string, allowInteractive = false): ShellPlan {
+export function classifyShellCommand(
+  command: string,
+  allowInteractive = false,
+  availableTools: readonly string[] = DEFAULT_AVAILABLE_TOOLS,
+): ShellPlan {
   if (allowInteractive) return { action: "run" };
   const parts = (typeof command === "string" ? command : "").trim().split(/\s+/).filter((p) => p !== "");
   let i = 0;
@@ -120,6 +433,12 @@ export function classifyShellCommand(command: string, allowInteractive = false):
   if (REPL_BLOCKLIST.has(base) && rest.every((t) => t.startsWith("-"))) {
     return { action: "refuse", reason: `${base} without a script is an interactive REPL` };
   }
+  // The configurable interceptor rule table runs AROUND the existing cat->read,
+  // interactive and REPL paths above (which keep their byte-stable behaviour):
+  // it only reaches commands none of those claimed. A rule fires only when its
+  // target tool is registered, so an absent-tool rule is transparent.
+  const matched = checkBashInterception(command, availableTools);
+  if (matched) return { action: "intercept-suggest", tool: matched.tool, message: matched.message };
   return { action: "run" };
 }
 
@@ -257,6 +576,11 @@ export const shellTool: Tool = {
       const plan = classifyShellCommand(command, process.env.HZ_ALLOW_INTERACTIVE === "1");
       if (plan.action === "refuse") {
         return fail(`interactive command blocked (interception): ${plan.reason}; set HZ_ALLOW_INTERACTIVE=1 to override`);
+      }
+      if (plan.action === "intercept-suggest") {
+        // A rule-table match with no first-class redirect path: surface the
+        // rule's guidance naming the dedicated tool instead of running.
+        return fail(`${plan.message}\n\nOriginal command: ${command}`);
       }
       if (plan.action === "intercept-read") {
         // `cat <file>` is the read tool's job: it asks(read) for its own guard,
