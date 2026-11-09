@@ -10,7 +10,7 @@
 
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { EventEnvelope, EventSeed, Receipt } from "../../src/contracts";
@@ -85,6 +85,34 @@ export function tempDir(prefix: string): string {
   temps.push(dir);
   return dir;
 }
+
+/**
+ * Whether Unix permission bits actually bind this process: a 0o000 file must
+ * be unreadable. They do NOT bind for root (CAP_DAC_OVERRIDE) or off unix, so
+ * a test whose subject is "an unreadable/unwritable store" cannot construct
+ * its precondition there and is skipped rather than failed (docs/28 ruling
+ * 39). Probed once, by behaviour rather than by uid, so a capability-dropped
+ * root or an unusual mount is decided correctly.
+ */
+export const permissionBitsBind: boolean = (() => {
+  if (process.platform === "win32") return false;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hz-perm-probe-"));
+  const file = path.join(dir, "probe");
+  try {
+    writeFileSync(file, "x");
+    chmodSync(file, 0o000);
+    try {
+      readFileSync(file);
+      return false; // read through a 0o000 file: bits do not bind here
+    } catch {
+      return true;
+    }
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 export function cleanupTemps(): void {
   while (temps.length > 0) {
@@ -232,6 +260,11 @@ export function runKernelNdjson(
   const input = requests.map((request) => JSON.stringify(request) + "\n").join("");
   const proc = spawnSync(binary, ["--state-dir", stateDir], {
     input,
+    // Explicit env snapshot, as KernelClient does: bun's spawnSync does not
+    // pass a runtime process.env mutation (setEnv HZ_ANCHOR_KEY) to the child
+    // by default, so without this the keyed-anchor interop tests ran the
+    // kernel unkeyed and failed on every host, root or not.
+    env: { ...process.env },
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   });

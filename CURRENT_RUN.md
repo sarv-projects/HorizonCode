@@ -2,7 +2,7 @@
 
 > **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. Snapshot: **2026-11-09, integration branch `integration/superset`** (twelve feature branches merged on top of `main` @ `cda913b`, PRs #1-#6 merged, #4-#6 only into `fix/typecheck-and-gate`; #7-#15 open). Repo: `github.com/sarv-projects/HorizonCode`. Status ladder used throughout: DESIGNED, CODE_PRESENT, WIRED, TESTED, VERIFIED. Nothing is RELEASED.
 >
-> **TL;DR (2026-11-09).** The twelve open feature branches (provider superset, safety rails, apply_patch routing, edit-engine superset, server mode + rewind, OS-sandbox seams, PTY exec, LSP loop, hooks lifecycle, tool exposure + turn diff, speculative execution + guardian, AST tools) are merged into one integration branch. Measured on that branch: **`bun run typecheck` 0 errors; `bun test` 1250 pass / 11 fail / 1261 tests across 106 files** (all 11 are the root/uid-0 permission artifacts of ruling 39, zero new); **`cargo test --locked` 47 + 50 pass, 0 fail; `hz-kernel --selftest` `SELFTEST OK (25 checks)`**; the three e2e gates pass when run by hand (exit 0 with receipts, budget exit 5, usage exit 2). `bash ops/gates.sh` stops at `ts-suite` as root because of those same 11 failures; on a non-root runner it is expected to go green (not measured here). One interaction bug was found and fixed during integration (`33e8e29`). The `docs/28` rulings are renumbered 39-49 into one ascending run. Open work is named in §5, including the done / partial / not-started table.
+> **TL;DR (2026-11-09).** The twelve open feature branches (provider superset, safety rails, apply_patch routing, edit-engine superset, server mode + rewind, OS-sandbox seams, PTY exec, LSP loop, hooks lifecycle, tool exposure + turn diff, speculative execution + guardian, AST tools) are merged into one integration branch. Measured on that branch: **`bun run typecheck` 0 errors; `bun test` 1267 tests across 107 files: 1267 pass / 0 fail as a non-root user (uid 1000), 1259 pass / 8 skip / 0 fail as root** (the 8 chmod-based tests skip where permission bits do not bind; rulings 39, 51); **`cargo test --locked` 49 + 50 pass, 0 fail, as root and as uid 1000; `hz-kernel --selftest` `SELFTEST OK (25 checks)`**; **`bash ops/gates.sh` 7/7 as root and as uid 1000** (measured with `setpriv --reuid=1000`, see §4). The first hosted CI run failed 4 host-dependent sandbox tests; they exposed a real overclaim in `sandbox.report`, now fixed (§5.0, `docs/28` ruling 44 correction and ruling 51). One interaction bug was found and fixed during integration (`33e8e29`). The `docs/28` rulings are renumbered 39-49 into one ascending run. Open work is named in §5, including the done / partial / not-started table.
 >
 > *Previous snapshot (2026-11-08), kept for history:* **TL;DR — the v0.1 vertical slice is complete and green; V2 adoption is underway; the design corpus is not frozen; per `docs/25` no roadmap phase has formally exited (M1 exit requirements remain open work — recorded, not papered over).** The v0.1 product, the deep test suite and all four V1 features (skills, subagents, Code Mode, preview servers) are implemented, tested and pushed; the design corpus (docs 00–30) is ratified through RC-17. Landed 2026-11-07, in order: the trust-hardening pass + docs pass-5 + RC-16; **V2 waves 1–5** (NF-072 batches, NF-073 rails, NF-069/052 edit ladder, NF-074 context-cost contracts, B-1 repo_map); **waves 6–7** (hostile-read hardening, H-7 metric contract, docs/05 D40 canonical numbers + internal capability IDs); **wave 8** (NF-071 managed runtime); **wave 9** (R1 guard precedence + keyed anchors); **wave 10 — the audit-response wave** (protected kernel state, an admission for every tool, no parent leases in subagents, full-intent approvals, shell exclusivity, WAL+FULL pragmas, keyed Code Mode frames); **wave 11** (canonical `.hz/` state paths with `.hzcode/` legacy in place — RC-17; NF-075 growth-loop v1; evals-from-post-mortems with answer isolation); and **wave 12 — the distrust-reaudit response**: four independent adversarial audits (trust/authority, docs-honesty, hostile robustness, performance/Rust-rewrite) plus a competitive viability audit were run by fresh agents on 2026-11-08, every confirmed finding is closed or recorded, and the release-blocking set is empty. Authority hardenings: symlink-lexical state protection, effect-time descriptor verification (write/edit), owner-scoped leases, exact-command `always` grants, fail-closed policy loading, unknown-kind refusal, caller-lease provenance. Runtime/store hardenings: CRLF/bidi-safe minimiser with raw spills, quote-correct `cat` interception, wrapper-aware blocklist, frame-glue-free bounded Code Mode buffers, edit stale-preimage, preview confinement + process-global lifecycle, DB quarantine, 0600/0700 everywhere, torn-ledger reporting, descendant tree-kill — and the kernel append tail cache (**p50 0.53–0.6 ms flat at 2.2 k and 20 k records**, was ~8 ms at 2.2 k; truncation/tamper semantics bit-exact). Audit-trail integrity: event/receipt/transcript write failures now force a run off `succeeded`. Latest green run (integrator, frozen tree): **`bun test` 709 pass / 0 fail (60 files)**, **`cargo test` 43 tests (9 unit + 34 integration)**, **`hz-kernel --selftest` OK (18 checks, hermetic scratch — bare runs repeat)**, **`ops/gates.sh` 6/6**. Open items are named, not implied — `docs/audit/triage-external-review-2026-11-07.md` §6 with closure postscripts §7–§8 (one-use lease consumption and kernel-issued tokens CLOSED there — rulings 32 and 29): receipt postimage / the durable transcript-kernel bridge; the kernel-absent fail-closed posture (ruling needed); the TUI workstream. `docs/audit/reaudit-2026-11-08.md` §6: OS-level sandbox for Code Mode/shell (NF-016) is the top open authority item (no `bwrap`; unprivileged userns blocked; Landlock is the candidate); `setsid` kills, the non-policy hardlink class, legacy owner-less leases, the stdio-transport child check. `docs/audit/competitive-viability-audit-2026-11-08.md` §7: the parity roadmap (compaction + usage meter, memory files, MCP/hooks/LSP, rewind, provider breadth, benchmarks, repo_map cache, server mode). The `docs/30` §4 queue continues with the **item 8 remainder** (test-model-in-library) and the item 7 reduced-form leftovers. **Wave 13** added project memory (the AGENTS.md/ZH.md hierarchy), the eval runner (`bun run eval`, scripted test model in-library), and closed the last half of the external review's finding 4 — one-use leases + session grants (ruling 32); 709 tests / 0 fail (60 files), gates 6/6.
 
@@ -40,7 +40,7 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 
 | Area | Status | Evidence |
 |---|---|---|
-| Rust trust kernel + protocol | **VERIFIED** | `cd kernel && cargo test` (47 green on the integration branch; 43 at the previous snapshot) + `--selftest` → `SELFTEST OK (25 checks on the integration branch; 18 at the previous snapshot)`, hermetic scratch; wave-12 kernel work: symlink-lexical state-dir walk, lease owner scoping, unknown-kind refusal, fail-closed policy loading (malformed rules; `nlink > 1` refusal), warm append tail cache; wave 13: one-use lease consumption + `guard.grant` session grants (ruling 32) |
+| Rust trust kernel + protocol | **VERIFIED** | `cd kernel && cargo test` (49 + 50 green on the integration branch, root and non-root; 43 at the previous snapshot) + `--selftest` → `SELFTEST OK (25 checks on the integration branch; 18 at the previous snapshot)`, hermetic scratch; wave-12 kernel work: symlink-lexical state-dir walk, lease owner scoping, unknown-kind refusal, fail-closed policy loading (malformed rules; `nlink > 1` refusal), warm append tail cache; wave 13: one-use lease consumption + `guard.grant` session grants (ruling 32) |
 | Contracts / Rust<->TS hash interop | **VERIFIED** | both directions verify each other's files (`log.verify`/`receipt.verify` → ok) |
 | Runtime core (loop, guard gate, sessions, providers, budget rails, output budget) | **VERIFIED** | `bun test tests/core` (23 files, incl. NF-073 rails, NF-074 output budget, the wave-10 audit-response suite, the wave-11 suites, and the wave-12 kernel-hardening / logging-hardening / durability-perms suites); live e2e `printf 'list files' \| ./bin/hzcode` → tool card + receipt; `kernelMode=trusted` |
 | Providers (Anthropic/OpenAI SSE + mock) | **VERIFIED** | `bun test tests/providers` → 72 pass; two fixes (empty `arguments`) |
@@ -143,11 +143,11 @@ Twelve branches merged in this order with `git merge --no-edit`; every row is TE
 ```bash
 cd HorizonCode            # the repo root
 
-# TypeScript: typecheck (0 errors) + full suite (1261 tests / 106 files)
+# TypeScript: typecheck (0 errors) + full suite (1267 tests / 107 files)
 cd app && bun install && bun run typecheck && bun test && cd ..
 git checkout app/bun.lock # bun install may rewrite the lockfile; keep it unchanged
 
-# Rust kernel: build, suite (47 + 50), hermetic selftest (25 checks)
+# Rust kernel: build, suite (49 + 50), hermetic selftest (25 checks)
 cd kernel && cargo build --release --locked && cargo test --locked \
   && ./target/release/hz-kernel --selftest && cd ..
 
@@ -162,7 +162,7 @@ printf 'list files\n' | ./bin/hzcode --max-steps 0   # 0 = unlimited, exit 0
 printf 'hello\n' | ./bin/hzcode
 ```
 
-Root-sandbox notes (measured 2026-11-09): running as root makes 11 permission tests fail (an unreadable file is readable to uid 0; ruling 39), so `ops/gates.sh` stops at `ts-suite`. If `$HOME` is read-only, `hz-kernel --selftest` cannot create its state dir: run it with a writable `HOME` (for example `HOME=$(mktemp -d)`). If `~/.cargo` is read-only, set `CARGO_HOME` to a writable path.
+Root-sandbox notes (measured 2026-11-09): as root, 8 permission tests are skipped (an unreadable file is readable to uid 0, so their precondition cannot be built; a behavioural probe decides, rulings 39 and 51) and `ops/gates.sh` passes 7/7. To see what a non-root CI runner sees, copy the tree to a scratch dir, `chown -R 1000:1000` it, and run the suites with `setpriv --reuid=1000 --regid=1000 --clear-groups env HOME=<writable> CARGO_HOME=<writable> RUSTUP_HOME=<toolchain> PATH=<bun and cargo dirs> ...` (bun needs a `bunx` symlink next to it if only the bare binary is copied). If `$HOME` is read-only, `hz-kernel --selftest` cannot create its state dir: run it with a writable `HOME` (for example `HOME=$(mktemp -d)`). If `~/.cargo` is read-only, set `CARGO_HOME` to a writable path.
 
 **Skills smoke (30 seconds):**
 ```bash
@@ -188,7 +188,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 
 | Capability | State | Notes |
 |---|---|---|
-| Kernel, guard, receipts, hash-chained logs | VERIFIED | `cargo test` 47 + 50; selftest 25 checks; e2e receipts present |
+| Kernel, guard, receipts, hash-chained logs | VERIFIED | `cargo test` 49 + 50 (root and uid 1000); selftest 25 checks; e2e receipts present |
 | Agent loop, budgets, format rail, batches | VERIFIED | e2e budget exit 5, usage exit 2 |
 | Safety rails: loop detection, mistake tracker, repeat-tool | TESTED, WIRED | ruling 40 |
 | Edit ladder superset (CRLF, unicode fold) | TESTED, WIRED | ruling 41 |
@@ -197,7 +197,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Server mode (single-attach NDJSON JSON-RPC v1) | TESTED, WIRED | single client; no UDS/TCP/HTTP, no SDKs |
 | Conversational rewind + file checkpoints | TESTED, WIRED | |
 | Session fork | NOT STARTED | designed in `docs/12`; no code |
-| OS sandbox | PARTIAL: TESTED seams | allowlist, egress decider, `SandboxMode` ladder (rulings 42-44); no OS confinement backend, no MITM/egress proxy |
+| OS sandbox | PARTIAL: TESTED seams | allowlist, egress decider, `SandboxMode` ladder (rulings 42-44, 51). Capability detection exists; enforcement does not. No Landlock ruleset, seccomp filter, netns or rlimit is applied to any spawned process, so `sandbox.report` reports no dimension `enforced`, `read-only`/`workspace-write` return `SANDBOX_UNAVAILABLE` on every host, and a Landlock-capable host is reported the same fail-closed way (detection shows up as `available` / `hostCapabilities`). Before 2026-11-09 the report claimed `enforced` for detected mechanisms; fixed. No MITM/egress proxy |
 | MITM / egress proxy | NOT STARTED | egress decisions are recorded, nothing intercepts traffic |
 | Interactive PTY exec (`shell_session`) | TESTED, WIRED | |
 | LSP loop + diagnostics ledger | TESTED, WIRED | default off; needs a user-configured server |
@@ -216,7 +216,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Memory tiers / background "dream" consolidation | NOT STARTED | project memory files (AGENTS.md hierarchy) ship; episodic/semantic tiers and dream are DESIGNED |
 | Fullscreen TUI renderer | NOT STARTED | readline chat loop ships |
 | Same-model head-to-head benchmarks | NOT STARTED | eval runner ships; needs provider keys |
-| Hosted CI | CODE_PRESENT | workflow file tracked; needs a token with `workflow` scope to install |
+| Hosted CI | WIRED | runs on PR #16; the run on `72ad830` passed install + typecheck and failed 4 host-dependent sandbox tests, fixed here (ruling 51); next run not yet observed |
 
 ### 5.0.1 Specialised agents (planner, coder, reviewer): analysis
 

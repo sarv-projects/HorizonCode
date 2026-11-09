@@ -57,6 +57,7 @@ import {
   tempDir,
   type EnvSnapshot,
   type KernelReply,
+  permissionBitsBind,
 } from "./helpers";
 
 let envBackup: EnvSnapshot;
@@ -460,7 +461,7 @@ describe("malformed policy fails closed (finding 6)", () => {
 /* ------------------------------ finding 7 ------------------------------ */
 
 describe("fallback read refusal (finding 7)", () => {
-  test("an unreadable chain refuses the append and leaves the bytes alone", async () => {
+  test.skipIf(!permissionBitsBind)("an unreadable chain refuses the append and leaves the bytes alone", async () => {
     const fx = fixture("hz-read-chain-");
     const stream = "session:read-chain";
     const chain = eventFilePath(fx.stateDir, stream);
@@ -482,7 +483,7 @@ describe("fallback read refusal (finding 7)", () => {
     expect(readJsonl<{ seq: number }>(chain).map((record) => record.seq)).toEqual([1, 2]);
   });
 
-  test("an unreadable anchor refuses the append and leaves the bytes alone", async () => {
+  test.skipIf(!permissionBitsBind)("an unreadable anchor refuses the append and leaves the bytes alone", async () => {
     const fx = fixture("hz-read-head-");
     const stream = "session:read-head";
     const chain = eventFilePath(fx.stateDir, stream);
@@ -517,7 +518,7 @@ describe("fallback read refusal (finding 7)", () => {
     await client.close();
   });
 
-  test("the trusted kernel refuses the same unreadable chain and anchor", async () => {
+  test.skipIf(!permissionBitsBind)("the trusted kernel refuses the same unreadable chain and anchor", async () => {
     if (!hasRustKernel) return;
     const fx = fixture("hz-read-rust-");
     const stream = "s:read-rust";

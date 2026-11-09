@@ -24,23 +24,18 @@
 //!       silent `enforced`, NEVER silently unconfined (docs/11 S1/S2/S4/S5).
 //!
 //! THE FAIL-CLOSED RULE (docs/11 S1/S4, dsh SANDBOX_UNAVAILABLE). `read-only`
-//! and `workspace-write` REQUIRE kernel-enforced per-path FS confinement. On
-//! both host classes we target (the gVisor `4.19.0-gvisor` deployment kernel of
-//! the landlock spike AND this build host, Linux 6.1.189-amzn2023), there is NO
-//! active FS-LSM: the spike's gVisor reports Landlock ENOSYS with no LSM list;
-//! this host has the `landlock_create_ruleset` symbol but NO
-//! `/sys/kernel/security/lsm` list, so Landlock FS confinement is NOT usable
-//! (the probe `ops/landlock-probe.sh` decides on the LSM list, not the syscall
-//! alone). bubblewrap exists here (`/usr/bin/bwrap`, 0.12.0) but without an
-//! FS-LSM backing the bwrap binary cannot by itself provide kernel-enforced
-//! per-path FS confinement, so FS-via-bwrap is reported `best_effort`/
-//! `unsupported` with a residual — NEVER `enforced`. Therefore a request for a
-//! mode that DEMANDS FS enforcement yields `SANDBOX_UNAVAILABLE` (the explicit,
-//! documented fail-closed choice — "fail when the mode requires the missing
-//! dimension"). The mechanisms that DO work here (seccomp ERRNO/KILL, rlimits,
-//! netns for the process/network dimensions) are reported `enforced`/
-//! `best_effort` with evidence. `danger-full-access` reports NO dimension
-//! enforced (S4).
+//! and `workspace-write` REQUIRE kernel-enforced per-path FS confinement. This
+//! kernel has NO OS confinement backend: nothing ever applies a Landlock
+//! ruleset, seccomp filter, netns or rlimit to a spawned process (docs/28
+//! ruling 44). The ladder is a REPORTING/admission seam only. A dimension is
+//! therefore `enforced` ONLY when the host OFFERS the mechanism (capability
+//! detection) AND this kernel APPLIES it (`AppliedMechanisms`, all-false today).
+//! Detection is reported separately (`available` per dimension, additive
+//! `hostCapabilities`) and is never converted into enforcement. A Landlock-
+//! capable host is reported exactly like a host without Landlock: a mode that
+//! DEMANDS FS enforcement yields `SANDBOX_UNAVAILABLE`, whose reason says
+//! whether the capability exists but is not applied. `danger-full-access`
+//! reports NO dimension enforced (S4).
 //!
 //! LAW reuse: nothing here invents a hash. Where a digest or canonical form is
 //! needed (`EnforcementReport::to_canonical_json`) it goes through
@@ -383,6 +378,9 @@ pub struct DimensionReport {
     pub backend: String,
     /// NON-EMPTY whenever the guarantee is below `enforced`; the typed residual.
     pub residual: String,
+    /// Whether the HOST offers the mechanism for this dimension (capability
+    /// detection). Informational only: `available` NEVER implies `enforced`.
+    pub available: bool,
 }
 
 impl DimensionReport {
@@ -392,6 +390,7 @@ impl DimensionReport {
             "guarantee": self.guarantee.as_str(),
             "backend": self.backend,
             "residual": self.residual,
+            "available": self.available,
         })
     }
 }
@@ -408,6 +407,8 @@ pub enum EnforcementOutcome {
     Unavailable {
         mode: SandboxMode,
         reason: String,
+        /// What the host offers (detection only; not enforcement).
+        host_capabilities: Capabilities,
     },
 }
 
@@ -419,10 +420,15 @@ impl EnforcementOutcome {
     pub fn to_json(&self) -> Value {
         match self {
             EnforcementOutcome::Report(report) => report.to_json(),
-            EnforcementOutcome::Unavailable { mode, reason } => json!({
+            EnforcementOutcome::Unavailable {
+                mode,
+                reason,
+                host_capabilities,
+            } => json!({
                 "status": "sandbox_unavailable",
                 "mode": mode.as_str(),
                 "reason": reason,
+                "hostCapabilities": host_capabilities.to_json(),
             }),
         }
     }
@@ -447,6 +453,8 @@ pub struct EnforcementReport {
     /// demand full enforcement (so the report is `partial` rather than
     /// `SANDBOX_UNAVAILABLE`); names what is unavailable.
     pub unavailable_reason: Option<String>,
+    /// What the host offers (detection only; not enforcement).
+    pub host_capabilities: Capabilities,
 }
 
 impl EnforcementReport {
@@ -458,6 +466,7 @@ impl EnforcementReport {
             "completeness": self.completeness.as_str(),
             "backend": self.backend,
             "dimensions": dims,
+            "hostCapabilities": self.host_capabilities.to_json(),
         });
         if let Some(reason) = &self.unavailable_reason {
             obj.as_object_mut()
@@ -501,6 +510,21 @@ pub struct Capabilities {
     pub rlimits: bool,
     /// Network namespaces are available (netns — network-off confinement).
     pub netns: bool,
+}
+
+impl Capabilities {
+    /// The wire form (additive `hostCapabilities`): what the host OFFERS. Not a
+    /// statement about what this kernel enforces.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "landlockFs": self.landlock_fs,
+            "bwrapPresent": self.bwrap_present,
+            "userns": self.userns,
+            "seccomp": self.seccomp,
+            "rlimits": self.rlimits,
+            "netns": self.netns,
+        })
+    }
 }
 
 static CAPABILITIES: OnceLock<Capabilities> = OnceLock::new();
@@ -668,27 +692,71 @@ fn detect_netns() -> bool {
 
 /* ----------------------------- mode composition ---------------------------- */
 
-/// Compose a requested `SandboxMode` into an `EnforcementOutcome` against the
-/// LIVE host capabilities, FAIL-CLOSED (docs/11 S1-S9):
+/// Which confinement mechanisms THIS KERNEL ACTUALLY APPLIES to child
+/// processes. This is deliberately separate from `Capabilities` (what the host
+/// OFFERS): a dimension may be reported `enforced` ONLY when the host offers the
+/// mechanism AND this kernel applies it. Detection is not enforcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppliedMechanisms {
+    /// A Landlock ruleset is applied to shell/code execution.
+    pub filesystem: bool,
+    /// A netns (or equivalent) is applied to shell/code execution.
+    pub network: bool,
+    /// A seccomp filter is applied to shell/code execution.
+    pub process: bool,
+    /// rlimits are applied to shell/code execution.
+    pub resources: bool,
+}
+
+impl AppliedMechanisms {
+    /// Nothing is applied.
+    pub const fn none() -> Self {
+        AppliedMechanisms {
+            filesystem: false,
+            network: false,
+            process: false,
+            resources: false,
+        }
+    }
+}
+
+/// What this kernel applies TODAY: nothing. There is no OS confinement backend
+/// anywhere in the kernel (no Landlock ruleset, seccomp filter, netns or rlimit
+/// is ever installed on a spawned process; docs/28 ruling 44). The ladder is a
+/// reporting/admission seam only. Flip a field here ONLY in the same change that
+/// really applies the mechanism to child processes.
+pub const fn kernel_applied_mechanisms() -> AppliedMechanisms {
+    AppliedMechanisms::none()
+}
+
+/// Compose a requested `SandboxMode` into an `EnforcementOutcome`, FAIL-CLOSED
+/// (docs/11 S1-S9). Both inputs are PARAMETERS so the ladder is deterministic
+/// and host-independent; only the outermost caller probes the live host
+/// (`capabilities()`) and passes `kernel_applied_mechanisms()`.
 ///
-///   - `read-only` / `workspace-write` REQUIRE FS confinement. If Landlock FS
-///     is not usable (both host classes), the FS dimension cannot be enforced,
-///     so we return `SANDBOX_UNAVAILABLE` (the explicit fail-closed choice:
-///     "fail when the mode requires the missing dimension" — NEVER a silent
-///     `enforced`, NEVER silently unconfined).
-///   - `danger-full-access` reports NO dimension enforced (S4): it is
-///     deliberately the user's ambient authority.
+///   - `read-only` / `workspace-write` REQUIRE FS confinement that is both
+///     available on the host AND applied by this kernel. Otherwise the result is
+///     `SANDBOX_UNAVAILABLE` (never a silent `enforced`, never silently
+///     unconfined). A Landlock-capable host is reported the same fail-closed way
+///     while the kernel applies no ruleset; the reason says the capability is
+///     available but not applied.
+///   - `danger-full-access` reports NO dimension enforced (S4).
 ///
 /// Set `demand_full = true` (the default for an FS-confined mode) to get the
 /// `SANDBOX_UNAVAILABLE` fail. A caller that can tolerate a partial boundary may
 /// pass `demand_full = false` to instead receive an `EnforcementReport` with
 /// `completeness = partial`, the FS dimension `unsupported`, a NON-EMPTY
 /// residual, and an explicit backend/`none` (S2/S5).
-pub fn enforce(mode: SandboxMode, caps: &Capabilities, demand_full: bool) -> EnforcementOutcome {
+pub fn enforce(
+    mode: SandboxMode,
+    caps: &Capabilities,
+    applied: &AppliedMechanisms,
+    demand_full: bool,
+) -> EnforcementOutcome {
     match mode {
-        SandboxMode::DangerFullAccess => danger_full_access_report(),
+        SandboxMode::DangerFullAccess => danger_full_access_report(caps),
         SandboxMode::ReadOnly | SandboxMode::WorkspaceWrite => {
-            confined_outcome(mode, caps, demand_full)
+            confined_outcome(mode, caps, applied, demand_full)
         }
     }
 }
@@ -696,27 +764,19 @@ pub fn enforce(mode: SandboxMode, caps: &Capabilities, demand_full: bool) -> Enf
 /// `danger-full-access`: NO dimension enforced (S4). Every dimension is
 /// `unsupported` with a residual naming that nothing confines this mode, backend
 /// `none`. Completeness is `partial` (nothing is fully enforced).
-fn danger_full_access_report() -> EnforcementOutcome {
+fn danger_full_access_report(caps: &Capabilities) -> EnforcementOutcome {
     let residual = "danger-full-access runs with the user's ambient authority; no dimension is confined (docs/11 S4)".to_string();
+    let dim = |name: &str, available: bool| DimensionReport {
+        dimension: name.to_string(),
+        guarantee: Guarantee::Unsupported,
+        backend: "none".to_string(),
+        residual: residual.clone(),
+        available,
+    };
     let dims = vec![
-        DimensionReport {
-            dimension: "filesystem".to_string(),
-            guarantee: Guarantee::Unsupported,
-            backend: "none".to_string(),
-            residual: residual.clone(),
-        },
-        DimensionReport {
-            dimension: "network".to_string(),
-            guarantee: Guarantee::Unsupported,
-            backend: "none".to_string(),
-            residual: residual.clone(),
-        },
-        DimensionReport {
-            dimension: "process".to_string(),
-            guarantee: Guarantee::Unsupported,
-            backend: "none".to_string(),
-            residual,
-        },
+        dim("filesystem", caps.landlock_fs),
+        dim("network", caps.netns),
+        dim("process", caps.seccomp),
     ];
     EnforcementOutcome::Report(EnforcementReport {
         mode: SandboxMode::DangerFullAccess,
@@ -724,27 +784,22 @@ fn danger_full_access_report() -> EnforcementOutcome {
         dimensions: dims,
         backend: "none".to_string(),
         unavailable_reason: None,
+        host_capabilities: caps.clone(),
     })
 }
 
-/// Compose an FS-confined mode (`read-only`/`workspace-write`) against the live
-/// capabilities. FS confinement is the REQUIRED dimension.
+/// Compose an FS-confined mode (`read-only`/`workspace-write`). FS confinement
+/// is the REQUIRED dimension: it must be available AND applied.
 fn confined_outcome(
     mode: SandboxMode,
     caps: &Capabilities,
+    applied: &AppliedMechanisms,
     demand_full: bool,
 ) -> EnforcementOutcome {
-    // The decisive gate: kernel-enforced per-path FS confinement.
-    if !caps.landlock_fs {
-        // bwrap may exist but cannot provide kernel-enforced FS confinement
-        // without an FS-LSM backing — so the FS dimension is NOT enforceable.
-        let backend_note = if caps.bwrap_present {
-            "bwrap present but no FS-LSM backing (Landlock inactive)"
-        } else {
-            "no Landlock/bwrap FS backend"
-        };
+    if !(caps.landlock_fs && applied.filesystem) {
+        let backend_note = fs_unmet_note(caps, applied);
         let reason = format!(
-            "SANDBOX_UNAVAILABLE: {} mode requires kernel-enforced per-path FS confinement, which is unavailable here ({}); failing closed rather than running unconfined (docs/11 S1/S4)",
+            "SANDBOX_UNAVAILABLE: {} mode requires kernel-enforced per-path FS confinement, which is not enforced here ({}); failing closed rather than running unconfined (docs/11 S1/S4)",
             mode.as_str(),
             backend_note
         );
@@ -754,64 +809,98 @@ fn confined_outcome(
             return EnforcementOutcome::Unavailable {
                 mode,
                 reason,
+                host_capabilities: caps.clone(),
             };
         }
         // Tolerant caller: a PARTIAL report with the FS dimension unsupported +
         // a non-empty residual + an explicit backend/'none' (never 'enforced').
-        return EnforcementOutcome::Report(partial_confined_report(mode, caps, reason));
+        return EnforcementOutcome::Report(partial_confined_report(mode, caps, applied, reason));
     }
 
-    // (Not reachable on either target host class; kept for correctness on a
-    // hypothetical host with an active Landlock LSM.) FS is enforceable.
-    EnforcementOutcome::Report(full_confined_report(mode, caps))
+    // Only reachable when the host offers Landlock AND the kernel applies it
+    // (a future confinement backend; `kernel_applied_mechanisms()` is all-false
+    // today, so no live call gets here).
+    EnforcementOutcome::Report(full_confined_report(mode, caps, applied))
 }
 
-/// The PARTIAL report for an FS-confined mode when FS confinement is NOT usable:
-/// FS `unsupported` (residual + backend `none`), and the mechanisms that DO work
-/// here reported with evidence (seccomp/netns `enforced` where live, rlimits
-/// `best_effort`).
-fn partial_confined_report(
-    mode: SandboxMode,
+/// Why FS confinement is not enforced, in plain words.
+fn fs_unmet_note(caps: &Capabilities, applied: &AppliedMechanisms) -> String {
+    if caps.landlock_fs && !applied.filesystem {
+        "Landlock is available on this host but this kernel does not apply a ruleset to executed processes yet".to_string()
+    } else if caps.bwrap_present {
+        "bwrap present but no FS-LSM backing (Landlock inactive), and this kernel applies no FS confinement".to_string()
+    } else {
+        "no Landlock/bwrap FS backend, and this kernel applies no FS confinement".to_string()
+    }
+}
+
+/// The filesystem dimension: `enforced` only when available AND applied.
+fn filesystem_dimension(
     caps: &Capabilities,
+    applied: &AppliedMechanisms,
     fs_residual: String,
-) -> EnforcementReport {
-    let dims = vec![
-        DimensionReport {
-            dimension: "filesystem".to_string(),
-            guarantee: Guarantee::Unsupported,
-            backend: "none".to_string(),
-            residual: fs_residual,
-        },
-        network_dimension(caps),
-        process_dimension(caps),
-        rlimits_dimension(caps),
-    ];
-    EnforcementReport {
-        mode,
-        completeness: EnforcementCompleteness::Partial,
-        dimensions: dims,
-        // The primary confinement backend is FS; it is unavailable -> 'none'.
-        backend: "none".to_string(),
-        unavailable_reason: Some(
-            "filesystem confinement is unavailable (no active Landlock LSM); this report is partial"
-                .to_string(),
-        ),
-    }
-}
-
-/// The FULL report for an FS-confined mode when FS confinement IS usable (only
-/// reached on a host with an active Landlock LSM — not either target class).
-fn full_confined_report(mode: SandboxMode, caps: &Capabilities) -> EnforcementReport {
-    let dims = vec![
+) -> DimensionReport {
+    if caps.landlock_fs && applied.filesystem {
         DimensionReport {
             dimension: "filesystem".to_string(),
             guarantee: Guarantee::Enforced,
             backend: "landlock".to_string(),
             residual: String::new(),
-        },
-        network_dimension(caps),
-        process_dimension(caps),
-        rlimits_dimension(caps),
+            available: true,
+        }
+    } else {
+        DimensionReport {
+            dimension: "filesystem".to_string(),
+            guarantee: Guarantee::Unsupported,
+            backend: "none".to_string(),
+            residual: fs_residual,
+            available: caps.landlock_fs,
+        }
+    }
+}
+
+/// The PARTIAL report for an FS-confined mode when FS confinement is NOT
+/// enforced: FS `unsupported` (residual + backend `none`) and every other
+/// dimension reported by the same available-AND-applied rule.
+fn partial_confined_report(
+    mode: SandboxMode,
+    caps: &Capabilities,
+    applied: &AppliedMechanisms,
+    fs_residual: String,
+) -> EnforcementReport {
+    let dims = vec![
+        filesystem_dimension(caps, applied, fs_residual),
+        network_dimension(caps, applied),
+        process_dimension(caps, applied),
+        rlimits_dimension(caps, applied),
+    ];
+    EnforcementReport {
+        mode,
+        completeness: EnforcementCompleteness::Partial,
+        dimensions: dims,
+        // The primary confinement backend is FS; it is not enforced -> 'none'.
+        backend: "none".to_string(),
+        unavailable_reason: Some(
+            "filesystem confinement is not enforced (the kernel applies no confinement mechanism); this report is partial"
+                .to_string(),
+        ),
+        host_capabilities: caps.clone(),
+    }
+}
+
+/// The FULL report for an FS-confined mode when FS confinement IS available and
+/// applied (a future confinement backend; unreachable with today's all-false
+/// `kernel_applied_mechanisms()`).
+fn full_confined_report(
+    mode: SandboxMode,
+    caps: &Capabilities,
+    applied: &AppliedMechanisms,
+) -> EnforcementReport {
+    let dims = vec![
+        filesystem_dimension(caps, applied, String::new()),
+        network_dimension(caps, applied),
+        process_dimension(caps, applied),
+        rlimits_dimension(caps, applied),
     ];
     let completeness = if dims.iter().all(|d| d.guarantee == Guarantee::Enforced) {
         EnforcementCompleteness::Full
@@ -824,67 +913,87 @@ fn full_confined_report(mode: SandboxMode, caps: &Capabilities) -> EnforcementRe
         dimensions: dims,
         backend: "landlock".to_string(),
         unavailable_reason: None,
+        host_capabilities: caps.clone(),
     }
 }
 
-/// The network dimension from the live capabilities: `enforced` via `netns`
-/// when available, else `unsupported` with a residual + backend `none`.
-fn network_dimension(caps: &Capabilities) -> DimensionReport {
-    if caps.netns {
+/// Residual for a mechanism that is not enforced: says whether the host offers
+/// it (so "available but not applied" is never confused with "unavailable").
+fn unmet_residual(available: bool, what: &str, mechanism: &str) -> String {
+    if available {
+        format!(
+            "{}: available on this host but this kernel does not apply it yet; {} not confined at the OS layer",
+            mechanism, what
+        )
+    } else {
+        format!("{}: unavailable on this host and not applied; {} not confined at the OS layer", mechanism, what)
+    }
+}
+
+/// The network dimension: `enforced` via `netns` only when available AND
+/// applied, else `unsupported` with a residual + backend `none`.
+fn network_dimension(caps: &Capabilities, applied: &AppliedMechanisms) -> DimensionReport {
+    if caps.netns && applied.network {
         DimensionReport {
             dimension: "network".to_string(),
             guarantee: Guarantee::Enforced,
             backend: "netns".to_string(),
             residual: String::new(),
+            available: true,
         }
     } else {
         DimensionReport {
             dimension: "network".to_string(),
             guarantee: Guarantee::Unsupported,
             backend: "none".to_string(),
-            residual: "network namespaces unavailable; egress is not confined at the OS layer".to_string(),
+            residual: unmet_residual(caps.netns, "egress", "network namespaces"),
+            available: caps.netns,
         }
     }
 }
 
-/// The process (syscall) dimension: `enforced` via `seccomp` when available,
-/// else `unsupported` with a residual + backend `none`.
-fn process_dimension(caps: &Capabilities) -> DimensionReport {
-    if caps.seccomp {
+/// The process (syscall) dimension: `enforced` via `seccomp` only when available
+/// AND applied, else `unsupported` with a residual + backend `none`.
+fn process_dimension(caps: &Capabilities, applied: &AppliedMechanisms) -> DimensionReport {
+    if caps.seccomp && applied.process {
         DimensionReport {
             dimension: "process".to_string(),
             guarantee: Guarantee::Enforced,
             backend: "seccomp".to_string(),
             residual: String::new(),
+            available: true,
         }
     } else {
         DimensionReport {
             dimension: "process".to_string(),
             guarantee: Guarantee::Unsupported,
             backend: "none".to_string(),
-            residual: "seccomp unavailable; syscalls are not filtered at the OS layer".to_string(),
+            residual: unmet_residual(caps.seccomp, "syscalls", "seccomp"),
+            available: caps.seccomp,
         }
     }
 }
 
-/// The resource (rlimits) dimension: `best_effort` when rlimits are settable (a
-/// limit bounds resources but is not a hard confinement boundary, so it is never
-/// `enforced`), else `unsupported`. A below-`enforced` guarantee always carries
-/// a non-empty residual (S2).
-fn rlimits_dimension(caps: &Capabilities) -> DimensionReport {
-    if caps.rlimits {
+/// The resource (rlimits) dimension: `best_effort` only when rlimits are
+/// available AND applied (a limit bounds resources but is not a hard boundary,
+/// so never `enforced`), else `unsupported`. A below-`enforced` guarantee always
+/// carries a non-empty residual (S2).
+fn rlimits_dimension(caps: &Capabilities, applied: &AppliedMechanisms) -> DimensionReport {
+    if caps.rlimits && applied.resources {
         DimensionReport {
             dimension: "resources".to_string(),
             guarantee: Guarantee::BestEffort,
             backend: "rlimits".to_string(),
             residual: "rlimits bound resources but are not a confinement boundary (best effort)".to_string(),
+            available: true,
         }
     } else {
         DimensionReport {
             dimension: "resources".to_string(),
             guarantee: Guarantee::Unsupported,
             backend: "none".to_string(),
-            residual: "rlimits unavailable".to_string(),
+            residual: unmet_residual(caps.rlimits, "resource use", "rlimits"),
+            available: caps.rlimits,
         }
     }
 }
@@ -1078,108 +1187,177 @@ mod tests {
 
     /* --- capability detection + mode composition --- */
 
+    /// Synthetic capability sets: the ladder tests never read the live host.
+    fn caps_none() -> Capabilities {
+        Capabilities {
+            landlock_fs: false,
+            bwrap_present: false,
+            userns: false,
+            seccomp: false,
+            rlimits: false,
+            netns: false,
+        }
+    }
+
+    fn caps_all() -> Capabilities {
+        Capabilities {
+            landlock_fs: true,
+            bwrap_present: true,
+            userns: true,
+            seccomp: true,
+            rlimits: true,
+            netns: true,
+        }
+    }
+
+    fn all_applied() -> AppliedMechanisms {
+        AppliedMechanisms {
+            filesystem: true,
+            network: true,
+            process: true,
+            resources: true,
+        }
+    }
+
     #[test]
     fn capability_detection_never_panics() {
-        // Every detector must return cleanly (true or false) and never panic.
+        // Every detector must return cleanly and never panic. The VALUES are
+        // host-dependent and deliberately NOT asserted.
         let caps = detect_capabilities();
-        // On every target host class we confine, Landlock FS is NOT usable
-        // (no active LSM list) and bwrap presence does NOT make FS enforced.
-        assert!(
-            !caps.landlock_fs,
-            "Landlock FS must not be reported usable without an active LSM list"
-        );
         // Caching returns the same posture.
         assert_eq!(capabilities(), capabilities());
+        // Detection is internally consistent: Landlock FS needs a usable ABI.
+        if caps.landlock_fs {
+            assert!(landlock_abi_usable() && lsm_list_contains_landlock());
+        }
     }
 
     #[test]
-    fn fs_confined_modes_fail_closed_here() {
-        // Use the LIVE host capabilities: FS confinement is unavailable, so a
-        // mode that demands it yields SANDBOX_UNAVAILABLE (never 'enforced').
-        let caps = capabilities();
-        for mode in [SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite] {
-            let outcome = enforce(mode, caps, true);
-            match outcome {
-                EnforcementOutcome::Unavailable { mode: m, reason } => {
-                    assert_eq!(m, mode);
-                    assert!(reason.contains("SANDBOX_UNAVAILABLE"));
-                    assert!(!reason.is_empty());
+    fn kernel_applies_no_mechanism_today() {
+        // Honesty pin: no confinement backend exists. If this changes, the
+        // change must also apply the mechanism to spawned processes.
+        assert_eq!(kernel_applied_mechanisms(), AppliedMechanisms::none());
+    }
+
+    #[test]
+    fn fs_confined_modes_fail_closed_with_and_without_landlock() {
+        // Host-independent: BOTH a no-Landlock and a Landlock-detected host
+        // fail closed, because the kernel applies nothing.
+        let applied = kernel_applied_mechanisms();
+        for caps in [caps_none(), caps_all()] {
+            for mode in [SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite] {
+                match enforce(mode, &caps, &applied, true) {
+                    EnforcementOutcome::Unavailable { mode: m, reason, host_capabilities } => {
+                        assert_eq!(m, mode);
+                        assert!(reason.contains("SANDBOX_UNAVAILABLE"));
+                        assert_eq!(host_capabilities, caps);
+                        if caps.landlock_fs {
+                            assert!(
+                                reason.contains("available on this host but this kernel does not apply"),
+                                "{}",
+                                reason
+                            );
+                        }
+                    }
+                    other => panic!("expected SANDBOX_UNAVAILABLE for {:?}, got {:?}", mode, other),
                 }
-                other => panic!("expected SANDBOX_UNAVAILABLE for {:?}, got {:?}", mode, other),
             }
         }
     }
 
     #[test]
-    fn fs_confined_partial_report_has_nonempty_residual_and_explicit_backend() {
-        // A tolerant caller (demand_full=false) gets a PARTIAL report with the
-        // FS dimension unsupported, a NON-EMPTY residual, and backend 'none' —
-        // never a silent 'enforced'.
-        let caps = capabilities();
-        let outcome = enforce(SandboxMode::WorkspaceWrite, caps, false);
-        let report = match outcome {
-            EnforcementOutcome::Report(r) => r,
-            other => panic!("expected a partial report, got {:?}", other),
-        };
-        assert_eq!(report.completeness, EnforcementCompleteness::Partial);
-        assert_eq!(report.backend, "none");
-        let fs = report
-            .dimensions
-            .iter()
-            .find(|d| d.dimension == "filesystem")
-            .expect("a filesystem dimension");
-        assert_eq!(fs.guarantee, Guarantee::Unsupported);
-        assert_eq!(fs.backend, "none");
-        assert!(!fs.residual.is_empty(), "FS residual must be non-empty (S2)");
-        // No dimension is silently 'enforced' for the FS requirement: FS is not.
-        assert_ne!(fs.guarantee, Guarantee::Enforced);
-        // Every below-enforced dimension carries a non-empty residual (S2).
-        for d in &report.dimensions {
-            if d.guarantee != Guarantee::Enforced {
-                assert!(
-                    !d.residual.is_empty(),
-                    "dimension {} below enforced must carry a residual",
-                    d.dimension
-                );
+    fn partial_report_never_claims_enforcement_even_with_every_capability() {
+        let applied = kernel_applied_mechanisms();
+        for caps in [caps_none(), caps_all()] {
+            let report = match enforce(SandboxMode::WorkspaceWrite, &caps, &applied, false) {
+                EnforcementOutcome::Report(r) => r,
+                other => panic!("expected a partial report, got {:?}", other),
+            };
+            assert_eq!(report.completeness, EnforcementCompleteness::Partial);
+            assert_eq!(report.backend, "none");
+            assert!(
+                report.has_no_enforced_dimension(),
+                "no mechanism is applied, so nothing may be enforced: {:?}",
+                report
+            );
+            let fs = report
+                .dimensions
+                .iter()
+                .find(|d| d.dimension == "filesystem")
+                .expect("a filesystem dimension");
+            assert_eq!(fs.guarantee, Guarantee::Unsupported);
+            assert_eq!(fs.backend, "none");
+            assert_eq!(fs.available, caps.landlock_fs);
+            assert!(!fs.residual.is_empty(), "FS residual must be non-empty (S2)");
+            for d in &report.dimensions {
+                assert_ne!(d.guarantee, Guarantee::Enforced, "{}", d.dimension);
+                assert!(!d.residual.is_empty(), "dimension {} needs a residual", d.dimension);
+                assert_eq!(d.backend, "none", "{}", d.dimension);
             }
-            // Backend is always explicit (a name or 'none'), S5.
-            assert!(!d.backend.is_empty());
+            if caps.landlock_fs {
+                assert!(fs.residual.contains("available on this host but this kernel does not apply"));
+            }
         }
+    }
+
+    #[test]
+    fn enforced_requires_both_available_and_applied() {
+        // The seam for a future backend: only available AND applied is enforced.
+        let report = match enforce(SandboxMode::ReadOnly, &caps_all(), &all_applied(), true) {
+            EnforcementOutcome::Report(r) => r,
+            other => panic!("expected a full report, got {:?}", other),
+        };
+        assert_eq!(report.backend, "landlock");
+        for d in &report.dimensions {
+            if d.dimension == "resources" {
+                assert_eq!(d.guarantee, Guarantee::BestEffort);
+            } else {
+                assert_eq!(d.guarantee, Guarantee::Enforced, "{}", d.dimension);
+            }
+        }
+        // Applied but not available -> not enforced, fail closed.
+        assert!(matches!(
+            enforce(SandboxMode::ReadOnly, &caps_none(), &all_applied(), true),
+            EnforcementOutcome::Unavailable { .. }
+        ));
     }
 
     #[test]
     fn danger_full_access_reports_no_enforced_dimension() {
-        let caps = capabilities();
-        let outcome = enforce(SandboxMode::DangerFullAccess, caps, true);
-        let report = match outcome {
-            EnforcementOutcome::Report(r) => r,
-            other => panic!("expected a report, got {:?}", other),
-        };
-        assert!(
-            report.has_no_enforced_dimension(),
-            "danger-full-access must report NO enforced dimension (S4)"
-        );
-        assert_eq!(report.backend, "none");
-        for d in &report.dimensions {
-            assert_eq!(d.guarantee, Guarantee::Unsupported);
-            assert!(!d.residual.is_empty());
+        for caps in [caps_none(), caps_all()] {
+            let report = match enforce(SandboxMode::DangerFullAccess, &caps, &kernel_applied_mechanisms(), true) {
+                EnforcementOutcome::Report(r) => r,
+                other => panic!("expected a report, got {:?}", other),
+            };
+            assert!(
+                report.has_no_enforced_dimension(),
+                "danger-full-access must report NO enforced dimension (S4)"
+            );
+            assert_eq!(report.backend, "none");
+            for d in &report.dimensions {
+                assert_eq!(d.guarantee, Guarantee::Unsupported);
+                assert!(!d.residual.is_empty());
+            }
         }
     }
 
     #[test]
     fn outcome_json_is_stable_and_typed() {
-        let caps = capabilities();
-        // SANDBOX_UNAVAILABLE json
-        let unavail = enforce(SandboxMode::ReadOnly, caps, true).to_json();
-        assert_eq!(unavail["status"], json!("sandbox_unavailable"));
-        assert_eq!(unavail["mode"], json!("read-only"));
-        assert!(unavail["reason"].as_str().unwrap().contains("SANDBOX_UNAVAILABLE"));
+        for caps in [caps_none(), caps_all()] {
+            let applied = kernel_applied_mechanisms();
+            let unavail = enforce(SandboxMode::ReadOnly, &caps, &applied, true).to_json();
+            assert_eq!(unavail["status"], json!("sandbox_unavailable"));
+            assert_eq!(unavail["mode"], json!("read-only"));
+            assert!(unavail["reason"].as_str().unwrap().contains("SANDBOX_UNAVAILABLE"));
+            assert_eq!(unavail["hostCapabilities"]["landlockFs"], json!(caps.landlock_fs));
 
-        // report json
-        let report = enforce(SandboxMode::DangerFullAccess, caps, true).to_json();
-        assert_eq!(report["status"], json!("report"));
-        assert_eq!(report["mode"], json!("danger-full-access"));
-        assert_eq!(report["completeness"], json!("partial"));
-        assert!(report["dimensions"].is_array());
+            let report = enforce(SandboxMode::DangerFullAccess, &caps, &applied, true).to_json();
+            assert_eq!(report["status"], json!("report"));
+            assert_eq!(report["mode"], json!("danger-full-access"));
+            assert_eq!(report["completeness"], json!("partial"));
+            assert!(report["dimensions"].is_array());
+            assert_eq!(report["hostCapabilities"]["netns"], json!(caps.netns));
+            assert_eq!(report["dimensions"][0]["available"], json!(caps.landlock_fs));
+        }
     }
 }

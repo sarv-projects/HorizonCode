@@ -40,6 +40,7 @@ import {
   snapshotEnv,
   tempDir,
   type EnvSnapshot,
+  permissionBitsBind,
 } from "./helpers";
 
 let envBackup: EnvSnapshot;
@@ -910,7 +911,7 @@ describe.skipIf(!hasRustKernel)("kernel interop (TS fallback <-> Rust kernel)", 
     expect(run.stderr).toContain("HZ_PRECONDITION_FAILED: policy.json rule 1 is malformed");
   });
 
-  test("an unreadable chain refuses appends in both implementations and keeps the bytes", async () => {
+  test.skipIf(!permissionBitsBind)("an unreadable chain refuses appends in both implementations and keeps the bytes", async () => {
     const workspace = tempDir("hz-ws-unreadable-i-");
     const stateDir = path.join(tempDir("hz-state-unreadable-i-"), "kernel");
     const stream = "session:unreadable-i";
