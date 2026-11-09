@@ -383,6 +383,11 @@ describe("shell_session: control characters and incomplete lines", () => {
       expect(r.ok).toBe(false);
       expect(r.error).toContain("too long");
       expect(ctx.guardCalls.length).toBe(before);
+      // 2000 CJK chars = 6000 UTF-8 bytes: under 4000 characters but over the tty byte limit.
+      const cjk = await interactiveExecTool.execute({ mode: "write", sessionId, input: "\u6f22".repeat(2000) + "\n" }, ctx);
+      expect(cjk.ok).toBe(false);
+      expect(cjk.error).toContain("too long");
+      expect(ctx.guardCalls.length).toBe(before);
     });
   });
 });

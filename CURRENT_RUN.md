@@ -199,7 +199,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Session fork | NOT STARTED | designed in `docs/12`; no code |
 | OS sandbox | PARTIAL: TESTED seams | allowlist, egress decider, `SandboxMode` ladder (rulings 42-44, 51). Capability detection exists; enforcement does not. No Landlock ruleset, seccomp filter, netns or rlimit is applied to any spawned process, so `sandbox.report` reports no dimension `enforced`, `read-only`/`workspace-write` return `SANDBOX_UNAVAILABLE` on every host, and a Landlock-capable host is reported the same fail-closed way (detection shows up as `available` / `hostCapabilities`). Before 2026-11-09 the report claimed `enforced` for detected mechanisms; fixed. No MITM/egress proxy |
 | MITM / egress proxy | NOT STARTED | egress decisions are recorded, nothing intercepts traffic |
-| Interactive PTY exec (`shell_session`) | TESTED, WIRED | every `write` is admitted per complete input line as `shell.exec`, control characters refused, lines capped at 4000 chars (tty limit) and shown whole in the prompt (ruling 55); text an approved interpreter acts on later is not inspected |
+| Interactive PTY exec (`shell_session`) | TESTED, WIRED | every `write` is admitted per complete input line as `shell.exec`, control characters refused, lines capped at 4000 bytes (tty limit) and shown whole in the prompt (ruling 55); text an approved interpreter acts on later is not inspected |
 | LSP loop + diagnostics ledger | TESTED, WIRED | default off; needs a user-configured server |
 | DAP (debugger) | NOT STARTED | `docs/09` lists `debug`; no code |
 | Hooks lifecycle (H1) + H9 context channel | TESTED, WIRED | trust gate H7 still open |

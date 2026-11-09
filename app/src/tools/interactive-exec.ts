@@ -511,8 +511,8 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   if (CONTROL_CHARS.test(input)) {
     return fail("control characters are not allowed in shell_session input (only tab and newline)");
   }
-  if (inputLines(session.partial + input).some((l) => l.length > MAX_LINE)) {
-    return fail(`input line too long (max ${MAX_LINE} characters per line); send shorter lines`);
+  if (inputLines(session.partial + input).some((l) => Buffer.byteLength(l, "utf8") > MAX_LINE)) {
+    return fail(`input line too long (max ${MAX_LINE} bytes per line); send shorter lines`);
   }
   // Fail-closed: admission at start covers ONLY the start command. A shell or
   // REPL session executes whatever is typed next, so every write is admitted
