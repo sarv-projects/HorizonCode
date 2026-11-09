@@ -357,6 +357,8 @@ function render(
 async function startSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (typeof args.command !== "string" || args.command.trim() === "") return fail("command is required");
   const command = args.command;
+  const invisibleStart = invisibleUnicodeError(command, "a shell command");
+  if (invisibleStart !== undefined) return fail(invisibleStart);
   if (ctx.signal.aborted) return fail("aborted");
 
   // Guard admission — fail-closed, BEFORE any spawn (reuses shell.exec).

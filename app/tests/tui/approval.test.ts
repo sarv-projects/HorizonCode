@@ -221,4 +221,13 @@ describe("approval prompt fidelity", () => {
     expect(h.text()).toContain("<U+200B>");
     expect(h.text()).not.toContain("\u202e");
   });
+
+  test("control characters and ANSI escapes in a shell.exec detail are shown, not stripped", async () => {
+    const h = harness({ interactive: true, answer: "n" });
+    await h.answer({ kind: "shell.exec", title: "run", detail: "echo a\rb\u001b[8mc\u0000" });
+    expect(h.text()).toContain("<U+000D>");
+    expect(h.text()).toContain("<U+001B>");
+    expect(h.text()).toContain("<U+0000>");
+    expect(h.text()).not.toContain("\u001b");
+  });
 });

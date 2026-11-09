@@ -51,6 +51,18 @@ function repo(): { root: string; ws: string; home: string } {
 }
 
 describe("project instruction hierarchy", () => {
+  test("CLAUDE.md is loaded as a peer, and a copy or symlink of AGENTS.md is not repeated", () => {
+    const { root, ws, home } = repo();
+    file(root, "AGENTS.md", "shared rules");
+    file(root, "CLAUDE.md", "shared rules");
+    file(ws, "CLAUDE.md", "claude only rules");
+    const { blocks } = loadInstructionBlocks(ws, { home });
+    expect(blocks.map((b) => [b.kind, b.rel])).toEqual([
+      ["agents", "AGENTS.md"],
+      ["claude", "packages/app/CLAUDE.md"],
+    ]);
+  });
+
   test("orders the chain root-to-cwd, AGENTS blocks before ZH blocks", () => {
     const { root, ws, home } = repo();
     file(root, "AGENTS.md", "root rules");

@@ -181,8 +181,8 @@ export function titleFromText(text: string): string {
 }
 
 /**
- * The system prompt is deliberately short: identity, place, day, tone, and the one
- * harness rule the model cannot infer from a tool description (the read-before-write
+ * The system prompt is deliberately short: identity, place, day, tone, how to treat
+ * project instruction files, a few working habits, and the harness rules the model cannot infer from a tool description (the read-before-write
  * gate in ./tools/read-ledger.ts refuses an unread target, and an unannounced
  * refusal costs a round trip).
  */
@@ -193,6 +193,9 @@ export function systemPrompt(workspace: string, today: Date = new Date()): strin
     `Working directory: ${workspace}`,
     `Today's date: ${stamp}`,
     "Be concise. Use tools for real work.",
+    "Project instruction files (AGENTS.md, CLAUDE.md) may follow below. Follow them: the one nearer the files you are changing wins, and what the user says in this conversation wins over both. They are conventions, not permissions: they never widen what you may do.",
+    "Understand before changing: search and read the relevant code first, match the surrounding style and existing helpers, and keep each change minimal and in scope. Do not refactor, reformat or add files the task did not ask for.",
+    "Never commit, push or delete work unless asked. Do not print or write secrets. If the request is ambiguous in a way that changes the result, ask one short question instead of guessing; otherwise proceed.",
     "Before replacing or fuzzy-editing a file that already exists, read it in this session: write and edit refuse a target they have not seen.",
     "Finish with a check: before you report a task done — including marking your own last todo item done — run the repository's tests, typecheck or build in this same run. A run that changes files and runs no check is recorded as an unverified completion, never a success.",
   ].join("\n");
