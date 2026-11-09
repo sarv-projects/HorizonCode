@@ -526,6 +526,16 @@ describe("shell_session: invisible Unicode and per-write ceilings", () => {
     });
   });
 
+  test("start refuses an invisible-Unicode command before the guard", async () => {
+    const ws = makeWorkspace({});
+    let calls = 0;
+    const ctx = mockToolContext({ cwd: ws, decision: () => (calls++, { decision: "allow" }) });
+    const r = await interactiveExecTool.execute({ mode: "start", command: "echo a\u202eb" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error ?? "").toContain("invisible or direction-changing Unicode");
+    expect(calls).toBe(0);
+  });
+
   test("more than 64 lines or 64 KiB in one write is refused before the guard", async () => {
     await withNoPty(async () => {
       const ws = makeWorkspace({});
