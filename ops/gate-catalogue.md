@@ -37,7 +37,7 @@ Seven gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). 
 |---|---|---|
 | `rust-kernel-suite` | `cargo test --locked` in `kernel/` (47 + 50 tests on 2026-11-09) | docs/28 §1, Rust trust kernel: `VERIFIED` |
 | `kernel-selftest` | `hz-kernel --selftest --state-dir <fresh tmpdir>` exits 0 with `SELFTEST OK` (release-built first when absent) | docs/28 §1: `SELFTEST OK (25 checks)` (2026-11-09) |
-| `ts-typecheck` | `bun run typecheck` (`tsc --noEmit`) in `app/` reports 0 errors | docs/28 ruling 39 |
+| `ts-typecheck` | `bun run typecheck` (`tsc --noEmit`) in `app/` reports 0 errors; on a clean checkout the gate first runs `bun install` in `app/` (dev type definitions only, the app has no runtime dependencies) and fails with a clear message if that install fails | docs/28 ruling 39 |
 | `ts-suite` | `bun test` in `app/` (1261 tests across 106 files on 2026-11-09) | docs/28 §1, runtime/tools/TUI rows: `TESTED + VERIFIED` |
 | `e2e-headless-smoke` | fresh workspace, `printf 'list files' \| ./bin/hzcode --workspace <tmp>` exits 0, the mock's tool exchange appears in the output, and a non-empty `receipts.jsonl` is left behind | docs/28 §1 e2e rows |
 | `e2e-budget-rail` | the same with `HZ_MAX_STEPS=1` exits 5 with the budget notice | docs/28 §3 ruling 15 |
