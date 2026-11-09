@@ -1818,7 +1818,16 @@ export async function runTurn(
       // rides every non-override dispatch, appended after the project-memory
       // blocks. A miss returns "" and warns via console — it never throws, so a
       // table defect degrades to the base prompt rather than failing the run.
-      const perModel = resolveModelInstructions({ model: deps.model, provider: deps.provider.name });
+      // A plain miss is normal (most models have no tailored block) and must not
+      // write to stderr, which headless/pipe consumers treat as a clean channel;
+      // only a resolution FAILURE surfaces, as a runtime notice.
+      const perModel = resolveModelInstructions({
+        model: deps.model,
+        provider: deps.provider.name,
+        warn: (message) => {
+          if (!message.startsWith("no per-model instruction template")) emit(deps.callbacks, { type: "notice", message });
+        },
+      });
       if (perModel === "") return projectBlocks;
       return `${projectBlocks}\n\n${perModel}\n`;
     })();
