@@ -15,8 +15,12 @@
  */
 
 import type { ApprovalHandler, Lease, Provider, ToolResult } from "../contracts";
+// Hooks v1 lifecycle (docs/15 §2.4 H1): subagent.start/subagent.stop mark the
+// child session boundary (session.start/end for the child), OBSERVATION-only
+// (H4 — a subagent boundary hook can never block the delegated run).
+import { loadHooks, runLifecycleHooks } from "./hooks";
 import type { KernelClient } from "./kernel";
-import { getApprovalHandler, runTurn, type BudgetLedger, type LoopDeps } from "./loop";
+import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
 
@@ -99,7 +103,26 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: clampSteps(opts.maxSteps) }) : undefined,
     // No `delegate`: a subagent can never spawn subagents.
   };
+  // H1 subagent.start/subagent.stop (the child session boundary): OBSERVATION
+  // hooks (H4) loaded once here. Any H9 note they return is already recorded as
+  // an attributed event by the runner; it is not injected into the child's
+  // request (the child drives its own run). A hook here can never block the
+  // delegated run.
+  const hooks = loadHooks(opts.workspace);
+  const subagentDetail = { childSessionId: session.id, task: taskHead(task) };
+  await runLifecycleHooks(hooks, {
+    point: "subagentStart",
+    sessionId: session.id,
+    workspace: opts.workspace,
+    detail: subagentDetail,
+  });
   const { text, aborted, exit } = await runTurn(deps, task);
+  await runLifecycleHooks(hooks, {
+    point: "subagentStop",
+    sessionId: session.id,
+    workspace: opts.workspace,
+    detail: { ...subagentDetail, terminal: exit.terminal, aborted },
+  });
   try {
     // runTurn titles by first message; the subagent title is the better label.
     opts.store.touchSession(session.id, title);

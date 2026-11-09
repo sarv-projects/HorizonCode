@@ -59,7 +59,15 @@ import { mcpAdmissionFor } from "./mcp/registry";
 // Hooks v1 (docs/15 H2–H4 reduced form): pre/post tool middleware that can
 // only narrow — a pre deny sinks into the standard tool-result shape, a post
 // failure is a notice (see hooks.ts for the named differences from HookV1).
-import { loadHooks, runPostToolHooks, runPreToolHooks, type HooksConfig } from "./hooks";
+import {
+  loadHooks,
+  renderHookContextBlock,
+  runLifecycleHooks,
+  runPostToolHooks,
+  runPreToolHooks,
+  type HookContextFragment,
+  type HooksConfig,
+} from "./hooks";
 import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
 // SAFETY-RAILS (FEAT-002): three self-contained loop-level guards, wired here
 // minimally — loop-detection before dispatch, repeat-tool after execute, and
@@ -1142,6 +1150,13 @@ async function collectAssistant(
     instructions?: string;
     /** The plan-mode rail line when the user has plan mode on. */
     planLine?: string;
+    /**
+     * H9 (docs/15 §2.4): the attributed, untrusted, bounded context block built
+     * from hook observation notes collected since the last dispatch. It rides
+     * the system rail as a fenced block the hook bytes cannot break out of — it
+     * is NEVER a forgeable user message.
+     */
+    hookContext?: string;
   },
 ): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
@@ -1159,6 +1174,10 @@ async function collectAssistant(
   if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
   if (rails?.planLine !== undefined && rails.planLine !== "") railParts.push(rails.planLine);
+  // H9: the attributed untrusted hook-context block rides the same system rail
+  // as the pinned task and the corrective note — in context on every step,
+  // never a history rewrite and never a forgeable user turn.
+  if (rails?.hookContext !== undefined && rails.hookContext !== "") railParts.push(rails.hookContext);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
   const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
@@ -1486,6 +1505,9 @@ async function runToolCall(
   faults: RunFaults,
   evidence: RunEvidence,
   hooks: HooksConfig,
+  // H9 (docs/15 §2.4): tool.post observation notes are collected here so the
+  // next provider request can carry them as an attributed untrusted block.
+  hookFragments: HookContextFragment[],
 ): Promise<ToolCallOutcome> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
@@ -1514,9 +1536,10 @@ async function runToolCall(
   }
   const content = toolMessageContent(result, plan.text);
 
-  // hooks v1 post point: an observation hook sees the model-facing text; a
-  // failure here is a notice, never a blocked step (H4).
-  await runPostToolHooks(hooks, {
+  // hooks v1 post point (H1 tool.post): an observation hook sees the
+  // model-facing text; a failure here is a notice, never a blocked step (H4).
+  // Any H9 bounded/attributed context notes are collected for the next request.
+  const postFragments = await runPostToolHooks(hooks, {
     sessionId: deps.sessionId,
     workspace: deps.workspace,
     callId: call.id,
@@ -1528,6 +1551,7 @@ async function runToolCall(
     onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
     onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
   });
+  for (const fragment of postFragments) hookFragments.push(fragment);
 
   try {
     deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
@@ -1707,6 +1731,28 @@ export async function runTurn(
     // cost, zero spawns). A malformed config is a fail-closed refusal state
     // carried by the loader, not an exception here.
     const hooks = deps.hooks ?? loadHooks(deps.workspace);
+    // H9 (docs/15 §2.4): observation-hook context notes gathered this run,
+    // carried into the NEXT provider request as one attributed untrusted block
+    // (never a forgeable user turn). Fragments are consumed once rendered.
+    const hookFragments: HookContextFragment[] = [];
+    // One minimal emitter for the OBSERVATION lifecycle points this stream
+    // wires (H1: step.start/end via turn.start/end, compact.pre/post). A
+    // lifecycle hook may observe and may return an H9 note; it can never block
+    // (H4), so its only effect here is a notice/event and a collected fragment.
+    const emitLifecycle = async (point: "turnStart" | "turnEnd" | "compactPre" | "compactPost", detail?: Record<string, unknown>): Promise<void> => {
+      const fragments = await runLifecycleHooks(hooks, {
+        point,
+        sessionId: deps.sessionId,
+        workspace: deps.workspace,
+        detail,
+        onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+        onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+      });
+      for (const fragment of fragments) hookFragments.push(fragment);
+    };
+    // H1 step.start (turn.start): fire once per turn, after the user message is
+    // appended and before the dispatch loop. Observation-only (H4).
+    await emitLifecycle("turnStart");
     // NF-073: one ledger for the run tree (the main turn and every subagent it
     // spawns); a caller that passes its own ledger shares one ceiling.
     const ledger =
@@ -1779,6 +1825,12 @@ export async function runTurn(
         // The elision is reported, never silent: a notice for the human of this
         // run, and an audit-trail event with the counts for the log.
         compactionAnnounced = true;
+        // H1 compact.pre/compact.post: bound to the one-report-per-run
+        // compaction guard, so the pair fires exactly once — only when a
+        // compaction actually happened, never a per-dispatch storm.
+        // Observation-only (H4). compactHistory is synchronous, so the window
+        // is already computed; pre carries the pending counts, post the result.
+        await emitLifecycle("compactPre", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
         emit(deps.callbacks, { type: "notice", message: view.notice });
         await logEvent(
           deps,
@@ -1797,9 +1849,17 @@ export async function runTurn(
           },
           { kind: "system", id: "hz-loop" },
         );
+        // H1 compact.post: the compaction settled; fire the post half of the
+        // pair (observation-only, H4).
+        await emitLifecycle("compactPost", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
       }
       await logEvent(deps, faults, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
       const combinedCorrective = [corrective, loopNudge].filter((part) => part !== undefined && part !== "").join("\n");
+      // H9: drain any hook context notes collected so far into one attributed
+      // untrusted block for THIS request; clearing them means each note is
+      // injected once, not re-sent on every dispatch.
+      const hookContext = renderHookContextBlock(hookFragments);
+      hookFragments.length = 0;
       const turn = await collectAssistant(deps, history, {
         pinned,
         budgetLine: budgetCountdownLine(ledger.countdown()),
@@ -1808,6 +1868,7 @@ export async function runTurn(
         appendedTokens,
         instructions,
         planLine,
+        hookContext,
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
@@ -1909,7 +1970,7 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks)
+            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments)
               .then((outcome) => {
                 appendedTokens += outcome.tokens;
                 // A plan-mode staged call changed nothing: not a failure. A
@@ -2028,6 +2089,12 @@ export async function runTurn(
         corrective = undefined;
       }
     }
+    // H1 step.end (turn.end): the dispatch loop has left by its single exit
+    // path; fire once, before the turn.done emission below. Observation-only
+    // (H4) — it carries the terminal outcome for the point but never changes
+    // it. Any context note it returns cannot reach this turn (it is over), but
+    // is still recorded as an attributed fragment event.
+    await emitLifecycle("turnEnd", { terminal: exit.terminal, detail: exit.detail });
   } catch (err) {
     emit(deps.callbacks, { type: "error", message: `runtime error: ${errorMessage(err)}` });
     await logEvent(deps, faults, EventTypes.error, { message: errorMessage(err) });

@@ -48,6 +48,9 @@ import {
   streamFor,
 } from "./loop";
 import { makeProvider } from "./providers";
+// Hooks v1 lifecycle (docs/15 §2.4 H1): the runtime seam emits session.start/
+// session.end as OBSERVATION points (H4) alongside the existing event appends.
+import { loadHooks, runLifecycleHooks } from "./hooks";
 import { SessionStore, type SessionInfo } from "./session";
 import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
 import { runNested } from "./subagent";
@@ -580,9 +583,39 @@ class HzRuntimeImpl implements HzRuntime {
       // under a different transport) can never rewrite an earlier run's record.
       kernelMode: this.kernel.mode,
     });
+    // H1 session.start: an OBSERVATION lifecycle hook (H4 — it may observe and
+    // may return an H9 note, but can never block the session opening). Loaded
+    // at the runtime seam; absent config costs nothing.
+    await this.runSessionHook("sessionStart", { provider: this.provider.name, model: this.currentModel });
   }
   private async logSessionEnd(sessionId: string): Promise<void> {
     await this.append(streamFor(sessionId), EventTypes.sessionEnd, { sessionId });
+    // H1 session.end: the OBSERVATION counterpart to session.start (H4).
+    await this.runSessionHook("sessionEnd", {}, sessionId);
+  }
+
+  /**
+   * Run the session.start/session.end hooks (H1), swallowing any H9 context
+   * fragments — there is no active provider request here to carry a note into,
+   * and the fragments are already recorded as attributed `hook.decision`
+   * events by the runner. Observation-only; never blocks (H4).
+   */
+  private async runSessionHook(
+    point: "sessionStart" | "sessionEnd",
+    detail: Record<string, unknown>,
+    sessionId: string = this.session.id,
+  ): Promise<void> {
+    try {
+      await runLifecycleHooks(loadHooks(this.workspace), {
+        point,
+        sessionId,
+        workspace: this.workspace,
+        detail,
+        onNotice: (message) => this.note(message),
+      });
+    } catch {
+      /* a lifecycle hook can never take the session down (H4) */
+    }
   }
 
   /**
