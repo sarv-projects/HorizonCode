@@ -78,6 +78,7 @@ impl Drop for TempDir {
 /// One live `hz-kernel` process speaking NDJSON over stdio.
 struct Kernel {
     child: Child,
+    stderr_path: PathBuf,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
@@ -92,6 +93,15 @@ impl Kernel {
     /// always scrubbed first so the outer environment can never key the tests
     /// by accident.
     fn start_with_env(state_dir: &Path, env: &[(&str, &str)]) -> Kernel {
+        // stderr goes to a per-process file (not inherited) so that a kernel
+        // that dies early can explain itself in the panic message.
+        static STDERR_SEQ: AtomicU64 = AtomicU64::new(0);
+        let stderr_path = std::env::temp_dir().join(format!(
+            "hz-kernel-stderr-{}-{}.log",
+            std::process::id(),
+            STDERR_SEQ.fetch_add(1, Ordering::SeqCst)
+        ));
+        let stderr_file = fs::File::create(&stderr_path).expect("create kernel stderr file");
         let mut command = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
         command
             .arg("--state-dir")
@@ -100,19 +110,48 @@ impl Kernel {
             .env_remove("HZ_ACCEPT_LEGACY_ANCHORS")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::from(stderr_file));
         for (key, value) in env {
             command.env(key, value);
         }
         let mut child = command.spawn().expect("failed to spawn hz-kernel");
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
-        Kernel {
+        let mut kernel = Kernel {
             child,
+            stderr_path,
             stdin,
             stdout,
             next_id: 1,
-        }
+        };
+        // Readiness handshake. The kernel validates `<state>/policy.json` once
+        // at startup and exits 2 on a malformed one, so a test that writes
+        // policy.json right after spawning could race that validation (a
+        // non-atomic `fs::write` is briefly an empty file). Waiting for the
+        // first reply proves startup validation has finished; every later
+        // policy.json write is read per request, in sequence. The probe id is
+        // outside the `next_id` range so request ids stay as the tests expect.
+        kernel.send_line(r#"{"id":0,"method":"ping","params":{}}"#);
+        let ready = kernel.read_response();
+        assert_eq!(ready["id"], json!(0), "readiness ping not echoed: {}", ready);
+        kernel
+    }
+
+    /// Exit status and captured stderr of a kernel that went away early.
+    fn describe_exit(&mut self) -> String {
+        let status = match self.child.try_wait() {
+            Ok(Some(status)) => format!("exited with {}", status),
+            Ok(None) => {
+                let _ = self.child.kill();
+                match self.child.wait() {
+                    Ok(status) => format!("closed stdout but was still running (killed: {})", status),
+                    Err(e) => format!("closed stdout (wait failed: {})", e),
+                }
+            }
+            Err(e) => format!("status unavailable: {}", e),
+        };
+        let stderr = fs::read_to_string(&self.stderr_path).unwrap_or_default();
+        format!("kernel {}; stderr: {:?}", status, stderr)
     }
 
     fn send_line(&mut self, line: &str) {
@@ -126,7 +165,14 @@ impl Kernel {
             .stdout
             .read_line(&mut line)
             .expect("read response line");
-        assert!(n > 0, "kernel closed stdout before answering a request");
+        if n == 0 {
+            // Give a dying child a moment to be reapable so the status is real.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            panic!(
+                "kernel closed stdout before answering a request ({})",
+                self.describe_exit()
+            );
+        }
         serde_json::from_str(line.trim_end())
             .unwrap_or_else(|e| panic!("response is not JSON: {:?} ({})", line, e))
     }
@@ -173,6 +219,7 @@ impl Drop for Kernel {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = fs::remove_file(&self.stderr_path);
     }
 }
 

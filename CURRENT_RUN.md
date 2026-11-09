@@ -218,6 +218,8 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Same-model head-to-head benchmarks | NOT STARTED | eval runner ships; needs provider keys |
 | Hosted CI | WIRED | runs on PR #16; the run on `72ad830` passed install + typecheck and failed 4 host-dependent sandbox tests, fixed here (ruling 51); next run not yet observed |
 
+Flake (ruling 52): `guard_denies_writes_inside_the_state_dir_even_when_policy_allows` failed once on hosted CI for main `606f981`. Root cause is a harness race (test wrote policy.json while the freshly spawned kernel was still doing its startup policy validation, and `fs::write` is briefly an empty file). Fixed by a readiness ping in `Kernel::start_with_env` plus exit status and stderr in the early-close panic. TESTED locally only; hosted CI on main has not been seen green.
+
 ### 5.0.1 Specialised agents (planner, coder, reviewer): analysis
 
 Kiro CLI and Freebuff/Codebuff both route work through specialised agents rather than one prompt: Freebuff's README describes file-finding agents that map the project before editing, implementation and review agents, and a cheap model (a Flash Lite tier) for specialist tasks such as file finding. HorizonCode today has one generic `agent` tool (`app/src/tools/agent.ts`: a task string and a step cap, no tool allow-list, same model, same prompt). The pieces a preset layer needs already exist: `LoopDeps.toolFilter` (per-run tool allow-list), the model-to-tool routing table, per-model prompts, the shared `BudgetLedger` per run tree, and the designed `AgentProfileV1` contract.
