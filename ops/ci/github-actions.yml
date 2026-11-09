@@ -53,6 +53,11 @@ jobs:
         run: cargo build --release --locked
 
       # app/ has no dependencies, so there is no bun install step: the suite
-      # runs straight from the checkout.
+      # runs straight from the checkout. Typecheck first as an explicit,
+      # fast-failing step (the ts-typecheck gate runs it too) so a type error
+      # is named on its own line before the full gate suite starts.
+      - name: Typecheck the app
+        run: cd app && bun run typecheck
+
       - name: Run the gate suite
         run: bash ops/gates.sh

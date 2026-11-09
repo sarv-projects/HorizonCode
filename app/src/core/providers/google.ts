@@ -175,7 +175,7 @@ async function requestWithRetry(
       await delay(waitMs, signal);
     } catch (err) {
       lastError = err;
-      if (signal?.aborted === true || attempt >= attempts) throw err;
+      if (signal?.aborted || attempt >= attempts) throw err;
       const waitMs = backoffDelay(attempt, { baseDelayMs: policy.baseDelayMs, maxDelayMs: policy.maxDelayMs, retryAfterMs: null });
       onRetry({ attempt, error: err, delayMs: waitMs });
       await delay(waitMs, signal);

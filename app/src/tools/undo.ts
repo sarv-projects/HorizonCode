@@ -20,7 +20,7 @@ import { rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
-import { writeAtomic } from "./atomic-write";
+import { isRefused, writeAtomic } from "./atomic-write";
 import {
   BEFORE_MAX_BYTES,
   bindJournalWorkspace,
@@ -169,7 +169,7 @@ export const undoTool: Tool = {
       }
 
       const outcome = await writeAtomic(entry.path, entry.before, ctx);
-      if (!outcome.ok) return fail(outcome.refusal);
+      if (isRefused(outcome)) return fail(outcome.refusal);
       // Append the consume tombstone: a reload must not resurrect this entry.
       consumeChange(ctx.sessionId, entry);
       // The session now holds the restored bytes -- later edits are legitimate.
