@@ -560,6 +560,15 @@ export type RuntimeEvent =
   // (one net diff per file), `files` is how many files changed, `truncated` is
   // set when the total line cap clipped the diff.
   | { type: "turn.diff"; turn: number; files: number; diff: string; truncated?: boolean }
+  // ADDITIVE (S1 P2): a bounded child-run event wrapped for the parent stream.
+  // Like `turn.diff` it is a harness-side facade event, NOT a kernel event
+  // (the 44-name catalogue is unchanged). `agentId` is the child session id,
+  // `name` the delegating tool, `depth` the nesting level (always 1: a
+  // subagent cannot spawn subagents). The runtime forwards only tool.card,
+  // notice, error and the child's final assistant.done, truncates text, and
+  // caps the number of events per child; the TUI renders them nested under
+  // the agent card and the server relays them as ordinary `session.event`s.
+  | { type: "subagent.event"; agentId: string; name: string; depth: number; event: RuntimeEvent }
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {

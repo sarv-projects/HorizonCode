@@ -222,6 +222,8 @@ Flake (ruling 52): `guard_denies_writes_inside_the_state_dir_even_when_policy_al
 
 ### 5.0.0 Stage 1 fixes (2026-11-09)
 
+Also fixed: a delegated subagent's tool cards now reach the parent stream as a bounded `subagent.event` and render nested under the agent card (server mode relays them as `session.event`), and `turn.diff` is rendered at the end of a direct-edit turn (`· changed N file(s)` plus a capped diff; headless prints only the summary on stderr). `docs/28` ruling 54.
+
 Fixed on `fix/tui-serve-subagent-and-session-gate`: `hzcode serve` now answers each request line while stdin stays open (Bun batches pipe stdin until EOF; a Worker with blocking reads feeds the server), `server.hello` reports the real kernel mode before any session, `/files` accounts for all 18 registered tools (available, deferred, hidden by routing), and every turn, plan mode included, returns an exit that the chat bar names when it is not a clean end. See `docs/28` ruling 53.
 
 ### 5.0.1 Specialised agents (planner, coder, reviewer): analysis

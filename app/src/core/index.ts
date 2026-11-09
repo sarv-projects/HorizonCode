@@ -724,6 +724,7 @@ class HzRuntimeImpl implements HzRuntime {
               sessionLeases: this.leases,
               approve: this.instanceApproval ?? getApprovalHandler(),
               ledger,
+              onEvent: (ev) => emit(cb, ev),
             }),
         },
         userContent,
