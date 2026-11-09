@@ -93,7 +93,12 @@ interface Session {
   buffer: string;
   /** True once the buffer hit the cap: the model sees `Total output lines:`. */
   truncated: boolean;
-  /** Raw (uncapped) capture, kept only to spill the original bytes on cap. */
+  /**
+   * Raw (uncapped) capture for THIS read window, kept only to spill the original
+   * bytes on cap. Reset with `buffer` on every `takeBuffer`, so it is both
+   * bounded (never accumulates across the session lifetime) and scoped to the
+   * report it backs (the spilled bytes match the truncated window reported).
+   */
   rawForSpill: string;
   startedAt: number;
   lastActivity: number;
@@ -284,13 +289,21 @@ function spillRawBeforeCap(ctx: ToolContext, modelText: string, raw: string): st
   return modelText;
 }
 
-/** Drain + clear the buffered output for a report; minimised like shell.ts. */
-function takeBuffer(session: Session): { text: string; truncated: boolean } {
+/**
+ * Drain + clear the buffered output for a report; minimised like shell.ts.
+ * `rawForSpill` is cleared here too, in lockstep with `buffer`, so the raw
+ * capture is scoped to exactly this read window: it never grows unbounded over
+ * a long-lived session, and the bytes a later cap spills match the report they
+ * back (not the whole session history).
+ */
+function takeBuffer(session: Session): { text: string; truncated: boolean; raw: string } {
   const minimised = minimiseShellOutput(session.buffer);
   const truncated = session.truncated;
+  const raw = session.rawForSpill;
   session.buffer = "";
   session.truncated = false;
-  return { text: truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, ""), truncated };
+  session.rawForSpill = "";
+  return { text: truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, ""), truncated, raw };
 }
 
 /**
@@ -303,7 +316,7 @@ function render(
   ctx: ToolContext,
   session: Session,
   phase: "running" | "exited",
-  body: { text: string; truncated: boolean },
+  body: { text: string; truncated: boolean; raw: string },
 ): string {
   const lines: string[] = [];
   if (phase === "running") {
@@ -323,7 +336,9 @@ function render(
   lines.push("Output:");
   lines.push(body.text);
   const text = lines.join("\n");
-  return spillRawBeforeCap(ctx, text, session.rawForSpill);
+  // Spill the raw bytes for THIS read window (captured by takeBuffer before it
+  // cleared the buffer), not the whole session history.
+  return spillRawBeforeCap(ctx, text, body.raw);
 }
 
 async function startSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -499,6 +514,17 @@ export const interactiveExecTool: Tool = {
 /** Test-only: number of live sessions in the registry. */
 export function liveSessionCount(): number {
   return sessions.size;
+}
+
+/**
+ * Test-only: the length of a live session's raw-spill capture. Lets a test
+ * prove `rawForSpill` is scoped per read window (reset in `takeBuffer`) and so
+ * neither grows unbounded across the session lifetime nor spills stale bytes.
+ * Returns -1 when the session is unknown.
+ */
+export function rawForSpillLengthForTest(sessionId: string): number {
+  const session = sessions.get(sessionId);
+  return session === undefined ? -1 : session.rawForSpill.length;
 }
 
 /** Test-only: force-drop every session (kills live ones). Keeps suites isolated. */
