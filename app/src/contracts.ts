@@ -100,6 +100,35 @@ export interface PolicyRule {
 }
 
 /**
+ * Command allowlist (FEAT-002) — mirrors kernel/src/execpolicy.rs byte-for-byte
+ * in semantics. The kernel reads these shapes from <state-dir>/allowlist.json
+ * (a bare array, or { rules, networkRules }) and the runtime amends them through
+ * "guard.allowlist.amend". shell.exec consults the allowlist BEFORE the policy
+ * rules: a matching deny wins (docs/11 R1), a matching allow admits, a non-match
+ * or ask falls through to the policy flow unchanged. No GuardDecision wire field
+ * was added — the decision still carries only {decision, reason, leaseId?}; the
+ * allowlist surfaces through the existing reason string.
+ */
+export type AllowlistRuleKind = "prefix" | "network";
+/** An argv-token pattern: a literal, or a one-of alternation. */
+export type AllowlistPatternToken = string | string[];
+export interface AllowlistPrefixRule {
+  program: string; // the first argv token, keyed
+  args?: AllowlistPatternToken[]; // trailing-arg pattern (per-token match)
+  decision: GuardDecisionValue;
+  canonicalMatching?: boolean; // default true: Unicode-caseless match
+  match?: string[][]; // argv lines that MUST match (validated at load, codex R8)
+  notMatch?: string[][]; // argv lines that MUST NOT match
+}
+export type AllowlistNetworkProtocol = "http" | "https" | "socks5_tcp" | "socks5_udp";
+export interface AllowlistNetworkRule {
+  host: string; // normalized: scheme/path/port stripped, no wildcards/whitespace, lowercased
+  protocol?: AllowlistNetworkProtocol; // default "https"
+  decision: GuardDecisionValue;
+  justification?: string;
+}
+
+/**
  * Built-in policy used when <state-dir>/policy.json is absent.
  * Evaluation: deny > lease > ask > allow (docs/11 R1; docs/28 ruling 23).
  * Any matching deny wins; then an unexpired matching lease; then any matching
@@ -349,6 +378,16 @@ export interface KernelRequestMap {
   "guard.check": { params: { action: GuardAction; scope?: PolicyScope; leases?: Lease[] }; result: GuardDecision };
   "guard.lease": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
   "guard.grant": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
+  // FEAT-002 (additive): append a rule to the runtime command allowlist at
+  // <state-dir>/allowlist.json, file-locked append-dedup; consulted for
+  // shell.exec BEFORE the policy rules (an allowlist deny wins, docs/11 R1).
+  // kind defaults to "prefix" (a command rule); "network" appends an egress
+  // rule. The NDJSON envelope is unchanged. Mirrors kernel/src/protocol.rs
+  // "guard.allowlist.amend" byte-for-byte in semantics.
+  "guard.allowlist.amend": {
+    params: { kind?: AllowlistRuleKind; rule: AllowlistPrefixRule | AllowlistNetworkRule };
+    result: { changed: boolean; fingerprint: string };
+  };
 }
 
 export type KernelMethod = keyof KernelRequestMap;
@@ -362,6 +401,7 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "guard.check",
   "guard.lease",
   "guard.grant",
+  "guard.allowlist.amend",
 ];
 
 /* ------------------------------ Hashing ------------------------------ */

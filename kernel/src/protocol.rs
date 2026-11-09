@@ -162,6 +162,47 @@ impl Kernel {
                 serde_json::to_value(grant).map_err(|e| format!("cannot serialize grant: {}", e))
             }
 
+            // FEAT-002: append a rule to the runtime command allowlist
+            // (<state-dir>/allowlist.json), file-locked append-dedup. Additive,
+            // mirrored in contracts.ts KERNEL_METHODS + KernelRequestMap; the
+            // NDJSON envelope is unchanged. An unknown `kind` is refused the way
+            // guard.lease refuses an unknown action kind. Returns
+            // {changed, fingerprint}.
+            "guard.allowlist.amend" => {
+                let rule = params
+                    .get("rule")
+                    .filter(|v| v.is_object())
+                    .ok_or_else(|| "guard.allowlist.amend.rule must be an object".to_string())?;
+                // Default to a prefix (command) rule; "network" for an egress rule.
+                let kind = params
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("prefix");
+                let (changed, fingerprint) = match kind {
+                    "prefix" => {
+                        let parsed = guard::prefix_rule_from_value(rule)
+                            .map_err(|e| e.to_string())?;
+                        self.guard
+                            .amend_allow_prefix_rule(&parsed)
+                            .map_err(|e| e.to_string())?
+                    }
+                    "network" => {
+                        let parsed = guard::network_rule_from_value(rule)
+                            .map_err(|e| e.to_string())?;
+                        self.guard
+                            .amend_network_rule(&parsed)
+                            .map_err(|e| e.to_string())?
+                    }
+                    other => {
+                        return Err(format!(
+                            "guard.allowlist.amend.kind {:?} is unknown; expected \"prefix\" or \"network\"",
+                            other
+                        ))
+                    }
+                };
+                Ok(json!({ "changed": changed, "fingerprint": fingerprint }))
+            }
+
             other => Err(format!("unknown method: {}", other)),
         }
     }

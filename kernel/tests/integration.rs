@@ -2559,3 +2559,192 @@ fn cli_selftest_and_version() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+/* ---------------------------- 7. command allowlist ---------------------------- */
+//
+// FEAT-002: the declarative command allowlist (<state-dir>/allowlist.json) is
+// consulted for shell.exec BEFORE the policy rules. A deny wins (docs/11 R1),
+// an allow admits, absence leaves shell.exec=ask byte-identical to today, and a
+// malformed allowlist is a typed HZ_PRECONDITION_FAILED refusal. Every test
+// drives the real binary over the NDJSON protocol.
+
+/// Write an allowlist document (bare array of rule objects) into the state dir.
+fn write_allowlist(state_dir: &Path, rules: Value) {
+    fs::write(
+        state_dir.join("allowlist.json"),
+        serde_json::to_string(&rules).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn allowlist_deny_wins_before_policy_for_shell_exec() {
+    let dir = TempDir::new("allowlist-deny");
+    let mut kernel = Kernel::start(dir.path());
+
+    // No allowlist yet: shell.exec asks (the shipped default, unchanged).
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "rm -rf /", Some("workspace"), None),
+        "ask"
+    );
+
+    // A deny rule on `rm` makes the same command deny, BEFORE policy.
+    write_allowlist(
+        dir.path(),
+        json!([{ "program": "rm", "args": ["-rf"], "decision": "deny" }]),
+    );
+    let decision = guard_check(&mut kernel, "shell.exec", "rm -rf /", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("allowlist deny"),
+        "deny reason must cite the allowlist: {}",
+        decision
+    );
+    // a command that does not match the deny rule falls through to ask
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "rm file.txt", Some("workspace"), None),
+        "ask"
+    );
+}
+
+#[test]
+fn allowlist_allow_admits_shell_exec() {
+    let dir = TempDir::new("allowlist-allow");
+    let mut kernel = Kernel::start(dir.path());
+
+    write_allowlist(
+        dir.path(),
+        json!([{ "program": "git", "args": [["status", "diff"]], "decision": "allow" }]),
+    );
+
+    let decision = guard_check(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("allowlist allow"),
+        "allow reason must cite the allowlist: {}",
+        decision
+    );
+    // case-insensitive (canonical) match by default
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "GIT diff", Some("workspace"), None),
+        "allow"
+    );
+    // a non-covered subcommand still asks
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "git push", Some("workspace"), None),
+        "ask"
+    );
+    // the allowlist is shell.exec only: fs.write workspace is untouched (allow
+    // via policy, not via the allowlist path)
+    let ws = TempDir::new("allowlist-allow-ws");
+    let target = ws.path().join("f.txt");
+    let decision = guard_check(
+        &mut kernel,
+        "fs.write",
+        target.to_str().unwrap(),
+        Some("workspace"),
+        None,
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("policy allow"),
+        "fs.write must still go through policy, not the allowlist: {}",
+        decision
+    );
+}
+
+#[test]
+fn absent_allowlist_leaves_shell_exec_asking() {
+    let dir = TempDir::new("allowlist-absent");
+    let mut kernel = Kernel::start(dir.path());
+    // No allowlist file at all: behaviour is byte-identical to today.
+    assert!(!dir.path().join("allowlist.json").exists());
+    let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"));
+    assert!(
+        !decision["reason"].as_str().unwrap_or("").contains("allowlist"),
+        "no allowlist opinion must not appear in the reason: {}",
+        decision
+    );
+}
+
+#[test]
+fn malformed_allowlist_is_a_typed_refusal() {
+    let dir = TempDir::new("allowlist-malformed");
+    let mut kernel = Kernel::start(dir.path());
+
+    // not JSON
+    fs::write(dir.path().join("allowlist.json"), "{not json").unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "echo hi" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("allowlist"), "{}", message);
+
+    // a bad rule names its index and still fails closed
+    fs::write(
+        dir.path().join("allowlist.json"),
+        r#"[{"program":"git","decision":"maybe"}]"#,
+    )
+    .unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "git status" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("rule 0"), "the bad rule index must be named: {}", message);
+
+    // a malformed allowlist does NOT affect non-shell kinds (they never consult it)
+    let ws = TempDir::new("allowlist-malformed-ws");
+    let target = ws.path().join("f.txt");
+    let decision = guard_check(
+        &mut kernel,
+        "fs.write",
+        target.to_str().unwrap(),
+        Some("workspace"),
+        None,
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+}
+
+#[test]
+fn allowlist_amend_appends_and_takes_effect() {
+    let dir = TempDir::new("allowlist-amend");
+    let mut kernel = Kernel::start(dir.path());
+
+    // before amend: ask
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "git status", Some("workspace"), None),
+        "ask"
+    );
+
+    // amend a prefix allow rule at runtime over the NDJSON protocol
+    let result = kernel.ok(
+        "guard.allowlist.amend",
+        json!({ "rule": { "program": "git", "args": ["status"], "decision": "allow" } }),
+    );
+    assert_eq!(result["changed"], json!(true));
+    assert!(is_hash(result["fingerprint"].as_str().unwrap_or("")));
+
+    // now the same command is admitted by the allowlist
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None),
+        "allow"
+    );
+
+    // a second identical amend dedups (changed=false) and the fingerprint is stable
+    let again = kernel.ok(
+        "guard.allowlist.amend",
+        json!({ "rule": { "program": "git", "args": ["status"], "decision": "allow" } }),
+    );
+    assert_eq!(again["changed"], json!(false));
+    assert_eq!(again["fingerprint"], result["fingerprint"]);
+
+    // an unknown amend kind is refused the way guard.lease refuses one
+    let message = kernel.err(
+        "guard.allowlist.amend",
+        json!({ "kind": "bogus", "rule": { "program": "git", "decision": "allow" } }),
+    );
+    assert!(message.contains("unknown"), "{}", message);
+}
