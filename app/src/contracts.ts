@@ -129,6 +129,92 @@ export interface AllowlistNetworkRule {
 }
 
 /**
+ * Per-origin egress decision shape (FEAT-003) — mirrors kernel/src/egress.rs
+ * byte-for-byte in semantics. The kernel reads these shapes from
+ * <state-dir>/egress.json and consults the decider for net.fetch BEFORE the
+ * policy rules (the FEAT-002 pattern). Composition, documented so it is
+ * unambiguous: an egress policy file that is ABSENT means the decider is not
+ * consulted and net.fetch keeps its policy-layer ask (DEFAULT_POLICY below is
+ * unchanged — net.fetch=ask). When the file is PRESENT the decider is
+ * default-deny (docs/11 N1): a Deny returns deny with its DenySource BEFORE
+ * policy, an Allow admits, an Ask or an observe-mode AllowAndRecord falls
+ * through to the net.fetch policy flow. No GuardDecision wire field was added —
+ * the decision still carries only {decision, reason, leaseId?}; the egress
+ * outcome surfaces through the existing reason string (as with FEAT-002).
+ *
+ * An origin is the (scheme, host, port) triple a rule is keyed on (docs/11 N2).
+ */
+export interface EgressOrigin {
+  scheme: string; // lowercased (e.g. "https")
+  host: string; // normalized bare host, lowercased
+  port: number; // explicit, defaulted per scheme (443 https, 80 http)
+}
+/** Where a deny came from (grok DenySource): a per-host row, or the org denylist. */
+export type EgressDenySource = "deny_row" | "web_fetch_denylist";
+/** What enforce mode WOULD have done, recorded by observe mode (grok WouldBe). */
+export type EgressWouldBe =
+  | { kind: "allowed" }
+  | { kind: "denied"; source: EgressDenySource }
+  | { kind: "asked" };
+/**
+ * The four decider outcomes (grok Decision). `allow_and_record` is observe
+ * mode: it ADMITS (never blocks) but records what enforce mode would have done.
+ */
+export type EgressDecision =
+  | { kind: "allow" }
+  | { kind: "deny"; source: EgressDenySource }
+  | { kind: "ask" }
+  | { kind: "allow_and_record"; would: EgressWouldBe };
+/** The stable outcome tag that appears in an EgressBlockedRequest.decided. */
+export type EgressOutcome = "allow" | "deny" | "ask" | "allow_and_record";
+/** The base decision a per-origin egress rule carries (no observe variant). */
+export type EgressBaseDecision = "allow" | "deny" | "ask";
+/**
+ * A per-origin egress rule in <state-dir>/egress.json. A null/absent scheme or
+ * port matches any; a present one must match exactly. Rules default to DENY
+ * (docs/11 N1): an unmatched origin is denied.
+ */
+export interface EgressOriginRule {
+  host: string; // normalized bare host (as AllowlistNetworkRule.host)
+  scheme?: string | null; // exact scheme match, or any when absent
+  port?: number | null; // exact port match (0..=65535), or any when absent
+  decision: EgressBaseDecision;
+}
+/**
+ * The egress policy document. A bare array is the `rules` list (enforce mode,
+ * empty denylist). The object form adds the org web-fetch denylist and the
+ * observe-mode flag.
+ */
+export interface EgressPolicyDoc {
+  rules: EgressOriginRule[];
+  disallowedWebFetchDomains?: string[]; // org denylist -> DenySource "web_fetch_denylist"
+  observe?: boolean; // safe-rollout: record would-be answers without blocking
+}
+/**
+ * A CONTENT-FREE record of a decided egress request (grok BlockedRequest).
+ * Carries ONLY the routing triple, the call tag, the outcome, and the hold
+ * timing — deliberately NO path/headers/body, so a record can never leak a
+ * secret-bearing URL query, auth header, or request body. The buffer is bounded
+ * to EGRESS_BLOCKED_REQUEST_CAPACITY (256) most-recent records.
+ */
+export interface EgressBlockedRequest {
+  host: string;
+  port: number;
+  call: string; // command tag / call id (NOT a URL)
+  decided: EgressOutcome;
+  holdMs: number;
+  deadlineUnix: number;
+}
+/** grok DEFAULT_MAX_HELD: proxy-wide concurrent-hold ceiling. */
+export const EGRESS_DEFAULT_MAX_HELD = 16;
+/** grok DEFAULT_MAX_HELD_PER_CALL: per command-tag concurrent-hold ceiling. */
+export const EGRESS_DEFAULT_MAX_HELD_PER_CALL = 8;
+/** grok DEFAULT_HOLD_TIMEOUT (seconds): a held request auto-denies after this. */
+export const EGRESS_DEFAULT_HOLD_TIMEOUT_SECS = 600;
+/** grok BLOCKED_REQUEST_CAPACITY: bounded record-buffer size. */
+export const EGRESS_BLOCKED_REQUEST_CAPACITY = 256;
+
+/**
  * Built-in policy used when <state-dir>/policy.json is absent.
  * Evaluation: deny > lease > ask > allow (docs/11 R1; docs/28 ruling 23).
  * Any matching deny wins; then an unexpired matching lease; then any matching

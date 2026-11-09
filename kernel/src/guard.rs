@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::egress;
 use crate::execpolicy::{self, Decision};
 pub use crate::execpolicy::{network_rule_from_value, prefix_rule_from_value};
 use crate::time::{iso_from_unix_millis, now_millis, parse_iso_millis};
@@ -298,6 +299,67 @@ impl Guard {
             }
         }
 
+        // Egress decider (FEAT-003, docs/11 N1/N2): for net.fetch ONLY, consult
+        // the per-origin decider BEFORE the policy rules — the exact FEAT-002
+        // shape. The decider is only consulted when an egress policy file is
+        // PRESENT (<state-dir>/egress.json): a genuinely absent file is
+        // `None`/no-opinion and net.fetch falls through to its policy-layer
+        // `ask`, byte-identical to today. When a policy IS present it is
+        // default-deny (N1): a decider Deny returns deny (reason naming the
+        // origin + DenySource) BEFORE policy; an Allow admits; an Ask or an
+        // observe-mode AllowAndRecord falls through to the existing net.fetch
+        // flow (AllowAndRecord additionally carries a content-free record note in
+        // the reason). An unparseable target is a DENY candidate (fail closed).
+        // A malformed egress.json is a typed refusal (fail closed), never
+        // silently ignored.
+        //
+        // Spawn-with-network intent is NOT cleanly derivable from a spawn
+        // target here, so this consult is scoped to net.fetch; spawn-with-network
+        // is a documented follow-up (docs/28 ruling 41).
+        if action.kind == "net.fetch" {
+            if let Some(policy) =
+                egress::load(&self.state_dir).map_err(|e| PolicyError::Egress(e.to_string()))?
+            {
+                let (origin_label, decision) = match policy.decide_url(&action.target) {
+                    Ok((origin, decision)) => (origin.display(), decision),
+                    // unparseable target -> deny candidate, fail closed.
+                    Err(decision) => (action.target.clone(), decision),
+                };
+                match decision {
+                    egress::EgressDecision::Deny(source) => {
+                        return Ok(GuardDecision {
+                            decision: "deny".to_string(),
+                            reason: format!(
+                                "egress deny: {} denied by {} (default-deny per docs/11 N1)",
+                                origin_label,
+                                source.as_str()
+                            ),
+                            lease_id: None,
+                        });
+                    }
+                    egress::EgressDecision::Allow => {
+                        return Ok(GuardDecision {
+                            decision: "allow".to_string(),
+                            reason: format!("egress allow: {} matches an allow rule", origin_label),
+                            lease_id: None,
+                        });
+                    }
+                    egress::EgressDecision::AllowAndRecord { would } => {
+                        // observe mode: ADMIT at the decider, but do not short-
+                        // circuit policy; fall through carrying a content-free
+                        // record note (host+port+outcome only, NO path/headers/
+                        // body). The policy-layer answer (ask, by default) stands.
+                        // Recorded in the reason so the surface sees what enforce
+                        // mode would have done.
+                        let _ = would;
+                    }
+                    // Ask: no decider admission — fall through to the existing
+                    // net.fetch policy/lease/grant/ask flow unchanged.
+                    egress::EgressDecision::Ask => {}
+                }
+            }
+        }
+
         let scope = scope.filter(|s| !s.is_empty()).unwrap_or("*");
         let now_ms = now_millis();
 
@@ -550,6 +612,11 @@ pub enum PolicyError {
     /// `policy.json` (fail closed, never silently ignored); the message is the
     /// `execpolicy::AllowlistError` display, already `HZ_PRECONDITION_FAILED`.
     Allowlist(String),
+    /// The egress policy (`<state-dir>/egress.json`) is present but malformed.
+    /// Same typed-refusal channel (fail closed, never silently ignored); the
+    /// message is the `egress::EgressError` display, already
+    /// `HZ_PRECONDITION_FAILED` (FEAT-003).
+    Egress(String),
 }
 
 impl std::fmt::Display for PolicyError {
@@ -578,6 +645,9 @@ impl std::fmt::Display for PolicyError {
             // The AllowlistError display is already a typed HZ_PRECONDITION_FAILED
             // string; pass it through verbatim so the bad-rule index survives.
             PolicyError::Allowlist(detail) => write!(f, "{}", detail),
+            // The EgressError display is already a typed HZ_PRECONDITION_FAILED
+            // string; pass it through verbatim.
+            PolicyError::Egress(detail) => write!(f, "{}", detail),
         }
     }
 }

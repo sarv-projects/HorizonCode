@@ -2748,3 +2748,172 @@ fn allowlist_amend_appends_and_takes_effect() {
     );
     assert!(message.contains("unknown"), "{}", message);
 }
+
+/* ----------------------------- 8. egress decider ----------------------------- */
+
+// FEAT-003: a per-origin egress decider (<state-dir>/egress.json) is consulted
+// for net.fetch BEFORE the policy rules (docs/11 N1/N2). With a policy present
+// it is default-deny; a deny rule denies, an allow rule admits, an unmatched
+// origin denies (N1). With NO egress.json present net.fetch keeps its
+// policy-layer `ask`, byte-identical to today. A malformed egress.json is a
+// typed HZ_PRECONDITION_FAILED refusal (fail closed). Every test drives the
+// real binary over the NDJSON protocol.
+
+/// Write an egress policy document into the state dir.
+fn write_egress(state_dir: &Path, doc: Value) {
+    fs::write(
+        state_dir.join("egress.json"),
+        serde_json::to_string(&doc).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn egress_deny_rule_denies_net_fetch_before_policy() {
+    let dir = TempDir::new("egress-deny");
+    let mut kernel = Kernel::start(dir.path());
+
+    // No egress policy yet: net.fetch asks (the shipped default, unchanged).
+    assert_eq!(
+        guard_decision(&mut kernel, "net.fetch", "https://evil.test/x", Some("workspace"), None),
+        "ask"
+    );
+
+    // A deny rule on evil.test denies the same fetch BEFORE policy would ask.
+    write_egress(
+        dir.path(),
+        json!([{ "host": "evil.test", "decision": "deny" }]),
+    );
+    let decision = guard_check(&mut kernel, "net.fetch", "https://evil.test/x", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("egress deny"),
+        "deny reason must cite the egress decider: {}",
+        decision
+    );
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("deny_row"),
+        "deny reason must name the DenySource: {}",
+        decision
+    );
+}
+
+#[test]
+fn egress_default_deny_for_unmatched_origin_when_policy_present() {
+    let dir = TempDir::new("egress-default-deny");
+    let mut kernel = Kernel::start(dir.path());
+
+    // A policy that only allows one host: any OTHER origin is denied (N1).
+    write_egress(
+        dir.path(),
+        json!([{ "host": "allowed.test", "decision": "allow" }]),
+    );
+    let decision = guard_check(&mut kernel, "net.fetch", "https://other.test/x", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("N1"),
+        "default-deny reason must cite docs/11 N1: {}",
+        decision
+    );
+}
+
+#[test]
+fn egress_allow_rule_admits_net_fetch() {
+    let dir = TempDir::new("egress-allow");
+    let mut kernel = Kernel::start(dir.path());
+
+    write_egress(
+        dir.path(),
+        json!([{ "host": "api.example.com", "decision": "allow" }]),
+    );
+    let decision = guard_check(
+        &mut kernel,
+        "net.fetch",
+        "https://api.example.com/v1/models?q=1",
+        Some("workspace"),
+        None,
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("egress allow"),
+        "allow reason must cite the egress decider: {}",
+        decision
+    );
+
+    // a different (unmatched) origin still denies (N1), proving allow is scoped
+    assert_eq!(
+        guard_decision(&mut kernel, "net.fetch", "https://other.test/x", Some("workspace"), None),
+        "deny"
+    );
+}
+
+#[test]
+fn absent_egress_policy_leaves_net_fetch_asking() {
+    let dir = TempDir::new("egress-absent");
+    let mut kernel = Kernel::start(dir.path());
+    // No egress file at all: behaviour is byte-identical to today (ask), and
+    // the reason must not mention the egress decider.
+    assert!(!dir.path().join("egress.json").exists());
+    let decision = guard_check(&mut kernel, "net.fetch", "https://x.test/y", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"));
+    assert!(
+        !decision["reason"].as_str().unwrap_or("").contains("egress"),
+        "no egress opinion must not appear in the reason: {}",
+        decision
+    );
+}
+
+#[test]
+fn egress_observe_mode_admits_without_blocking() {
+    let dir = TempDir::new("egress-observe");
+    let mut kernel = Kernel::start(dir.path());
+
+    // observe mode: even a would-deny origin ADMITS (does not block) and falls
+    // through to the policy layer, which for net.fetch is ask by default.
+    write_egress(
+        dir.path(),
+        json!({
+            "rules": [{ "host": "watch.test", "decision": "deny" }],
+            "observe": true
+        }),
+    );
+    let decision = guard_check(&mut kernel, "net.fetch", "https://watch.test/x", Some("workspace"), None);
+    // not a deny: observe mode never blocks; the policy-layer ask stands.
+    assert_ne!(decision["decision"], json!("deny"));
+    assert_eq!(decision["decision"], json!("ask"));
+}
+
+#[test]
+fn malformed_egress_policy_is_a_typed_refusal() {
+    let dir = TempDir::new("egress-malformed");
+    let mut kernel = Kernel::start(dir.path());
+
+    // not JSON
+    fs::write(dir.path().join("egress.json"), "{not json").unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "net.fetch", "target": "https://x.test/y" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("egress"), "{}", message);
+
+    // a bad rule names its index and still fails closed
+    fs::write(
+        dir.path().join("egress.json"),
+        r#"[{"host":"x.test","decision":"maybe"}]"#,
+    )
+    .unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "net.fetch", "target": "https://x.test/y" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("rule 0"), "the bad rule index must be named: {}", message);
+
+    // a malformed egress policy does NOT affect non-net kinds (they never
+    // consult it): shell.exec still asks via policy.
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
+        "ask"
+    );
+}
