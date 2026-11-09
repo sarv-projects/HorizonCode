@@ -21,8 +21,15 @@
  * `ctx.approve({ title: "Run interactive command", ... }, action)` and refuses
  * on decline. No new GuardAction kind is introduced: a PTY session is still a
  * shell.exec effect (contracts.ts unchanged; additive surface: none).
- * `write`/`close` operate on an ALREADY-ADMITTED live session (admitted at
- * `start`), so they do NOT re-admit — and they never start a new process.
+ * Admission at `start` covers only the start command: a shell/REPL session
+ * runs whatever is typed next. So EVERY `write` is admitted again as a
+ * `shell.exec` effect whose target is the typed input line(s) (per line, the
+ * unterminated tail carried across writes and admitted once completed); deny refuses, ask prompts (showing
+ * session command + input), decline writes nothing. Input containing control
+ * characters (other than tab/newline) is refused: a PTY's line editing would
+ * let the shell run something other than the text that was admitted. An `always` answer mints
+ * the usual exact-target grant, i.e. exactly that input line. `close` only
+ * kills an admitted session and needs no admission.
  *
  * Concurrency: `concurrencyClass: "exclusive"` (R-tools-39) — a terminal
  * session is serial with shell and with other sessions. loop.ts needs no change
@@ -60,7 +67,7 @@ import { sha256Hex } from "../core/canon";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
-import { resolvePath, scrubEnv, truncate } from "./helpers";
+import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
 import { minimiseShellOutput } from "./shell";
 
 const MAX_OUTPUT = 30_000;
@@ -107,6 +114,12 @@ interface Session {
   /** Idle budget; the session is killed after this long with no read/write. */
   idleTimeoutMs: number;
   exited: boolean;
+  /**
+   * The unterminated tail of the input admitted so far (text written with no
+   * newline yet). The next write is admitted as `partial + chunk`, so splitting
+   * one command across writes cannot dodge the per-line guard.
+   */
+  partial: string;
   killTimer?: ReturnType<typeof setTimeout>;
   /** Per-session guard timer: fires on idle/overall timeout and kills the tree. */
   watchdog?: ReturnType<typeof setTimeout>;
@@ -344,6 +357,8 @@ function render(
 async function startSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (typeof args.command !== "string" || args.command.trim() === "") return fail("command is required");
   const command = args.command;
+  const invisibleStart = invisibleUnicodeError(command, "a shell command");
+  if (invisibleStart !== undefined) return fail(invisibleStart);
   if (ctx.signal.aborted) return fail("aborted");
 
   // Guard admission — fail-closed, BEFORE any spawn (reuses shell.exec).
@@ -403,6 +418,7 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
     overallTimeoutMs,
     idleTimeoutMs,
     exited: false,
+    partial: "",
   };
   sessions.set(session.id, session);
   startDraining(session);
@@ -423,6 +439,68 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
   return { ok: true, output: render(ctx, session, "running", body) };
 }
 
+/** Split typed text into lines on any newline form (\n, \r\n, \r). */
+function inputLines(text: string): string[] {
+  return text.split(/\r\n|\n|\r/);
+}
+
+/**
+ * C0 control characters (and DEL) other than tab/CR/LF. Under a PTY the line
+ * discipline and readline act on these (Ctrl-U kill-line, Ctrl-W, backspace,
+ * Ctrl-C/D, ESC sequences), so the shell can execute something other than the
+ * text the guard saw. `write` input containing any of them is refused.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
+/**
+ * Longest input line (complete or unterminated) a session accepts; longer is
+ * refused. A tty in canonical mode holds ~4095 bytes per line and drops the
+ * excess (verified on a real `script` PTY with bash: 4000 intact, 4100 cut),
+ * so a longer line could run truncated, differing from the admitted text.
+ * Approval prompts show the whole line, so approved text equals executed text.
+ */
+const MAX_LINE = 4000;
+/** Per-write ceilings; they bound how many approval prompts one write can raise. */
+const MAX_WRITE_LINES = 64;
+const MAX_WRITE_BYTES = 64 * 1024;
+
+/** The part of `text` after its last newline: the line still being typed. */
+function unterminatedTail(text: string): string {
+  const lines = inputLines(text);
+  return lines[lines.length - 1] ?? "";
+}
+
+/**
+ * Admit the input line(s) of one write. Each non-blank line (the carried-over
+ * unterminated tail joined to the new text) goes through the kernel guard as
+ * `shell.exec` with the line as target, so deny rules, allowlists, the ask
+ * prompt and exact-input `always` grants apply per typed command. Returns a
+ * refusal result, or undefined when every line is admitted. Nothing is written
+ * to stdin before this returns undefined.
+ */
+async function admitInput(session: Session, input: string, ctx: ToolContext): Promise<ToolResult | undefined> {
+  // Only COMPLETE lines are admitted now; the unterminated tail is carried
+  // (see `partial`) and admitted once a later write completes it, so a
+  // fragment never prompts on its own. Nothing executes before a newline.
+  const complete = inputLines(session.partial + input).slice(0, -1);
+  const lines = [...new Set(complete.map((l) => l.trim()).filter((l) => l !== ""))];
+  for (const line of lines) {
+    const action: GuardAction = { kind: "shell.exec", target: line };
+    const decision = await ctx.guard(action);
+    if (decision.decision === "deny") {
+      return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
+    }
+    if (decision.decision === "ask") {
+      const approved = await ctx.approve(
+        { title: "Send input to interactive session", detail: `${session.command} <- ${line}`, kind: "shell.exec" },
+        action,
+      );
+      if (!approved) return fail("declined by user");
+    }
+  }
+  return undefined;
+}
+
 async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (ctx.signal.aborted) return fail("aborted");
   if (typeof args.sessionId !== "string" || args.sessionId === "") return fail("sessionId is required");
@@ -434,9 +512,30 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
     dropSession(session);
     return { ok: true, output: out };
   }
-  const input = typeof args.input === "string" ? args.input : "";
-  // write operates on an ALREADY-ADMITTED live session (admitted at start); it
-  // feeds stdin and never starts a new process, so no second guard admission.
+  const rawInput = typeof args.input === "string" ? args.input : "";
+  // Normalize every newline form to "\n" BEFORE admission and the write. Admission
+  // splits on \r too, but a piped bash does not: it would run "a\rb" as ONE
+  // command while the guard saw "a" and "b". Writing the normalized text makes
+  // the admitted lines exactly the lines the shell executes, on PTY and pipe.
+  const input = rawInput.replace(/\r\n|\r/g, "\n");
+  if (CONTROL_CHARS.test(input)) {
+    return fail("control characters are not allowed in shell_session input (only tab and newline)");
+  }
+  const invisible = invisibleUnicodeError(input, "shell_session input");
+  if (invisible !== undefined) return fail(invisible);
+  const sentLines = input.endsWith("\n") ? input.slice(0, -1).split("\n") : input.split("\n");
+  if (sentLines.length > MAX_WRITE_LINES || Buffer.byteLength(input, "utf8") > MAX_WRITE_BYTES) {
+    return fail(`input too large for one write (max ${MAX_WRITE_LINES} lines and ${MAX_WRITE_BYTES / 1024} KiB); send it in smaller writes`);
+  }
+  if (inputLines(session.partial + input).some((l) => Buffer.byteLength(l, "utf8") > MAX_LINE)) {
+    return fail(`input line too long (max ${MAX_LINE} bytes per line); send shorter lines`);
+  }
+  // Fail-closed: admission at start covers ONLY the start command. A shell or
+  // REPL session executes whatever is typed next, so every write is admitted
+  // as a shell.exec effect whose target is the typed input line(s).
+  const admission = await admitInput(session, input, ctx);
+  if (admission !== undefined) return admission;
+  if (ctx.signal.aborted) return fail("aborted");
   try {
     const writer = (session.proc.stdin as unknown as { write(chunk: string): void; flush?: () => void }) ?? undefined;
     if (writer === undefined || typeof writer.write !== "function") {
@@ -447,6 +546,7 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   } catch (e) {
     return fail(`failed to write to session: ${msg(e)}`);
   }
+  session.partial = unterminatedTail(session.partial + input);
   session.lastActivity = Date.now();
   armWatchdog(session);
 
@@ -476,7 +576,7 @@ async function closeSession(args: Record<string, unknown>, _ctx: ToolContext): P
 export const interactiveExecTool: Tool = {
   name: "shell_session",
   description:
-    "Drive an interactive terminal session: start a command in a persistent PTY-backed session (mode:start), feed it stdin (mode:write), or terminate it (mode:close). Unlike the one-shot shell tool, this is the explicit opt-in for interactive programs. Every start is authorized as a shell.exec effect.",
+    "Drive an interactive terminal session: start a command in a persistent PTY-backed session (mode:start), feed it stdin (mode:write), or terminate it (mode:close). Unlike the one-shot shell tool, this is the explicit opt-in for interactive programs. Every start, and every input line written later, is authorized as its own shell.exec effect.",
   parameters: {
     type: "object",
     properties: {

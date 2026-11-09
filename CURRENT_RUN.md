@@ -199,7 +199,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Session fork | NOT STARTED | designed in `docs/12`; no code |
 | OS sandbox | PARTIAL: TESTED seams | allowlist, egress decider, `SandboxMode` ladder (rulings 42-44, 51). Capability detection exists; enforcement does not. No Landlock ruleset, seccomp filter, netns or rlimit is applied to any spawned process, so `sandbox.report` reports no dimension `enforced`, `read-only`/`workspace-write` return `SANDBOX_UNAVAILABLE` on every host, and a Landlock-capable host is reported the same fail-closed way (detection shows up as `available` / `hostCapabilities`). Before 2026-11-09 the report claimed `enforced` for detected mechanisms; fixed. No MITM/egress proxy |
 | MITM / egress proxy | NOT STARTED | egress decisions are recorded, nothing intercepts traffic |
-| Interactive PTY exec (`shell_session`) | TESTED, WIRED | |
+| Interactive PTY exec (`shell_session`) | TESTED, WIRED | every `write` is admitted per complete input line as `shell.exec`, CR/CRLF normalized to LF, control characters and invisible/bidi Unicode refused, writes capped at 64 lines and 64 KiB, lines capped at 4000 bytes (tty limit), and the line shown verbatim in the prompt (ruling 55; the one-shot `shell` also refuses invisible Unicode); text an approved interpreter acts on later is not inspected |
 | LSP loop + diagnostics ledger | TESTED, WIRED | default off; needs a user-configured server |
 | DAP (debugger) | NOT STARTED | `docs/09` lists `debug`; no code |
 | Hooks lifecycle (H1) + H9 context channel | TESTED, WIRED | trust gate H7 still open |
@@ -219,6 +219,12 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Hosted CI | WIRED | runs on PR #16; the run on `72ad830` passed install + typecheck and failed 4 host-dependent sandbox tests, fixed here (ruling 51); next run not yet observed |
 
 Flake (ruling 52): `guard_denies_writes_inside_the_state_dir_even_when_policy_allows` failed once on hosted CI for main `606f981`. Root cause is a harness race (test wrote policy.json while the freshly spawned kernel was still doing its startup policy validation, and `fs::write` is briefly an empty file). Fixed by a readiness ping in `Kernel::start_with_env` plus exit status and stderr in the early-close panic. TESTED locally only; hosted CI on main has not been seen green.
+
+### 5.0.0 Stage 1 fixes (2026-11-09)
+
+Also fixed: a delegated subagent's tool cards now reach the parent stream as a bounded `subagent.event` and render nested under the agent card (server mode relays them as `session.event`), and `turn.diff` is rendered at the end of a direct-edit turn (`· changed N file(s)` plus a capped diff; headless prints only the summary on stderr). `docs/28` ruling 54.
+
+Fixed on `fix/tui-serve-subagent-and-session-gate`: `hzcode serve` now answers each request line while stdin stays open (Bun batches pipe stdin until EOF; a Worker with blocking reads feeds the server), `server.hello` reports the real kernel mode before any session, `/files` accounts for all 18 registered tools (available, deferred, hidden by routing), and every turn, plan mode included, returns an exit that the chat bar names when it is not a clean end. See `docs/28` ruling 53.
 
 ### 5.0.1 Specialised agents (planner, coder, reviewer): analysis
 
