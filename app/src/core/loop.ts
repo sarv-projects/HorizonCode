@@ -894,13 +894,10 @@ export interface LoopDeps {
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
   /**
-   * Tier-3 speculative execution (docs/28 ruling 40): OFF BY DEFAULT. When
-   * absent or false, the loop runs the ordinary NF-072 batch (byte-identical
-   * turn semantics). When true, the loop MAY pre-run only provably
-   * side-effect-free calls (read/grep/glob/repo_map) in a segment ahead of
-   * commit through the SAME guarded executeTool path (a speculated read is a
-   * guarded fs.read); every other tool is never speculated. This is an additive
-   * opt-in field and does not change the guard or the admission mapping.
+   * Tier-3 speculative execution (docs/28 ruling 40): OFF BY DEFAULT and NOT
+   * YET READ by the turn path. The field and the `buildSpeculationHost` /
+   * `speculativeCandidatesFor` helpers are primitives for a future consumer;
+   * today the flag changes nothing. The ordinary NF-072 batch is unchanged.
    */
   speculativeExecution?: boolean;
 }
@@ -916,15 +913,26 @@ export function buildSpeculationHost(
   deps: LoopDeps,
   gate: GuardGate,
   faults: RunFaults,
-  hooks: HooksConfig,
 ): SpeculativeHost {
+  // A speculative run must have no user-visible side effects ahead of commit:
+  // user hooks are skipped (`state: "none"`) and an `ask` decision is DECLINED
+  // without prompting (the gate's approve is replaced; every other gate method
+  // is the real, guarded one). The guard check itself is never skipped.
+  const hooks: HooksConfig = { state: "none" };
+  const speculativeGate = new Proxy(gate, {
+    get(target, prop) {
+      if (prop === "approve") return async (): Promise<boolean> => false;
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
   return {
     async run(candidate: SpeculativeToolCandidate): Promise<SpeculativeRunResult> {
       const call: ToolCall = { id: candidate.id, name: candidate.name, arguments: JSON.stringify(candidate.args) };
       const parsed = parseArguments(call.arguments);
       // Route through executeTool so admissionFor -> gate.check -> tool.execute
       // happens exactly as it would for a non-speculative call.
-      const executed = await executeTool(deps, gate, call, parsed, faults, hooks);
+      const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks);
       return { ok: executed.result.ok, output: executed.result.output, error: executed.result.error };
     },
   };

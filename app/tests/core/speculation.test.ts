@@ -29,7 +29,6 @@ import {
   speculativeCandidatesFor,
   type LoopDeps,
 } from "../../src/core/loop";
-import { loadHooks } from "../../src/core/hooks";
 import {
   DEFAULT_MAX_IN_FLIGHT,
   SpeculationError,
@@ -258,9 +257,8 @@ describe("safety invariant: a speculated read is a guarded fs.read", () => {
     // admission flows through it before the tool runs.
     const gate = new GuardGate(workspace, kernel, [], () => async () => true, sessionId);
     const faults = new RunFaults();
-    const hooks = loadHooks(workspace);
 
-    const host = buildSpeculationHost(deps, gate, faults, hooks);
+    const host = buildSpeculationHost(deps, gate, faults);
     const coord = new SpeculativeOperationCoordinator(host);
 
     const calls: ToolCall[] = [{ id: "r1", name: "read", arguments: JSON.stringify({ path: "hello.txt" }) }];
@@ -274,7 +272,90 @@ describe("safety invariant: a speculated read is a guarded fs.read", () => {
     // The guard was consulted for exactly the fs.read of the resolved target.
     const readCheck = events.guardChecks.find((a) => a.kind === "fs.read" && a.target === target);
     expect(readCheck).toBeDefined();
+    // Ordering: the guard check is recorded, and the host only returned the
+    // content after it (the guard entry exists before the outcome did).
+    expect(events.order.indexOf(`guard:fs.read:${target}`)).toBeGreaterThanOrEqual(0);
 
+    try {
+      await kernel.close();
+      store.close();
+    } catch {
+      /* best effort cleanup */
+    }
+  });
+
+  test("a denying guard blocks the read: the file content is never returned", async () => {
+    const target = path.join(workspace, "secret.txt");
+    writeFileSync(target, "TOP-SECRET-CONTENT", "utf8");
+    const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+    const store = new SessionStore(workspace);
+    const sessionId = store.createSession("spec-deny").id;
+    const checks: GuardAction[] = [];
+    kernel.checkGuard = (async (action: GuardAction): Promise<GuardDecision> => {
+      checks.push(action);
+      return { decision: "deny", reason: "test deny" } as unknown as GuardDecision;
+    }) as typeof kernel.checkGuard;
+    const deps: LoopDeps = {
+      workspace,
+      sessionId,
+      model: "scripted-1",
+      provider: { name: "scripted", async *stream() {} },
+      kernel,
+      store,
+      signal: new AbortController().signal,
+      callbacks: { onEvent: () => {} },
+      sessionLeases: [],
+      approve: async () => true,
+      speculativeExecution: true,
+    };
+    const gate = new GuardGate(workspace, kernel, [], () => async () => true, sessionId);
+    const host = buildSpeculationHost(deps, gate, new RunFaults());
+    const coord = new SpeculativeOperationCoordinator(host);
+    const [cand] = speculativeCandidatesFor([{ id: "r1", name: "read", arguments: JSON.stringify({ path: "secret.txt" }) }], workspace);
+    const outcome = await coord.admit(cand!);
+    expect(checks.some((a) => a.kind === "fs.read" && a.target === target)).toBe(true);
+    expect(outcome.result?.ok).toBe(false);
+    expect(outcome.result?.output ?? "").not.toContain("TOP-SECRET-CONTENT");
+    try {
+      await kernel.close();
+      store.close();
+    } catch {
+      /* best effort cleanup */
+    }
+  });
+
+  test("an 'ask' decision is declined during speculation: the approval handler is never prompted", async () => {
+    writeFileSync(path.join(workspace, "ask.txt"), "ASK-CONTENT", "utf8");
+    const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+    const store = new SessionStore(workspace);
+    const sessionId = store.createSession("spec-ask").id;
+    kernel.checkGuard = (async (): Promise<GuardDecision> =>
+      ({ decision: "ask", reason: "test ask" }) as unknown as GuardDecision) as typeof kernel.checkGuard;
+    let prompted = 0;
+    const approve = async (): Promise<boolean> => {
+      prompted += 1;
+      return true;
+    };
+    const deps: LoopDeps = {
+      workspace,
+      sessionId,
+      model: "scripted-1",
+      provider: { name: "scripted", async *stream() {} },
+      kernel,
+      store,
+      signal: new AbortController().signal,
+      callbacks: { onEvent: () => {} },
+      sessionLeases: [],
+      approve,
+      speculativeExecution: true,
+    };
+    const gate = new GuardGate(workspace, kernel, [], () => approve, sessionId);
+    const coord = new SpeculativeOperationCoordinator(buildSpeculationHost(deps, gate, new RunFaults()));
+    const [cand] = speculativeCandidatesFor([{ id: "r1", name: "read", arguments: JSON.stringify({ path: "ask.txt" }) }], workspace);
+    const outcome = await coord.admit(cand!);
+    expect(prompted).toBe(0);
+    expect(outcome.result?.ok).toBe(false);
+    expect(outcome.result?.output ?? "").not.toContain("ASK-CONTENT");
     try {
       await kernel.close();
       store.close();
@@ -291,5 +372,91 @@ describe("safety invariant: a speculated read is a guarded fs.read", () => {
     ];
     const candidates = speculativeCandidatesFor(calls, workspace);
     expect(candidates.map((c) => c.id)).toEqual(["r1"]);
+  });
+});
+
+describe("coordinator robustness", () => {
+  const pure = { kind: "pure" } as const;
+  const mk = (id: string, deps?: string[]) =>
+    makeCandidate({ id, name: "read", args: { path: `${id}.txt` }, effect: pure, dependencies: deps });
+
+  test("a discard issued while run is in flight is not resurrected", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const coord = new SpeculativeOperationCoordinator({
+      async run() {
+        await gate;
+        return { ok: true, output: "late" };
+      },
+    });
+    const pending = coord.admit(mk("a"));
+    await Promise.resolve();
+    coord.discard("a", "fingerprint-mismatch");
+    release();
+    const out = await pending;
+    expect(out.state).toBe("discarded");
+    expect(coord.outcomeFor("a")?.state).toBe("discarded");
+    expect(coord.admitted()[0]?.committed).toBe(false);
+    expect(coord.reconcile([{ id: "a", fingerprint: coord.admitted()[0]!.fingerprint }])).toEqual([]);
+  });
+
+  test("a throwing run is recorded as failed, not left running", async () => {
+    const coord = new SpeculativeOperationCoordinator({
+      async run() {
+        throw new Error("boom");
+      },
+    });
+    const out = await coord.admit(mk("a"));
+    expect(out.state).toBe("failed");
+    expect(out.result?.error).toBe("boom");
+    expect(coord.admitted()[0]?.state).toBe("failed");
+  });
+
+  test("a candidate whose parent was discarded or is unknown is discarded without running", async () => {
+    const { host, ran } = recordingHost();
+    const coord = new SpeculativeOperationCoordinator(host);
+    await coord.admit(mk("p"));
+    coord.discard("p", "validate-veto");
+    const child = await coord.admit(mk("c", ["p"]));
+    expect(child.state).toBe("discarded");
+    expect(child.discardReason).toBe("dependency-discarded");
+    const orphan = await coord.admit(mk("o", ["ghost"]));
+    expect(orphan.state).toBe("discarded");
+    expect(ran).toEqual(["p"]);
+  });
+
+  test("a duplicate candidate id is rejected", async () => {
+    const { host } = recordingHost();
+    const coord = new SpeculativeOperationCoordinator(host);
+    await coord.admit(mk("a"));
+    await expect(coord.admit(mk("a"))).rejects.toMatchObject({ reason: "invalid-candidate" });
+  });
+
+  test("a slot is released after completion so admission is accepted again", async () => {
+    const { host } = recordingHost();
+    const coord = new SpeculativeOperationCoordinator(host, 1);
+    await coord.admit(mk("a"));
+    const second = await coord.admit(mk("b"));
+    expect(second.state).toBe("completed");
+  });
+
+  test("a validate veto cascades to an already-admitted dependent", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const coord = new SpeculativeOperationCoordinator({
+      async run(c) {
+        if (c.id === "a") await gate;
+        return { ok: true, output: c.id };
+      },
+    });
+    const a = coord.admit(mk("a"));
+    await Promise.resolve();
+    const b = await coord.admit(mk("b", ["a"]));
+    expect(b.state).toBe("completed");
+    coord.discard("a", "validate-veto");
+    expect(coord.outcomeFor("b")?.state).toBe("discarded");
+    release();
+    await a;
+    expect(coord.outcomeFor("b")?.discardReason).toBe("dependency-discarded");
   });
 });

@@ -351,14 +351,27 @@ export class SpeculativeOperationCoordinator {
       if (this.inFlight >= this.maxInFlight) {
         throw new SpeculationError("max-in-flight", `at most ${this.maxInFlight} speculative calls may run at once`);
       }
+      if (this.candidates.has(candidate.id)) {
+        throw new SpeculationError("invalid-candidate", `duplicate candidate id ${JSON.stringify(candidate.id)}`);
+      }
       this.inFlight += 1;
       candidate.state = "running";
       this.candidates.set(candidate.id, candidate);
       this.admittedFingerprints.set(candidate.id, candidate.fingerprint);
-      // Link this candidate as a dependent of each of its dependencies.
+      // Link this candidate as a dependent of each of its dependencies, and
+      // note whether any dependency is unknown or already discarded.
+      let badDependency = false;
       for (const dep of candidate.dependencies) {
         const parent = this.candidates.get(dep);
-        if (parent !== undefined && !parent.dependents.includes(candidate.id)) parent.dependents.push(candidate.id);
+        if (parent === undefined || parent.state === "discarded") {
+          badDependency = true;
+          continue;
+        }
+        if (!parent.dependents.includes(candidate.id)) parent.dependents.push(candidate.id);
+      }
+      if (badDependency) {
+        this.inFlight -= 1;
+        return this.discard(candidate.id, "dependency-discarded");
       }
     } finally {
       release();
@@ -375,11 +388,28 @@ export class SpeculativeOperationCoordinator {
         }
       }
       const result = await this.host.run(candidate);
+      // A discard issued while `run` was pending is final: keep it.
+      if ((candidate.state as SpeculativeState) === "discarded") {
+        return this.outcomes.get(candidate.id) as SpeculativeOutcome;
+      }
       candidate.state = result.ok ? "completed" : "failed";
       candidate.committed = result.ok;
       const outcome: SpeculativeOutcome = { id: candidate.id, state: candidate.state, fingerprint: candidate.fingerprint, result };
       this.outcomes.set(candidate.id, outcome);
       return outcome;
+    } catch (err) {
+      // A throwing validate/run must not leave the candidate stuck `running`.
+      if ((candidate.state as SpeculativeState) !== "discarded") {
+        candidate.state = "failed";
+        candidate.committed = false;
+        this.outcomes.set(candidate.id, {
+          id: candidate.id,
+          state: "failed",
+          fingerprint: candidate.fingerprint,
+          result: { ok: false, output: "", error: err instanceof Error ? err.message : String(err) },
+        });
+      }
+      return this.outcomes.get(candidate.id) as SpeculativeOutcome;
     } finally {
       this.inFlight -= 1;
     }
