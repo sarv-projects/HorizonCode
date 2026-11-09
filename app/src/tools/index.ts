@@ -9,6 +9,7 @@ import { codemodeTool } from "./codemode";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
+import { lspTool } from "./lsp";
 import { previewTool } from "./preview";
 import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
@@ -30,6 +31,7 @@ export const tools: Tool[] = [
   agentTool,
   codemodeTool,
   previewTool,
+  lspTool,
 ];
 
 /** The seven base tools; the delegation tool is deliberately excluded here. */

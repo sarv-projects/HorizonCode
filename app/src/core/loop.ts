@@ -268,6 +268,16 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       if (previewAction !== "start" || command === undefined) return undefined;
       return { kind: "shell.exec", target: command };
     }
+    case "lsp": {
+      // The `lsp` tool reads the named file before syncing it to a language
+      // server, so its loop-level admission is that file's fs.read (the same
+      // read a diagnostics pass performs). Starting a server is a SECOND,
+      // in-tool admission: a `spawn` the tool asks through ctx.guard when a
+      // server must actually start (core/lsp lspSpawnAction) — one read here,
+      // one spawn there, neither silent.
+      const file = argString(args, "path", "file");
+      return file ? { kind: "fs.read", target: resolved(file) } : undefined;
+    }
     case "undo": {
       // The effect target is the journal's recorded change, which no argument
       // names. A `path` argument admits as that file's fs.write; without one the
