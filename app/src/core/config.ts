@@ -16,13 +16,25 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
+import { catalogDefaultModel, loadCatalog, type LoadedCatalog } from "./catalog/catalog";
 import { userConfigDir } from "./paths";
 
 export type ProviderName = "anthropic" | "openai" | "google" | "ollama" | "mock";
 
 export const PROVIDER_NAMES: readonly ProviderName[] = ["anthropic", "openai", "google", "ollama", "mock"];
 
-/** Model used when nothing else is configured, per provider. */
+/**
+ * Model used when nothing else is configured, per provider.
+ *
+ * FEAT-003 (spec §5.4): the default model for a built-in provider now resolves
+ * through the model catalog (`catalog/catalog.ts`) — `catalogDefaultModel`. This
+ * map is kept as the OFFLINE FALLBACK, used only when the catalog lacks the
+ * provider. The curated catalog snapshot carries these exact ids, so a resolved
+ * default equals the fallback here; the values MUST stay byte-identical (the
+ * config/providers-expansion tests assert `config.model === DEFAULT_MODELS.<p>`
+ * and the literal strings). Capabilities/limits are DATA read from the catalog,
+ * never inferred from the id.
+ */
 export const DEFAULT_MODELS: Record<ProviderName, string> = {
   anthropic: "claude-sonnet-4-5",
   openai: "gpt-4o-mini",
@@ -30,6 +42,15 @@ export const DEFAULT_MODELS: Record<ProviderName, string> = {
   ollama: "llama3.1",
   mock: "mock-1",
 };
+
+/**
+ * The default model for a BUILT-IN provider: the catalog's default when it knows
+ * the provider, else the historical hardcoded fallback. Pure; the catalog is
+ * injectable so tests can pin it without touching the environment.
+ */
+export function builtinDefaultModel(provider: ProviderName, catalog: LoadedCatalog = loadCatalog()): string {
+  return catalogDefaultModel(catalog, provider) ?? DEFAULT_MODELS[provider];
+}
 
 /** Endpoint root used when nothing else is configured. `mock` has no endpoint. */
 export const DEFAULT_BASE_URLS: Record<Exclude<ProviderName, "mock">, string> = {
@@ -447,11 +468,17 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
     resolved = { name: selectedEntry.id, baseUrl: selectedEntry.baseUrl, protocol: selectedEntry.protocol, credential, wantsKey };
   }
 
+  // The default model for a built-in provider goes THROUGH the catalog
+  // (FEAT-003): `builtinDefaultModel` returns the catalog's default when it
+  // knows the provider and falls back to DEFAULT_MODELS when it does not. The
+  // curated snapshot carries the same ids, so the resolved default equals the
+  // historical constant; a catalog miss (offline/curated-gap) still yields it.
+  const catalog = loadCatalog(env);
   const envModel = str(env.HZ_MODEL);
   const fileModel = str(fromFile.model);
   const registryModel = selectedEntry?.models?.[0];
-  const builtinModel = selectedEntry ? undefined : DEFAULT_MODELS[provider as ProviderName];
-  const model = envModel ?? fileModel ?? registryModel ?? builtinModel ?? DEFAULT_MODELS.mock;
+  const builtinModel = selectedEntry ? undefined : builtinDefaultModel(provider as ProviderName, catalog);
+  const model = envModel ?? fileModel ?? registryModel ?? builtinModel ?? builtinDefaultModel("mock", catalog);
 
   const envBase = str(env.HZ_BASE_URL);
   const fileBase = str(fromFile.baseUrl);
