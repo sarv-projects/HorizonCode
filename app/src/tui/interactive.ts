@@ -156,7 +156,7 @@ function printHelp(r: Renderer): void {
     ["/discard", "drop the staged changes"],
     ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
     ["/memory", "which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias /instructions)"],
-    ["/init", "draft an AGENTS.md for this repo (you approve the write)"],
+    ["/init", "draft an AGENTS.md for this repo (staged; you review it, then /apply)"],
     ["/exit", "leave (Ctrl+D also works)"],
   ];
   const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
@@ -566,7 +566,7 @@ export async function runInitCommand(
   try {
     const staged = typeof extras.stagedChanges === "function" ? extras.stagedChanges.call(runtime) : [];
     if (staged.some((change) => change.rel === "AGENTS.md")) {
-      renderer.notice("AGENTS.md draft staged \u2014 /changes to review the diff, /apply to write it (asks for approval), /discard to drop it");
+      renderer.notice("AGENTS.md draft staged \u2014 /changes to review the diff, /apply to write it (through the normal guard), /discard to drop it");
     }
   } catch {
     /* the notice is a convenience */
