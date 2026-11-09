@@ -108,6 +108,225 @@ export interface PolicyRule {
 }
 
 /**
+ * Command allowlist (FEAT-002) — mirrors kernel/src/execpolicy.rs byte-for-byte
+ * in semantics. The kernel reads these shapes from <state-dir>/allowlist.json
+ * (a bare array, or { rules, networkRules }) and the runtime amends them through
+ * "guard.allowlist.amend". shell.exec consults the allowlist BEFORE the policy
+ * rules: a matching deny wins (docs/11 R1), a matching allow admits, a non-match
+ * or ask falls through to the policy flow unchanged. No GuardDecision wire field
+ * was added — the decision still carries only {decision, reason, leaseId?}; the
+ * allowlist surfaces through the existing reason string.
+ */
+export type AllowlistRuleKind = "prefix" | "network";
+/** An argv-token pattern: a literal, or a one-of alternation. */
+export type AllowlistPatternToken = string | string[];
+export interface AllowlistPrefixRule {
+  program: string; // the first argv token, keyed
+  args?: AllowlistPatternToken[]; // trailing-arg pattern (per-token match)
+  decision: GuardDecisionValue;
+  canonicalMatching?: boolean; // default true: Unicode-caseless match
+  match?: string[][]; // argv lines that MUST match (validated at load, codex R8)
+  notMatch?: string[][]; // argv lines that MUST NOT match
+}
+export type AllowlistNetworkProtocol = "http" | "https" | "socks5_tcp" | "socks5_udp";
+export interface AllowlistNetworkRule {
+  host: string; // normalized: scheme/path/port stripped, no wildcards/whitespace, lowercased
+  protocol?: AllowlistNetworkProtocol; // default "https"
+  decision: GuardDecisionValue;
+  justification?: string;
+}
+
+/**
+ * Per-origin egress decision shape (FEAT-003) — mirrors kernel/src/egress.rs
+ * byte-for-byte in semantics. The kernel reads these shapes from
+ * <state-dir>/egress.json and consults the decider for net.fetch BEFORE the
+ * policy rules (the FEAT-002 pattern). Composition, documented so it is
+ * unambiguous: an egress policy file that is ABSENT means the decider is not
+ * consulted and net.fetch keeps its policy-layer ask (DEFAULT_POLICY below is
+ * unchanged — net.fetch=ask). When the file is PRESENT the decider is
+ * default-deny (docs/11 N1): a Deny returns deny with its DenySource BEFORE
+ * policy, an Allow admits, an Ask or an observe-mode AllowAndRecord falls
+ * through to the net.fetch policy flow. No GuardDecision wire field was added —
+ * the decision still carries only {decision, reason, leaseId?}; the egress
+ * outcome surfaces through the existing reason string (as with FEAT-002).
+ *
+ * An origin is the (scheme, host, port) triple a rule is keyed on (docs/11 N2).
+ */
+export interface EgressOrigin {
+  scheme: string; // lowercased (e.g. "https")
+  host: string; // normalized bare host, lowercased
+  port: number; // explicit, defaulted per scheme (443 https, 80 http)
+}
+/** Where a deny came from (grok DenySource): a per-host row, or the org denylist. */
+export type EgressDenySource = "deny_row" | "web_fetch_denylist";
+/** What enforce mode WOULD have done, recorded by observe mode (grok WouldBe). */
+export type EgressWouldBe =
+  | { kind: "allowed" }
+  | { kind: "denied"; source: EgressDenySource }
+  | { kind: "asked" };
+/**
+ * The four decider outcomes (grok Decision). `allow_and_record` is observe
+ * mode: it ADMITS (never blocks) but records what enforce mode would have done.
+ */
+export type EgressDecision =
+  | { kind: "allow" }
+  | { kind: "deny"; source: EgressDenySource }
+  | { kind: "ask" }
+  | { kind: "allow_and_record"; would: EgressWouldBe };
+/** The stable outcome tag that appears in an EgressBlockedRequest.decided. */
+export type EgressOutcome = "allow" | "deny" | "ask" | "allow_and_record";
+/** The base decision a per-origin egress rule carries (no observe variant). */
+export type EgressBaseDecision = "allow" | "deny" | "ask";
+/**
+ * A per-origin egress rule in <state-dir>/egress.json. A null/absent scheme or
+ * port matches any; a present one must match exactly. Rules default to DENY
+ * (docs/11 N1): an unmatched origin is denied.
+ */
+export interface EgressOriginRule {
+  host: string; // normalized bare host (as AllowlistNetworkRule.host)
+  scheme?: string | null; // exact scheme match, or any when absent
+  port?: number | null; // exact port match (0..=65535), or any when absent
+  decision: EgressBaseDecision;
+}
+/**
+ * The egress policy document. A bare array is the `rules` list (enforce mode,
+ * empty denylist). The object form adds the org web-fetch denylist and the
+ * observe-mode flag.
+ */
+export interface EgressPolicyDoc {
+  rules: EgressOriginRule[];
+  disallowedWebFetchDomains?: string[]; // org denylist -> DenySource "web_fetch_denylist"
+  observe?: boolean; // safe-rollout: record would-be answers without blocking
+}
+/**
+ * A CONTENT-FREE record of a decided egress request (grok BlockedRequest).
+ * Carries ONLY the routing triple, the call tag, the outcome, and the hold
+ * timing — deliberately NO path/headers/body, so a record can never leak a
+ * secret-bearing URL query, auth header, or request body. The buffer is bounded
+ * to EGRESS_BLOCKED_REQUEST_CAPACITY (256) most-recent records.
+ */
+export interface EgressBlockedRequest {
+  host: string;
+  port: number;
+  call: string; // command tag / call id (NOT a URL)
+  decided: EgressOutcome;
+  holdMs: number;
+  deadlineUnix: number;
+}
+/** grok DEFAULT_MAX_HELD: proxy-wide concurrent-hold ceiling. */
+export const EGRESS_DEFAULT_MAX_HELD = 16;
+/** grok DEFAULT_MAX_HELD_PER_CALL: per command-tag concurrent-hold ceiling. */
+export const EGRESS_DEFAULT_MAX_HELD_PER_CALL = 8;
+/** grok DEFAULT_HOLD_TIMEOUT (seconds): a held request auto-denies after this. */
+export const EGRESS_DEFAULT_HOLD_TIMEOUT_SECS = 600;
+/** grok BLOCKED_REQUEST_CAPACITY: bounded record-buffer size. */
+export const EGRESS_BLOCKED_REQUEST_CAPACITY = 256;
+
+/**
+ * Fail-closed per-call SandboxMode ladder (FEAT-004) — mirrors
+ * kernel/src/sandbox.rs byte-for-byte in semantics. Modeled on dsh's
+ * escalation.ts (research/compare-ohmypi-deepseek.md §2.4). The kernel reports
+ * the enforcement posture of a requested mode against the LIVE host
+ * capabilities over the additive "sandbox.report" method and FAILS CLOSED: a
+ * mode that requires FS confinement unavailable on the host returns a typed
+ * SANDBOX_UNAVAILABLE (HZ_PRECONDITION_FAILED class), NEVER a silent "enforced",
+ * NEVER silently unconfined (docs/11 S1/S4). No GuardDecision wire field was
+ * added — the decision still carries only {decision, reason, leaseId?}; this
+ * contract is the sandbox report shape only. DEFAULT_POLICY is unchanged.
+ */
+export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+/**
+ * The strictly-WIDER modes a one-shot escalation may target FROM a mode (dsh
+ * WIDER_MODES). read-only is the floor (nothing escalates TO it);
+ * danger-full-access is the ceiling (nothing is wider).
+ */
+export const SANDBOX_WIDER_MODES: Record<SandboxMode, SandboxMode[]> = {
+  "read-only": ["workspace-write", "danger-full-access"],
+  "workspace-write": ["danger-full-access"],
+  "danger-full-access": [],
+};
+/**
+ * The schema-enum escalation targets (dsh ESCALATION_TARGETS): the modes a
+ * caller may ask to escalate to. read-only is the floor and is deliberately
+ * absent — nothing escalates to it.
+ */
+export const SANDBOX_ESCALATION_TARGETS: SandboxMode[] = ["workspace-write", "danger-full-access"];
+/**
+ * The model-facing denial marker (dsh sandboxDenialMarker(mode)), byte-for-byte
+ * from escalation.ts: `[sandbox: file access denied under ${mode} mode]`.
+ */
+export function sandboxDenialMarker(mode: SandboxMode): string {
+  return `[sandbox: file access denied under ${mode} mode]`;
+}
+/**
+ * The model-facing escalation-hint marker (dsh escalationHintMarker(subject)),
+ * byte-for-byte from escalation.ts. The source separates "available" from
+ * "retry" with an EM DASH (U+2014) — preserved exactly, as this is model-facing
+ * text. Matches kernel/src/sandbox.rs::escalation_hint_marker byte-for-byte.
+ */
+export function escalationHintMarker(subject: string): string {
+  return `[sandbox: escalation available \u2014 retry this exact ${subject} once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]`;
+}
+/**
+ * The paired escalation arguments that widen a single call (dsh
+ * sandbox_permissions + justification). They travel TOGETHER and the
+ * justification is non-empty (validateEscalationArgs). sandbox_permissions is a
+ * strictly-wider mode per SANDBOX_WIDER_MODES.
+ */
+export interface SandboxEscalationArgs {
+  sandbox_permissions: SandboxMode;
+  justification: string; // non-empty
+}
+/**
+ * Per-call enforcement completeness (dsh full|partial). A consumer needing the
+ * absolute boundary can reject "partial".
+ */
+export type EnforcementCompleteness = "full" | "partial";
+/**
+ * The guarantee level for a single sandbox dimension (docs/11 S2/S3 guarantee
+ * vector). Below "enforced" the DimensionReport.residual is non-empty.
+ */
+export type SandboxGuarantee = "enforced" | "best_effort" | "unsupported";
+/**
+ * One dimension of the guarantee vector. `residual` is NON-EMPTY whenever the
+ * guarantee is below "enforced" (docs/11 S2/S3); `backend` is an explicit
+ * mechanism name or "none" (docs/11 S5: no silent fallback).
+ */
+export interface SandboxDimensionReport {
+  dimension: string; // e.g. "filesystem" | "network" | "process" | "resources"
+  guarantee: SandboxGuarantee;
+  backend: string; // explicit mechanism name or "none"
+  residual: string; // non-empty when guarantee !== "enforced"
+}
+/**
+ * A per-call enforcement report for a requested mode (status "report"). backend
+ * is the primary confinement backend name or "none" (S5). unavailableReason is
+ * present when a required mechanism was absent but a partial boundary was
+ * tolerated (so completeness is "partial" rather than SANDBOX_UNAVAILABLE).
+ * danger-full-access reports NO dimension as "enforced" (S4).
+ */
+export interface EnforcementReport {
+  status: "report";
+  mode: SandboxMode;
+  completeness: EnforcementCompleteness;
+  backend: string;
+  dimensions: SandboxDimensionReport[];
+  unavailableReason?: string;
+}
+/**
+ * The typed SANDBOX_UNAVAILABLE outcome (status "sandbox_unavailable"): a mode
+ * requires a dimension the host cannot enforce, so the kernel FAILS CLOSED
+ * rather than running unconfined (HZ_PRECONDITION_FAILED class, docs/11 S1/S4).
+ */
+export interface SandboxUnavailable {
+  status: "sandbox_unavailable";
+  mode: SandboxMode;
+  reason: string; // typed SANDBOX_UNAVAILABLE reason
+}
+/** The sandbox.report outcome: either a report (possibly partial) or unavailable. */
+export type EnforcementOutcome = EnforcementReport | SandboxUnavailable;
+
+/**
  * Built-in policy used when <state-dir>/policy.json is absent.
  * Evaluation: deny > lease > ask > allow (docs/11 R1; docs/28 ruling 23).
  * Any matching deny wins; then an unexpired matching lease; then any matching
@@ -385,6 +604,34 @@ export interface KernelRequestMap {
   "guard.check": { params: { action: GuardAction; scope?: PolicyScope; leases?: Lease[] }; result: GuardDecision };
   "guard.lease": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
   "guard.grant": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
+  // FEAT-002 (additive): append a rule to the runtime command allowlist at
+  // <state-dir>/allowlist.json, file-locked append-dedup; consulted for
+  // shell.exec BEFORE the policy rules (an allowlist deny wins, docs/11 R1).
+  // kind defaults to "prefix" (a command rule); "network" appends an egress
+  // rule. The NDJSON envelope is unchanged. Mirrors kernel/src/protocol.rs
+  // "guard.allowlist.amend" byte-for-byte in semantics.
+  "guard.allowlist.amend": {
+    params: { kind?: AllowlistRuleKind; rule: AllowlistPrefixRule | AllowlistNetworkRule };
+    result: { changed: boolean; fingerprint: string };
+  };
+  // FEAT-004 (additive): report the fail-closed enforcement posture of a
+  // requested SandboxMode against the LIVE host capabilities. Validates the
+  // optional escalation args (sandbox_permissions + justification travel
+  // together, justification non-empty) BEFORE anything, and FAILS CLOSED — a
+  // mode that requires FS confinement unavailable on the host yields a typed
+  // SANDBOX_UNAVAILABLE outcome, NEVER a silent "enforced". allowPartial lets a
+  // tolerant caller receive a completeness="partial" report instead. The NDJSON
+  // envelope is unchanged. Mirrors kernel/src/protocol.rs "sandbox.report"
+  // byte-for-byte in semantics.
+  "sandbox.report": {
+    params: {
+      mode: SandboxMode;
+      sandboxPermissions?: SandboxMode;
+      justification?: string;
+      allowPartial?: boolean;
+    };
+    result: EnforcementOutcome;
+  };
 }
 
 export type KernelMethod = keyof KernelRequestMap;
@@ -398,6 +645,8 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "guard.check",
   "guard.lease",
   "guard.grant",
+  "guard.allowlist.amend",
+  "sandbox.report",
 ];
 
 /* --------------------------- Server protocol --------------------------- */
