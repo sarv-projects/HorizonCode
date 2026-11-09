@@ -312,6 +312,17 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       if (previewAction !== "start" || command === undefined) return undefined;
       return { kind: "shell.exec", target: command };
     }
+    case "shell_session": {
+      // The interactive-exec tool, modelled exactly on preview's admission:
+      // `start` runs a command, so it is the same shell.exec admission the tool
+      // itself performs (one approval, not two). `write` and `close` only touch
+      // an already-admitted live session (admitted at its start), so they are
+      // session-state — never a second shell.exec for the same command.
+      const sessionMode = argString(args, "mode");
+      const sessionCommand = argString(args, "command");
+      if (sessionMode !== "start" || sessionCommand === undefined) return undefined;
+      return { kind: "shell.exec", target: sessionCommand };
+    }
     case "undo": {
       // The effect target is the journal's recorded change, which no argument
       // names. A `path` argument admits as that file's fs.write; without one the
@@ -339,7 +350,7 @@ export function taskHead(text: string, max = 120): string {
  * described in the mapping above; `undo` reads the session's own change journal
  * to find its target and guards that entry inside the tool.
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };

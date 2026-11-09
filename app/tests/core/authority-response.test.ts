@@ -267,6 +267,7 @@ describe("every tool passes an admission", () => {
       code_mode: { code: "return 1" },
       preview: { action: "start", command: "true" },
       apply_patch: { input: "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\n" },
+      shell_session: { mode: "start", command: "echo hi" },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {

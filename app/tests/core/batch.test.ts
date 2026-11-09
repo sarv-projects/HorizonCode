@@ -121,6 +121,7 @@ describe("concurrency classes (NF-072)", () => {
     expect(concurrencyClassOf("code_mode")).toBe("exclusive");
     expect(concurrencyClassOf("preview")).toBe("exclusive");
     expect(concurrencyClassOf("shell")).toBe("exclusive"); // R-tools-39: shell is serial
+    expect(concurrencyClassOf("shell_session")).toBe("exclusive"); // R-tools-39: a terminal session is serial too
     expect(concurrencyClassOf("read")).toBe("shared");
     expect(concurrencyClassOf("grep")).toBe("shared");
     expect(concurrencyClassOf("glob")).toBe("shared");
