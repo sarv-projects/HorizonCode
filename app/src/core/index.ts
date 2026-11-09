@@ -761,8 +761,24 @@ export function setApprovalHandler(fn: ApprovalHandler): void {
 }
 
 export { getApprovalHandler } from "./loop";
-export { loadConfig, describeConfig, missingKey, DEFAULT_MODELS } from "./config";
+export { loadConfig, describeConfig, missingKey, DEFAULT_MODELS, builtinDefaultModel } from "./config";
 export type { HzConfig, ProviderName } from "./config";
+export {
+  loadCatalog,
+  curatedCatalog,
+  decodeCatalog,
+  decodeModel,
+  validateCatalog,
+  loadSnapshotFile,
+  fetchLiveCatalog,
+  catalogDefaultModel,
+  catalogModel,
+  catalogWindow,
+  MINIMUM_PROVIDERS,
+  CATALOG_PATH,
+  DEFAULT_CATALOG_SOURCE,
+} from "./catalog/catalog";
+export type { Catalog, LoadedCatalog, CatalogModel, CatalogProvider, CatalogSource, ModelCapabilities, ModelCost } from "./catalog/catalog";
 export { KernelClient, LocalKernel, resolveKernelBinary } from "./kernel";
 export { SessionStore, type SessionInfo } from "./session";
 export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider, createGoogleProvider, createOllamaProvider } from "./providers";
