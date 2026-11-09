@@ -35,6 +35,17 @@ export interface SessionInfo {
   title: string;
   created: string;
   updated: string;
+  /** Present only on a fork (session.ts forkSession): where it came from. */
+  forkedFrom?: SessionFork;
+}
+
+/** Fork lineage stored on the child row; the parent is never modified. */
+export interface SessionFork {
+  sessionId: string;
+  /** Parent messages copied (after the boundary-safe cut). */
+  messageIndex: number;
+  /** The parent stream's last seq when the fork was taken (0 = no events). */
+  parentSeq: number;
 }
 
 /** What an open found and had to recover from; `null` on a healthy open. */
@@ -99,7 +110,29 @@ interface RepairRow {
   meta: string | null;
 }
 
-interface SessionRow extends SessionInfo {}
+interface SessionRow {
+  id: string;
+  title: string;
+  created: string;
+  updated: string;
+  forked_from?: string | null;
+  fork_index?: number | null;
+  fork_seq?: number | null;
+}
+
+const SESSION_COLS = "id, title, created, updated, forked_from, fork_index, fork_seq";
+
+function rowToInfo(row: SessionRow): SessionInfo {
+  const info: SessionInfo = { id: row.id, title: row.title, created: row.created, updated: row.updated };
+  if (typeof row.forked_from === "string" && row.forked_from !== "") {
+    info.forkedFrom = {
+      sessionId: row.forked_from,
+      messageIndex: row.fork_index ?? 0,
+      parentSeq: row.fork_seq ?? 0,
+    };
+  }
+  return info;
+}
 
 interface MessageMeta {
   toolCallId?: string;
@@ -334,6 +367,14 @@ export class SessionStore {
       /* pragma support is best-effort */
     }
     this.db.exec(SCHEMA);
+    // Fork lineage columns: additive, nullable, migration-safe (an older
+    // database gains them in place; a session that is not a fork keeps NULLs).
+    const have = new Set(
+      (this.db.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!have.has("forked_from")) this.db.exec("ALTER TABLE sessions ADD COLUMN forked_from TEXT");
+    if (!have.has("fork_index")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_index INTEGER");
+    if (!have.has("fork_seq")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_seq INTEGER");
 
     // Owner-only state, applied after the schema and WAL pragmas so the file
     // and any sidecar they created are covered. Re-applied on every open, so a
@@ -361,23 +402,82 @@ export class SessionStore {
 
   getSession(id: string): SessionInfo | null {
     const row = this.db
-      .query("SELECT id, title, created, updated FROM sessions WHERE id = ?")
+      .query(`SELECT ${SESSION_COLS} FROM sessions WHERE id = ?`)
       .get(id) as SessionRow | null | undefined;
-    return row ?? null;
+    return row ? rowToInfo(row) : null;
   }
 
   /** The most recently touched session in this workspace, if there is one. */
   latestSession(): SessionInfo | null {
     const row = this.db
-      .query("SELECT id, title, created, updated FROM sessions ORDER BY updated DESC, rowid DESC LIMIT 1")
+      .query(`SELECT ${SESSION_COLS} FROM sessions ORDER BY updated DESC, rowid DESC LIMIT 1`)
       .get() as SessionRow | null | undefined;
-    return row ?? null;
+    return row ? rowToInfo(row) : null;
   }
 
   listSessions(limit = 20): SessionInfo[] {
-    return this.db
-      .query("SELECT id, title, created, updated FROM sessions ORDER BY updated DESC, rowid DESC LIMIT ?")
-      .all(Math.max(1, limit)) as SessionInfo[];
+    const rows = this.db
+      .query(`SELECT ${SESSION_COLS} FROM sessions ORDER BY updated DESC, rowid DESC LIMIT ?`)
+      .all(Math.max(1, limit)) as SessionRow[];
+    return rows.map(rowToInfo);
+  }
+
+  /**
+   * Fork (docs/12 S-45): a NEW session holding a copy of the parent's settled
+   * transcript, whole or the first `at` messages. The cut goes through
+   * `safeTruncationBoundary`, so a fork never starts between an assistant
+   * tool_call and its results. Message ids are fresh, `ts` and order are kept,
+   * and the parent's rows are only read: the original is untouched. One
+   * transaction, all-or-nothing. `parentSeq` is the caller's reading of the
+   * parent's event stream head (the store does not own the log).
+   */
+  forkSession(parentId: string, opts: { at?: number; parentSeq?: number; title?: string } = {}): SessionInfo {
+    const parent = this.getSession(parentId);
+    if (!parent) throw new Error(`no session ${parentId} in this workspace`);
+    const rows = this.db
+      .query("SELECT id, role, content, ts, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC")
+      .all(parentId) as Array<{ id: string; role: string; content: string | null; ts: string; meta: string | null }>;
+    if (opts.at !== undefined && (!Number.isInteger(opts.at) || opts.at < 0)) {
+      throw new Error("fork point must be a non-negative integer message index");
+    }
+    const keep =
+      opts.at === undefined
+        ? rows.length
+        : safeTruncationBoundary(
+            rows.map((row) => ({
+              role: row.role,
+              toolCallIds:
+                row.role === "assistant"
+                  ? (parseMeta(row.meta).toolCalls ?? []).filter(isToolCall).map((call) => call.id)
+                  : [],
+            })),
+            Math.min(opts.at, rows.length),
+          );
+    const now = nowIso();
+    const child: SessionInfo = {
+      id: newId(),
+      title: opts.title ?? `${parent.title} (fork)`,
+      created: now,
+      updated: now,
+      forkedFrom: { sessionId: parentId, messageIndex: keep, parentSeq: opts.parentSeq ?? 0 },
+    };
+    this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO sessions (id, title, created, updated, forked_from, fork_index, fork_seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [child.id, child.title, child.created, child.updated, parentId, keep, opts.parentSeq ?? 0],
+      );
+      for (const row of rows.slice(0, keep)) {
+        this.db.run("INSERT INTO messages (id, session_id, role, content, ts, meta) VALUES (?, ?, ?, ?, ?, ?)", [
+          newId(),
+          child.id,
+          row.role,
+          row.content ?? "",
+          row.ts,
+          row.meta,
+        ]);
+      }
+    })();
+    return child;
   }
 
   /** Retitle a session (the chat loop names it from the first user message). */

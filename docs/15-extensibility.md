@@ -1573,3 +1573,4 @@ Every capability below is **DESIGNED** except the two rows `28-implementation-st
 5. **The `skillify` eval gate depends on the evidence gate**, which is itself still `DESIGNED` (`11-authority-safety.md` §10.1). A synthesized skill cannot be promoted above `DESIGNED` before the gate is wired.
 6. **Plugin UI panels are specified as renderer-isolated webviews** with a declared action surface; the concrete webview technology per platform is not decided here and MUST NOT be a path to unsandboxed code.
 
+> **Session fork (`docs/28` ruling 59).** `session.start`/`session.end` hooks fire for the child as for any resumed session; `session.fork` is a log event, not a hook point.

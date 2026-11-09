@@ -662,4 +662,4 @@ Known limitations this document MUST NOT paper over:
 2. The ancestor refuses two edits to the same file in one message (`stale_preimage`), so the web/IDE hunk flows MUST apply sequentially with recomputed preimages rather than bulk-applying (S57, S93).
 3. Cross-platform sandbox residuals are typed, not absent: a surface MUST render the residual vector rather than imply confinement it does not have (`docs/02-decisions.md`, ADR-002 and P6).
 
-
+> **Session fork (`docs/28` ruling 59).** `session.fork {sessionId, at?}` returns `{sessionId, uri, forkedFrom{uri,sessionId,messageIndex,parentSeq}, model, providerName, kernelMode}`; the child is live and promptable. `session.list` rows carry `forkedFrom` only for forks. Bad `at` or an unknown session is INVALID_PARAMS.
