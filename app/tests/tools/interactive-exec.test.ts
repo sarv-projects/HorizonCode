@@ -502,3 +502,47 @@ describe("shell_session: bare CR cannot join two admitted lines (pipe mode)", ()
     });
   });
 });
+
+describe("shell_session: invisible Unicode and per-write ceilings", () => {
+  async function startBash(ctx: ReturnType<typeof mockToolContext>): Promise<string> {
+    const start = await interactiveExecTool.execute({ mode: "start", command: "bash --norc --noprofile" }, ctx);
+    return (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+  }
+
+  test("bidi, zero-width and line-separator characters are refused before the guard", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({});
+      let calls = 0;
+      const ctx = mockToolContext({ cwd: ws, decision: () => (calls++, { decision: "allow" }) });
+      const sessionId = await startBash(ctx);
+      const before = calls;
+      for (const ch of ["\u202e", "\u2066", "\u200b", "\u2060", "\ufeff", "\u2028", "\u2029", "\u200f"]) {
+        const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: `echo a${ch}b\n` }, ctx);
+        expect(r.ok).toBe(false);
+        expect(r.error ?? "").toContain("invisible or direction-changing Unicode");
+      }
+      expect(calls).toBe(before);
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+    });
+  });
+
+  test("more than 64 lines or 64 KiB in one write is refused before the guard", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({});
+      let calls = 0;
+      const ctx = mockToolContext({ cwd: ws, decision: () => (calls++, { decision: "allow" }) });
+      const sessionId = await startBash(ctx);
+      const before = calls;
+      const many = await interactiveExecTool.execute({ mode: "write", sessionId, input: "true\n".repeat(65) }, ctx);
+      expect(many.ok).toBe(false);
+      expect(many.error ?? "").toContain("too large for one write");
+      const big = await interactiveExecTool.execute({ mode: "write", sessionId, input: ("#" + "x".repeat(3000) + "\n").repeat(22) }, ctx);
+      expect(big.ok).toBe(false);
+      expect(big.error ?? "").toContain("too large for one write");
+      expect(calls).toBe(before);
+      const ok = await interactiveExecTool.execute({ mode: "write", sessionId, input: "true\n".repeat(64) }, ctx);
+      expect(ok.ok).toBe(true);
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+    });
+  });
+});
