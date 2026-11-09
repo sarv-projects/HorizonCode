@@ -393,6 +393,24 @@ async function privateFile(file: string): Promise<void> {
   }
 }
 
+/**
+ * Append to a chain file; a failure always names the file. Some runtimes (bun
+ * 1.2.x) report "EACCES: permission denied, open" with no path, which left the
+ * run-level failure unable to say WHICH store was unwritable. The errno code is
+ * preserved.
+ */
+async function appendChain(file: string, data: string): Promise<void> {
+  try {
+    await appendFile(file, data, "utf8");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes(file)) throw err;
+    const named = new Error(`${message} '${file}'`) as NodeJS.ErrnoException;
+    named.code = (err as NodeJS.ErrnoException | undefined)?.code;
+    throw named;
+  }
+}
+
 /** Post-create chmod 0700, umask-proof; a no-op off unix (mirrors permm.rs). */
 async function privateDir(dir: string): Promise<void> {
   if (process.platform === "win32") return;
@@ -730,7 +748,7 @@ export class LocalKernel {
         prevHash: tail ? tail.hash : null,
       };
       const envelope: EventEnvelope = { ...base, hash: hashEnvelope(base) };
-      await appendFile(file, canonicalJson(envelope) + "\n", "utf8");
+      await appendChain(file, canonicalJson(envelope) + "\n");
       await privateFile(file);
       await this.writeHead(file, envelope.seq, this.anchorDigest("event", envelope));
       this.tails.set(`events:${stream}`, {
@@ -804,7 +822,7 @@ export class LocalKernel {
         prevHash: tail ? tail.hash : null,
       };
       const receipt: Receipt = { ...base, hash: hashReceipt(base) };
-      await appendFile(file, canonicalJson(receipt) + "\n", "utf8");
+      await appendChain(file, canonicalJson(receipt) + "\n");
       await privateFile(file);
       await this.writeHead(file, receipt.seq, this.anchorDigest("receipt", receipt));
       this.tails.set("receipts", {

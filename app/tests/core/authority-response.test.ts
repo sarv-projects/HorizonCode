@@ -266,6 +266,12 @@ describe("every tool passes an admission", () => {
       agent: { task: "do it" },
       code_mode: { code: "return 1" },
       preview: { action: "start", command: "true" },
+      apply_patch: { input: "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\n" },
+      shell_session: { mode: "start", command: "echo hi" },
+      lsp: { op: "diagnostics", path: "a.ts" },
+      tool_search: { query: "preview dev server" },
+      ast_search: { pat: "foo($A)" },
+      ast_edit: { path: "a.ts", pat: "foo($A)", out: "bar($A)" },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {

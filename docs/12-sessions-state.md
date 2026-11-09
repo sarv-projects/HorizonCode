@@ -1,5 +1,7 @@
 # 12 — Sessions, State, Persistence & Time Travel
 
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED on the integration branch: conversational rewind (`SessionStore.truncateMessages` boundary-safe, `rewindTo(n)` truncates the transcript to the checkpoint and appends a `rewind.conversation` event) on top of the file-side checkpoints of wave 14c, and admission-queue recovery on open/resume. NOT STARTED: session fork and branch, cross-process locking for sessions, checkpoints and the change journal, workspace snapshots. See `28-implementation-status.md` §1.
+
 > What is durable, where it lives, who may write it, how it is rebuilt, how it is moved between machines, and exactly what survives each kind of death.
 
 ---

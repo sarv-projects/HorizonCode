@@ -180,6 +180,62 @@ export function interruptedToolResult(toolName: string): string {
   );
 }
 
+/**
+ * The minimum a row needs for the boundary computation: its role and the tool
+ * calls an assistant message declared (the only two facts the cut depends on).
+ * `safeTruncationBoundary` takes this shape so it is a PURE function of the
+ * transcript's structure — unit-testable with hand-built rows, no DB.
+ */
+export interface BoundaryRow {
+  role: string;
+  /** Call ids this assistant message declared (empty for every other role). */
+  toolCallIds: readonly string[];
+}
+
+/**
+ * Compute a provider-replayable truncation boundary: the number of leading rows
+ * to KEEP so the kept prefix never ends between an assistant message that
+ * carries tool calls and the tool-result rows that answer it.
+ *
+ * The naive cut keeps the first `keepCount` rows (clamped to [0, rows.length]).
+ * That is unsafe when it lands INSIDE a tool-call group — after an assistant
+ * message with tool calls but before all of its answering tool rows — because
+ * the kept prefix would then hold an assistant `tool_call` with no following
+ * tool result, exactly the dangling-call shape `repairDanglingToolCalls` and
+ * every real provider reject. When the naive cut is unsafe the boundary is
+ * moved EARLIER, to just before that assistant message, so the group is kept or
+ * dropped whole. The result is always in [0, naive]: truncation only ever keeps
+ * fewer rows to stay safe, never more.
+ *
+ * Pure: identical rows and keepCount give an identical number, with no I/O.
+ */
+export function safeTruncationBoundary(rows: readonly BoundaryRow[], keepCount: number): number {
+  const total = rows.length;
+  const naive = Number.isFinite(keepCount) ? Math.max(0, Math.min(Math.floor(keepCount), total)) : total;
+  if (naive === 0 || naive === total) return naive;
+
+  // The cut lands just after row index `naive - 1`. Walk back over the tool
+  // rows immediately preceding the cut to find the assistant message they
+  // answer; if that assistant declared tool calls and any of its answering tool
+  // rows fall on the dropped side of the cut, the group is split — move the
+  // boundary to before that assistant message.
+  let assistantIdx = naive - 1;
+  while (assistantIdx >= 0 && (rows[assistantIdx] as BoundaryRow).role === "tool") assistantIdx -= 1;
+  if (assistantIdx < 0) return naive;
+  const assistant = rows[assistantIdx] as BoundaryRow;
+  if (assistant.role !== "assistant" || assistant.toolCallIds.length === 0) return naive;
+
+  // How many tool rows actually follow this assistant message in the full
+  // transcript? If the kept prefix would not include all of them, the group is
+  // split and the cut must fall before the assistant message instead.
+  let groupEnd = assistantIdx + 1;
+  while (groupEnd < total && (rows[groupEnd] as BoundaryRow).role === "tool") groupEnd += 1;
+  // `naive` keeps rows [0, naive); the group occupies (assistantIdx, groupEnd).
+  // Safe only when the whole group is kept, i.e. naive >= groupEnd.
+  if (naive >= groupEnd) return naive;
+  return assistantIdx;
+}
+
 /** Rows -> ChatMsg, restoring the fields the providers need to replay a turn. */
 export function rowToChatMsg(row: MessageRow): ChatMsg {
   const role: ChatMsg["role"] =
@@ -457,6 +513,57 @@ export class SessionStore {
       | null
       | undefined;
     return typeof row?.n === "number" ? row.n : 0;
+  }
+
+  /**
+   * Conversational rewind (FEAT-002): keep the first `keepCount` messages in
+   * rowid order and delete the rest, in ONE transaction. This is the
+   * transcript-truncation API wave-14c named as a residual (checkpoints.ts
+   * records `messageIndex` but nothing acted on it); the file-side rewind
+   * (`rewindPlan`) is unchanged — this is the conversational half.
+   *
+   * CRITICAL invariant, the same one `repairDanglingToolCalls` protects: the
+   * kept prefix must never end between an assistant message carrying tool calls
+   * and the tool-result rows that answer it, or the next provider replay would
+   * reject a dangling `tool_call`. The cut is therefore passed through
+   * `safeTruncationBoundary`, which moves the boundary EARLIER (before that
+   * assistant message) whenever the naive cut would split such a group. The
+   * adjusted boundary is reported in `adjustedTo`.
+   *
+   * `keepCount >= messageCount` removes nothing (a no-op); `keepCount === 0`
+   * clears the transcript. Idempotent and safe to call repeatedly: a second
+   * call with the same (already-reached) boundary removes nothing.
+   */
+  truncateMessages(sessionId: string, keepCount: number): { removed: number; keptCount: number; adjustedTo: number } {
+    const roleRows = this.db
+      .query("SELECT id, role, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC")
+      .all(sessionId) as Array<{ id: string; role: string; meta: string | null }>;
+    const total = roleRows.length;
+
+    const boundaryRows: BoundaryRow[] = roleRows.map((row) => ({
+      role: row.role,
+      toolCallIds:
+        row.role === "assistant"
+          ? (parseMeta(row.meta).toolCalls ?? []).filter(isToolCall).map((call) => call.id)
+          : [],
+    }));
+    const adjustedTo = safeTruncationBoundary(boundaryRows, keepCount);
+    const removed = total - adjustedTo;
+    if (removed <= 0) return { removed: 0, keptCount: total, adjustedTo };
+
+    // The ids to delete are everything from the boundary onward, by rowid.
+    const doomed = roleRows.slice(adjustedTo).map((row) => row.id);
+    const truncate = this.db.transaction(() => {
+      // Delete by id (stable across the loop) rather than by a rowid range, so
+      // the cut is exactly the rows the boundary named — one statement each,
+      // one transaction, all-or-nothing.
+      for (const id of doomed) {
+        this.db.run("DELETE FROM messages WHERE session_id = ? AND id = ?", [sessionId, id]);
+      }
+    });
+    truncate();
+    this.touchSession(sessionId);
+    return { removed, keptCount: adjustedTo, adjustedTo };
   }
 
   close(): void {

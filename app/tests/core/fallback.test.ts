@@ -33,6 +33,7 @@ import {
   snapshotEnv,
   tempDir,
   type EnvSnapshot,
+  permissionBitsBind,
 } from "./helpers";
 
 const STREAM = "session:fallback-1";
@@ -486,7 +487,7 @@ test("the fallback tightens a pre-existing loose state dir to 0700/0600 (Unix)",
   expect(mode(`${receiptsFilePath(stateDir)}.head`), "receipts anchor").toBe(0o600);
 });
 
-test("an unreadable receipts chain refuses the append and leaves the bytes alone", async () => {
+test.skipIf(!permissionBitsBind)("an unreadable receipts chain refuses the append and leaves the bytes alone", async () => {
   const stateDir = path.join(tempDir("hz-state-rread-fb-"), "kernel");
   const workspace = tempDir("hz-ws-rread-fb-");
   const receipts = receiptsFilePath(stateDir);

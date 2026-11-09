@@ -31,18 +31,19 @@
 
 ## 2. What `ops/gates.sh` runs today
 
-Six gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`):
+Seven gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Measured 2026-11-09 on `integration/superset` (as root): `rust-kernel-suite`, `kernel-selftest` and `ts-typecheck` ok; `ts-suite` fails on the 11 known root/uid-0 permission tests (ruling 39), so the e2e steps were skipped by fail-fast. Run by hand they all pass: exit 0 with receipts, exit 5, exit 2.
 
 | Step | What it proves | Existing evidence for it |
 |---|---|---|
-| `rust-kernel-suite` | `cargo test --locked` in `kernel/` (40 tests: 9 unit + 31 integration) | docs/28 §1, Rust trust kernel — `VERIFIED` |
-| `kernel-selftest` | `hz-kernel --selftest --state-dir <fresh tmpdir>` exits 0 with `SELFTEST OK` (release-built first when absent) | docs/28 §1 — `SELFTEST OK (18 checks)` |
-| `ts-suite` | `bun test` in `app/` (607 tests across 48 files) | docs/28 §1, runtime/tools/TUI rows — `TESTED + VERIFIED` |
+| `rust-kernel-suite` | `cargo test --locked` in `kernel/` (49 + 50 tests on 2026-11-09) | docs/28 §1, Rust trust kernel: `VERIFIED` |
+| `kernel-selftest` | `hz-kernel --selftest --state-dir <fresh tmpdir>` exits 0 with `SELFTEST OK` (release-built first when absent) | docs/28 §1: `SELFTEST OK (25 checks)` (2026-11-09) |
+| `ts-typecheck` | `bun run typecheck` (`tsc --noEmit`) in `app/` reports 0 errors; on a clean checkout the gate first runs `bun install` in `app/` (dev type definitions only, the app has no runtime dependencies) and fails with a clear message if that install fails | docs/28 ruling 39 |
+| `ts-suite` | `bun test` in `app/` (1267 tests across 107 files on 2026-11-09; 8 permission tests skip as root) | docs/28 §1, runtime/tools/TUI rows: `TESTED + VERIFIED` |
 | `e2e-headless-smoke` | fresh workspace, `printf 'list files' \| ./bin/hzcode --workspace <tmp>` exits 0, the mock's tool exchange appears in the output, and a non-empty `receipts.jsonl` is left behind | docs/28 §1 e2e rows |
 | `e2e-budget-rail` | the same with `HZ_MAX_STEPS=1` exits 5 with the budget notice | docs/28 §3 ruling 15 |
 | `e2e-usage-error` | `./bin/hzcode --max-steps nope` exits 2 with the diagnostic naming the flag | docs/28 §3 ruling 15; docs/14 §3.2 (exit table) |
 
-None of these six *is* a §3.5 gate: they are the repository's own suites. The e2e steps run the provider pinned to `mock` under a throwaway `HOME`, so a gate never reaches the network and never spends money.
+None of these seven *is* a §3.5 gate: they are the repository's own suites. The e2e steps run the provider pinned to `mock` under a throwaway `HOME`, so a gate never reaches the network and never spends money.
 
 ## 3. Keeping this file honest
 

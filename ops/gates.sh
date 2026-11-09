@@ -14,7 +14,8 @@
 #   kernel-selftest       kernel/target/release/hz-kernel --selftest
 #                         --state-dir <fresh tmpdir> (release-built first when
 #                         the binary is absent)
-#   ts-typecheck          bun run typecheck in app/ (tsc --noEmit)
+#   ts-typecheck          bun run typecheck in app/ (tsc --noEmit); runs bun install
+#                         in app/ first when @types/bun or @types/node is absent
 #   ts-suite              bun test in app/
 #   e2e-headless-smoke    printf 'list files' | ./bin/hzcode --workspace <fresh>
 #                         -> exit 0, the mock's tool exchange in the output, and
@@ -172,6 +173,17 @@ gate_ts_typecheck() {
   if [ -z "$BUN" ]; then
     printf 'bun not found — looked on PATH and at $HOME/.bun/bin/bun\n'
     return 1
+  fi
+  # tsconfig.json lists the "bun" and "node" type libraries, which are
+  # devDependencies. On a clean checkout they are absent and tsc fails with
+  # TS2688, so install them first (dev type definitions only; the app has no
+  # runtime dependencies). A failed install, e.g. offline, fails the gate.
+  if [ ! -d "$ROOT/app/node_modules/@types/bun" ] || [ ! -d "$ROOT/app/node_modules/@types/node" ]; then
+    printf 'app/node_modules/@types/{bun,node} missing — running bun install in app/\n'
+    if ! ( cd "$ROOT/app" && "$BUN" install ); then
+      printf 'bun install failed in app/ — the type definitions (@types/bun, @types/node, typescript) are required for the typecheck; is the network reachable?\n'
+      return 1
+    fi
   fi
   # tsc --noEmit (via the app's "typecheck" script): a type error is a gate
   # failure before the suite ever runs, so a RED compile fails fast and cheap.

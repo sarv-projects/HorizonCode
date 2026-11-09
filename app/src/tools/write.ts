@@ -31,6 +31,7 @@ import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { detectLineEnding, normalizeLineEndings } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
 import { protectedTargetRefusal } from "./verified-open";
 
@@ -199,8 +200,21 @@ export const writeTool: Tool = {
         }
       }
 
+      // Line-ending normalisation (FEAT-001), additive and byte-identical to
+      // today for pure-LF content (the common case). The content's own detected
+      // ending wins; only when OVERWRITING a file whose readable preimage is
+      // CRLF and the new content did not itself choose CRLF do we keep CRLF, so
+      // a round-trip of model-emitted LF text does not flip an existing CRLF
+      // file to LF wholesale. New files take the content's own ending (LF by
+      // default) -- HorizonCode does not gate on os.EOL.
+      const contentEnding = detectLineEnding(content);
+      const eol = contentEnding === "\n" && preimageText !== null && detectLineEnding(preimageText) === "\r\n" ? "\r\n" : contentEnding;
+      const toWrite = normalizeLineEndings(content, eol);
+      const outLines = countLines(toWrite);
+      const outBytes = Buffer.byteLength(toWrite, "utf8");
+
       await mkdir(path.dirname(resolved), { recursive: true });
-      const outcome = await writeAtomic(resolved, content, ctx);
+      const outcome = await writeAtomic(resolved, toWrite, ctx);
       if (isRefused(outcome)) return fail(outcome.refusal);
 
       recordChange(ctx.sessionId, {
@@ -208,7 +222,7 @@ export const writeTool: Tool = {
         rel,
         before: preimageText,
         ...(preimageUnreadable ? { beforeUnreadable: true } : {}),
-        afterSha256: sha256Hex(content),
+        afterSha256: sha256Hex(toWrite),
         at: Date.now(),
         tool: "write",
       });
@@ -217,7 +231,7 @@ export const writeTool: Tool = {
       // path counts as known: overwriting your own work is not the "never saw
       // it" hazard the gate targets.
       noteRead(ctx, resolved);
-      return { ok: true, output: `Wrote ${lines} lines (${bytes} bytes) to ${rel}` };
+      return { ok: true, output: `Wrote ${outLines} lines (${outBytes} bytes) to ${rel}` };
     } catch (e) {
       return fail(msg(e));
     }

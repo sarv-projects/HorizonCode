@@ -1,5 +1,7 @@
 # 14 — Surfaces (headless, server, web, desktop, IDE/ACP, MCP server, SDKs)
 
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: a single-attach server mode speaking NDJSON JSON-RPC v1 over stdio (`docs/28` §1 server row; resume by id, read-only `session.list`), reusing `createRuntime` recovery. Headless remains line-in / text-out. NOT STARTED: headless `-p` with JSON/JSONL output, UDS/TCP/HTTP+SSE transports, SDKs, web, desktop and IDE surfaces, the fullscreen TUI renderer.
+
 > ADR-001 makes the TUI the product and the protocol the API; ADR-005 makes every surface a client of one Controller. This document fixes each non-TUI surface: its architecture, protocol usage, auth, capabilities and limits — plus the parity ratchet that stops them drifting apart.
 
 ---

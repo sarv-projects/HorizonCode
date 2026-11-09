@@ -2,6 +2,8 @@
 
 > Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/HorizonCode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** The catalog below stays a specification. Eighteen tools ship in reduced form and are TESTED (§12 last row; `docs/28` §1): the base seven, `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch` (GPT/Codex grammar, model-routed), `shell_session` (interactive PTY), `lsp` (default off), `tool_search` (Deferred discovery), `ast_search` and `ast_edit`. `debug` (DAP), `multi_edit`, hashline-anchored edits and multi-dialect tool sets beyond `apply_patch` are NOT STARTED.
+>
 > Templates and names follow `/data/home/forge/HorizonCode/docs/_conventions.md`.
 
 ---
@@ -109,6 +111,19 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 **R-tools-26.** Admission: a tool admitted by `tool_search` becomes part of the session's visible set for the remainder of the session (or for `ttlSteps` if the caller requests a shorter window). Admission is recorded as a session fact with `discovery: tool_search` and included in the next step's tool prefix (R-tools-13 applies: the admitted fragment joins the *projected* end of the prefix, never the stable head, so the cache guard is not broken).
 
 **R-tools-27.** `tool_search` MUST filter against the session's **effective** tool set: it MUST NOT reveal, admit or describe a tool that policy, posture, allow-lists or the plugin trust decision has removed. Searching MUST NOT be a path to un-hiding authority.
+
+#### 2.4.1 Implementation note — exposure classes (FEAT-002, research §1.6)
+
+The shipped runtime realises a reduced form of R-tools-24…27 through one additive, optional field on the `Tool` interface (`app/src/contracts.ts`), `exposure`, with a companion optional `searchInfo: { keywords: string[] }`. Absent `exposure` means `"direct"` — exactly as an absent `concurrencyClass` means `"shared"` — so every shipped tool that sets nothing keeps today's behaviour (it appears in the default spec list and is callable). The four classes map to the codex `ToolExposure` reference:
+
+| Exposure | Meaning in this runtime |
+|---|---|
+| `direct` | In the initial spec list the model sees from turn one (the default). |
+| `deferred` | Absent from the default specs; discovered at runtime via `tool_search`, then visible + callable for the rest of that session. Carries `searchInfo.keywords` as the extra matching surface beyond its name and description. |
+| `code_mode_only` | Reserved: excluded from the default specs; its nested code-mode child-list wiring is not yet implemented (only Direct/Deferred/Hidden are fully wired). |
+| `hidden` | Never exposed in any spec list. |
+
+`tool_search` (`app/src/tools/tool-search.ts`) is itself a Direct tool. Its matching is **data-driven** over each Deferred candidate's `searchInfo` (name + description + keywords): the query is tokenised and a candidate matches when any query token meets any of its fields (case-insensitive, ≥3-char substring/token match so common stop-words never match) — there is no per-tool-id logic, so a new Deferred tool needs no change to the meta-tool. On a match it records the unlocked names in a per-session discovery registry and returns the matched tools' full specs so the model can call them immediately; a no-match query unlocks nothing. Discovery makes `toolSpecs(sessionId)` include the unlocked tool and `getTool` resolve it for that session only. The `preview` tool ships Deferred (a niche dev-server tool; keywords preview/dev server/serve/localhost/http/port); every other shipped tool stays Direct. The loop refuses a Hidden, undiscovered-Deferred or CodeModeOnly tool at dispatch as defense in depth. This is runtime-only: no kernel event is added (the reserved `hz.tool.discovered` name stays reserved).
 
 ### 2.5 The execution pipeline
 
@@ -557,6 +572,14 @@ Every tool listed in `/data/home/forge/HorizonCode/README.md` §3.2 is enumerate
 - **Output.** `sessionId`, `alive: boolean`, `exitCode?: number`, `output: string` (for `read`), `seq: number`, `truncated`, `screenHint?: string`.
 - **capability** `terminal.pty` · **eff** `process` · **RO** no · **perm** `ask` on `open`; subsequent `write` decisions are evaluated per command line by policy · **lease** kernel per action
 - **Fails.** `SessionNotFound`; `SessionDead` (terminal state, reported as a result); `ReadTimeout` returns partial output with `seq` so the caller can continue (never duplicates bytes); a session killed by the kernel reports the residual confinement state explicitly; sessions are capped per session (default 4) and idle sessions are reaped with a receipt.
+
+> **Implemented v0.1 (reduced form)** — `app/src/tools/interactive-exec.ts`, registered as `shell_session`; status/evidence in `28-implementation-status.md`. This is the additive, fail-closed, guard-authorized interactive terminal the model drives (codex `unified_exec` exec_command + write_stdin, convergent with oh-my-pi bash-interactive/bash-pty-selection). It is the EXPLICIT opt-in for interactivity; the one-shot `shell` tool and its interactive blocklist are left intact.
+> - **Actions (reduced from the designed set).** `mode: 'start' | 'write' | 'close'` — `start` runs a command in a new session and returns a `Session: <id>` + buffered output; `write` feeds `input` to a running session's stdin and returns the newly buffered output; `close` kills the session. `resize`/`interrupt`/explicit `read` are not in this slice (a `write` with empty input polls buffered output).
+> - **Admission (fail-closed).** Every `start` is authorized as a `shell.exec` effect — both the loop's `admissionFor`/`guardActionFor` (mapping `start`→`shell.exec`, `write`/`close`→session-state, exactly like `preview`) and the tool's own `ctx.guard` / `ctx.approve` ("Run interactive command"). A `deny` refuses WITHOUT spawning; an `ask` routes through approval. No new `GuardAction` kind — a PTY session is still `shell.exec`.
+> - **PTY-vs-piped (capability-detected, env opt-out).** When util-linux `script` is on `PATH` and `HZ_NO_PTY` is unset, the command runs under `script -qec <cmd> /dev/null` so the child gets a real `/dev/pts` tty; otherwise the piped `bash -lc` fallback (the always-works headless path). `canUseInteractivePty` is pure/injectable. `HZ_NO_PTY=1` is the opt-out (analogous to oh-my-pi's `PI_NO_PTY`).
+> - **Lifecycle.** Spawned through `spawnOwned` (foreground owned process, own process group, `stdin:"pipe"`, `scrubEnv()` + env-taming defaults); bounded registry (`MAX_SESSIONS=4`, over-the-cap `start` refused typed); idle + overall/wall timeouts (default 120000 ms, max 600000 ms); the SIGTERM-grace-then-SIGKILL ladder to the process group. Residual: a `setsid()` descendant can escape the group kill (NF-016 owns the OS-level fix) — not claimed bulletproof.
+> - **Output format (matches codex `unified_exec`).** `Exit code: <n>` or `Signal: <sig>`, `Wall time: <s>s` (0.1 s rounding), `Total output lines: <n>` ONLY when the 30000-char buffer capped, then `Output:` + the minimised text (`minimiseShellOutput` imported from `shell.ts`; `shell.ts` is untouched). Over-budget buffers spill via `planToolOutputCap`/`writeSpillFile`.
+> - **Concurrency.** `concurrencyClass: "exclusive"` (R-tools-39) — serial with `shell` and other sessions; honoured automatically by `concurrencyClassOf`.
 
 #### `powershell` — `builtin.powershell`
 - **Purpose.** The Windows-native command surface (`pwsh`/`powershell.exe`) with the same policy shape as `shell`.
@@ -1516,7 +1539,7 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 | `ToolDeclarationV1` anatomy and mandatory fields | DESIGNED | §2.1, §3.1, §11.1 |
 | Declaration generation from one source of truth + completeness gate | DESIGNED | §2.2, §11.1 |
 | Registry, namespace ranks, resolution algorithm | DESIGNED | §2.3, §3.2, §11.2 |
-| `tool_search` deferred discovery and admission | DESIGNED | §2.4, §3.3, §11.2 |
+| `tool_search` deferred discovery and admission | DESIGNED (reduced form TESTED — §2.4.1, FEAT-002: additive `Tool.exposure`/`searchInfo`, data-driven `tool_search`, per-session discovery; `preview` ships Deferred) | §2.4, §2.4.1, §3.3, §11.2; `docs/28` ruling 45 |
 | Execution pipeline + per-stage fail-closed rules | DESIGNED | §2.5, §3.4, §7.1, §11.3 |
 | Settlement, `UNKNOWN` and reconciliation hand-off | DESIGNED | §2.5 (R-tools-36/37), §7.1, §11.3 |
 | Origin typing (`SessionBatch` / `UserAction` / `ManagedRun` / `ManagedRoot`) | DESIGNED | §2.5 (R-tools-38), §9.5 |
@@ -1529,6 +1552,7 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 | Security and authority narrowing | DESIGNED | §9 |
 | Performance budgets | DESIGNED (targets, unmeasured) | §10 — explicitly **not** measured; a measurement would be `UNKNOWN` today |
 | Test suite, including the completeness gate | DESIGNED | §11 — no test exists yet |
+| Shipped reduced-form tools (18 registered: base seven + `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch`, `shell_session`, `lsp`, `tool_search`, `ast_search`, `ast_edit`) | TESTED (integration branch; `docs/28` §1, rulings 45 and 49) | every tool has an admission (`app/tests/core/authority-response.test.ts`); `apply_patch` is model-routed; `debug` (DAP) is NOT STARTED |
 
 **Known unknowns (stated, not implied).**
 

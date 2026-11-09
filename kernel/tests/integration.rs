@@ -2559,3 +2559,517 @@ fn cli_selftest_and_version() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+/* ---------------------------- 7. command allowlist ---------------------------- */
+//
+// FEAT-002: the declarative command allowlist (<state-dir>/allowlist.json) is
+// consulted for shell.exec BEFORE the policy rules. A deny wins (docs/11 R1),
+// an allow admits, absence leaves shell.exec=ask byte-identical to today, and a
+// malformed allowlist is a typed HZ_PRECONDITION_FAILED refusal. Every test
+// drives the real binary over the NDJSON protocol.
+
+/// Write an allowlist document (bare array of rule objects) into the state dir.
+fn write_allowlist(state_dir: &Path, rules: Value) {
+    fs::write(
+        state_dir.join("allowlist.json"),
+        serde_json::to_string(&rules).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn allowlist_deny_wins_before_policy_for_shell_exec() {
+    let dir = TempDir::new("allowlist-deny");
+    let mut kernel = Kernel::start(dir.path());
+
+    // No allowlist yet: shell.exec asks (the shipped default, unchanged).
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "rm -rf /", Some("workspace"), None),
+        "ask"
+    );
+
+    // A deny rule on `rm` makes the same command deny, BEFORE policy.
+    write_allowlist(
+        dir.path(),
+        json!([{ "program": "rm", "args": ["-rf"], "decision": "deny" }]),
+    );
+    let decision = guard_check(&mut kernel, "shell.exec", "rm -rf /", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("allowlist deny"),
+        "deny reason must cite the allowlist: {}",
+        decision
+    );
+    // a command that does not match the deny rule falls through to ask
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "rm file.txt", Some("workspace"), None),
+        "ask"
+    );
+}
+
+#[test]
+fn allowlist_allow_admits_shell_exec() {
+    let dir = TempDir::new("allowlist-allow");
+    let mut kernel = Kernel::start(dir.path());
+
+    write_allowlist(
+        dir.path(),
+        json!([{ "program": "git", "args": [["status", "diff"]], "decision": "allow" }]),
+    );
+
+    let decision = guard_check(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("allowlist allow"),
+        "allow reason must cite the allowlist: {}",
+        decision
+    );
+    // case-insensitive (canonical) match by default
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "GIT diff", Some("workspace"), None),
+        "allow"
+    );
+    // a non-covered subcommand still asks
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "git push", Some("workspace"), None),
+        "ask"
+    );
+    // the allowlist is shell.exec only: fs.write workspace is untouched (allow
+    // via policy, not via the allowlist path)
+    let ws = TempDir::new("allowlist-allow-ws");
+    let target = ws.path().join("f.txt");
+    let decision = guard_check(
+        &mut kernel,
+        "fs.write",
+        target.to_str().unwrap(),
+        Some("workspace"),
+        None,
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("policy allow"),
+        "fs.write must still go through policy, not the allowlist: {}",
+        decision
+    );
+}
+
+#[test]
+fn absent_allowlist_leaves_shell_exec_asking() {
+    let dir = TempDir::new("allowlist-absent");
+    let mut kernel = Kernel::start(dir.path());
+    // No allowlist file at all: behaviour is byte-identical to today.
+    assert!(!dir.path().join("allowlist.json").exists());
+    let decision = guard_check(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"));
+    assert!(
+        !decision["reason"].as_str().unwrap_or("").contains("allowlist"),
+        "no allowlist opinion must not appear in the reason: {}",
+        decision
+    );
+}
+
+#[test]
+fn malformed_allowlist_is_a_typed_refusal() {
+    let dir = TempDir::new("allowlist-malformed");
+    let mut kernel = Kernel::start(dir.path());
+
+    // not JSON
+    fs::write(dir.path().join("allowlist.json"), "{not json").unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "echo hi" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("allowlist"), "{}", message);
+
+    // a bad rule names its index and still fails closed
+    fs::write(
+        dir.path().join("allowlist.json"),
+        r#"[{"program":"git","decision":"maybe"}]"#,
+    )
+    .unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "shell.exec", "target": "git status" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("rule 0"), "the bad rule index must be named: {}", message);
+
+    // a malformed allowlist does NOT affect non-shell kinds (they never consult it)
+    let ws = TempDir::new("allowlist-malformed-ws");
+    let target = ws.path().join("f.txt");
+    let decision = guard_check(
+        &mut kernel,
+        "fs.write",
+        target.to_str().unwrap(),
+        Some("workspace"),
+        None,
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+}
+
+#[test]
+fn allowlist_amend_appends_and_takes_effect() {
+    let dir = TempDir::new("allowlist-amend");
+    let mut kernel = Kernel::start(dir.path());
+
+    // before amend: ask
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "git status", Some("workspace"), None),
+        "ask"
+    );
+
+    // amend a prefix allow rule at runtime over the NDJSON protocol
+    let result = kernel.ok(
+        "guard.allowlist.amend",
+        json!({ "rule": { "program": "git", "args": ["status"], "decision": "allow" } }),
+    );
+    assert_eq!(result["changed"], json!(true));
+    assert!(is_hash(result["fingerprint"].as_str().unwrap_or("")));
+
+    // now the same command is admitted by the allowlist
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "git status -s", Some("workspace"), None),
+        "allow"
+    );
+
+    // a second identical amend dedups (changed=false) and the fingerprint is stable
+    let again = kernel.ok(
+        "guard.allowlist.amend",
+        json!({ "rule": { "program": "git", "args": ["status"], "decision": "allow" } }),
+    );
+    assert_eq!(again["changed"], json!(false));
+    assert_eq!(again["fingerprint"], result["fingerprint"]);
+
+    // an unknown amend kind is refused the way guard.lease refuses one
+    let message = kernel.err(
+        "guard.allowlist.amend",
+        json!({ "kind": "bogus", "rule": { "program": "git", "decision": "allow" } }),
+    );
+    assert!(message.contains("unknown"), "{}", message);
+}
+
+/* ----------------------------- 8. egress decider ----------------------------- */
+
+// FEAT-003: a per-origin egress decider (<state-dir>/egress.json) is consulted
+// for net.fetch BEFORE the policy rules (docs/11 N1/N2). With a policy present
+// it is default-deny; a deny rule denies, an allow rule admits, an unmatched
+// origin denies (N1). With NO egress.json present net.fetch keeps its
+// policy-layer `ask`, byte-identical to today. A malformed egress.json is a
+// typed HZ_PRECONDITION_FAILED refusal (fail closed). Every test drives the
+// real binary over the NDJSON protocol.
+
+/// Write an egress policy document into the state dir.
+fn write_egress(state_dir: &Path, doc: Value) {
+    fs::write(
+        state_dir.join("egress.json"),
+        serde_json::to_string(&doc).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn egress_deny_rule_denies_net_fetch_before_policy() {
+    let dir = TempDir::new("egress-deny");
+    let mut kernel = Kernel::start(dir.path());
+
+    // No egress policy yet: net.fetch asks (the shipped default, unchanged).
+    assert_eq!(
+        guard_decision(&mut kernel, "net.fetch", "https://evil.test/x", Some("workspace"), None),
+        "ask"
+    );
+
+    // A deny rule on evil.test denies the same fetch BEFORE policy would ask.
+    write_egress(
+        dir.path(),
+        json!([{ "host": "evil.test", "decision": "deny" }]),
+    );
+    let decision = guard_check(&mut kernel, "net.fetch", "https://evil.test/x", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("egress deny"),
+        "deny reason must cite the egress decider: {}",
+        decision
+    );
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("deny_row"),
+        "deny reason must name the DenySource: {}",
+        decision
+    );
+}
+
+#[test]
+fn egress_default_deny_for_unmatched_origin_when_policy_present() {
+    let dir = TempDir::new("egress-default-deny");
+    let mut kernel = Kernel::start(dir.path());
+
+    // A policy that only allows one host: any OTHER origin is denied (N1).
+    write_egress(
+        dir.path(),
+        json!([{ "host": "allowed.test", "decision": "allow" }]),
+    );
+    let decision = guard_check(&mut kernel, "net.fetch", "https://other.test/x", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("deny"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("N1"),
+        "default-deny reason must cite docs/11 N1: {}",
+        decision
+    );
+}
+
+#[test]
+fn egress_allow_rule_admits_net_fetch() {
+    let dir = TempDir::new("egress-allow");
+    let mut kernel = Kernel::start(dir.path());
+
+    write_egress(
+        dir.path(),
+        json!([{ "host": "api.example.com", "decision": "allow" }]),
+    );
+    let decision = guard_check(
+        &mut kernel,
+        "net.fetch",
+        "https://api.example.com/v1/models?q=1",
+        Some("workspace"),
+        None,
+    );
+    assert_eq!(decision["decision"], json!("allow"));
+    assert!(
+        decision["reason"].as_str().unwrap_or("").contains("egress allow"),
+        "allow reason must cite the egress decider: {}",
+        decision
+    );
+
+    // a different (unmatched) origin still denies (N1), proving allow is scoped
+    assert_eq!(
+        guard_decision(&mut kernel, "net.fetch", "https://other.test/x", Some("workspace"), None),
+        "deny"
+    );
+}
+
+#[test]
+fn absent_egress_policy_leaves_net_fetch_asking() {
+    let dir = TempDir::new("egress-absent");
+    let mut kernel = Kernel::start(dir.path());
+    // No egress file at all: behaviour is byte-identical to today (ask), and
+    // the reason must not mention the egress decider.
+    assert!(!dir.path().join("egress.json").exists());
+    let decision = guard_check(&mut kernel, "net.fetch", "https://x.test/y", Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"));
+    assert!(
+        !decision["reason"].as_str().unwrap_or("").contains("egress"),
+        "no egress opinion must not appear in the reason: {}",
+        decision
+    );
+}
+
+#[test]
+fn egress_observe_mode_admits_without_blocking() {
+    let dir = TempDir::new("egress-observe");
+    let mut kernel = Kernel::start(dir.path());
+
+    // observe mode: even a would-deny origin ADMITS (does not block) and falls
+    // through to the policy layer, which for net.fetch is ask by default.
+    write_egress(
+        dir.path(),
+        json!({
+            "rules": [{ "host": "watch.test", "decision": "deny" }],
+            "observe": true
+        }),
+    );
+    let decision = guard_check(&mut kernel, "net.fetch", "https://watch.test/x", Some("workspace"), None);
+    // not a deny: observe mode never blocks; the policy-layer ask stands.
+    assert_ne!(decision["decision"], json!("deny"));
+    assert_eq!(decision["decision"], json!("ask"));
+}
+
+#[test]
+fn malformed_egress_policy_is_a_typed_refusal() {
+    let dir = TempDir::new("egress-malformed");
+    let mut kernel = Kernel::start(dir.path());
+
+    // not JSON
+    fs::write(dir.path().join("egress.json"), "{not json").unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "net.fetch", "target": "https://x.test/y" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("egress"), "{}", message);
+
+    // a bad rule names its index and still fails closed
+    fs::write(
+        dir.path().join("egress.json"),
+        r#"[{"host":"x.test","decision":"maybe"}]"#,
+    )
+    .unwrap();
+    let message = kernel.err(
+        "guard.check",
+        json!({ "action": { "kind": "net.fetch", "target": "https://x.test/y" }, "scope": "workspace" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("rule 0"), "the bad rule index must be named: {}", message);
+
+    // a malformed egress policy does NOT affect non-net kinds (they never
+    // consult it): shell.exec still asks via policy.
+    assert_eq!(
+        guard_decision(&mut kernel, "shell.exec", "echo hi", Some("workspace"), None),
+        "ask"
+    );
+}
+
+/* --------------------------- 9. sandbox-mode ladder --------------------------- */
+
+// FEAT-004: the fail-closed SandboxMode ladder is reachable over the additive
+// NDJSON method `sandbox.report`. The kernel applies NO OS confinement
+// mechanism on any host, so these assertions are HOST-INDEPENDENT (identical on
+// a Landlock-capable runner and on a host without Landlock): FS-confined modes
+// (read-only / workspace-write) must FAIL CLOSED: a SANDBOX_UNAVAILABLE outcome by default,
+// or a completeness=partial report with a non-empty residual + explicit backend
+// when the caller opts into a partial boundary — NEVER a silent 'enforced',
+// NEVER silently unconfined. danger-full-access reports no enforced dimension
+// (docs/11 S4). Escalation args are validated (paired + non-empty) before
+// anything. Every test drives the real binary over the NDJSON protocol.
+
+#[test]
+fn sandbox_report_fs_mode_is_unavailable_not_silently_enforced() {
+    let dir = TempDir::new("sandbox-unavailable");
+    let mut kernel = Kernel::start(dir.path());
+
+    for mode in ["read-only", "workspace-write"] {
+        let result = kernel.ok("sandbox.report", json!({ "mode": mode }));
+        assert_eq!(
+            result["status"],
+            json!("sandbox_unavailable"),
+            "FS-confined mode {} must fail closed, not report enforced: {}",
+            mode,
+            result
+        );
+        assert_eq!(result["mode"], json!(mode));
+        let reason = result["reason"].as_str().unwrap_or("");
+        assert!(
+            reason.contains("SANDBOX_UNAVAILABLE"),
+            "the reason must be the typed SANDBOX_UNAVAILABLE outcome: {}",
+            result
+        );
+        assert!(!reason.is_empty(), "the reason must be non-empty: {}", result);
+        assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
+    }
+}
+
+#[test]
+fn sandbox_report_partial_has_nonempty_residual_and_explicit_backend() {
+    let dir = TempDir::new("sandbox-partial");
+    let mut kernel = Kernel::start(dir.path());
+
+    // A tolerant caller (allowPartial) receives a PARTIAL report with the FS
+    // dimension unsupported, a non-empty residual, and an explicit backend
+    // name or 'none' (docs/11 S2/S5) — never a silent 'enforced'.
+    let result = kernel.ok(
+        "sandbox.report",
+        json!({ "mode": "workspace-write", "allowPartial": true }),
+    );
+    assert_eq!(result["status"], json!("report"), "{}", result);
+    assert_eq!(result["completeness"], json!("partial"), "{}", result);
+    assert_eq!(result["backend"], json!("none"), "{}", result);
+
+    let dims = result["dimensions"].as_array().expect("dimensions array");
+    let fs = dims
+        .iter()
+        .find(|d| d["dimension"] == json!("filesystem"))
+        .expect("a filesystem dimension");
+    assert_eq!(fs["guarantee"], json!("unsupported"), "FS must not be enforced: {}", result);
+    assert_ne!(fs["guarantee"], json!("enforced"));
+    assert_eq!(fs["backend"], json!("none"), "{}", result);
+    // Detection is never enforcement: no dimension is enforced on ANY host, and
+    // the host capabilities are reported separately (additive field).
+    assert!(
+        result["dimensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["guarantee"] != json!("enforced") && d["backend"] == json!("none")),
+        "{}",
+        result
+    );
+    assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
+    assert!(
+        !fs["residual"].as_str().unwrap_or("").is_empty(),
+        "FS residual must be non-empty (docs/11 S2): {}",
+        result
+    );
+
+    // Every below-enforced dimension carries a non-empty residual and an
+    // explicit backend (a name or 'none') — no silent fallback (S5).
+    for d in dims {
+        let backend = d["backend"].as_str().unwrap_or("");
+        assert!(!backend.is_empty(), "backend must be explicit: {}", d);
+        if d["guarantee"] != json!("enforced") {
+            assert!(
+                !d["residual"].as_str().unwrap_or("").is_empty(),
+                "a below-enforced dimension must carry a residual: {}",
+                d
+            );
+        }
+    }
+}
+
+#[test]
+fn sandbox_report_danger_full_access_has_no_enforced_dimension() {
+    let dir = TempDir::new("sandbox-danger");
+    let mut kernel = Kernel::start(dir.path());
+
+    let result = kernel.ok("sandbox.report", json!({ "mode": "danger-full-access" }));
+    assert_eq!(result["status"], json!("report"), "{}", result);
+    assert_eq!(result["backend"], json!("none"), "{}", result);
+    let dims = result["dimensions"].as_array().expect("dimensions array");
+    assert!(
+        dims.iter().all(|d| d["guarantee"] != json!("enforced")),
+        "danger-full-access must report NO enforced dimension (docs/11 S4): {}",
+        result
+    );
+}
+
+#[test]
+fn sandbox_report_validates_escalation_args_over_the_protocol() {
+    let dir = TempDir::new("sandbox-escalation-args");
+    let mut kernel = Kernel::start(dir.path());
+
+    // lone sandbox_permissions (no justification) -> typed refusal
+    let message = kernel.err(
+        "sandbox.report",
+        json!({ "mode": "read-only", "sandboxPermissions": "workspace-write" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("escalation arguments"), "{}", message);
+
+    // lone justification (no sandbox_permissions) -> typed refusal
+    let message = kernel.err(
+        "sandbox.report",
+        json!({ "mode": "read-only", "justification": "please let me write" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+
+    // empty justification with permissions -> typed refusal
+    let message = kernel.err(
+        "sandbox.report",
+        json!({ "mode": "read-only", "sandboxPermissions": "workspace-write", "justification": "   " }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+
+    // an unknown mode is refused (fail-closed, never a silent default)
+    let message = kernel.err("sandbox.report", json!({ "mode": "wide-open" }));
+    assert!(message.contains("not a known mode"), "{}", message);
+
+    // a well-formed escalation pairing is accepted (still fails closed on FS):
+    // the args validate, then the FS-confined mode yields SANDBOX_UNAVAILABLE.
+    let result = kernel.ok(
+        "sandbox.report",
+        json!({
+            "mode": "workspace-write",
+            "sandboxPermissions": "danger-full-access",
+            "justification": "need full access for this one call"
+        }),
+    );
+    assert_eq!(result["status"], json!("sandbox_unavailable"), "{}", result);
+}
