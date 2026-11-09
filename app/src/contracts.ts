@@ -292,6 +292,16 @@ export type RuntimeEvent =
   | { type: "notice"; message: string }
   | { type: "error"; message: string }
   | ({ type: "context.usage" } & ContextUsage)
+  // ADDITIVE (FEAT-003): the per-turn aggregated file diff. This is a
+  // harness-side UI/runtime facade event, exactly like `context.usage` and
+  // `turn.done` above -- a computed surface the loop emits for the TUI, NOT a
+  // durable kernel event. The kernel event catalogue (docs/_conventions.md §6)
+  // is a CLOSED 44-name set and stays unchanged; adding a RuntimeEvent variant
+  // does not touch it. One event per model turn that changed >=1 file:
+  // `diff` is the aggregated unified diff across every file edited in the turn
+  // (one net diff per file), `files` is how many files changed, `truncated` is
+  // set when the total line cap clipped the diff.
+  | { type: "turn.diff"; turn: number; files: number; diff: string; truncated?: boolean }
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {
