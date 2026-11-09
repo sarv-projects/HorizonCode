@@ -43,7 +43,12 @@ import { canonicalJson, sha256Hex } from "./canon";
 import { COMPACTION_EVENT, compactHistory } from "./compaction";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
-import { instructionPrompt, loadInstructionBlocks } from "./instructions";
+import { instructionPrompt, loadInstructionBlocks, resolveModelInstructions } from "./instructions";
+// The model->tool routing table (docs/28; research A.7): resolved ONCE per run
+// against the active model/provider and composed with deps.toolFilter, so a
+// routing-disabled tool is both hidden from toolSpecs() and refused at
+// execution. No scattered id.includes() lives in the loop or the tools.
+import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 // The plan-mode staging store (session-scoped): write/edit calls are staged
 // instead of applied while the user has plan mode on; the TUI reviews the
 // staged diffs with /changes and applies them with /apply (each apply passes
@@ -221,6 +226,25 @@ function argString(args: Record<string, unknown>, ...names: string[]): string | 
 }
 
 /**
+ * The first file path an `apply_patch` body names, for a stable coarse
+ * admission target (the tool re-guards every file itself). Reads only the
+ * freeform grammar's `*** Add/Update/Delete File:` headers; returns undefined
+ * when none is present (a malformed patch the parser will reject downstream).
+ */
+function firstApplyPatchPath(input: string): string | undefined {
+  for (const raw of input.split("\n")) {
+    const line = raw.trim();
+    for (const marker of ["*** Add File: ", "*** Update File: ", "*** Delete File: "]) {
+      if (line.startsWith(marker)) {
+        const p = line.slice(marker.length).trim();
+        if (p !== "") return p;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * The guard action a tool call implies, using the same path resolution the tools
  * themselves use. Every registered tool appears in the mapping table below or
  * in `SESSION_STATE_TOOLS`; a tool with neither is refused before execution
@@ -251,6 +275,19 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
     case "edit": {
       const file = argString(args, "path", "file_path", "file");
       return file ? { kind: "fs.write", target: resolved(file) } : undefined;
+    }
+    case "apply_patch": {
+      // The patch text carries one or more file operations; the tool issues a
+      // per-file `fs.write` guard for every one of them. The coarse loop-level
+      // admission is a single `fs.write` keyed to the first file the patch
+      // names (so the approval and the cache have a stable target), falling
+      // back to a digest of the patch when no path can be read out.
+      const input = typeof args.input === "string" ? args.input : "";
+      const first = firstApplyPatchPath(input);
+      return {
+        kind: "fs.write",
+        target: first !== undefined ? resolved(first) : `apply_patch ${sha256Hex(input).slice(0, 16)}`,
+      };
     }
     case "shell":
     case "bash": {
@@ -1593,6 +1630,17 @@ export async function runTurn(
   let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
   try {
     const prompt = typeof userText === "string" ? userText.trim() : "";
+    // Model->tool routing (docs/28; research A.7): resolve the rule table ONCE
+    // for this run from the active model + provider and fold the decision into
+    // deps.toolFilter. The composed filter is consulted at BOTH toolFilter
+    // points (the toolSpecs() visibility filter in collectAssistant and the
+    // execution gate in executeTool), so a routing-disabled tool is hidden from
+    // the model AND refused if it is called anyway, while a subagent's prior
+    // tool restriction is preserved (routing only narrows, never widens). A
+    // subagent with a fixed systemOverride still routes — the editing dialect
+    // follows the model, not the prompt.
+    const routing = resolveToolRoutingConfig({ model: deps.model, provider: deps.provider.name });
+    deps = { ...deps, toolFilter: routing.toToolFilter(deps.toolFilter) };
     await beginUserTurn(deps, faults, prompt);
     // Read once per run, from the store: the task statement survives a trim and
     // a resume alike, and it is the FIRST user turn that is the task — not the
@@ -1615,7 +1663,15 @@ export async function runTurn(
         if (report.skipped.length > 0) parts.push(`skipped: ${report.skipped.join("; ")}`);
         emit(deps.callbacks, { type: "notice", message: parts.join(" \u2014 ") });
       }
-      return instructionPrompt(loaded.blocks, report);
+      const projectBlocks = instructionPrompt(loaded.blocks, report);
+      // Per-model prompt selection (docs §1.7; fail-soft): the active model's
+      // tailored block (e.g. the apply_patch grammar for the GPT/Codex family)
+      // rides every non-override dispatch, appended after the project-memory
+      // blocks. A miss returns "" and warns via console — it never throws, so a
+      // table defect degrades to the base prompt rather than failing the run.
+      const perModel = resolveModelInstructions({ model: deps.model, provider: deps.provider.name });
+      if (perModel === "") return projectBlocks;
+      return `${projectBlocks}\n\n${perModel}\n`;
     })();
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
