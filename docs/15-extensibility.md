@@ -278,6 +278,26 @@ Signature preimage: `"hz.plugin.manifest.v1\0" || canonical_json(manifest_withou
 
 Config values are available to the plugin only as declared substitutions: `${config.apiKey}` inside its own MCP/LSP server config and hook commands, and as an opaque handle inside the host process. A `sensitive: true` value is never written to a settings file.
 
+#### `ProviderContributionV1` — WIRED (openai-chat, config-only)
+
+`ProviderContributionV1` is **"endpoint + codec id, never code"** and, as of provider-superset FEAT-002, it is **WIRED for the `openai-chat` protocol** through the user **provider registry** (not yet the plugin `contributes.providers` array, which stays DESIGNED — the registry is the same shape delivered config-first). A user declares providers in `~/.config/horizon/config.json` with NO code:
+
+```jsonc
+{
+  "providers": [
+    { "id": "groq",   "baseUrl": "https://api.groq.com/openai",   "envKey": "GROQ_API_KEY",        "models": ["llama-3.3-70b-versatile"] },
+    { "id": "nvidia", "baseUrl": "https://integrate.api.nvidia.com", "envKey": "NVIDIA_API_KEY",   "models": ["meta/llama-3.1-70b-instruct"] },
+    { "id": "vllm",   "baseUrl": "http://127.0.0.1:8000" }
+  ]
+}
+```
+
+- **Fields.** `id` is a slug `[a-z0-9-]+` that must not collide with a built-in (`PROVIDER_NAMES`); `baseUrl` is a required http/https endpoint; `protocol` defaults to `openai-chat` (the only value in v1 — any other is rejected with a readable reason); `envKey`/`apiKey` name the key source; `models[0]` is the default model. Requests POST to `<baseUrl>/v1/chat/completions`.
+- **Codec, not code.** Every registered provider reuses one adapter (`createOpenAiCompatibleProvider`), which reuses `openai.ts`'s wire core. The returned provider's name is the configured id (e.g. `"groq"`), never `"openai-compatible"`. The `Authorization` header is a pure function of the resolved `Credential` — `apiKey`/`oauth` → `Bearer …`, `none` → no header (keyless, e.g. the local `vllm` entry above). There is no `id.includes(...)` anywhere: provider/model policy is **data**.
+- **Authority.** USER-config only, mirroring the MCP rule — a workspace may not name a provider that would run with the user's authority.
+- **NVIDIA-NIM note (CURRENT_RUN.md §11).** The `nvidia` entry above is an EXAMPLE, not built-in code; its key is read from `NVIDIA_API_KEY` (or whatever `envKey` names — the CLI also honors `NVAPI_KEY` if you set `"envKey": "NVAPI_KEY"`), and the key stays out of the file by using `envKey`. Never commit a NIM key (CURRENT_RUN.md §9).
+- **Deferred.** The `anthropic-compatible` and OpenAI-`responses`-compatible codecs, OAuth acquisition for the `oauth` credential arm, and live model discovery (models.dev) are deferred; the `protocol` field reserves the seam.
+
 ### 3.2 `ToolContributionV1` → `ToolDeclarationV1`
 
 A plugin contributes a **declaration**, and the runtime compiles it into the same `ToolDeclarationV1` a first-party tool has (ADR-015):
@@ -558,7 +578,7 @@ Two placement rules that exist for safety rather than tidiness:
 | Hooks | managed → user → plugin → workspace (all merged, §4.6 ordering rules) | n/a | every hook program requires a trust record |
 | Workflows | workspace `.hz/workflow/` → user → plugin | `project:`, `user:` | workspace workflows require trust |
 | MCP servers | managed → user `mcp.json` → workspace `.hz/mcp.json` → plugin | server name; tool name `mcp__<server>__<tool>` | workspace/plugin servers off until trusted |
-| Providers | managed → user → plugin contribution | provider id | plugin-provided providers are endpoints + codec ids, never code |
+| Providers | managed → user → plugin contribution | provider id | providers are endpoints + codec ids, never code (the user **registry** is WIRED for `openai-chat` — §3.1; plugin `contributes.providers` stays DESIGNED) |
 
 Precedence selects a **definition**, never an authority level (`S7`, `C7`). A bare-name collision is always a typed error, because silently preferring one of two definitions is exactly the failure mode a hostile repository would engineer.
 

@@ -16,6 +16,22 @@ export interface OpenAiSettings {
   maxTokens?: number;
 }
 
+/**
+ * The provider-agnostic settings the wire core actually needs. `name` labels
+ * the notices/errors (so a compatible host reads as itself, e.g. "groq", not
+ * "openai"); `authorization` is the complete header value (`Bearer <key>`) or
+ * `undefined` for a keyless host. The generic openai-compatible adapter reuses
+ * this exact core — it does not clone the SSE loop.
+ */
+export interface OpenAiWireSettings {
+  /** The provider id used in notices and error messages. */
+  name: string;
+  baseUrl?: string;
+  maxTokens?: number;
+  /** The full Authorization header value, or `undefined` for a keyless host. */
+  authorization?: string;
+}
+
 const DEFAULT_BASE_URL = "https://api.openai.com";
 const DEFAULT_MAX_TOKENS = 4096;
 
@@ -79,11 +95,21 @@ function mapFinishReason(reason: unknown): "end" | "tool_use" | "max_tokens" {
   return "end";
 }
 
-async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): AsyncIterable<ProviderEvent> {
+/**
+ * The OpenAI chat-completions wire core, parameterized purely by data
+ * (`name` / `baseUrl` / `authorization`). The `openai` provider and the generic
+ * `openai-compatible` adapter both stream through this one function — there is
+ * no second SSE loop, tool-call assembler, finish-reason map or retry policy.
+ */
+export async function* streamOpenAiCompatible(
+  settings: OpenAiWireSettings,
+  req: ProviderRequest,
+): AsyncIterable<ProviderEvent> {
+  const name = settings.name;
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_BASE_URL).replace(/\/+$/, "");
   const messages = toOpenAiMessages(req.messages ?? []);
   if (messages.length === 0) {
-    yield { type: "error", message: "openai: nothing to send (no messages)" };
+    yield { type: "error", message: `${name}: nothing to send (no messages)` };
     return;
   }
 
@@ -101,6 +127,14 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
   else if (settings.maxTokens && settings.maxTokens > 0) body.max_tokens = settings.maxTokens;
   else body.max_tokens = DEFAULT_MAX_TOKENS;
 
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "text/event-stream",
+  };
+  // A keyless host (Credential kind "none") gets no Authorization header; the
+  // header is data, never derived from the provider id.
+  if (settings.authorization && settings.authorization.trim() !== "") headers.authorization = settings.authorization;
+
   let response: Response;
   const retries: string[] = [];
   try {
@@ -108,18 +142,14 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
       baseUrl + "/v1/chat/completions",
       {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${settings.apiKey}`,
-          accept: "text/event-stream",
-        },
+        headers,
         body: JSON.stringify(body),
         signal: req.signal,
       },
       {
         // Ride out a rate limit or an overloaded upstream instead of failing the
         // whole turn; the notices below keep it visible rather than silent.
-        onRetry: (info) => retries.push(retryNotice("openai", info, DEFAULT_RETRY_ATTEMPTS)),
+        onRetry: (info) => retries.push(retryNotice(name, info, DEFAULT_RETRY_ATTEMPTS)),
       },
     );
   } catch (err) {
@@ -127,18 +157,18 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `openai request failed: ${errorText(err)}` };
+    yield { type: "error", message: `${name} request failed: ${errorText(err)}` };
     return;
   }
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    yield { type: "error", message: `openai HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
+    yield { type: "error", message: `${name} HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
     return;
   }
   if (!response.body) {
-    yield { type: "error", message: "openai returned an empty response body" };
+    yield { type: "error", message: `${name} returned an empty response body` };
     return;
   }
 
@@ -162,7 +192,7 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
       }
       if (!event || typeof event !== "object") continue;
       if (event.error) {
-        const text = typeof event.error.message === "string" ? event.error.message : "openai stream error";
+        const text = typeof event.error.message === "string" ? event.error.message : `${name} stream error`;
         yield { type: "error", message: text };
         return;
       }
@@ -194,7 +224,7 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `openai stream failed: ${errorText(err)}` };
+    yield { type: "error", message: `${name} stream failed: ${errorText(err)}` };
     return;
   }
 
@@ -227,6 +257,10 @@ async function* streamOpenAi(settings: OpenAiSettings, req: ProviderRequest): As
 export function createOpenAiProvider(settings: OpenAiSettings): Provider {
   return {
     name: "openai",
-    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> => streamOpenAi(settings, req),
+    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> =>
+      streamOpenAiCompatible(
+        { name: "openai", baseUrl: settings.baseUrl, maxTokens: settings.maxTokens, authorization: `Bearer ${settings.apiKey}` },
+        req,
+      ),
   };
 }
