@@ -62,7 +62,7 @@ import { discardStaged, stagedChanges as planStagedChanges, type StagedChange } 
 // The MCP manager (docs/09 §4.7): connect-time spawn admissions happen through
 // the session's kernel; its children are reaped by close().
 import { startMcpManager, type McpManager } from "./mcp";
-import { getTool } from "../tools";
+import { clearDiscoveredTools, getTool } from "../tools";
 import { noteRead } from "../tools/read-ledger";
 import { canonicalJson, sha256Hex } from "./canon";
 // Wave-14c rewind: the durable checkpoint store (the TUI's /rewind) sits on the
@@ -589,6 +589,7 @@ class HzRuntimeImpl implements HzRuntime {
     await this.runSessionHook("sessionStart", { provider: this.provider.name, model: this.currentModel });
   }
   private async logSessionEnd(sessionId: string): Promise<void> {
+    clearDiscoveredTools(sessionId);
     await this.append(streamFor(sessionId), EventTypes.sessionEnd, { sessionId });
     // H1 session.end: the OBSERVATION counterpart to session.start (H4).
     await this.runSessionHook("sessionEnd", {}, sessionId);

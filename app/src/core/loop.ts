@@ -1348,6 +1348,9 @@ async function collectAssistant(
  * unknown-tool refusal.
  */
 const PLAN_MODE_REFUSED: Record<string, string> = {
+  apply_patch: "plan mode: apply_patch is not staged (multi-file); use write or edit to stage a change, or exit plan mode",
+  ast_edit: "plan mode: ast_edit rewrites files and is not staged; use write or edit to stage a change, or exit plan mode",
+  shell_session: "plan mode: interactive sessions are not started while planning; exit plan mode to run one",
   shell: "plan mode: commands are not run while planning; the user applies the plan (or exits plan mode) to execute",
   undo: "plan mode: undo restores files and is not staged; exit plan mode to undo",
   preview: "plan mode: dev servers are not started; exit plan mode to run one",
@@ -1394,10 +1397,10 @@ function planModeOutcome(
   name: string,
   args: Record<string, unknown>,
   deps: LoopDeps,
-): { result: ToolResult; staged?: true; preview?: string } | undefined {
+): { result: ToolResult; staged?: true; preview?: string; expected?: true } | undefined {
   const refusal = PLAN_MODE_REFUSED[name];
   if (refusal !== undefined) {
-    return { result: { ok: false, output: refusal, error: refusal } };
+    return { result: { ok: false, output: refusal, error: refusal }, expected: true };
   }
   if (name !== "write" && name !== "edit") return undefined;
   const projected = projectChange(name, args, deps.workspace);
@@ -1434,7 +1437,7 @@ async function executeTool(
   parsed: { args: Record<string, unknown>; error?: string },
   faults: RunFaults,
   hooks: HooksConfig,
-): Promise<{ result: ToolResult; leaseId?: string; staged?: boolean; preview?: string }> {
+): Promise<{ result: ToolResult; leaseId?: string; staged?: boolean; preview?: string; expected?: boolean }> {
   if (parsed.error) {
     return {
       result: { ok: false, output: `Invalid arguments for ${call.name}: ${parsed.error}`, error: `invalid arguments: ${parsed.error}` },
@@ -1479,7 +1482,7 @@ async function executeTool(
     leaseId = decision.leaseId ?? gate.leaseFor(action);
     if (decision.decision === "deny") {
       const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
-      return { result: { ok: false, output: denied, error: denied } };
+      return { result: { ok: false, output: denied, error: denied }, expected: true };
     }
     if (decision.decision === "ask") {
       const request = approvalRequestFor(call.name, action, deps.workspace);
@@ -1509,7 +1512,7 @@ async function executeTool(
         { kind: "human", id: "user" },
       );
       if (!approved) {
-        return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" } };
+        return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" }, expected: true };
       }
       leaseId = gate.leaseFor(action);
     }
@@ -1529,7 +1532,7 @@ async function executeTool(
   });
   if (hookDecision.decision === "deny") {
     const denied = `DENIED by hook: ${hookDecision.reason}`;
-    return { result: { ok: false, output: denied, error: denied } };
+    return { result: { ok: false, output: denied, error: denied }, expected: true };
   }
 
   const context: ToolContext = {
@@ -1600,7 +1603,16 @@ interface ToolCallOutcome {
   tokens: number;
   ok: boolean;
   staged: boolean;
+  /**
+   * An ok:false that is the system working as designed, not the model
+   * mistaking: a guard/hook denial, a user decline, a plan-mode refusal, an
+   * edit-ladder miss (the result carries reflection feedback), or an empty
+   * tool_search. Such a call neither counts as a mistake nor resets the tracker.
+   */
+  expected: boolean;
 }
+
+const EXPECTED_MISS_TOOLS: ReadonlySet<string> = new Set(["edit", "apply_patch", "ast_edit", "tool_search"]);
 
 async function runToolCall(
   deps: LoopDeps,
@@ -1729,7 +1741,10 @@ async function runToolCall(
   // the outcome the mistake-tracker rail needs: a tool that returned ok:false
   // is a `tool_execution_failed` mistake, while a plan-mode staged call changed
   // nothing and is not a failure.
-  return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok, staged: executed.staged === true };
+  return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok,
+    staged: executed.staged === true,
+    expected: executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name)),
+  };
 }
 
 /**
@@ -2097,7 +2112,7 @@ export async function runTurn(
                 // by the format cap / `invalid_tool_call` axis below — not a
                 // `tool_execution_failed` mistake, so it is excluded here to
                 // avoid double-counting the same batch on both axes.
-                if (!outcome.staged && parseArguments(call.arguments).error === undefined) {
+                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseArguments(call.arguments).error === undefined) {
                   toolOk.set(call.id, outcome.ok);
                 }
               })
