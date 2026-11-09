@@ -28,4 +28,6 @@ for (;;) {
   if (n === 0) break;
   self.postMessage({ chunk: decoder.decode(buf.subarray(0, n), { stream: true }) });
 }
+const tail = decoder.decode();
+if (tail !== "") self.postMessage({ chunk: tail });
 self.postMessage({ end: true });

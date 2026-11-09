@@ -72,6 +72,61 @@ describe("P1: hzcode serve answers each line while stdin stays open", () => {
       child.kill("SIGKILL");
     }
   }, 30000);
+
+  function startServe() {
+    const ws = tempDir("hz-s1-serve2-");
+    const home = tempDir("hz-s1-home2-");
+    const child = spawn("sh", ["-c", `cat | exec "$0" run "$1" serve --mock --workspace "$2"`, process.execPath, MAIN, ws], {
+      cwd: ws,
+      env: { ...process.env, HOME: home },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let buf = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (c: string) => {
+      buf += c;
+    });
+    const waitFor = async (id: number, ms: number): Promise<Record<string, unknown>> => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        for (const line of buf.split("\n")) {
+          if (line.trim() === "") continue;
+          const obj = JSON.parse(line) as Record<string, unknown>;
+          if (obj.id === id) return obj;
+        }
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error(`no reply for id ${id}`);
+    };
+    return { child, waitFor };
+  }
+
+  test("a single request line larger than the 64KB read buffer is reassembled", async () => {
+    const { child, waitFor } = startServe();
+    try {
+      child.stdin.write(JSON.stringify({ id: 7, method: "server.hello", params: { pad: "x".repeat(300_000) } }) + "\n");
+      const hello = await waitFor(7, 10000);
+      expect((hello.result as Record<string, unknown>).proto).toBeDefined();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 30000);
+
+  test("SIGTERM stops the server even though stdin is still open", async () => {
+    const { child, waitFor } = startServe();
+    try {
+      child.stdin.write(JSON.stringify({ id: 1, method: "server.hello" }) + "\n");
+      await waitFor(1, 10000);
+      const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+      const started = Date.now();
+      child.kill("SIGTERM");
+      const timeout = new Promise<"hang">((r) => setTimeout(() => r("hang"), 5000));
+      expect(await Promise.race([exited, timeout])).not.toBe("hang");
+      expect(Date.now() - started).toBeLessThan(5000);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 30000);
 });
 
 describe("P4: server.hello reports a real kernelMode before any session", () => {

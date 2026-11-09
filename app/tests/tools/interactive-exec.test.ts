@@ -337,6 +337,51 @@ describe("shell_session: write is admitted per input line (start approval does n
   });
 });
 
+describe("shell_session: control characters and incomplete lines", () => {
+  async function startCat(ctx: ReturnType<typeof mockToolContext>): Promise<string> {
+    const start = await interactiveExecTool.execute({ mode: "start", command: "cat" }, ctx);
+    return (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+  }
+
+  test("input with line-editing control characters is refused and nothing is guarded or written", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ cwd: makeWorkspace() });
+      const sessionId = await startCat(ctx);
+      const before = ctx.guardCalls.length;
+      for (const input of ["ls\x15rm -rf x\n", "a\x7fb\n", "x\x03\n", "\x1b[Ahi\n", "q\x17\n", "\x04"]) {
+        const r = await interactiveExecTool.execute({ mode: "write", sessionId, input }, ctx);
+        expect(r.ok).toBe(false);
+        expect(r.error).toContain("control characters");
+      }
+      expect(ctx.guardCalls.length).toBe(before);
+      expect((await interactiveExecTool.execute({ mode: "write", sessionId, input: "tab\there\n" }, ctx)).ok).toBe(true);
+    });
+  });
+
+  test("an unterminated fragment is not admitted or prompted; the completed line is, once", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }), approve: true });
+      const sessionId = await startCat(ctx);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -r" }, ctx);
+      expect(ctx.approveCalls.length).toBe(0);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: "f x\n" }, ctx);
+      expect(ctx.approveCalls.length).toBe(1);
+      expect(ctx.guardCalls.at(-1)).toEqual({ kind: "shell.exec", target: "rm -rf x" });
+    });
+  });
+
+  test("a very long line is clipped in the prompt but the guard target stays exact", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }), approve: true });
+      const sessionId = await startCat(ctx);
+      const long = "p".repeat(1000);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: long + "\n" }, ctx);
+      expect(ctx.approveCalls.at(-1)?.detail.length).toBeLessThan(260);
+      expect(ctx.guardCalls.at(-1)?.target).toBe(long);
+    });
+  });
+});
+
 describe("canUseInteractivePty (pure helper) + argv selection", () => {
   test("true when a backend is available and HZ_NO_PTY is unset", () => {
     expect(canUseInteractivePty({ backendAvailable: true, noPtyEnv: undefined })).toBe(true);
@@ -392,6 +437,37 @@ describe("shell_session: PTY integration (when a backend is obtainable)", () => 
       expect(r.ok).toBe(true);
       // `tty` prints the controlling terminal: a /dev/pts entry under a real pty.
       expect(r.output).toContain("/dev/pts/");
+    } finally {
+      if (before !== undefined) process.env.HZ_NO_PTY = before;
+    }
+  });
+});
+
+describe("shell_session: guard on the real PTY path with a real bash", () => {
+  test("typed commands are admitted per line and control-character edits are refused", async () => {
+    if (Bun.which("script") === null) return;
+    const before = process.env.HZ_NO_PTY;
+    delete process.env.HZ_NO_PTY;
+    try {
+      const ws = makeWorkspace({ "x/keep.txt": "keep" });
+      const ctx = mockToolContext({
+        cwd: ws,
+        decision: (a) => (a.target.startsWith("rm ") ? { decision: "deny", reason: "rm is denied" } : { decision: "allow" }),
+      });
+      const start = await interactiveExecTool.execute({ mode: "start", command: "bash --norc --noprofile -i" }, ctx);
+      expect(start.ok).toBe(true);
+      const sessionId = (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+      const edited = await interactiveExecTool.execute({ mode: "write", sessionId, input: "ls\x15rm -rf x\n" }, ctx);
+      expect(edited.ok).toBe(false);
+      expect(edited.error).toContain("control characters");
+      const denied = await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf x\n" }, ctx);
+      expect(denied.error).toBe("denied by policy: rm is denied");
+      const ok = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo pty-ok-$((20+22))\n" }, ctx);
+      expect(ok.ok).toBe(true);
+      await Bun.sleep(300);
+      const out = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
+      expect(ok.output + out.output).toContain("pty-ok-42");
+      expect(require("node:fs").existsSync(ws + "/x/keep.txt")).toBe(true);
     } finally {
       if (before !== undefined) process.env.HZ_NO_PTY = before;
     }
