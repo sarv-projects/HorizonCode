@@ -364,6 +364,83 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "guard.grant",
 ];
 
+/* --------------------------- Server protocol --------------------------- */
+
+/**
+ * The server surface (`hzcode serve`) of docs/14 §3.2, in a REDUCED v1 form.
+ *
+ * ADDITIVE and SEPARATE: these types never touch `KernelRequestMap` /
+ * `KERNEL_METHODS` above — that table is the kernel's internal NDJSON protocol
+ * and stays frozen. This block is the *client-facing* server protocol: a
+ * long-lived leader exposes the agent over NDJSON JSON-RPC (the same framing
+ * style the kernel header documents — one request per line, one response line
+ * per request, plus `session.event` notifications that carry a `RuntimeEvent`).
+ *
+ * v1 implements exactly the subset `SERVER_METHODS` names below:
+ *   server.hello, session.create, session.list, session.prompt,
+ *   session.rewind, session.subscribe.
+ * Every session is opened through `createRuntime`, so attach/resume runs BOTH
+ * crash recoveries (repairDanglingToolCalls + recoverInterrupted) before the
+ * next turn — the server's rollout-reconstruction seam.
+ *
+ * DESIGNED extension points NOT in v1 (so this is honestly a reduced surface):
+ *   - transports beyond stdio (UDS/named-pipe, TCP loopback, HTTP/SSE/WS) — S32;
+ *   - auth (S38) and discovery/registration-file (S34);
+ *   - multi-client coordination: roles (S41), per-client cursors/lanes,
+ *     driver-lease claim/release (S42–S44);
+ *   - the ACP bridge (S89) and the remaining method families of §3.2
+ *     (auth/transcript/diff/approval/receipts/artifacts/memory/terminal/…).
+ * The single-attach rule (last subscriber for a session wins) is the reduced
+ * stand-in for the multi-client coordination above.
+ */
+
+/** Protocol revision a client and the server must agree on (docs/14 S3). */
+export const HZ_PROTO = 1 as const;
+
+/** One NDJSON JSON-RPC request line: `{id, method, params?}`. */
+export interface ServerRequest {
+  id: number | string;
+  method: string;
+  params?: unknown;
+}
+
+/** One response line: the request's `id` plus either a result or a typed error. */
+export type ServerResponse = { id: number | string } & (
+  | { result: unknown }
+  | { error: { code?: number; message: string } }
+);
+
+/**
+ * A server-initiated notification (no `id`, never answered). The streamed
+ * turn events use method `session.event` with a `RuntimeEvent` payload tagged
+ * with the owning `sessionId`.
+ */
+export interface ServerNotification {
+  method: string;
+  params: unknown;
+}
+
+/** The method name every streamed `RuntimeEvent` notification carries. */
+export const SESSION_EVENT_METHOD = "session.event" as const;
+
+/** The reduced v1 server method set (subset of docs/14 §3.2). */
+export type ServerMethod =
+  | "server.hello"
+  | "session.create"
+  | "session.list"
+  | "session.prompt"
+  | "session.rewind"
+  | "session.subscribe";
+
+export const SERVER_METHODS: ServerMethod[] = [
+  "server.hello",
+  "session.create",
+  "session.list",
+  "session.prompt",
+  "session.rewind",
+  "session.subscribe",
+];
+
 /* ------------------------------ Hashing ------------------------------ */
 
 const textEncoder = new TextEncoder();

@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
+import { createServer } from "./core/server";
 import { createApprovalUi, installApprovalHandler, runHeadless, runInteractive } from "./tui";
 import { errorMessage } from "./tui/style";
 
@@ -24,6 +25,7 @@ const HELP = [
   "hzcode \u2014 chat with a coding assistant in your terminal",
   "",
   "  hzcode [message]     start chatting (optionally with an opening message)",
+  "  hzcode serve         run the single-attach server (NDJSON JSON-RPC on stdio)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
   "  --mock               offline demo, no key   --version    print the version",
@@ -143,7 +145,74 @@ type CoreModule = {
   default?: { createRuntime?: (opts: RuntimeOptions) => Promise<Runtime> };
 };
 
+/**
+ * `hzcode serve` — the single-attach server (docs/14 §3.2, reduced v1). It
+ * speaks NDJSON JSON-RPC over stdio: every stdin line is one request, every
+ * response is one stdout line, and `session.event` notifications stream a
+ * turn's RuntimeEvents. stdout carries ONLY protocol lines (S15: diagnostics go
+ * to stderr). SIGTERM stops gracefully — every live runtime is closed through
+ * runtime.close() — and exits 143 like the chat stop path. This is parsed
+ * before the chat-first arg handling, so no existing flag behaviour changes.
+ */
+async function runServe(opts: CliOptions, workspace: string): Promise<number> {
+  const server = createServer({
+    workspace,
+    input: process.stdin,
+    // One protocol line per frame to stdout; nothing else is ever written here.
+    output: (line: string) => process.stdout.write(line),
+    mock: opts.mock,
+    model: opts.model,
+  });
+
+  let terminated = false;
+  const onSigterm = (): void => {
+    terminated = true;
+    void Promise.resolve(server.stop()).catch(() => {
+      /* closing on the way out */
+    });
+    const timer = setTimeout(() => process.exit(143), 300);
+    if (typeof (timer as { unref?: () => void }).unref === "function") (timer as { unref: () => void }).unref();
+  };
+  process.once("SIGTERM", onSigterm);
+
+  process.stderr.write(`hzcode serve: NDJSON JSON-RPC on stdio (workspace ${workspace})\n`);
+  try {
+    await server.start();
+  } catch (err) {
+    process.stderr.write(`hzcode serve: ${errorMessage(err)}\n`);
+    await server.stop().catch(() => undefined);
+    return 1;
+  } finally {
+    process.removeListener("SIGTERM", onSigterm);
+  }
+  await server.stop().catch(() => undefined);
+  return terminated ? 143 : 0;
+}
+
 async function main(): Promise<number> {
+  // Subcommand dispatch happens before the chat-first arg parse so no existing
+  // flag behaviour changes: `serve` is additive, everything else is unchanged.
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "serve") {
+    const serveOpts = parseArgs(rawArgs.slice(1));
+    if (serveOpts.errors.length > 0) {
+      for (const message of serveOpts.errors) process.stderr.write(`hzcode: ${message}\n`);
+      process.stderr.write("try 'hzcode --help'\n");
+      return 2;
+    }
+    const serveWorkspace = path.resolve(serveOpts.workspace);
+    try {
+      if (!fs.existsSync(serveWorkspace) || !fs.statSync(serveWorkspace).isDirectory()) {
+        process.stderr.write(`hzcode: not a folder: ${serveWorkspace}\n`);
+        return 2;
+      }
+    } catch (err) {
+      process.stderr.write(`hzcode: cannot use ${serveWorkspace}: ${errorMessage(err)}\n`);
+      return 2;
+    }
+    return runServe(serveOpts, serveWorkspace);
+  }
+
   const opts = parseArgs(process.argv.slice(2));
 
   if (opts.errors.length > 0) {
