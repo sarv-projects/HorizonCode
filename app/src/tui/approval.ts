@@ -97,6 +97,13 @@ async function rememberAlways(
   }
 }
 
+/** Show format/invisible Unicode (bidi, zero-width, U+2028/9) as visible <U+XXXX>. */
+function escapeInvisible(text: string): string {
+  return text.replace(/[\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/g, (c) => {
+    return `<U+${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}>`;
+  });
+}
+
 /** The handler registered with the core runtime. */
 export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
   // The gate calls this with the action and the kernel client when it has them
@@ -109,8 +116,12 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     gateSessionId?: string,
   ): Promise<boolean> => {
     const kind = sanitizeText(req?.kind ?? "other") || "other";
-    const title = sanitizeText(req?.title) || "this action";
-    const detail = sanitizeText(req?.detail ?? "").replace(/\s+/g, " ").trim();
+    const title = escapeInvisible(sanitizeText(req?.title)).replace(/\s+/g, " ").trim() || "this action";
+    // Titles stay tidy (whitespace collapsed). A shell.exec detail is the command
+    // itself, shown verbatim so `cat 'a   b'` reads as it runs; invisible and
+    // direction-changing Unicode is made visible as <U+XXXX> in every detail.
+    const rawDetail = escapeInvisible(sanitizeText(req?.detail ?? ""));
+    const detail = kind === "shell.exec" ? rawDetail.replace(/^\s+|\s+$/g, "") : rawDetail.replace(/\s+/g, " ").trim();
     const r = ui.renderer;
 
     if (!ui.interactive) {

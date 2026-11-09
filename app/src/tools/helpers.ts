@@ -76,3 +76,19 @@ export const TAMING_ENV_DEFAULTS: Record<string, string> = {
   TQDM_DISABLE: "1",
   PIP_PROGRESS_BAR: "off",
 };
+
+/**
+ * Unicode format/invisible characters that make a displayed command differ from
+ * the executed one: bidi controls (U+202A-202E, U+2066-2069, U+200E/F), zero
+ * width characters (U+200B-200D, U+2060, U+FEFF) and the line/paragraph
+ * separators U+2028/U+2029. Shell commands containing any are refused.
+ */
+export const INVISIBLE_UNICODE = /[\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/;
+
+/** Clear refusal text for INVISIBLE_UNICODE, or undefined when the text is clean. */
+export function invisibleUnicodeError(text: string, what: string): string | undefined {
+  const m = INVISIBLE_UNICODE.exec(text);
+  if (m === null) return undefined;
+  const cp = (m[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0");
+  return `invisible or direction-changing Unicode character U+${cp} is not allowed in ${what} (it would make the displayed command differ from the one that runs)`;
+}

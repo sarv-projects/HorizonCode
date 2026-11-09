@@ -67,7 +67,7 @@ import { sha256Hex } from "../core/canon";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
-import { resolvePath, scrubEnv, truncate } from "./helpers";
+import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
 import { minimiseShellOutput } from "./shell";
 
 const MAX_OUTPUT = 30_000;
@@ -458,6 +458,9 @@ const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
  * Approval prompts show the whole line, so approved text equals executed text.
  */
 const MAX_LINE = 4000;
+/** Per-write ceilings; they bound how many approval prompts one write can raise. */
+const MAX_WRITE_LINES = 64;
+const MAX_WRITE_BYTES = 64 * 1024;
 
 /** The part of `text` after its last newline: the line still being typed. */
 function unterminatedTail(text: string): string {
@@ -515,6 +518,12 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   const input = rawInput.replace(/\r\n|\r/g, "\n");
   if (CONTROL_CHARS.test(input)) {
     return fail("control characters are not allowed in shell_session input (only tab and newline)");
+  }
+  const invisible = invisibleUnicodeError(input, "shell_session input");
+  if (invisible !== undefined) return fail(invisible);
+  const sentLines = input.endsWith("\n") ? input.slice(0, -1).split("\n") : input.split("\n");
+  if (sentLines.length > MAX_WRITE_LINES || Buffer.byteLength(input, "utf8") > MAX_WRITE_BYTES) {
+    return fail(`input too large for one write (max ${MAX_WRITE_LINES} lines and ${MAX_WRITE_BYTES / 1024} KiB); send it in smaller writes`);
   }
   if (inputLines(session.partial + input).some((l) => Buffer.byteLength(l, "utf8") > MAX_LINE)) {
     return fail(`input line too long (max ${MAX_LINE} bytes per line); send shorter lines`);

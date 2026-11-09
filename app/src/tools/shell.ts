@@ -6,7 +6,7 @@ import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
 import { sha256Hex } from "../core/canon";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
-import { resolvePath, scrubEnv, truncate } from "./helpers";
+import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
 import { readTool } from "./read";
 
 const MAX_OUTPUT = 30_000;
@@ -567,6 +567,8 @@ export const shellTool: Tool = {
     try {
       if (typeof args.command !== "string" || args.command.trim() === "") return fail("command is required");
       const command = args.command;
+      const invisible = invisibleUnicodeError(command, "a shell command");
+      if (invisible !== undefined) return fail(invisible);
       if (ctx.signal.aborted) return fail("aborted");
 
       const dir = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(ctx.cwd, args.cwd) : ctx.cwd;
