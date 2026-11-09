@@ -171,6 +171,20 @@ export interface ToolResult {
   error?: string;
 }
 
+/**
+ * Tool exposure class (research §1.6, codex ToolExposure reference). Controls
+ * which specs the model sees in the default tool list; it never changes a
+ * tool's dispatch resolution (getTool resolves any registered tool by name).
+ *
+ *  - "direct"         initial spec list — the model sees it from turn one.
+ *  - "deferred"       absent from the default specs; discovered at runtime via
+ *                     the `tool_search` meta-tool (matched over its searchInfo),
+ *                     then visible+callable for the rest of that session.
+ *  - "code_mode_only" only exposed inside a nested code-mode child tool list.
+ *  - "hidden"         never exposed in any spec list.
+ */
+export type ToolExposure = "direct" | "deferred" | "code_mode_only" | "hidden";
+
 export interface Tool {
   name: string;
   description: string;
@@ -181,6 +195,21 @@ export interface Tool {
    * its own barrier. Mutating and lifecycle tools are exclusive.
    */
   concurrencyClass?: "shared" | "exclusive";
+  /**
+   * Exposure class (research §1.6). ADDITIVE and optional: absent === "direct",
+   * exactly as an absent `concurrencyClass` === "shared". A tool that sets no
+   * exposure keeps today's behavior unchanged — it appears in the default spec
+   * list and is callable. Only non-Direct tools (deferred/hidden/code_mode_only)
+   * are gated out of the default specs; see tools/index.ts toolSpecs().
+   */
+  exposure?: ToolExposure;
+  /**
+   * Discovery surface for Deferred tools (research §1.6). ADDITIVE and optional.
+   * `name` and `description` already live on Tool; `keywords` is the extra
+   * matching surface the data-driven `tool_search` scores a query against.
+   * Only meaningful for exposure === "deferred".
+   */
+  searchInfo?: { keywords: string[] };
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 

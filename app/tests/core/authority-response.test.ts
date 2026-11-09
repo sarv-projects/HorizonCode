@@ -266,6 +266,7 @@ describe("every tool passes an admission", () => {
       agent: { task: "do it" },
       code_mode: { code: "return 1" },
       preview: { action: "start", command: "true" },
+      tool_search: { query: "preview dev server" },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {
