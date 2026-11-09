@@ -104,7 +104,7 @@ describe("diff-shaped failure feedback (A-3), byte-identical (A-5)", () => {
     const r = await editTool.execute({ path: "f.txt", old: "absent", new: "x" }, await ctxHavingRead(ws));
     expect(r.error).toBe(
       "old string not found in f.txt\n" +
-        "searched: exact \u2192 indent-normalised \u2192 3-way merge \u2192 line-patch; no unique match\n" +
+        "searched: exact \u2192 indent-normalised \u2192 unicode-fold \u2192 3-way merge \u2192 line-patch; no unique match\n" +
         "no similar lines found\n" +
         "reflection: " +
         `${MAX_EDIT_REFLECTIONS}/${MAX_EDIT_REFLECTIONS} \u2014 fix this call using the feedback above; a second failure disables fuzzy matching for this file`,
@@ -119,7 +119,7 @@ describe("diff-shaped failure feedback (A-3), byte-identical (A-5)", () => {
     );
     expect(r.error).toBe(
       "old string not found in f.txt\n" +
-        "searched: exact \u2192 indent-normalised \u2192 3-way merge \u2192 line-patch; no unique match\n" +
+        "searched: exact \u2192 indent-normalised \u2192 unicode-fold \u2192 3-way merge \u2192 line-patch; no unique match\n" +
         "no similar lines found\n" +
         "the new text already appears at lines 1-1 \u2014 the file may already contain this edit\n" +
         "reflection: 1/1 \u2014 fix this call using the feedback above; a second failure disables fuzzy matching for this file",
@@ -135,7 +135,7 @@ describe("diff-shaped failure feedback (A-3), byte-identical (A-5)", () => {
     );
     expect(r.error).toBe(
       "old string not found in f.txt\n" +
-        "searched: exact \u2192 indent-normalised \u2192 3-way merge \u2192 line-patch; no unique match\n" +
+        "searched: exact \u2192 indent-normalised \u2192 unicode-fold \u2192 3-way merge \u2192 line-patch; no unique match\n" +
         "closest actual lines (lines 1-3, 33% similar):\n" +
         "  - fn handler() {\n" +
         "  + fn handler(a) {\n" +
@@ -143,6 +143,12 @@ describe("diff-shaped failure feedback (A-3), byte-identical (A-5)", () => {
         "  +   let x = 2;\n" +
         "  - }\n" +
         "  + }\n" +
+        "closest candidates (up to 5, 5 lines each):\n" +
+        "  lines 1-4 (33% similar):\n" +
+        "    fn handler(a) {\n" +
+        "      let x = 2;\n" +
+        "    }\n" +
+        "    \n" +
         "reflection: 1/1 \u2014 fix this call using the feedback above; a second failure disables fuzzy matching for this file",
     );
   });
