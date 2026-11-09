@@ -11,6 +11,7 @@ import { editTool } from "./edit";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
 import { interactiveExecTool } from "./interactive-exec";
+import { lspTool } from "./lsp";
 import { previewTool } from "./preview";
 import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
@@ -34,6 +35,7 @@ export const tools: Tool[] = [
   previewTool,
   applyPatchTool,
   interactiveExecTool,
+  lspTool,
 ];
 
 /** The seven base tools; the delegation tool is deliberately excluded here. */
