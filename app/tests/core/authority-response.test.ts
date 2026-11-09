@@ -269,6 +269,7 @@ describe("every tool passes an admission", () => {
       apply_patch: { input: "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\n" },
       shell_session: { mode: "start", command: "echo hi" },
       lsp: { op: "diagnostics", path: "a.ts" },
+      tool_search: { query: "preview dev server" },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {
