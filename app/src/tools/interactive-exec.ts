@@ -24,8 +24,10 @@
  * Admission at `start` covers only the start command: a shell/REPL session
  * runs whatever is typed next. So EVERY `write` is admitted again as a
  * `shell.exec` effect whose target is the typed input line(s) (per line, the
- * unterminated tail carried across writes); deny refuses, ask prompts (showing
- * session command + input), decline writes nothing. An `always` answer mints
+ * unterminated tail carried across writes and admitted once completed); deny refuses, ask prompts (showing
+ * session command + input), decline writes nothing. Input containing control
+ * characters (other than tab/newline) is refused: a PTY's line editing would
+ * let the shell run something other than the text that was admitted. An `always` answer mints
  * the usual exact-target grant, i.e. exactly that input line. `close` only
  * kills an admitted session and needs no admission.
  *
@@ -440,6 +442,19 @@ function inputLines(text: string): string[] {
   return text.split(/\r\n|\n|\r/);
 }
 
+/**
+ * C0 control characters (and DEL) other than tab/CR/LF. Under a PTY the line
+ * discipline and readline act on these (Ctrl-U kill-line, Ctrl-W, backspace,
+ * Ctrl-C/D, ESC sequences), so the shell can execute something other than the
+ * text the guard saw. `write` input containing any of them is refused.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
+/** Longest unterminated line a session will carry; longer is refused. */
+const MAX_PARTIAL = 8192;
+/** Longest input line echoed in an approval prompt (the grant target stays exact). */
+const PROMPT_LINE_CAP = 200;
+
 /** The part of `text` after its last newline: the line still being typed. */
 function unterminatedTail(text: string): string {
   const lines = inputLines(text);
@@ -455,7 +470,11 @@ function unterminatedTail(text: string): string {
  * to stdin before this returns undefined.
  */
 async function admitInput(session: Session, input: string, ctx: ToolContext): Promise<ToolResult | undefined> {
-  const lines = [...new Set(inputLines(session.partial + input).map((l) => l.trim()).filter((l) => l !== ""))];
+  // Only COMPLETE lines are admitted now; the unterminated tail is carried
+  // (see `partial`) and admitted once a later write completes it, so a
+  // fragment never prompts on its own. Nothing executes before a newline.
+  const complete = inputLines(session.partial + input).slice(0, -1);
+  const lines = [...new Set(complete.map((l) => l.trim()).filter((l) => l !== ""))];
   for (const line of lines) {
     const action: GuardAction = { kind: "shell.exec", target: line };
     const decision = await ctx.guard(action);
@@ -464,7 +483,7 @@ async function admitInput(session: Session, input: string, ctx: ToolContext): Pr
     }
     if (decision.decision === "ask") {
       const approved = await ctx.approve(
-        { title: "Send input to interactive session", detail: `${session.command} <- ${line}`, kind: "shell.exec" },
+        { title: "Send input to interactive session", detail: `${session.command} <- ${line.length > PROMPT_LINE_CAP ? line.slice(0, PROMPT_LINE_CAP - 3) + "..." : line}`, kind: "shell.exec" },
         action,
       );
       if (!approved) return fail("declined by user");
@@ -485,13 +504,18 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
     return { ok: true, output: out };
   }
   const input = typeof args.input === "string" ? args.input : "";
+  if (CONTROL_CHARS.test(input)) {
+    return fail("control characters are not allowed in shell_session input (only tab and newline)");
+  }
+  if (unterminatedTail(session.partial + input).length > MAX_PARTIAL) {
+    return fail(`input line too long (max ${MAX_PARTIAL} characters without a newline)`);
+  }
   // Fail-closed: admission at start covers ONLY the start command. A shell or
   // REPL session executes whatever is typed next, so every write is admitted
   // as a shell.exec effect whose target is the typed input line(s).
   const admission = await admitInput(session, input, ctx);
   if (admission !== undefined) return admission;
   if (ctx.signal.aborted) return fail("aborted");
-  session.partial = unterminatedTail(session.partial + input);
   try {
     const writer = (session.proc.stdin as unknown as { write(chunk: string): void; flush?: () => void }) ?? undefined;
     if (writer === undefined || typeof writer.write !== "function") {
@@ -502,6 +526,7 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   } catch (e) {
     return fail(`failed to write to session: ${msg(e)}`);
   }
+  session.partial = unterminatedTail(session.partial + input);
   session.lastActivity = Date.now();
   armWatchdog(session);
 

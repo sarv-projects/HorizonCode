@@ -25,6 +25,32 @@ function script() {
   ]);
 }
 
+describe("subagent.event cap", () => {
+  test("a chatty child is cut at the cap with one notice and then silence", async () => {
+    const workspace = tempDir("hz-subev-cap-");
+    const runtime = await createRuntime({ workspace, mock: true });
+    try {
+      const turns = [toolCallTurn({ name: "agent", args: { task: "many", max_steps: 20 } })];
+      for (let i = 0; i < 10; i++) {
+        turns.push(toolCallTurn(...[0, 1, 2].map((j) => ({ name: "glob", args: { pattern: `*${i}${j}` } }))));
+      }
+      turns.push(textTurn("child report"), textTurn("parent done"));
+      (runtime as unknown as { provider: unknown }).provider = createScriptedProvider(turns);
+      runtime.setApprovalHandler(async () => true);
+      const seen: RuntimeEvent[] = [];
+      await runtime.send("delegate", { onEvent: (ev) => seen.push(ev) });
+      const nested = seen.filter((e) => e.type === "subagent.event") as Extract<RuntimeEvent, { type: "subagent.event" }>[];
+      // 30 globs x (running+ok) = 60 child cards: CAP forwarded plus one cap notice, then silence.
+      expect(nested.length).toBe(SUBAGENT_EVENT_CAP + 1);
+      const notices = nested.filter((n) => n.event.type === "notice");
+      expect(notices.length).toBe(1);
+      expect(nested[nested.length - 1]?.event).toEqual({ type: "notice", message: "child events capped" });
+    } finally {
+      await runtime.close();
+    }
+  }, 60000);
+});
+
 describe("subagent.event forwarding", () => {
   test("runtime.send surfaces the child's tool cards wrapped as subagent.event", async () => {
     const workspace = tempDir("hz-subev-");
