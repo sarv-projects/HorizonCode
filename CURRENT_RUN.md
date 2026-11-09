@@ -284,6 +284,8 @@ Recommendation: worth doing, as a small reduced form of `docs/15` §2.6 and not 
 5. **Chat-first is the product charter:** no subcommand menus; flags are optional conveniences; headless is for scripts/tests only.
 6. **Update `docs/28` in the same commit** as any code that changes a status or count.
 
+7. **System prompt (stage 2):** base prompt is data under `app/src/core/prompt/`; environment block rendered per request from the real tool registry; child prompt inherits instruction files. See `docs/28` item 9 of the cognition notes.
+
 ---
 
 *End of state document. If you are starting the next phase: begin at docs/27 (V2+) and `docs/28` §4 (gaps 10–12 carry the live queue) — or the competitive audit §7 roadmap. If you are auditing: everything claimed VERIFIED above has a copy-pasteable command in section 4 or in `docs/28`, and the 2026-11-08 reaudits are the template for how to try to break it.*

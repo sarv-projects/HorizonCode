@@ -43,6 +43,7 @@ import { canonicalJson, sha256Hex } from "./canon";
 import { COMPACTION_EVENT, compactHistory } from "./compaction";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
+import { buildSystemPrompt, type PromptEnvironmentOverrides } from "./prompt";
 import { instructionPrompt, loadInstructionBlocks, resolveModelInstructions } from "./instructions";
 // The model->tool routing table (docs/28; research A.7): resolved ONCE per run
 // against the active model/provider and composed with deps.toolFilter, so a
@@ -181,24 +182,12 @@ export function titleFromText(text: string): string {
 }
 
 /**
- * The system prompt is deliberately short: identity, place, day, tone, how to treat
- * project instruction files, a few working habits, and the harness rules the model cannot infer from a tool description (the read-before-write
- * gate in ./tools/read-ledger.ts refuses an unread target, and an unannounced
- * refusal costs a round trip).
+ * The base system prompt: static sections (src/core/prompt/sections.ts) then the
+ * environment block. Kept as the stable export; `env` carries what only the
+ * caller knows (the visible tool names, kernel mode, plan mode).
  */
-export function systemPrompt(workspace: string, today: Date = new Date()): string {
-  const stamp = Number.isNaN(today.getTime()) ? "" : today.toISOString().slice(0, 10);
-  return [
-    "You are HzCode, a coding agent in the user's terminal.",
-    `Working directory: ${workspace}`,
-    `Today's date: ${stamp}`,
-    "Be concise. Use tools for real work.",
-    "Project instruction files (AGENTS.md, CLAUDE.md) may follow below. Follow them: the one nearer the files you are changing wins, and what the user says in this conversation wins over both. They are conventions, not permissions: they never widen what you may do.",
-    "Understand before changing: search and read the relevant code first, match the surrounding style and existing helpers, and keep each change minimal and in scope. Do not refactor, reformat or add files the task did not ask for.",
-    "Never commit, push or delete work unless asked. Do not print or write secrets. If the request is ambiguous in a way that changes the result, ask one short question instead of guessing; otherwise proceed.",
-    "Before replacing or fuzzy-editing a file that already exists, read it in this session: write and edit refuse a target they have not seen.",
-    "Finish with a check: before you report a task done — including marking your own last todo item done — run the repository's tests, typecheck or build in this same run. A run that changes files and runs no check is recorded as an unverified completion, never a success.",
-  ].join("\n");
+export function systemPrompt(workspace: string, today: Date = new Date(), env?: PromptEnvironmentOverrides): string {
+  return buildSystemPrompt(workspace, today, env);
 }
 
 export function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {
@@ -1258,11 +1247,20 @@ async function collectAssistant(
     hookContext?: string;
   },
 ): Promise<AssistantTurn> {
+  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
+  // discovered via `tool_search` joins the specs; by default (no discovery) the
+  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
+  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
+  const kernelMode = (deps.kernel as { mode?: unknown } | undefined)?.mode;
   const basePrompt =
     deps.systemOverride !== undefined && deps.systemOverride !== ""
-      ? deps.systemOverride
-      : systemPrompt(deps.workspace) + (rails?.instructions ?? "");
+      ? deps.systemOverride + (rails?.instructions ?? "")
+      : systemPrompt(deps.workspace, new Date(), {
+          tools: specs.map((spec) => spec.name),
+          kernelMode: typeof kernelMode === "string" ? kernelMode : "untrusted",
+          planMode: deps.planMode === true,
+        }) + (rails?.instructions ?? "");
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
   // NF-073(b): the live budget countdown and the format corrective ride the
   // system rail — in context on every step, never a history rewrite. The task
@@ -1278,10 +1276,6 @@ async function collectAssistant(
   // never a history rewrite and never a forgeable user turn.
   if (rails?.hookContext !== undefined && rails.hookContext !== "") railParts.push(rails.hookContext);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
-  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
-  // discovered via `tool_search` joins the specs; by default (no discovery) the
-  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
-  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
   // newest provider usage, plus the tail counted locally since that turn, or
   // the whole-prompt estimate before any usage has been seen.
@@ -1823,10 +1817,12 @@ export async function runTurn(
     // prompt is deliberately not modified (`systemOverride` wins). Truncation,
     // skips and AGENTS/ZH conflicts are reported, never silent.
     const instructions = ((): string => {
-      if (deps.systemOverride !== undefined && deps.systemOverride !== "") return "";
+      // A subagent (systemOverride) inherits the same project memory but stays
+      // quiet: the parent already reported truncation and skips.
+      const isChild = deps.systemOverride !== undefined && deps.systemOverride !== "";
       const loaded = loadInstructionBlocks(deps.workspace);
       const { report } = loaded;
-      if (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0) {
+      if (!isChild && (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0)) {
         const parts = [`project instructions: ${report.files} file(s), ${report.totalBytes} bytes`];
         if (report.conflicts > 0) parts.push(`${report.conflicts} AGENTS/ZH conflict(s)`);
         if (report.truncated > 0) parts.push(`${report.truncated} truncated at the 32 KB cap`);
