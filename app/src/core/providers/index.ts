@@ -67,6 +67,26 @@ function unknownProviderProvider(id: string, validNames: readonly string[]): Pro
   };
 }
 
+/**
+ * A provider that explains, in one event, that a registered host has no model
+ * configured — then ends the turn cleanly (the same shape as
+ * `missingKeyProvider`). Forwarding a placeholder model id (historically the
+ * mock's `mock-1`) to a real host yields an opaque 400/404; this is the
+ * fail-loud guard that keeps that silent-wrong-thing from reaching the wire.
+ */
+function noModelProvider(provider: string): Provider {
+  const message =
+    `No model configured for "${provider}". Set HZ_MODEL or add a models[] ` +
+    `entry to the provider in your config.`;
+  return {
+    name: provider,
+    async *stream(): AsyncIterable<ProviderEvent> {
+      yield { type: "error", message };
+      yield { type: "done", stopReason: "end" };
+    },
+  };
+}
+
 /** The provider the runtime will talk to. */
 export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): Provider {
   if (opts.mockFlag) return createMockProvider();
@@ -74,11 +94,16 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
   // A registered (config-declared) provider resolves to the generic
   // openai-compatible adapter — endpoint + credential as DATA, never code. An
   // entry that wanted a key but could not find one reports it the same way a
-  // built-in does; a keyless entry (kind "none", no key declared) streams.
+  // built-in does; a keyless entry (kind "none", no key declared) streams. An
+  // entry with no model configured fails loud rather than forwarding a
+  // placeholder id to the real host.
   const resolved = config.resolved;
   if (resolved) {
     if (resolved.credential.kind === "none" && resolved.wantsKey) {
       return missingKeyProvider(resolved.name, "HZ_API_KEY or the provider's envKey");
+    }
+    if (config.model === "") {
+      return noModelProvider(resolved.name);
     }
     return createOpenAiCompatibleProvider({ name: resolved.name, baseUrl: resolved.baseUrl, credential: resolved.credential });
   }

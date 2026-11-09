@@ -473,11 +473,18 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   // knows the provider and falls back to DEFAULT_MODELS when it does not. The
   // curated snapshot carries the same ids, so the resolved default equals the
   // historical constant; a catalog miss (offline/curated-gap) still yields it.
+  // A registered entry that declares no model (and has no HZ_MODEL/file model)
+  // MUST NOT inherit the mock's default id: forwarding "mock-1" to a real host
+  // is the opaque-400 silent-wrong-thing the fail-loud default exists to kill,
+  // one layer up. Such an entry resolves `model` to the empty-string sentinel
+  // ("" = no model configured), which `makeProvider` surfaces as a readable
+  // error. A built-in with no explicit model still gets the catalog default
+  // (falling back to DEFAULT_MODELS), exactly as before.
   const catalog = loadCatalog(env);
   const envModel = str(env.HZ_MODEL);
   const fileModel = str(fromFile.model);
   const registryModel = selectedEntry?.models?.[0];
-  const builtinModel = selectedEntry ? undefined : builtinDefaultModel(provider as ProviderName, catalog);
+  const builtinModel = selectedEntry ? "" : builtinDefaultModel(provider as ProviderName, catalog);
   const model = envModel ?? fileModel ?? registryModel ?? builtinModel ?? builtinDefaultModel("mock", catalog);
 
   const envBase = str(env.HZ_BASE_URL);
