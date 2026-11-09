@@ -19,6 +19,8 @@ This document decides, for the whole product:
 
 Design-only except the v0.1 slice enumerated in §10: the Guard decision path, in-memory leases, the chained receipt log and `policy.json` overrides are implemented and tested in `kernel/`. Levels are owned by `docs/28-implementation-status.md` — 285 TypeScript tests and 17 Rust tests pass at the 2026-11-06 snapshot, and the provider layer is implemented. Nothing else here should be read as a claim that working code exists.
 
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Beyond the §10 slice, the kernel now ships three admission-time sandbox seams, all TESTED (`docs/28` rulings 42-44): a declarative `shell.exec` command allowlist (`kernel/src/execpolicy.rs`), a per-origin `net.fetch` egress decider (`kernel/src/egress.rs`; decisions recorded, no proxy intercepts traffic), and a fail-closed `SandboxMode` ladder with capability detection and `sandbox.report` (`kernel/src/sandbox.rs`; S3 holds: an unprobed dimension reports `unsupported`). The loop adds identical-call loop detection and a mistake tracker (ruling 40) and an advisory guardian classifier that is CODE_PRESENT and not wired (ruling 48). NOT STARTED: the OS confinement backend (seccomp, netns, Landlock where available), the MITM/egress proxy, and named permission modes beyond plan mode.
+
 ### 1.1 Scope and non-scope
 
 | In scope | Out of scope (owned elsewhere) |

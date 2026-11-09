@@ -2,6 +2,8 @@
 
 > Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/HorizonCode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** The catalog below stays a specification. Eighteen tools ship in reduced form and are TESTED (§12 last row; `docs/28` §1): the base seven, `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch` (GPT/Codex grammar, model-routed), `shell_session` (interactive PTY), `lsp` (default off), `tool_search` (Deferred discovery), `ast_search` and `ast_edit`. `debug` (DAP), `multi_edit`, hashline-anchored edits and multi-dialect tool sets beyond `apply_patch` are NOT STARTED.
+>
 > Templates and names follow `/data/home/forge/HorizonCode/docs/_conventions.md`.
 
 ---
@@ -1550,6 +1552,7 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 | Security and authority narrowing | DESIGNED | §9 |
 | Performance budgets | DESIGNED (targets, unmeasured) | §10 — explicitly **not** measured; a measurement would be `UNKNOWN` today |
 | Test suite, including the completeness gate | DESIGNED | §11 — no test exists yet |
+| Shipped reduced-form tools (18 registered: base seven + `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch`, `shell_session`, `lsp`, `tool_search`, `ast_search`, `ast_edit`) | TESTED (integration branch; `docs/28` §1, rulings 45 and 49) | every tool has an admission (`app/tests/core/authority-response.test.ts`); `apply_patch` is model-routed; `debug` (DAP) is NOT STARTED |
 
 **Known unknowns (stated, not implied).**
 
