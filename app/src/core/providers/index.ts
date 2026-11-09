@@ -4,11 +4,15 @@
  * `mockFlag` (the --mock flag or an empty key) forces the offline provider so the
  * chat always works; a real provider without a key reports that clearly instead
  * of failing with an opaque 401. Ollama is the exception: a local server needs
- * no key, and a refused connection is already the readable error.
+ * no key, and a refused connection is already the readable error. The mock is
+ * reached ONLY through `--mock` or an explicit `HZ_PROVIDER=mock`; an unknown
+ * provider id fails loud (it names the id and lists the valid providers) rather
+ * than silently becoming a fake offline chat.
  */
 
 import type { Provider, ProviderEvent } from "../../contracts";
 import type { HzConfig } from "../config";
+import { PROVIDER_NAMES } from "../config";
 import { createAnthropicProvider } from "./anthropic";
 import { createGoogleProvider } from "./google";
 import { createMockProvider } from "./mock";
@@ -40,6 +44,26 @@ function missingKeyProvider(provider: string, envVar: string): Provider {
   };
 }
 
+/**
+ * A provider that explains, in one event, that the configured provider id is
+ * not known — then ends the turn cleanly (the same shape as
+ * `missingKeyProvider`). This is the fail-loud default: a typo in HZ_PROVIDER
+ * must never silently become the offline mock chat.
+ */
+function unknownProviderProvider(id: string, validNames: readonly string[]): Provider {
+  const message =
+    `Unknown provider "${id}". Valid providers are: ${validNames.join(", ")} ` +
+    `(plus any provider registered in your config). ` +
+    `Check HZ_PROVIDER, or run with --mock (or HZ_PROVIDER=mock) to chat offline.`;
+  return {
+    name: id,
+    async *stream(): AsyncIterable<ProviderEvent> {
+      yield { type: "error", message };
+      yield { type: "done", stopReason: "end" };
+    },
+  };
+}
+
 /** The provider the runtime will talk to. */
 export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): Provider {
   if (opts.mockFlag) return createMockProvider();
@@ -59,7 +83,12 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
     case "ollama":
       // No key required: a local server (a key only fronts a proxy deployment).
       return createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl });
-    default:
+    case "mock":
       return createMockProvider();
+    default:
+      // Fail loud: an unknown id (a typo'd HZ_PROVIDER) is reported, never
+      // silently turned into the offline mock. The mock is only reachable via
+      // the --mock flag (above) or an explicit `case "mock"`.
+      return unknownProviderProvider(config.provider, PROVIDER_NAMES);
   }
 }
