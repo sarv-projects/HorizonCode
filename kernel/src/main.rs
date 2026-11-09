@@ -15,6 +15,7 @@ mod guard;
 mod permm;
 mod protocol;
 mod receipts;
+mod sandbox;
 mod time;
 
 use std::io::{BufRead, BufWriter, Write};
@@ -495,6 +496,73 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             }
             eprintln!("selftest: {}", e);
         }
+    }
+
+    // 11. sandbox-mode ladder (FEAT-004): the fail-closed SandboxMode report
+    // over `sandbox.report`. On this host (and the gVisor deployment class)
+    // there is NO active Landlock LSM, so an FS-confined mode MUST fail closed:
+    // SANDBOX_UNAVAILABLE by default (never 'enforced' for FS), a partial report
+    // with a non-empty residual + explicit backend/'none' when partial is
+    // allowed, and danger-full-access reporting NO enforced dimension (S4).
+    {
+        // read-only demands FS confinement that is unavailable here -> the
+        // typed SANDBOX_UNAVAILABLE outcome, proving we never run unconfined.
+        let unavailable = call(&kernel, "sandbox.report", json!({ "mode": "read-only" }));
+        checks.check(
+            "sandbox.report read-only -> SANDBOX_UNAVAILABLE (never enforced for FS)",
+            matches!(&unavailable, Ok(d)
+                if d.get("status").and_then(|v| v.as_str()) == Some("sandbox_unavailable")
+                    && d.get("reason").and_then(|v| v.as_str()).map(|r| r.contains("SANDBOX_UNAVAILABLE")).unwrap_or(false)),
+        );
+
+        // workspace-write with allowPartial -> a PARTIAL report whose FS
+        // dimension is 'unsupported' with a non-empty residual and backend
+        // 'none' (never a silent 'enforced').
+        let partial = call(
+            &kernel,
+            "sandbox.report",
+            json!({ "mode": "workspace-write", "allowPartial": true }),
+        );
+        let partial_ok = matches!(&partial, Ok(d)
+            if d.get("status").and_then(|v| v.as_str()) == Some("report")
+                && d.get("completeness").and_then(|v| v.as_str()) == Some("partial")
+                && d.get("dimensions").and_then(|v| v.as_array()).map(|dims| {
+                    dims.iter().any(|dim| {
+                        dim.get("dimension").and_then(|v| v.as_str()) == Some("filesystem")
+                            && dim.get("guarantee").and_then(|v| v.as_str()) == Some("unsupported")
+                            && dim.get("backend").and_then(|v| v.as_str()) == Some("none")
+                            && dim.get("residual").and_then(|v| v.as_str()).map(|r| !r.is_empty()).unwrap_or(false)
+                    }) && dims.iter().all(|dim| {
+                        dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced")
+                            || dim.get("dimension").and_then(|v| v.as_str()) != Some("filesystem")
+                    })
+                }).unwrap_or(false));
+        checks.check(
+            "sandbox.report workspace-write partial -> FS unsupported, residual non-empty",
+            partial_ok,
+        );
+
+        // danger-full-access reports NO enforced dimension (S4).
+        let danger = call(&kernel, "sandbox.report", json!({ "mode": "danger-full-access" }));
+        checks.check(
+            "sandbox.report danger-full-access -> no enforced dimension (S4)",
+            matches!(&danger, Ok(d)
+                if d.get("status").and_then(|v| v.as_str()) == Some("report")
+                    && d.get("dimensions").and_then(|v| v.as_array()).map(|dims| {
+                        dims.iter().all(|dim| dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced"))
+                    }).unwrap_or(false)),
+        );
+
+        // escalation args are validated (paired + non-empty) before anything.
+        let bad_args = call(
+            &kernel,
+            "sandbox.report",
+            json!({ "mode": "read-only", "sandboxPermissions": "workspace-write" }),
+        );
+        checks.check(
+            "sandbox.report lone sandbox_permissions -> typed refusal",
+            matches!(&bad_args, Err(e) if e.contains("HZ_PRECONDITION_FAILED")),
+        );
     }
 
     let _ = std::fs::remove_dir_all(&scratch);
