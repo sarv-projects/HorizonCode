@@ -450,10 +450,14 @@ function inputLines(text: string): string[] {
  */
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
-/** Longest unterminated line a session will carry; longer is refused. */
-const MAX_PARTIAL = 8192;
-/** Longest input line echoed in an approval prompt (the grant target stays exact). */
-const PROMPT_LINE_CAP = 200;
+/**
+ * Longest input line (complete or unterminated) a session accepts; longer is
+ * refused. A tty in canonical mode holds ~4095 bytes per line and drops the
+ * excess (verified on a real `script` PTY with bash: 4000 intact, 4100 cut),
+ * so a longer line could run truncated, differing from the admitted text.
+ * Approval prompts show the whole line, so approved text equals executed text.
+ */
+const MAX_LINE = 4000;
 
 /** The part of `text` after its last newline: the line still being typed. */
 function unterminatedTail(text: string): string {
@@ -483,7 +487,7 @@ async function admitInput(session: Session, input: string, ctx: ToolContext): Pr
     }
     if (decision.decision === "ask") {
       const approved = await ctx.approve(
-        { title: "Send input to interactive session", detail: `${session.command} <- ${line.length > PROMPT_LINE_CAP ? line.slice(0, PROMPT_LINE_CAP - 3) + "..." : line}`, kind: "shell.exec" },
+        { title: "Send input to interactive session", detail: `${session.command} <- ${line}`, kind: "shell.exec" },
         action,
       );
       if (!approved) return fail("declined by user");
@@ -507,8 +511,8 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   if (CONTROL_CHARS.test(input)) {
     return fail("control characters are not allowed in shell_session input (only tab and newline)");
   }
-  if (unterminatedTail(session.partial + input).length > MAX_PARTIAL) {
-    return fail(`input line too long (max ${MAX_PARTIAL} characters without a newline)`);
+  if (inputLines(session.partial + input).some((l) => l.length > MAX_LINE)) {
+    return fail(`input line too long (max ${MAX_LINE} characters per line); send shorter lines`);
   }
   // Fail-closed: admission at start covers ONLY the start command. A shell or
   // REPL session executes whatever is typed next, so every write is admitted

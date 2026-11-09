@@ -370,14 +370,19 @@ describe("shell_session: control characters and incomplete lines", () => {
     });
   });
 
-  test("a very long line is clipped in the prompt but the guard target stays exact", async () => {
+  test("a long line is shown whole in the prompt and the guard target is exact; over 4000 is refused", async () => {
     await withNoPty(async () => {
       const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }), approve: true });
       const sessionId = await startCat(ctx);
-      const long = "p".repeat(1000);
+      const long = "p".repeat(3000) + "; tail-marker";
       await interactiveExecTool.execute({ mode: "write", sessionId, input: long + "\n" }, ctx);
-      expect(ctx.approveCalls.at(-1)?.detail.length).toBeLessThan(260);
+      expect(ctx.approveCalls.at(-1)?.detail).toContain(long);
       expect(ctx.guardCalls.at(-1)?.target).toBe(long);
+      const before = ctx.guardCalls.length;
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "x".repeat(4001) + "\n" }, ctx);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("too long");
+      expect(ctx.guardCalls.length).toBe(before);
     });
   });
 });
