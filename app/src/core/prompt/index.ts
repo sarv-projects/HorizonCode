@@ -1,8 +1,12 @@
 /**
  * Prompt assembly: static sections first, then the environment block.
- * Project instruction files and per-model blocks (../instructions.ts) are
- * appended after this by the loop, so the order on the wire is
- * static prefix -> environment -> project memory -> per-model -> rails.
+ * For the main agent the loop passes project instruction files and the
+ * per-model block (../instructions.ts) as `memory`, so the order on the wire is
+ * static prefix -> project memory -> per-model -> environment -> rails. The
+ * volatile environment (date, plan mode, visible tools) sits AFTER the memory
+ * so toggling /plan or discovering a deferred tool does not change the bytes
+ * in front of the instruction files. A subagent's prompt (`buildChildPrompt`)
+ * keeps static -> environment -> memory; its environment is fixed for its life.
  */
 import os from "node:os";
 import { BASE_PROMPT_SECTIONS, CHILD_PROMPT_SECTIONS, type PromptSection } from "./sections";
@@ -35,8 +39,13 @@ function environmentFor(workspace: string, today: Date, over: PromptEnvironmentO
   };
 }
 
-export function buildSystemPrompt(workspace: string, today: Date = new Date(), over?: PromptEnvironmentOverrides): string {
-  return `${staticPrompt()}\n\n${renderEnvironment(environmentFor(workspace, today, over))}`;
+export function buildSystemPrompt(
+  workspace: string,
+  today: Date = new Date(),
+  over?: PromptEnvironmentOverrides,
+  memory = "",
+): string {
+  return `${staticPrompt()}${memory}\n\n${renderEnvironment(environmentFor(workspace, today, over))}`;
 }
 
 /** The subagent body without the environment (kept as the exported constant). */

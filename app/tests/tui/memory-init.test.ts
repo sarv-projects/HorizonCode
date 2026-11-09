@@ -14,6 +14,7 @@ import { KernelClient } from "../../src/core/kernel";
 import { runTurn, type LoopDeps } from "../../src/core/loop";
 import { SessionStore } from "../../src/core/session";
 import { discardStaged, stagedChanges } from "../../src/core/plan";
+import { lazyInstructionsFor, loadInstructionBlocks } from "../../src/core/instructions";
 import { initPrompt, runInitCommand, runMemoryCommand } from "../../src/tui/interactive";
 import { createRenderer } from "../../src/tui/render";
 import { strip } from "../../src/tui/style";
@@ -62,7 +63,7 @@ describe("/memory", () => {
       expect(out).toContain("resolves outside");
       expect(out).toContain("not applied:");
       expect(out).toContain("scoped by globs");
-      expect(out).toContain("load when a tool reads or edits");
+      expect(out).toContain("load after a tool successfully reads or edits");
     }
   });
 
@@ -209,4 +210,22 @@ describe("/init", () => {
       store.close();
     }
   }, 60000);
+});
+
+describe("/memory lazy listing", () => {
+  test("lists nested instructions loaded this session", () => {
+    const { root, home } = repo();
+    put(root, "AGENTS.md", "root rules");
+    put(root, "sub/AGENTS.md", "sub rules");
+    const eager = loadInstructionBlocks(root, { home }).blocks;
+    lazyInstructionsFor(root, "sess-mem", eager).discover("sub/x.ts");
+    const c = capture();
+    runMemoryCommand("memory", root, c.renderer, { home, sessionId: "sess-mem" });
+    const out = c.plain();
+    expect(out).toContain("nested instructions loaded this session: 1");
+    expect(out).toContain("sub/AGENTS.md");
+    const d = capture();
+    runMemoryCommand("memory", root, d.renderer, { home, sessionId: "other" });
+    expect(d.plain()).not.toContain("loaded this session");
+  });
 });

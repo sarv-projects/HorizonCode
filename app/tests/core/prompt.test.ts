@@ -109,7 +109,7 @@ describe("wired into the loop", () => {
   });
   afterEach(() => rmSync(workspace, { recursive: true, force: true }));
 
-  test("the provider request carries the static prefix, then the registry tools, then project memory; a child inherits memory", async () => {
+  test("the provider request carries the static prefix, then project memory, then the environment with the registry tools; a child inherits memory", async () => {
     const { writeFileSync } = await import("node:fs");
     writeFileSync(path.join(workspace, "AGENTS.md"), "PROJECT-RULE-XYZ\n");
     const systems: string[] = [];
@@ -146,7 +146,7 @@ describe("wired into the loop", () => {
       expect(sys).toContain(`Tools: ${(specNames[0] ?? []).join(", ")}`);
       expect(sys).toContain("Plan mode: on");
       expect(sys).toContain("Kernel: untrusted");
-      expect(sys.indexOf("PROJECT-RULE-XYZ")).toBeGreaterThan(sys.indexOf("Environment:"));
+      expect(sys.indexOf("PROJECT-RULE-XYZ")).toBeLessThan(sys.indexOf("Environment:"));
 
       const child: LoopDeps = { ...deps, sessionId: store.createSession("c").id, planMode: false, systemOverride: buildChildPrompt(workspace, FIXED, ENV) };
       await runTurn(child, "go");
@@ -157,5 +157,18 @@ describe("wired into the loop", () => {
       await kernel.close();
       store.close();
     }
+  });
+});
+
+describe("memory precedes the volatile environment", () => {
+  test("toggling plan mode or tools leaves the bytes before the environment block unchanged", () => {
+    const memory = "\n\nProject instruction files follow\nMEMORY-BODY\n";
+    const a = systemPrompt("/w/proj", FIXED, ENV, memory);
+    const b = systemPrompt("/w/proj", FIXED, { ...ENV, planMode: true, tools: ["x"] }, memory);
+    const cut = (t: string) => t.slice(0, t.indexOf("MEMORY-BODY") + "MEMORY-BODY".length);
+    expect(cut(a)).toBe(cut(b));
+    expect(a.indexOf("MEMORY-BODY")).toBeLessThan(a.indexOf("2026"));
+    expect(a).not.toBe(b);
+    expect(systemPrompt("/w/proj", FIXED, ENV, "")).toBe(systemPrompt("/w/proj", FIXED, ENV));
   });
 });

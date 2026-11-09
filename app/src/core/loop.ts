@@ -47,6 +47,8 @@ import { buildSystemPrompt, type PromptEnvironmentOverrides } from "./prompt";
 import {
   instructionPrompt,
   LazyInstructions,
+  lazyInstructionsFor,
+  LAZY_TOTAL_CAP,
   loadInstructionBlocks,
   renderLazyInstructionBlock,
   resolveModelInstructions,
@@ -193,8 +195,13 @@ export function titleFromText(text: string): string {
  * environment block. Kept as the stable export; `env` carries what only the
  * caller knows (the visible tool names, kernel mode, plan mode).
  */
-export function systemPrompt(workspace: string, today: Date = new Date(), env?: PromptEnvironmentOverrides): string {
-  return buildSystemPrompt(workspace, today, env);
+export function systemPrompt(
+  workspace: string,
+  today: Date = new Date(),
+  env?: PromptEnvironmentOverrides,
+  memory = "",
+): string {
+  return buildSystemPrompt(workspace, today, env, memory);
 }
 
 export function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {
@@ -1273,7 +1280,7 @@ async function collectAssistant(
           tools: specs.map((spec) => spec.name),
           kernelMode: typeof kernelMode === "string" ? kernelMode : "untrusted",
           planMode: deps.planMode === true,
-        }) + (rails?.instructions ?? "");
+        }, rails?.instructions ?? "");
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
   // NF-073(b): the live budget countdown and the format corrective ride the
   // system rail — in context on every step, never a history rewrite. The task
@@ -1677,6 +1684,13 @@ async function runToolCall(
       for (const fragment of lazy.discover(touched)) {
         emit(deps.callbacks, { type: "notice", message: `nested instructions loaded: ${fragment.rel}` });
       }
+      const skipped = lazy.skippedForBudget().filter((rel) => !lazy.reportedBudgetSkip(rel));
+      for (const rel of skipped) {
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `nested instructions NOT loaded: ${rel} (the ${LAZY_TOTAL_CAP / 1024} KB lazy budget is used up)`,
+        });
+      }
     }
   }
 
@@ -1850,7 +1864,7 @@ export async function runTurn(
       const isChild = deps.systemOverride !== undefined && deps.systemOverride !== "";
       const loaded = loadInstructionBlocks(deps.workspace);
       const { report } = loaded;
-      lazy = new LazyInstructions(deps.workspace, loaded.blocks);
+      lazy = lazyInstructionsFor(deps.workspace, deps.sessionId, loaded.blocks);
       if (!isChild && (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0)) {
         const parts = [`project instructions: ${report.files} file(s), ${report.totalBytes} bytes`];
         if (report.conflicts > 0) parts.push(`${report.conflicts} AGENTS/ZH conflict(s)`);

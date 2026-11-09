@@ -281,6 +281,8 @@ export function loadInstructionBlocks(workspace: string, opts: InstructionOption
       if (trimmed === "") continue;
       if (seenReal.has(real)) continue;
       const priorKind = seenText.get(trimmed);
+      // Cross-kind identical text keeps the first (least specific) copy. Only
+      // the attribution line differs, never the content the model sees.
       if (priorKind !== undefined && priorKind !== kind) continue;
       // A file that does not fit the REMAINING total is skipped, not cut in
       // half: a directive truncated mid-sentence is worse than an absent one,
@@ -368,6 +370,8 @@ export class LazyInstructions {
   private readonly seenDirs = new Set<string>();
   private bytes = 0;
   private readonly fragments: InstructionBlock[] = [];
+  private readonly budgetSkipped: string[] = [];
+  private readonly budgetReported = new Set<string>();
 
   constructor(
     private readonly workspace: string,
@@ -415,10 +419,18 @@ export class LazyInstructions {
           continue;
         }
         const trimmed = text.trim();
+        // Identical text under another file is dropped: the first (least
+        // specific) copy stays. Only attribution differs, never the content the
+        // model sees, so precedence does not matter for identical text.
         if (trimmed === "" || this.seenText.has(trimmed)) continue;
         const cut = cutToCap(text, PER_FILE_CAP);
         const size = Buffer.byteLength(cut.text, "utf8");
-        if (this.bytes + size > LAZY_TOTAL_CAP) continue;
+        if (this.bytes + size > LAZY_TOTAL_CAP) {
+          // Not silent: the loop emits a notice and /memory lists it.
+          const rel = path.relative(this.root, file);
+          if (!this.budgetSkipped.includes(rel)) this.budgetSkipped.push(rel);
+          continue;
+        }
         this.bytes += size;
         this.seenReal.add(real);
         this.seenText.add(trimmed);
@@ -430,10 +442,49 @@ export class LazyInstructions {
     return fresh;
   }
 
+  /** True if this skip was already announced; marks it announced otherwise. */
+  reportedBudgetSkip(rel: string): boolean {
+    if (this.budgetReported.has(rel)) return true;
+    this.budgetReported.add(rel);
+    return false;
+  }
+
+  /** Files skipped because the lazy budget (LAZY_TOTAL_CAP) was exhausted. */
+  skippedForBudget(): readonly string[] {
+    return this.budgetSkipped;
+  }
+
   /** Everything injected so far (append-only: later calls only extend it). */
   all(): readonly InstructionBlock[] {
     return this.fragments;
   }
+}
+
+/**
+ * Session-scoped registry: lazily loaded fragments outlive a single user turn
+ * (a later `send` in the same chat keeps the rules it already earned) and let
+ * /memory list them. Bounded so a long-lived process cannot grow it forever.
+ */
+const LAZY_SESSIONS = new Map<string, LazyInstructions>();
+const LAZY_SESSIONS_MAX = 64;
+
+export function lazyInstructionsFor(workspace: string, sessionId: string, eager: readonly InstructionBlock[]): LazyInstructions {
+  const key = `${workspace}\0${sessionId}`;
+  let lazy = LAZY_SESSIONS.get(key);
+  if (lazy === undefined) {
+    lazy = new LazyInstructions(workspace, eager);
+    if (LAZY_SESSIONS.size >= LAZY_SESSIONS_MAX) {
+      const oldest = LAZY_SESSIONS.keys().next().value;
+      if (oldest !== undefined) LAZY_SESSIONS.delete(oldest);
+    }
+    LAZY_SESSIONS.set(key, lazy);
+  }
+  return lazy;
+}
+
+/** The lazy state for a session, if any tool has touched a nested directory. */
+export function peekLazyInstructions(workspace: string, sessionId: string): LazyInstructions | undefined {
+  return LAZY_SESSIONS.get(`${workspace}\0${sessionId}`);
 }
 
 function lazyAttr(value: string): string {
