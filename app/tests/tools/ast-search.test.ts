@@ -250,6 +250,21 @@ describe("ast_search tool", () => {
     expect(r.output).toContain("results are incomplete");
   });
 
+  test("the work budget is shared across files: many pathological files stay bounded", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 100; i++) files[`f${i}.ts`] = "a b c d e f g h ".repeat(300);
+    const ws = makeWorkspace(files);
+    const t0 = Date.now();
+    const r = await withoutRipgrep(() =>
+      astSearchTool.execute({ pat: "$$$A $$$B zzz" }, mockToolContext({ cwd: ws })),
+    );
+    const elapsed = Date.now() - t0;
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("100 file(s) not scanned or cut short by the matcher work budget");
+    // Per-file budgets would cost ~0.23 s x 100 files; a shared one is a single budget's worth.
+    expect(elapsed).toBeLessThan(5000);
+  });
+
   test("files with unterminated strings get a lexing-uncertain notice", async () => {
     const ws = makeWorkspace({ "l.lisp": "(foo 'bar)\n(foo baz)\n" });
     const r = await withoutRipgrep(() => astSearchTool.execute({ pat: "foo($A)" }, mockToolContext({ cwd: ws })));

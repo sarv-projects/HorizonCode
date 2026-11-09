@@ -502,8 +502,18 @@ export interface ScanResult {
  * `start + 1` for an empty match, which only a pattern of entirely-empty
  * variadics could produce). Bounded by MAX_MATCHES.
  */
-export function scanPattern(pattern: string, source: string, opts: LexOptions = {}): ScanResult {
+export interface ScanOptions extends LexOptions {
+  /** Shared step counter: pass one object across many scans to bound their total work. */
+  budget?: { steps: number };
+}
+
+export function scanPattern(pattern: string, source: string, opts: ScanOptions = {}): ScanResult {
   const out: ScanResult = { matches: [], truncated: false, skipped: null, lexIssues: 0 };
+  const budget = opts.budget ?? { steps: 0 };
+  if (budget.steps > matchBudget.maxSteps) {
+    out.skipped = "budget";
+    return out;
+  }
   const pp = parsePattern(pattern, opts);
   if (pp.skipped !== null) {
     out.skipped = pp.skipped;
@@ -522,7 +532,6 @@ export function scanPattern(pattern: string, source: string, opts: LexOptions = 
   if (tokens.length === 0) return out;
 
   let si = 0;
-  const budget = { steps: 0 };
   while (si < tokens.length) {
     let hit: ReturnType<typeof matchAt>;
     try {
