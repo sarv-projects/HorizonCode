@@ -145,7 +145,7 @@ describe("loadHooks: config discovery", () => {
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     expect(config.sources).toEqual([legacy]);
-    expect(config.preTool.map((hook) => hook.source)).toEqual([legacy]);
+    expect(config.points.preTool.map((hook) => hook.source)).toEqual([legacy]);
     expect(hooksConfigFiles(ws, { home })[0]).toBe(legacy);
   });
 
@@ -169,8 +169,8 @@ describe("loadHooks: config discovery", () => {
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     expect(config.sources).toEqual([wsHooksFile(ws)]);
-    expect(config.preTool).toHaveLength(1);
-    expect(config.preTool[0].timeoutMs).toBe(DEFAULT_HOOK_TIMEOUT_MS);
+    expect(config.points.preTool).toHaveLength(1);
+    expect(config.points.preTool[0].timeoutMs).toBe(DEFAULT_HOOK_TIMEOUT_MS);
     expect(DEFAULT_HOOK_TIMEOUT_MS).toBe(5_000);
 
     // A non-matching tool advances without spawning anything.
@@ -202,8 +202,8 @@ describe("loadHooks: config discovery", () => {
     const config = loadHooks(ws, { home });
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
-    expect(config.preTool).toEqual([]);
-    expect(config.postTool).toEqual([]);
+    expect(config.points.preTool).toEqual([]);
+    expect(config.points.postTool).toEqual([]);
     expect(config.sources).toEqual([wsHooksFile(ws)]);
   });
 });
