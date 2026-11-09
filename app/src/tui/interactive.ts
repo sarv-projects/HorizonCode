@@ -8,9 +8,10 @@
  */
 
 import * as readline from "node:readline";
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ContextUsage, RunExit, Runtime } from "../contracts";
+import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
@@ -154,6 +155,8 @@ function printHelp(r: Renderer): void {
     ["/apply", "write the staged changes"],
     ["/discard", "drop the staged changes"],
     ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
+    ["/memory", "which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias /instructions)"],
+    ["/init", "draft an AGENTS.md for this repo (you approve the write)"],
     ["/exit", "leave (Ctrl+D also works)"],
   ];
   const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
@@ -474,6 +477,103 @@ export async function runRewindCommand(
   return true;
 }
 
+/* ------------------------- /memory and /init ------------------------- */
+
+function kb(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/**
+ * The /memory (alias /instructions) report: every project instruction file the
+ * next request will carry, in precedence order (least to most specific, later
+ * wins), with sizes and what was truncated, skipped or left unapplied.
+ */
+export function runMemoryCommand(
+  name: string,
+  workspace: string,
+  renderer: Renderer,
+  opts: { home?: string } = {},
+): boolean {
+  if (name !== "memory" && name !== "instructions") return false;
+  const { blocks, report } = loadInstructionBlocks(workspace, opts.home === undefined ? {} : { home: opts.home });
+  if (blocks.length === 0 && report.skipped.length === 0 && report.scoped.length === 0) {
+    renderer.notice("no project instruction files found \u2014 /init drafts an AGENTS.md");
+    return true;
+  }
+  renderer.notice(
+    `project instructions: ${report.files} file(s), ${kb(report.totalBytes)} of 128 KB (least to most specific; later wins; your messages win over all)`,
+  );
+  for (const block of blocks) {
+    const size = kb(Buffer.byteLength(block.text, "utf8"));
+    renderer.notice(
+      `  ${block.rel}  ${INSTRUCTION_KIND_LABEL[block.kind]}  ${size}${block.truncated ? "  TRUNCATED at the 32 KB cap" : ""}`,
+    );
+  }
+  for (const skipped of report.skipped) renderer.notice(`  skipped: ${skipped}`);
+  for (const scoped of report.scoped) renderer.notice(`  not applied: ${scoped}`);
+  if (report.totalCapped) renderer.notice("  the 128 KB total cap stopped further files");
+  renderer.notice("nested AGENTS.md/CLAUDE.md below the working directory load when a tool reads or edits a file there");
+  return true;
+}
+
+/**
+ * The /init turn prompt. The model inspects the repository with read-only tools
+ * only, then proposes AGENTS.md through the ordinary `write` (or `edit`) tool,
+ * which goes through the guard and the user's approval like any other write:
+ * /init itself never touches the disk.
+ */
+export function initPrompt(workspace: string): string {
+  const exists = existsSync(path.join(workspace, "AGENTS.md"));
+  return [
+    exists
+      ? "An AGENTS.md already exists in this repository. Review it against the repository and propose targeted improvements with the edit tool; do not replace it wholesale."
+      : "Create an AGENTS.md for this repository.",
+    "First inspect the repository using ONLY read-only tools (read, glob, grep, repo_map; no shell commands that modify anything): the manifest and lockfile, the build, test, lint and typecheck commands as actually defined, the directory layout, the code style and naming conventions you can observe, and any README or CONTRIBUTING guidance.",
+    "Then write a concise AGENTS.md (aim for under 80 lines) with: what the project is, exact commands to build, test and lint, the layout in a few lines, conventions and pitfalls specific to this repo, and what to never touch. Only state facts you verified in the files; leave out generic advice. Do not include secrets.",
+    exists ? "" : "Write it with the write tool at AGENTS.md in the repository root. The write is reviewed and approved by the user before it lands; do not try to work around that.",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+/**
+ * /init: runs the draft as an ordinary turn, but with plan mode on when the
+ * runtime offers it, so the AGENTS.md write is STAGED rather than landed: the
+ * user reviews the diff (/changes) and /apply performs the write through the
+ * normal guarded `write` tool (guard check, approval prompt, ledger, journal).
+ * /init itself never touches the disk. Plan mode returns to its prior state
+ * afterwards; the staged draft stays. Returns false when `name` is not /init.
+ */
+export async function runInitCommand(
+  name: string,
+  workspace: string,
+  runtime: Runtime,
+  renderer: Renderer,
+  send: (prompt: string) => Promise<void>,
+): Promise<boolean> {
+  if (name !== "init") return false;
+  const extras = runtime as RuntimeWithExtras;
+  const wasOn = readPlanMode(runtime);
+  const canStage = typeof extras.setPlanMode === "function";
+  if (canStage && !wasOn) extras.setPlanMode?.call(runtime, true);
+  if (!canStage) renderer.notice("this runtime has no plan mode: the AGENTS.md write goes through the normal guard and approval prompt");
+  else renderer.notice("drafting AGENTS.md (read-only inspection; the write is staged for your review)");
+  try {
+    await send(initPrompt(workspace));
+  } finally {
+    if (canStage && !wasOn) extras.setPlanMode?.call(runtime, false);
+  }
+  try {
+    const staged = typeof extras.stagedChanges === "function" ? extras.stagedChanges.call(runtime) : [];
+    if (staged.some((change) => change.rel === "AGENTS.md")) {
+      renderer.notice("AGENTS.md draft staged \u2014 /changes to review the diff, /apply to write it (asks for approval), /discard to drop it");
+    }
+  } catch {
+    /* the notice is a convenience */
+  }
+  return true;
+}
+
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   const { workspace, ui } = opts;
   let runtime: Runtime = opts.runtime;
@@ -711,6 +811,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "rewind": {
         // Rewind owns its notices too; an old core prints one typed line.
         await runRewindCommand(name, arg, runtime, renderer);
+        break;
+      }
+      case "memory":
+      case "instructions":
+        runMemoryCommand(name, workspace, renderer);
+        break;
+      case "init": {
+        if (busy) {
+          renderer.notice("/init needs an idle chat \u2014 try again when the current answer ends");
+          break;
+        }
+        await runInitCommand(name, workspace, runtime, renderer, sendTurn);
+        planState.on = readPlanMode(runtime);
+        await drainQueue();
         break;
       }
       default:
