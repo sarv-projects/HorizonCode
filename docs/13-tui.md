@@ -180,6 +180,12 @@ Rule IDs are stable and individually testable. `MUST` fails a gate; `SHOULD` is 
 | R61 | The palette and slash menu MUST each render at most 200 rows, with virtualization; searching MUST NOT block input for longer than 50 ms for a 100 k-item corpus on the reference machine. |
 | R62 | Discoverability: `/help`, the palette, and the status bar's hint line MUST be generated from the live registries. There MUST NOT be a hand-maintained help text that can drift from the registry. |
 
+**Reduced v1 (implemented in `app/src/tui/interactive.ts`).** The shipped interactive TUI has a fixed built-in set, listed by `/help`: `/help`, `/new`, `/model [name]`, `/files`, `/context`, `/plan [on|off]`, `/changes`, `/apply`, `/discard`, `/rewind [n]`, `/memory` (alias `/instructions`), `/init` and `/exit`. The instruction-related ones:
+
+- `/memory` (alias `/instructions`) prints every project instruction file the next request carries, least to most specific (later wins; the user's messages win over all), each with its kind and size, plus truncations, skips and `.mdc` rules that were not applied. It is read-only. Nested `AGENTS.md`/`CLAUDE.md` below the working directory are not listed until a tool successfully reads or edits a file there (`read`, `write`, `edit`, `apply_patch`, `ast_edit`; `grep`/`glob`/list do not count). They then load lazily, a notice names them, they stay for the life of the process (a restart or resume drops them until a tool touches the directory again), and `/memory` lists them. The call that first touches a directory runs without its rules; they apply from the next request. A file skipped because the 64 KB lazy budget is used up gets a notice and a `/memory` line.
+- `/init` runs an ordinary model turn that inspects the repository with read-only tools and proposes `AGENTS.md` through the normal `write` tool (or `edit` when an `AGENTS.md` already exists). Plan mode is switched on for that turn when the runtime supports it, so the write is staged, not landed: review it with `/changes`, write it with `/apply` (through the normal guard) or drop it with `/discard`. Plan mode returns to its prior state afterwards. `/init` itself never writes.
+- `/plan`, `/changes`, `/apply` and `/discard` are the staging surface `/init` relies on; staged changes are per-session.
+
 ### 2.6 Streaming rendering and backpressure
 
 | # | Rule |

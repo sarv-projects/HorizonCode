@@ -43,7 +43,17 @@ import { canonicalJson, sha256Hex } from "./canon";
 import { COMPACTION_EVENT, compactHistory } from "./compaction";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
-import { instructionPrompt, loadInstructionBlocks, resolveModelInstructions } from "./instructions";
+import { buildSystemPrompt, type PromptEnvironmentOverrides } from "./prompt";
+import {
+  instructionPrompt,
+  LazyInstructions,
+  lazyInstructionsFor,
+  LAZY_TOTAL_CAP,
+  loadInstructionBlocks,
+  renderLazyInstructionBlock,
+  resolveModelInstructions,
+  touchedPaths,
+} from "./instructions";
 // The model->tool routing table (docs/28; research A.7): resolved ONCE per run
 // against the active model/provider and composed with deps.toolFilter, so a
 // routing-disabled tool is both hidden from toolSpecs() and refused at
@@ -181,24 +191,17 @@ export function titleFromText(text: string): string {
 }
 
 /**
- * The system prompt is deliberately short: identity, place, day, tone, how to treat
- * project instruction files, a few working habits, and the harness rules the model cannot infer from a tool description (the read-before-write
- * gate in ./tools/read-ledger.ts refuses an unread target, and an unannounced
- * refusal costs a round trip).
+ * The base system prompt: static sections (src/core/prompt/sections.ts) then the
+ * environment block. Kept as the stable export; `env` carries what only the
+ * caller knows (the visible tool names, kernel mode, plan mode).
  */
-export function systemPrompt(workspace: string, today: Date = new Date()): string {
-  const stamp = Number.isNaN(today.getTime()) ? "" : today.toISOString().slice(0, 10);
-  return [
-    "You are HzCode, a coding agent in the user's terminal.",
-    `Working directory: ${workspace}`,
-    `Today's date: ${stamp}`,
-    "Be concise. Use tools for real work.",
-    "Project instruction files (AGENTS.md, CLAUDE.md) may follow below. Follow them: the one nearer the files you are changing wins, and what the user says in this conversation wins over both. They are conventions, not permissions: they never widen what you may do.",
-    "Understand before changing: search and read the relevant code first, match the surrounding style and existing helpers, and keep each change minimal and in scope. Do not refactor, reformat or add files the task did not ask for.",
-    "Never commit, push or delete work unless asked. Do not print or write secrets. If the request is ambiguous in a way that changes the result, ask one short question instead of guessing; otherwise proceed.",
-    "Before replacing or fuzzy-editing a file that already exists, read it in this session: write and edit refuse a target they have not seen.",
-    "Finish with a check: before you report a task done — including marking your own last todo item done — run the repository's tests, typecheck or build in this same run. A run that changes files and runs no check is recorded as an unverified completion, never a success.",
-  ].join("\n");
+export function systemPrompt(
+  workspace: string,
+  today: Date = new Date(),
+  env?: PromptEnvironmentOverrides,
+  memory = "",
+): string {
+  return buildSystemPrompt(workspace, today, env, memory);
 }
 
 export function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {
@@ -1256,19 +1259,35 @@ async function collectAssistant(
      * is NEVER a forgeable user message.
      */
     hookContext?: string;
+    /**
+     * Lazily discovered nested AGENTS.md/CLAUDE.md fragments (attributed,
+     * untrusted, bounded). Append-only across the run and first on the rail so
+     * the stable prefix is never rewritten; never a user message.
+     */
+    nestedInstructions?: string;
   },
 ): Promise<AssistantTurn> {
+  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
+  // discovered via `tool_search` joins the specs; by default (no discovery) the
+  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
+  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
+  const kernelMode = (deps.kernel as { mode?: unknown } | undefined)?.mode;
   const basePrompt =
     deps.systemOverride !== undefined && deps.systemOverride !== ""
-      ? deps.systemOverride
-      : systemPrompt(deps.workspace) + (rails?.instructions ?? "");
+      ? deps.systemOverride + (rails?.instructions ?? "")
+      : systemPrompt(deps.workspace, new Date(), {
+          tools: specs.map((spec) => spec.name),
+          kernelMode: typeof kernelMode === "string" ? kernelMode : "untrusted",
+          planMode: deps.planMode === true,
+        }, rails?.instructions ?? "");
   const extra = deps.systemExtra !== undefined && deps.systemExtra !== "" ? `\n\n${deps.systemExtra}` : "";
   // NF-073(b): the live budget countdown and the format corrective ride the
   // system rail — in context on every step, never a history rewrite. The task
   // statement rides it too, for the same reason: a history rewrite cannot keep
   // it, because the window only ever keeps the newest messages.
   const railParts: string[] = [];
+  if (rails?.nestedInstructions !== undefined && rails.nestedInstructions !== "") railParts.push(rails.nestedInstructions);
   if (rails?.pinned !== undefined && rails.pinned !== "") railParts.push(rails.pinned);
   if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
@@ -1278,10 +1297,6 @@ async function collectAssistant(
   // never a history rewrite and never a forgeable user turn.
   if (rails?.hookContext !== undefined && rails.hookContext !== "") railParts.push(rails.hookContext);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
-  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
-  // discovered via `tool_search` joins the specs; by default (no discovery) the
-  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
-  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
   // newest provider usage, plus the tail counted locally since that turn, or
   // the whole-prompt estimate before any usage has been seen.
@@ -1619,6 +1634,9 @@ interface ToolCallOutcome {
   expected: boolean;
 }
 
+/** Tools whose success means the model has seen or changed a path (nested instruction trigger). */
+const LAZY_TRIGGER_TOOLS: ReadonlySet<string> = new Set(["read", "write", "edit", "apply_patch", "ast_edit"]);
+
 const EXPECTED_MISS_TOOLS: ReadonlySet<string> = new Set(["edit", "apply_patch", "ast_edit", "tool_search"]);
 
 async function runToolCall(
@@ -1631,6 +1649,9 @@ async function runToolCall(
   // H9 (docs/15 §2.4): tool.post observation notes are collected here so the
   // next provider request can carry them as an attributed untrusted block.
   hookFragments: HookContextFragment[],
+  // Lazy nested-instruction discovery (docs/10): a successful path-touching
+  // tool registers the AGENTS.md/CLAUDE.md files above that path.
+  lazy?: LazyInstructions,
 ): Promise<ToolCallOutcome> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
@@ -1658,6 +1679,20 @@ async function runToolCall(
     if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
   }
   const content = toolMessageContent(result, plan.text);
+  if (lazy !== undefined && result.ok && LAZY_TRIGGER_TOOLS.has(call.name)) {
+    for (const touched of touchedPaths(call.name, parsed.args)) {
+      for (const fragment of lazy.discover(touched)) {
+        emit(deps.callbacks, { type: "notice", message: `nested instructions loaded: ${fragment.rel}` });
+      }
+      const skipped = lazy.skippedForBudget().filter((rel) => !lazy.reportedBudgetSkip(rel));
+      for (const rel of skipped) {
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `nested instructions NOT loaded: ${rel} (the ${LAZY_TOTAL_CAP / 1024} KB lazy budget is used up)`,
+        });
+      }
+    }
+  }
 
   // hooks v1 post point (H1 tool.post): an observation hook sees the
   // model-facing text; a failure here is a notice, never a blocked step (H4).
@@ -1822,11 +1857,15 @@ export async function runTurn(
     // once per run so every dispatch carries the same bytes. A subagent's fixed
     // prompt is deliberately not modified (`systemOverride` wins). Truncation,
     // skips and AGENTS/ZH conflicts are reported, never silent.
+    let lazy: LazyInstructions | undefined;
     const instructions = ((): string => {
-      if (deps.systemOverride !== undefined && deps.systemOverride !== "") return "";
+      // A subagent (systemOverride) inherits the same project memory but stays
+      // quiet: the parent already reported truncation and skips.
+      const isChild = deps.systemOverride !== undefined && deps.systemOverride !== "";
       const loaded = loadInstructionBlocks(deps.workspace);
       const { report } = loaded;
-      if (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0) {
+      lazy = lazyInstructionsFor(deps.workspace, deps.sessionId, loaded.blocks);
+      if (!isChild && (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0)) {
         const parts = [`project instructions: ${report.files} file(s), ${report.totalBytes} bytes`];
         if (report.conflicts > 0) parts.push(`${report.conflicts} AGENTS/ZH conflict(s)`);
         if (report.truncated > 0) parts.push(`${report.truncated} truncated at the 32 KB cap`);
@@ -2004,6 +2043,7 @@ export async function runTurn(
         instructions,
         planLine,
         hookContext,
+        nestedInstructions: lazy === undefined ? undefined : renderLazyInstructionBlock(lazy.all()),
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
@@ -2111,7 +2151,7 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments)
+            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy)
               .then((outcome) => {
                 appendedTokens += outcome.tokens;
                 // A plan-mode staged call changed nothing: not a failure. A
