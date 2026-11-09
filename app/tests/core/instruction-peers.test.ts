@@ -210,6 +210,9 @@ describe("LazyInstructions", () => {
     expect(lazy.all().every((b) => b.truncated && Buffer.byteLength(b.text) <= PER_FILE_CAP)).toBe(true);
     expect(total).toBeLessThanOrEqual(LAZY_TOTAL_CAP);
     expect(lazy.all().length).toBeLessThan(6);
+    // Budget exhaustion is reported, not silent.
+    expect(lazy.skippedForBudget().length).toBe(6 - lazy.all().length);
+    expect(lazy.skippedForBudget().length).toBeGreaterThan(0);
   }, 30000);
 
   test("rendering is attributed, untrusted, and cannot close its own fence", () => {
@@ -284,6 +287,93 @@ describe("lazy injection at the loop", () => {
       }
       // Append-only after the stable prefix: the eager instruction section precedes it.
       expect(sys(1).indexOf("<nested_instructions")).toBeGreaterThan(sys(1).indexOf("Project instruction") === -1 ? 0 : sys(1).indexOf("Project instruction"));
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      await kernel.close();
+      store.close();
+    }
+  }, 60000);
+});
+
+describe("lazy injection across turns and budget", () => {
+  function setup(workspace: string, requests: ProviderRequest[], script: (n: number) => ProviderEvent[]) {
+    const provider: Provider = {
+      name: "capture",
+      async *stream(req): AsyncIterable<ProviderEvent> {
+        requests.push(req);
+        for (const ev of script(requests.length)) yield ev;
+      },
+    };
+    const kernel = new KernelClient({ workspace });
+    const store = new SessionStore(workspace);
+    const notices: string[] = [];
+    const deps: LoopDeps = {
+      workspace,
+      sessionId: store.createSession("lazy2").id,
+      model: "capture-1",
+      provider,
+      kernel,
+      store,
+      signal: new AbortController().signal,
+      callbacks: { onEvent: (e) => void (e.type === "notice" && notices.push(e.message)) },
+      sessionLeases: [],
+      approve: async () => true,
+      budget: { maxSteps: 6 },
+    };
+    return { deps, kernel, store, notices };
+  }
+
+  test("nested rules loaded in turn 1 are still in turn 2's system prompt", async () => {
+    const workspace = tempDir("hz-lazy-2turn-");
+    mkdirSync(path.join(workspace, ".git"), { recursive: true });
+    file(workspace, "sub/AGENTS.md", "TWO-TURN-RULE");
+    file(workspace, "sub/a.txt", "hello");
+    const home = tempDir("hz-lazy-2turn-home-");
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    const requests: ProviderRequest[] = [];
+    const { deps, kernel, store } = setup(workspace, requests, (n) =>
+      n === 1
+        ? [{ type: "tool_call", id: "c1", name: "read", arguments: JSON.stringify({ path: "sub/a.txt" }) }, { type: "done", stopReason: "tool_use" }]
+        : [{ type: "text", text: "ok" }, { type: "done", stopReason: "end" }],
+    );
+    try {
+      await runTurn(deps, "turn one");
+      const before = requests.length;
+      await runTurn(deps, "turn two");
+      expect(requests.length).toBeGreaterThan(before);
+      expect(requests[before]?.system ?? "").toContain("TWO-TURN-RULE");
+      expect((requests[before]?.system ?? "").split("TWO-TURN-RULE").length - 1).toBe(1);
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      await kernel.close();
+      store.close();
+    }
+  }, 60000);
+
+  test("an exhausted lazy budget emits a notice", async () => {
+    const workspace = tempDir("hz-lazy-budget-");
+    mkdirSync(path.join(workspace, ".git"), { recursive: true });
+    const big = `${"q".repeat(99)}\n`.repeat(400);
+    for (let i = 0; i < 6; i += 1) {
+      file(workspace, `d${i}/AGENTS.md`, `${i}\n${big}`);
+      file(workspace, `d${i}/f.txt`, "x");
+    }
+    const home = tempDir("hz-lazy-budget-home-");
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    const requests: ProviderRequest[] = [];
+    const { deps, kernel, store, notices } = setup(workspace, requests, (n) =>
+      n <= 6
+        ? [{ type: "tool_call", id: `c${n}`, name: "read", arguments: JSON.stringify({ path: `d${n - 1}/f.txt` }) }, { type: "done", stopReason: "tool_use" }]
+        : [{ type: "text", text: "ok" }, { type: "done", stopReason: "end" }],
+    );
+    deps.budget = { maxSteps: 10 };
+    try {
+      await runTurn(deps, "read all");
+      expect(notices.some((n) => n.startsWith("nested instructions NOT loaded:"))).toBe(true);
     } finally {
       if (savedHome === undefined) delete process.env.HOME;
       else process.env.HOME = savedHome;

@@ -11,7 +11,7 @@ import * as readline from "node:readline";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ContextUsage, RunExit, Runtime } from "../contracts";
-import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks } from "../core/instructions";
+import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
@@ -492,12 +492,13 @@ export function runMemoryCommand(
   name: string,
   workspace: string,
   renderer: Renderer,
-  opts: { home?: string } = {},
+  opts: { home?: string; sessionId?: string } = {},
 ): boolean {
   if (name !== "memory" && name !== "instructions") return false;
   const { blocks, report } = loadInstructionBlocks(workspace, opts.home === undefined ? {} : { home: opts.home });
-  if (blocks.length === 0 && report.skipped.length === 0 && report.scoped.length === 0) {
-    renderer.notice("no project instruction files found \u2014 /init drafts an AGENTS.md");
+  const lazyState = opts.sessionId === undefined ? undefined : peekLazyInstructions(workspace, opts.sessionId);
+  if (blocks.length === 0 && report.skipped.length === 0 && report.scoped.length === 0 && (lazyState?.all().length ?? 0) === 0) {
+    renderer.notice("no project instruction files found: /init drafts an AGENTS.md");
     return true;
   }
   renderer.notice(
@@ -512,7 +513,16 @@ export function runMemoryCommand(
   for (const skipped of report.skipped) renderer.notice(`  skipped: ${skipped}`);
   for (const scoped of report.scoped) renderer.notice(`  not applied: ${scoped}`);
   if (report.totalCapped) renderer.notice("  the 128 KB total cap stopped further files");
-  renderer.notice("nested AGENTS.md/CLAUDE.md below the working directory load when a tool reads or edits a file there");
+  const lazy = lazyState;
+  const loadedLazy = lazy?.all() ?? [];
+  if (loadedLazy.length > 0) {
+    renderer.notice(`nested instructions loaded this session: ${loadedLazy.length}`);
+    for (const block of loadedLazy) {
+      renderer.notice(`  ${block.rel}  ${INSTRUCTION_KIND_LABEL[block.kind]}  ${kb(Buffer.byteLength(block.text, "utf8"))}  (lazy)`);
+    }
+  }
+  for (const rel of lazy?.skippedForBudget() ?? []) renderer.notice(`  nested, not loaded (lazy budget used up): ${rel}`);
+  renderer.notice("nested AGENTS.md/CLAUDE.md below the working directory load after a tool successfully reads or edits a file there");
   return true;
 }
 
@@ -566,7 +576,7 @@ export async function runInitCommand(
   try {
     const staged = typeof extras.stagedChanges === "function" ? extras.stagedChanges.call(runtime) : [];
     if (staged.some((change) => change.rel === "AGENTS.md")) {
-      renderer.notice("AGENTS.md draft staged \u2014 /changes to review the diff, /apply to write it (through the normal guard), /discard to drop it");
+      renderer.notice("AGENTS.md draft staged: /changes to review the diff, /apply to write it (through the normal guard), /discard to drop it");
     }
   } catch {
     /* the notice is a convenience */
@@ -815,11 +825,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       case "memory":
       case "instructions":
-        runMemoryCommand(name, workspace, renderer);
+        runMemoryCommand(name, workspace, renderer, { sessionId: runtime.sessionId });
         break;
       case "init": {
         if (busy) {
-          renderer.notice("/init needs an idle chat \u2014 try again when the current answer ends");
+          renderer.notice("/init needs an idle chat: try again when the current answer ends");
           break;
         }
         await runInitCommand(name, workspace, runtime, renderer, sendTurn);
