@@ -15,6 +15,7 @@ import {
   canUseInteractivePty,
   interactiveExecTool,
   liveSessionCount,
+  rawForSpillLengthForTest,
   resetSessionsForTest,
   sessionArgv,
 } from "../../src/tools/interactive-exec";
@@ -95,6 +96,35 @@ describe("shell_session: codex output format", () => {
       expect(r.ok).toBe(true);
       expect(r.output).toContain("Total output lines:");
       expect(r.output).toContain("Output:");
+    });
+  });
+});
+
+describe("shell_session: raw-spill capture is scoped per read window", () => {
+  test("rawForSpill is reset on every read, so it never accumulates across the session", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext();
+      // A persistent `cat` echoes each write; every read drains the buffer.
+      const start = await interactiveExecTool.execute({ mode: "start", command: "cat" }, ctx);
+      expect(start.ok).toBe(true);
+      const sessionId = (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1];
+
+      // First burst: write, read back, and the raw capture must be cleared.
+      const first = await interactiveExecTool.execute({ mode: "write", sessionId, input: "alpha-line\n" }, ctx);
+      expect(first.ok).toBe(true);
+      expect(first.output).toContain("alpha-line");
+      expect(rawForSpillLengthForTest(sessionId)).toBe(0);
+
+      // Second burst: the prior burst's bytes must NOT carry forward. The raw
+      // capture reflects only this read window, proving it is bounded/scoped.
+      const second = await interactiveExecTool.execute({ mode: "write", sessionId, input: "beta-line\n" }, ctx);
+      expect(second.ok).toBe(true);
+      expect(second.output).toContain("beta-line");
+      expect(second.output).not.toContain("alpha-line");
+      expect(rawForSpillLengthForTest(sessionId)).toBe(0);
+
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+      expect(liveSessionCount()).toBe(0);
     });
   });
 });
