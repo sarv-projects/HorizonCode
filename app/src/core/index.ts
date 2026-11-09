@@ -33,6 +33,7 @@ import type {
   ToolResult,
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
+import { AdmissionQueue } from "./admission";
 import { loadConfig, type HzConfig, type McpConfig } from "./config";
 import { KernelClient } from "./kernel";
 import {
@@ -282,14 +283,36 @@ class HzRuntimeImpl implements HzRuntime {
         ? `${plan.skipped.length} change(s) cannot be put back (content not kept, or the change created the file) and were left as they are`
         : "";
     if (restorable.length === 0) {
-      const summary =
-        `nothing to rewind to checkpoint ${n}: no restorable change was recorded after it` +
+      // No file to put back, but the conversational rewind still applies: a
+      // rewind to a checkpoint with no later file changes must still cut the
+      // transcript back to the checkpoint's boundary (FEAT-002). Boundary-safe,
+      // same invariant as above.
+      const truncation = this.store.truncateMessages(this.session.id, checkpoint.messageIndex);
+      const transcriptNote =
+        truncation.removed > 0
+          ? `removed ${truncation.removed} transcript message(s)` +
+            (truncation.adjustedTo !== checkpoint.messageIndex
+              ? ` (boundary moved earlier to ${truncation.adjustedTo} to keep a tool-call group whole)`
+              : "")
+          : "removed no transcript messages";
+      const fileNote =
+        `no restorable change was recorded after checkpoint ${n}` +
         (skippedNote === "" ? "" : ` \u2014 ${skippedNote}`);
+      const summary =
+        truncation.removed > 0
+          ? `rewound to checkpoint ${n}: ${transcriptNote} \u2014 ${fileNote}`
+          : `nothing to rewind to checkpoint ${n}: ${fileNote} \u2014 ${transcriptNote}`;
       await this.append(streamFor(this.session.id), "rewind.plan", {
         checkpoint: checkpoint.id,
         restored: [],
         refused: [],
         skipped: plan.skipped.map((s) => s.rel),
+      });
+      await this.append(streamFor(this.session.id), "rewind.conversation", {
+        checkpoint: checkpoint.id,
+        messageIndex: checkpoint.messageIndex,
+        removed: truncation.removed,
+        adjustedTo: truncation.adjustedTo,
       });
       return summary;
     }
@@ -363,6 +386,16 @@ class HzRuntimeImpl implements HzRuntime {
         this.note(`could not issue a receipt for the rewound write ${item.rel}: ${errorMessage(err)}`);
       }
     }
+    // FEAT-002 conversational rewind, ADDITIVE to the file-side restore above
+    // (wave-14c shipped the file side only). The checkpoint recorded the
+    // session's message count at the boundary; truncate the transcript back to
+    // it. `truncateMessages` is boundary-safe: it never leaves a dangling
+    // assistant tool_call in the kept prefix (it moves the cut earlier if the
+    // naive boundary would split a tool-call group), so the kept history stays
+    // provider-replayable. The kernel event log stays append-only — the rewind
+    // is recorded below as a NEW forward event, never a log edit.
+    const truncation = this.store.truncateMessages(this.session.id, checkpoint.messageIndex);
+
     const parts: string[] = [
       restored.length > 0
         ? `restored ${restored.length} change(s) from before checkpoint ${n}: ${restored.join(", ")}`
@@ -370,12 +403,30 @@ class HzRuntimeImpl implements HzRuntime {
     ];
     if (refused.length > 0) parts.push(`refused ${refused.length}: ${refused.join("; ")}`);
     if (skippedNote !== "") parts.push(skippedNote);
+    if (truncation.removed > 0) {
+      const adjusted =
+        truncation.adjustedTo !== checkpoint.messageIndex
+          ? ` (boundary moved earlier to ${truncation.adjustedTo} to keep a tool-call group whole)`
+          : "";
+      parts.push(`removed ${truncation.removed} transcript message(s)${adjusted}`);
+    } else {
+      parts.push("removed no transcript messages");
+    }
     const summary = parts.join(" \u2014 ");
     await this.append(streamFor(this.session.id), "rewind.apply", {
       checkpoint: checkpoint.id,
       restored,
       refused,
       skipped: plan.skipped.map((s) => s.rel),
+    });
+    // Append-only forward audit event for the conversational truncation. The
+    // past log records are untouched; this records that the rewind happened and
+    // what it removed, so `verify` still passes and the history is auditable.
+    await this.append(streamFor(this.session.id), "rewind.conversation", {
+      checkpoint: checkpoint.id,
+      messageIndex: checkpoint.messageIndex,
+      removed: truncation.removed,
+      adjustedTo: truncation.adjustedTo,
     });
     return summary;
   }
@@ -683,9 +734,12 @@ class HzRuntimeImpl implements HzRuntime {
 }
 
 /**
- * Bring up the runtime for one workspace. `continueSession` resumes the most
- * recently touched session; otherwise a fresh one starts (zero-config default:
- * provider `mock`, no key, kernel fallback when the Rust binary is absent).
+ * Bring up the runtime for one workspace. `sessionId` resumes that SPECIFIC
+ * session by id (server-mode resume-by-id — fails closed if the id is unknown);
+ * `continueSession` resumes the most recently touched session; otherwise a
+ * fresh one starts (zero-config default: provider `mock`, no key, kernel
+ * fallback when the Rust binary is absent). `sessionId` wins over
+ * `continueSession` when both are set.
  */
 export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
@@ -695,15 +749,45 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const store = new SessionStore(workspace);
 
   let session: SessionInfo | null = null;
-  if (opts?.continueSession) session = store.latestSession();
+  const wantId = typeof opts?.sessionId === "string" && opts.sessionId !== "" ? opts.sessionId : undefined;
+  if (wantId !== undefined) {
+    // Resume-by-id: open exactly the requested session. Fail closed if it is
+    // not in this workspace rather than silently retargeting to another one, so
+    // `session.list`'s per-id addressing is honest and a wrong id is a clean
+    // error, never a surprise write to a different session's transcript.
+    session = store.getSession(wantId);
+    if (!session) {
+      store.close();
+      throw new Error(`no session ${wantId} in this workspace`);
+    }
+  }
+  if (!session && opts?.continueSession) session = store.latestSession();
   if (!session) session = store.createSession();
 
-  // A run killed between "append the assistant message with its tool calls" and
-  // "append the tool result" leaves an unanswered call, and every real provider
-  // refuses to replay that history — which made a crash permanently brick the
-  // session. Repair it on open, for a resumed session and for a fresh one alike
-  // (a fresh session has no rows, so this is a no-op). Idempotent.
+  // Crash-recovery on open is TWO complementary repairs, not one — see external
+  // audit finding 2 and the dsh ToolCallRecovery reference. A run killed between
+  // "append the assistant message with its tool calls" and "append the tool
+  // result" leaves two distinct kinds of damage, and each mechanism heals one:
+  //
+  //   - repairDanglingToolCalls repairs the TRANSCRIPT: an assistant tool call
+  //     with no following tool result is answered with a synthetic UNKNOWN
+  //     result (the dsh ToolCallRecovery pairing invariant). Without it every
+  //     real provider refuses to replay the history and the session is bricked.
+  //
+  //   - recoverInterrupted settles the ADMISSION FIFO: a 'running' row left by
+  //     the killed turn becomes 'unknown' (evidence 'interrupted'), which HALTS
+  //     its followers instead of silently replaying a turn whose effect may or
+  //     may not have happened.
+  //
+  // They are complementary, never duplicative: one keeps the provider-replayable
+  // history valid, the other keeps the work-queue honest. recoverInterrupted was
+  // defined but called from nowhere on the live path (external audit finding 2);
+  // wiring it here, beside repairDanglingToolCalls and BEFORE the first turn can
+  // run, closes that finding — a resumed server session (FEAT-003) reuses this
+  // same entry point. Both run for a resumed session and a fresh one alike (a
+  // fresh session has no rows, so each is a no-op). Both are idempotent.
   const repaired = store.repairDanglingToolCalls(session.id);
+  const interrupted = new AdmissionQueue(store).recoverInterrupted(session.id);
 
   let impl: HzRuntimeImpl | null = null;
   const kernel = new KernelClient({
@@ -747,6 +831,16 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     impl.note(
       `repaired ${repaired.repaired} interrupted tool call(s) left by a run that was killed mid-execution ` +
         `(${repaired.calls.join(", ")}) — each was answered with UNKNOWN; verify the real state before trusting it`,
+    );
+  }
+  if (interrupted.length > 0) {
+    // The admission side of the same crash: a turn that was 'running' when the
+    // process died is now 'unknown' and will never be silently replayed. It
+    // halts its followers until a human resolves it (requeue/drop/cancel).
+    impl.note(
+      `settled ${interrupted.length} interrupted admission row(s) left 'running' by a killed run ` +
+        `(${interrupted.join(", ")}) — each is now 'unknown' (evidence 'interrupted') and will never be replayed; ` +
+        `resolve it before the queue can advance`,
     );
   }
   // MCP servers: user-config only, spawned via the spawn-kind admission, and
