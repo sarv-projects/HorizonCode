@@ -78,7 +78,7 @@ import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./pos
 import { LoopDetectionTracker } from "./guards/loop-detection";
 import { MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
-// Tier-3 speculative execution (docs/28 ruling 44): an OFF-BY-DEFAULT coordinator
+// Tier-3 speculative execution (docs/28 ruling 47): an OFF-BY-DEFAULT coordinator
 // that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
 // Its host `run` callback goes through the SAME guarded executeTool path, so a
 // speculated read is a guarded fs.read — the guard is never bypassed. When the
@@ -981,7 +981,7 @@ export interface LoopDeps {
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
   /**
-   * Tier-3 speculative execution (docs/28 ruling 44): OFF BY DEFAULT and NOT
+   * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
    * YET READ by the turn path. The field and the `buildSpeculationHost` /
    * `speculativeCandidatesFor` helpers are primitives for a future consumer;
    * today the flag changes nothing. The ordinary NF-072 batch is unchanged.

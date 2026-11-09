@@ -1,5 +1,5 @@
 /**
- * guardian.ts — Tier-3 guardian action classifier (docs/28 ruling 45).
+ * guardian.ts — Tier-3 guardian action classifier (docs/28 ruling 48).
  *
  * An OPTIONAL per-action pass: given a proposed action and the task
  * instructions, a classifier returns an allow / flag / deny judgment.

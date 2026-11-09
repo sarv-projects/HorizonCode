@@ -40,7 +40,7 @@
  * The loop owns the wiring (off-by-default) and the single guarded run path.
  *
  * Sources: research/compare-ohmypi-deepseek.md §1.4 (speculative-execution.ts);
- * docs/24 NF-072; docs/28 ruling 44.
+ * docs/24 NF-072; docs/28 ruling 47.
  */
 
 import * as path from "node:path";

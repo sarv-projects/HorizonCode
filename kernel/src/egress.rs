@@ -42,7 +42,7 @@
 // constants are the PURE, fully unit-tested model of grok's hold mechanism and
 // content-free records. Their only live consumer — the async MITM/routed-proxy
 // that actually parks connections and broadcasts records to a UI channel — is
-// DEFERRED (see the module header and docs/28 ruling 41). They are exercised by
+// DEFERRED (see the module header and docs/28 ruling 43). They are exercised by
 // the `#[cfg(test)]` suite below; `allow(dead_code)` documents that they are
 // policy-and-data now, wiring later, rather than accidentally unused.
 #![allow(dead_code)]
