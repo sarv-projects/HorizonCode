@@ -1,13 +1,15 @@
 /**
- * agent-profiles.ts — specialised subagent presets (CURRENT_RUN §5.0.1,
+ * agent-profiles.ts: specialised subagent presets (CURRENT_RUN §5.0.1,
  * docs/30 §5.11; contract AgentProfileV1, docs/15 §2.6/§3.6, docs/05 §4.9).
  *
  * A preset is DATA: a tool allow-list, a prompt block, an optional model
- * override and a step cap. The one invariant is the profile-level half of D17:
- * a preset may only NARROW authority. Its allow-list must be a subset of the
- * ceiling (every registered tool except `agent` itself, which a child never
- * holds), so a preset naming anything outside it is refused with
- * `profile_ceiling_widens` (docs/15 §8). The kernel guard still decides every
+ * override and a step cap. The invariant is the profile-level half of D17
+ * measured against the PARENT: an allow-list must be a subset of the ceiling
+ * (every registered tool except `agent` itself, which a child never holds), so
+ * a preset naming anything outside it is refused with `profile_ceiling_widens`
+ * (docs/15 §8). "Narrow" means relative to the parent, NOT to the generic
+ * seven-tool child: `code` and user presets can hold tools (apply_patch,
+ * ast_edit, undo, lsp, repo_map, ast_search) the generic child does not. The kernel guard still decides every
  * effect: a preset never grants a lease and never skips an approval.
  *
  * Built-ins: explore, plan, code, review. User presets come from
@@ -127,7 +129,7 @@ export interface PresetSet {
 
 /**
  * The widening check: names in `tools` outside `ceiling`. Empty means the
- * preset only narrows.
+ * preset stays within the parent's tools.
  */
 export function wideningTools(tools: readonly string[], ceiling: readonly string[] = presetCeiling()): string[] {
   const allowed = new Set(ceiling);
@@ -287,5 +289,5 @@ export function presetCatalog(workspace: string, opts: PresetOptions = {}): stri
     const tag = p.source === "builtin" ? "" : ` [${p.source}]`;
     lines.push(`- ${p.name}${tag}: ${p.description}`);
   }
-  return "Profiles (optional `profile` argument; a profile only narrows the subagent's tools):\n" + lines.join("\n");
+  return "Profiles (optional `profile` argument; a profile picks a subset of the parent's tools, never `agent`):\n" + lines.join("\n");
 }

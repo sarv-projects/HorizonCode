@@ -1,5 +1,5 @@
 /**
- * print.ts — one non-interactive turn (`hzcode -p "prompt"`).
+ * print.ts: one non-interactive turn (`hzcode -p "prompt"`).
  *
  * Claude Code `-p --output-format json|stream-json` and `codex exec --json`
  * are the references. The prompt is sent as ONE turn and the process exits

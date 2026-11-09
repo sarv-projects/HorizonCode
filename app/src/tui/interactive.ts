@@ -539,13 +539,13 @@ export async function runForkCommand(
   if (text !== "") {
     const n = Number(text);
     if (!Number.isInteger(n) || n < 1) {
-      renderer.notice("usage: /fork [n] \u2014 n is a checkpoint number from /rewind");
+      renderer.notice("usage: /fork [n]: n is a checkpoint number from /rewind");
       return true;
     }
     const cp = typeof rt.checkpoints === "function" ? rt.checkpoints().find((c) => c.n === n) : undefined;
     const idx = cp?.messageIndex;
     if (typeof idx !== "number") {
-      renderer.notice(`no checkpoint ${n} to fork at \u2014 /rewind lists them`);
+      renderer.notice(`no checkpoint ${n} to fork at; /rewind lists them`);
       return true;
     }
     at = idx;

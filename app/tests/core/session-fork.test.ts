@@ -1,5 +1,5 @@
 /**
- * session-fork.test.ts — session fork (FEAT-004): the store copy, the runtime
+ * session-fork.test.ts: session fork (FEAT-004): the store copy, the runtime
  * seam, the kernel stream and the server method. Each test fails if the fork
  * implementation is reverted (no forkSession / no session.fork method).
  */
@@ -103,6 +103,18 @@ describe("runtime fork", () => {
     rt.switchSession!(child.id);
     expect(rt.sessionId).toBe(child.id);
     expect(rt.history().length).toBeGreaterThan(0);
+    await rt.close();
+  });
+});
+
+describe("fork during a turn", () => {
+  test("is refused while a turn is running and works after it ends", async () => {
+    const ws = tempDir("hz-fork-mid-");
+    const rt = await createRuntime({ workspace: ws, mock: true });
+    const turn = rt.send("hello", {});
+    await expect(rt.forkSession!()).rejects.toThrow(/while a turn is running/);
+    await turn;
+    expect((await rt.forkSession!()).forkedFrom?.sessionId).toBe(rt.sessionId);
     await rt.close();
   });
 });

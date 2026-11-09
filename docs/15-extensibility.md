@@ -1,10 +1,10 @@
 # 15 — Extensibility
-> **Permission modes (`docs/28` ruling 58).** User config key `permissionMode` sets the starting mode (user file only; a bad or bypass value is ignored with a notice). Subagents inherit the parent's mode; a preset can still only narrow tools.
+> **Permission modes (`docs/28` ruling 58).** User config key `permissionMode` sets the starting mode (user file only; a bad or bypass value is ignored with a notice). Subagents inherit the parent's mode; a preset's tools stay within the parent's (ruling 61).
 
 > **Print mode (`docs/28` ruling 57).** The headless result object is a stable machine surface for scripts and wrappers; it adds no extension point.
 
 
-> **Agent presets (stage 3, `docs/28` ruling 56).** The reduced form of `AgentProfileV1` (2.6, 3.6) ships as `app/src/core/agent-profiles.ts`: built-in explore/plan/code/review plus `agents/*.md` front-matter presets from the user config dir and workspace `.hz/` (name, description, tools, model, max_steps, body = prompt), narrow-only with the `profile_ceiling_widens` refusal. Result schemas, `requiresInputs`, `refusesWhen`, pinning and plugin profiles stay NOT STARTED.
+> **Agent presets (stage 3, `docs/28` ruling 56).** The reduced form of `AgentProfileV1` (2.6, 3.6) ships as `app/src/core/agent-profiles.ts`: built-in explore/plan/code/review plus `agents/*.md` front-matter presets from the user config dir and workspace `.hz/` (name, description, tools, model, max_steps, body = prompt), bounded by the parent's tools with the `profile_ceiling_widens` refusal. Result schemas, `requiresInputs`, `refusesWhen`, pinning and plugin profiles stay NOT STARTED.
 >
 > **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: hooks v1 broadened to the ratified H1 lifecycle points plus the H9 attributed context channel (tool.post notes ride the system rail as an untrusted block); a user provider registry (user config only, data not code); LSP servers as user config (default off). The H7 hooks trust gate is still open. NOT STARTED: plugins, the marketplace, the workflow engine, and full `AgentProfileV1` pinning (§2.6, §3.6; the reduced preset form shipped, ruling 56).
 

@@ -247,7 +247,13 @@ class HzRuntimeImpl implements HzRuntime {
     return this;
   }
 
+  /** send() calls accepted and not yet finished (fork refuses while any). */
+  private pendingSends = 0;
+
   async forkSession(at?: number): Promise<SessionInfo> {
+    // A fork taken mid-turn would copy a partial transcript (an assistant
+    // message with its tool results still arriving): refuse until the turn ends.
+    if (this.active || this.pendingSends > 0) throw new Error("cannot fork while a turn is running; wait for it to finish or cancel it");
     const parentStream = streamFor(this.session.id);
     let parentSeq = 0;
     try {
@@ -265,7 +271,13 @@ class HzRuntimeImpl implements HzRuntime {
     };
     // A fork is a NEW stream whose first event references the parent; the
     // parent's log is never written to (append-only, no rewrite).
-    await this.append(streamFor(child.id), EventTypes.sessionFork, payload);
+    // The store row already carries the lineage, so a failed append leaves a
+    // valid fork (resume never reads this event); say so rather than fail.
+    try {
+      await this.append(streamFor(child.id), EventTypes.sessionFork, payload);
+    } catch (err) {
+      this.note(`fork recorded in the session store, but the session.fork event was not written: ${errorMessage(err)}`);
+    }
     return child;
   }
 
@@ -721,10 +733,15 @@ class HzRuntimeImpl implements HzRuntime {
 
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
     // Turns are serialized: a second send waits for the first to finish.
-    const run = this.sendQueue.then(
-      () => this.runSend(text, cb),
-      () => this.runSend(text, cb),
-    );
+    this.pendingSends += 1;
+    const run = this.sendQueue
+      .then(
+        () => this.runSend(text, cb),
+        () => this.runSend(text, cb),
+      )
+      .finally(() => {
+        this.pendingSends -= 1;
+      });
     this.sendQueue = run.then(
       () => undefined,
       () => undefined,

@@ -35,7 +35,7 @@ export const agentTool: Tool = {
       profile: {
         type: "string",
         description:
-          "Optional preset: explore, plan, code or review (a user preset may be listed below). A preset only narrows the subagent's tools. Omit for the generic subagent.",
+          "Optional preset: explore, plan, code or review (a user preset may be listed below). A preset picks a subset of the parent's tools (never agent); the guard still decides every effect. Omit for the generic subagent.",
       },
       max_steps: {
         type: "number",

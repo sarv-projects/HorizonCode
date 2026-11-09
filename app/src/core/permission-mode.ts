@@ -1,5 +1,5 @@
 /**
- * permission-mode.ts — the named permission postures (docs/28 ruling on
+ * permission-mode.ts: the named permission postures (docs/28 ruling on
  * permission modes; reference: Claude Code default/acceptEdits/plan, codex
  * approval modes).
  *
@@ -8,7 +8,11 @@
  *   accept-edits  an fs.write the guard would ASK about, inside the workspace, is
  *                 answered yes; shell, network, spawn, MCP and every write outside
  *                 the workspace stay exactly as default
- *   read-only     every fs.write and shell.exec is refused before it can run
+ *   read-only     every fs.write, shell.exec and mcp.invoke is refused before it can
+ *                 run (an MCP tool can write, so it is refused with the rest). net.fetch
+ *                 (a read), LSP/MCP server start and agent/code_mode spawns are left to
+ *                 the guard: a child inherits this mode and a code_mode bridge call is
+ *                 decided on its own merits, so neither can write or run a command
  *
  * The mode is a policy layer ABOVE the kernel guard and can only narrow or
  * auto-answer an ASK: it never produces an allow the guard did not, and a
@@ -73,19 +77,43 @@ export function permissionModeError(value: unknown): string {
  */
 export function modeRefusal(mode: PermissionMode | undefined, action: GuardAction): string | undefined {
   if (mode !== "read-only") return undefined;
-  if (action.kind === "fs.write" || action.kind === "shell.exec") {
+  if (action.kind === "fs.write" || action.kind === "shell.exec" || action.kind === "mcp.invoke") {
     return `read-only permission mode refuses ${action.kind}`;
   }
   return undefined;
 }
 
-/** Workspace-relative first segments accept-edits never auto-answers. */
-const SENSITIVE_ROOTS: readonly string[] = [".git", ".hz"];
+/**
+ * Directory names (at ANY depth) accept-edits never auto-answers: repository and
+ * harness state, and CI/hook directories whose files run later without a shell ask.
+ */
+const SENSITIVE_DIRS: readonly string[] = [".git", ".hz", ".github", ".gitlab", ".husky", ".circleci", ".devcontainer", ".vscode"];
+
+/**
+ * File names (any depth, case-insensitive) that run or configure code later:
+ * manifests with scripts, shell startup files, env loaders, CI/hook configs,
+ * build files. Writing one is deferred code execution, so a human answers.
+ */
+const SENSITIVE_FILES: readonly string[] = [
+  "package.json", ".envrc", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", ".bashrc", ".bash_profile", ".bash_login", ".bash_logout",
+  ".profile", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".cshrc", ".kshrc", "config.fish", ".gitlab-ci.yml", ".gitmodules", ".gitattributes",
+  "jenkinsfile", "makefile", "gnumakefile", "dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
+  "lefthook.yml", ".pre-commit-config.yaml", "azure-pipelines.yml", "bitbucket-pipelines.yml", "setup.py", "conftest.py", "justfile", "taskfile.yml",
+  "build.rs", "build.gradle", "pom.xml", ".env",
+];
+
+function isSensitiveRel(rel: string): boolean {
+  const parts = rel.split(path.sep).filter((s) => s !== "");
+  const base = (parts[parts.length - 1] ?? "").toLowerCase();
+  if (parts.slice(0, -1).some((seg) => SENSITIVE_DIRS.includes(seg))) return true;
+  if (SENSITIVE_DIRS.includes(parts[parts.length - 1] ?? "")) return true;
+  return SENSITIVE_FILES.includes(base) || base.startsWith(".env.");
+}
 
 /**
  * Whether the mode answers an ASK for `action` with yes. Only accept-edits does,
  * and only for an fs.write whose target `inside` (the caller's symlink-aware
- * workspace test) puts in the workspace and outside repository/harness state.
+ * workspace test) puts in the workspace and outside repository, harness, CI/hook and manifest files (see SENSITIVE_*).
  * Everything else, shell included, falls through to the human (or a fail-closed
  * deny when there is none).
  */
@@ -99,8 +127,7 @@ export function modeAutoApproves(
   if (action.kind !== "fs.write") return false;
   if (!inside(action.target, workspace)) return false;
   const rel = path.relative(path.resolve(workspace), path.resolve(workspace, action.target));
-  const first = rel.split(path.sep)[0] ?? "";
-  return !SENSITIVE_ROOTS.includes(first);
+  return !isSensitiveRel(rel);
 }
 
 /** The prompt badge text for a mode (empty for default). */
@@ -123,9 +150,9 @@ export function describeMode(mode: PermissionMode): string {
     case "plan":
       return "plan: writes and edits are staged for review (/changes, /apply, /discard)";
     case "accept-edits":
-      return "accept-edits: in-workspace write/edit asks are answered yes; shell and everything else ask as usual";
+      return "accept-edits: in-workspace write/edit asks are answered yes (not CI/hook/manifest/shell-rc files); shell and everything else ask as usual";
     case "read-only":
-      return "read-only: every write and shell command is refused";
+      return "read-only: every write, shell command and MCP tool call is refused";
     default:
       return "default: the guard decides, you answer asks";
   }
