@@ -14,7 +14,7 @@
  * caller gets back one thing: the subagent's final report, capped.
  */
 
-import type { ApprovalHandler, Lease, Provider, ToolResult } from "../contracts";
+import type { ApprovalHandler, Lease, Provider, RuntimeEvent, ToolResult } from "../contracts";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): subagent.start/subagent.stop mark the
 // child session boundary (session.start/end for the child), OBSERVATION-only
 // (H4 — a subagent boundary hook can never block the delegated run).
@@ -46,7 +46,52 @@ function subagentTitle(task: string): string {
   return `subagent: ${suffix}`;
 }
 
+/** Most child events forwarded to the parent per delegated run. */
+export const SUBAGENT_EVENT_CAP = 40;
+/** Longest text field (summary, notice, child answer) a forwarded event keeps. */
+export const SUBAGENT_EVENT_TEXT_CAP = 300;
+
+function clip(text: unknown): string {
+  const s = typeof text === "string" ? text : "";
+  return s.length > SUBAGENT_EVENT_TEXT_CAP ? s.slice(0, SUBAGENT_EVENT_TEXT_CAP - 3) + "..." : s;
+}
+
+/**
+ * Reduce one child event to its bounded, forwardable form, or null when the
+ * parent should not see it (deltas, usage, diffs, turn boundaries).
+ */
+export function boundChildEvent(ev: RuntimeEvent): RuntimeEvent | null {
+  switch (ev.type) {
+    case "tool.card": {
+      let args = ev.args;
+      try {
+        if (JSON.stringify(args).length > 400) args = { truncated: clip(JSON.stringify(args)) };
+      } catch {
+        args = {};
+      }
+      return {
+        type: "tool.card",
+        callId: ev.callId,
+        name: clip(ev.name),
+        args,
+        status: ev.status,
+        ...(ev.summary !== undefined ? { summary: clip(ev.summary) } : {}),
+      };
+    }
+    case "notice":
+      return { type: "notice", message: clip(ev.message) };
+    case "error":
+      return { type: "error", message: clip(ev.message) };
+    case "assistant.done":
+      return { type: "assistant.done", text: clip(ev.text) };
+    default:
+      return null;
+  }
+}
+
 export interface NestedRunOptions {
+  /** Receives bounded child events wrapped as `subagent.event` (parent stream). */
+  onEvent?: (ev: RuntimeEvent) => void;
   workspace: string;
   task: string;
   maxSteps?: number;
@@ -77,6 +122,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   if (task === "") return { ok: false, output: "", error: "task is required" };
   const title = subagentTitle(task);
   const session = opts.store.createSession(title);
+  let forwarded = 0;
   const deps: LoopDeps = {
     workspace: opts.workspace,
     sessionId: session.id,
@@ -85,9 +131,28 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     kernel: opts.kernel,
     store: opts.store,
     signal: opts.signal,
-    // The child's transcript lands in its own session; the parent's tool card
-    // is the user-visible surface, so no events are forwarded upward.
-    callbacks: { onEvent: () => undefined },
+    // The child's transcript lands in its own session. A bounded subset of its
+    // events (tool cards, notices, errors, final text) is also forwarded to the
+    // parent as `subagent.event`, capped per run so a chatty child cannot flood
+    // the parent's stream.
+    callbacks: {
+      onEvent: (ev) => {
+        if (opts.onEvent === undefined) return;
+        const bounded = boundChildEvent(ev);
+        if (bounded === null) return;
+        if (forwarded > SUBAGENT_EVENT_CAP) return;
+        forwarded += 1;
+        const out: RuntimeEvent =
+          forwarded > SUBAGENT_EVENT_CAP
+            ? { type: "notice", message: "child events capped" }
+            : bounded;
+        try {
+          opts.onEvent({ type: "subagent.event", agentId: session.id, name: "agent", depth: 1, event: out });
+        } catch {
+          /* a sink failure must not fail the delegated run */
+        }
+      },
+    },
     // R-tools-32: the child inherits no parent leases — only the parent's
     // approval handler, so its own effects can ask. Combined with the child's
     // own session id below, an owner-scoped 'always' lease minted for the

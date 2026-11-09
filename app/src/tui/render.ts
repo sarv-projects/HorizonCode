@@ -89,6 +89,11 @@ function firstLine(text: unknown, limit = 1000): string {
   return line.length > limit ? truncate(line, limit) : line;
 }
 
+/** Most nested child lines rendered per agent run; the rest collapse to a marker. */
+export const NESTED_LINE_CAP = 30;
+/** Most turn.diff lines rendered; the rest collapse to `\u2026 N more lines`. */
+export const TURN_DIFF_LINE_CAP = 40;
+
 export function createRenderer(opts: RenderOptions = {}): Renderer {
   const out = opts.out ?? ((chunk: string) => void process.stdout.write(chunk));
   const wrap = opts.wrap ?? Boolean((process.stdout as { isTTY?: boolean } | undefined)?.isTTY);
@@ -152,9 +157,62 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     write(dim("  )") + "\n");
   };
 
+  const nestedCount = new Map<string, number>();
+
+  /** One child event, indented under the agent card behind a dim bar. */
+  const handleNested = (agentId: string, inner: RuntimeEvent): void => {
+    if (!inner || typeof inner !== "object") return;
+    let line = "";
+    if (inner.type === "tool.card") {
+      const name = sanitizeText(inner.name) || "tool";
+      if (inner.status === "running") {
+        const compact = compactArgs(inner.args);
+        line = cyan("\u23fa") + " " + bold(name) + (compact ? dim("(" + truncate(compact, 80) + ")") : "");
+      } else {
+        const summary = firstLine(inner.summary, 120);
+        line =
+          "  " + dim("\u2514 ") + (inner.status === "ok" ? green("ok") : red("error")) + (summary ? dim(": " + summary) : "");
+      }
+    } else if (inner.type === "assistant.done") {
+      const text = firstLine(inner.text, 200);
+      if (text === "") return;
+      line = dim(text);
+    } else if (inner.type === "notice") {
+      line = dim("\u00b7 " + firstLine(inner.message, 200));
+    } else if (inner.type === "error") {
+      line = red("\u26a0 " + firstLine(inner.message, 200));
+    } else {
+      return;
+    }
+    const n = (nestedCount.get(agentId) ?? 0) + 1;
+    nestedCount.set(agentId, n);
+    if (n > NESTED_LINE_CAP + 1) return;
+    const text = n === NESTED_LINE_CAP + 1 ? dim("\u2026 more child output hidden") : line;
+    ensureLineStart();
+    write("  " + dim("\u2502") + " " + text + "\n");
+  };
+
   const handle = (ev: RuntimeEvent): void => {
     if (!ev || typeof ev !== "object") return;
     switch (ev.type) {
+      case "subagent.event":
+        handleNested(String(ev.agentId), ev.event);
+        break;
+      case "turn.diff": {
+        const files = typeof ev.files === "number" ? ev.files : 0;
+        if (files < 1) break;
+        emit(dim(`\u00b7 changed ${files} file${files === 1 ? "" : "s"}`), dim);
+        const lines = diffBlock(ev.diff).split("\n").filter((l) => l !== "");
+        const shown = lines.slice(0, TURN_DIFF_LINE_CAP);
+        if (shown.length > 0) {
+          ensureLineStart();
+          write(shown.join("\n") + "\n");
+        }
+        const more = lines.length - shown.length;
+        if (more > 0) emit("  " + dim(`\u2026 ${more} more lines`), dim);
+        else if (ev.truncated === true) emit("  " + dim("\u2026 diff truncated"), dim);
+        break;
+      }
       case "assistant.delta": {
         sawDelta = true;
         write(sanitizeText(ev.text));

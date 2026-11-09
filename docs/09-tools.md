@@ -146,7 +146,7 @@ The shipped runtime realises a reduced form of R-tools-24…27 through one addit
 
 **R-tools-31.** An `ask` decision emits `hz.permission.asked` and suspends the step. Answers are accepted only from an origin of kind `UserAction`; `SessionBatch` (model-origin) answers are rejected by the kernel and recorded as an attempt.
 
-**R-tools-32.** The **lease** is bound to `(sessionId, stepId, toolCallId, capabilityId, resourceScope, idempotencyKey?, expiry)`. It is one-use: a second invocation — including a retry, a subagent, or a resumed run — MUST present its own lease. Subagents receive capability *grants* (narrowed sets), never leases.
+**R-tools-32.** The **lease** is bound to `(sessionId, stepId, toolCallId, capabilityId, resourceScope, idempotencyKey?, expiry)`. It is one-use: a second invocation — including a retry, a subagent, or a resumed run — MUST present its own lease. Subagents receive capability *grants* (narrowed sets), never leases. Implementation note (stage 1): a child's tool cards are mirrored to the parent as a bounded `subagent.event` (tool.card, notice, error and final text only; text cut to 300 characters; 40 events per run); the child's receipts and session remain its own (`docs/28` ruling 54).
 
 **R-tools-33.** **Execute** happens inside the effect host and only there. A native tool runs in its Rust crate with the lease as its confinement input; a plugin tool runs in the sandboxed plugin host with the same; an MCP tool runs remotely and is governed by `mcp.invoke` plus the server's declared scope. An effect observed outside the lease scope fails the call and is reported as a policy violation, not as a tool bug.
 
