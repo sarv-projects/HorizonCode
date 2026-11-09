@@ -105,12 +105,14 @@ function selfContainedSearch(
   globFilter: string | undefined,
   cwd: string,
   lang: string | undefined,
-): { results: string[]; capped: boolean; skippedLarge: number } {
+): { results: string[]; capped: boolean; skippedLarge: number; skippedBudget: number; lexUncertain: number } {
   const globMatch = makeGlob(globFilter);
 
   const results: string[] = [];
   let capped = false;
   let skippedLarge = 0;
+  let skippedBudget = 0;
+  let lexUncertain = 0;
 
   const scanFile = (abs: string, rel: string): void => {
     if (globMatch && !globMatch(rel)) return;
@@ -127,10 +129,15 @@ function selfContainedSearch(
     }
     const source = buf.toString("utf8");
     const scan = scanPattern(pat, source, { lang: lang ?? langFromPath(abs) });
+    if (scan.skipped === "budget") {
+      skippedBudget += 1;
+      return;
+    }
     if (scan.skipped !== null) {
       skippedLarge += 1;
       return;
     }
+    if (scan.lexIssues > 0) lexUncertain += 1;
     for (const m of scan.matches) {
       results.push(formatMatch(rel, m.startLine, m.startColumn, m.text, m.metaVariables));
       if (results.length >= MAX_RESULTS) return;
@@ -165,7 +172,7 @@ function selfContainedSearch(
   try {
     rootIsFile = statSync(root).isFile();
   } catch {
-    return { results, capped, skippedLarge };
+    return { results, capped, skippedLarge, skippedBudget, lexUncertain };
   }
   if (rootIsFile) candidates.push(root);
   else walk(root);
@@ -174,7 +181,7 @@ function selfContainedSearch(
     if (results.length >= MAX_RESULTS) break;
     scanFile(abs, relPath(cwd, abs));
   }
-  return { results, capped, skippedLarge };
+  return { results, capped, skippedLarge, skippedBudget, lexUncertain };
 }
 
 /**
@@ -339,7 +346,7 @@ export const astSearchTool: Tool = {
       pat: { type: "string", description: "Structural pattern, e.g. 'foo($A)'. $NAME / $$$NAME are metavariables." },
       path: { type: "string", description: "File or directory to search (default: workspace)." },
       glob: { type: "string", description: "Only search files matching this glob, e.g. '*.ts'." },
-      lang: { type: "string", description: "Optional language hint for an external ast-grep backend." },
+      lang: { type: "string", description: "Optional language or extension hint (e.g. rust/rs, py/python). Selects the built-in matcher\'s lexer family (comments, quotes) and is passed to an external ast-grep; default is inferred from each file extension." },
     },
     required: ["pat"],
   },
@@ -371,6 +378,14 @@ export const astSearchTool: Tool = {
         results = self.results;
         if (self.capped) {
           notices.push(`[incomplete: stopped after ${MAX_CANDIDATES} candidate files; narrow the path]`);
+        }
+        if (self.skippedBudget > 0) {
+          notices.push(
+            `[skipped: ${self.skippedBudget} file(s) exceeded the matcher work budget (pattern too ambiguous, e.g. several '$$$'); results are incomplete]`,
+          );
+        }
+        if (self.lexUncertain > 0) {
+          notices.push(`[lexing uncertain in ${self.lexUncertain} file(s): unterminated strings; matches there may be mis-paired or missed]`);
         }
         if (self.skippedLarge > 0) {
           notices.push(

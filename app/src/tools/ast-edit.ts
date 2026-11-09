@@ -47,7 +47,7 @@ export const astEditTool: Tool = {
       path: { type: "string", description: "File to edit (a single file)." },
       pat: { type: "string", description: "Structural pattern to match, e.g. 'foo($A)'." },
       out: { type: "string", description: "Replacement template; $NAME / $$$NAME expand to captured text." },
-      lang: { type: "string", description: "Optional language hint (reserved; the built-in matcher is language-agnostic)." },
+      lang: { type: "string", description: "Optional language or extension hint selecting the lexer family (e.g. rust/rs for lifetimes, py/python/sh/yaml for # comments); default is inferred from the file extension, else C-like." },
     },
     required: ["path", "pat", "out"],
   },
@@ -101,6 +101,11 @@ export const astEditTool: Tool = {
       // report success for a partial or unscanned file.
       if (rewrite.skipped === "pattern-too-large") {
         return fail("pattern is too large for the structural matcher (nothing written)");
+      }
+      if (rewrite.skipped === "budget") {
+        return fail(
+          `refused: the pattern exceeded the structural matcher's work budget on ${rel} (too many '$$$' holes or too ambiguous); nothing written. Make the pattern more specific.`,
+        );
       }
       if (rewrite.skipped !== null) {
         return fail(

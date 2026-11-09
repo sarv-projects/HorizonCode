@@ -239,4 +239,30 @@ describe("ast_search tool", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe("pat is required");
   });
+
+  test("a budget-cut scan prints a notice instead of 'No matches.'", async () => {
+    const ws = makeWorkspace({ "big.ts": "a b c d e f g h ".repeat(300) });
+    const r = await withoutRipgrep(() =>
+      astSearchTool.execute({ pat: "$$$A $$$B zzz" }, mockToolContext({ cwd: ws })),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("work budget");
+    expect(r.output).toContain("results are incomplete");
+  });
+
+  test("files with unterminated strings get a lexing-uncertain notice", async () => {
+    const ws = makeWorkspace({ "l.lisp": "(foo 'bar)\n(foo baz)\n" });
+    const r = await withoutRipgrep(() => astSearchTool.execute({ pat: "foo($A)" }, mockToolContext({ cwd: ws })));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[lexing uncertain in 1 file(s)");
+    const clean = makeWorkspace({ "c.ts": "foo(bar)\n" });
+    const r2 = await withoutRipgrep(() => astSearchTool.execute({ pat: "foo($A)" }, mockToolContext({ cwd: clean })));
+    expect(r2.output).not.toContain("lexing uncertain");
+  });
+
+  test("lang description mentions the lexer family", () => {
+    const d = (astSearchTool.parameters as any).properties.lang.description as string;
+    expect(d).toContain("lexer family");
+    expect(d).not.toContain("for an external ast-grep backend");
+  });
 });
