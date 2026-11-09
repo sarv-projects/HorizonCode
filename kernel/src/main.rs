@@ -9,6 +9,7 @@
 
 mod canon;
 mod eventlog;
+mod execpolicy;
 mod guard;
 mod permm;
 mod protocol;
@@ -376,6 +377,44 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             checks.check("guard.lease echo * -> allow", false);
             eprintln!("selftest: {}", e);
         }
+    }
+
+    // 8b. command allowlist (FEAT-002): with no allowlist file a shell command
+    // still asks; a runtime amend of a deny rule then denies the same command
+    // BEFORE the policy would ask. Uses its own hermetic state dir so the main
+    // selftest chains are untouched.
+    {
+        let allow_dir = scratch.join("selftest-allowlist");
+        let akernel = Kernel::new_with_anchor(&allow_dir, anchor.clone());
+        let before = call(
+            &akernel,
+            "guard.check",
+            json!({ "action": { "kind": "shell.exec", "target": "rm -rf /" }, "scope": "workspace" }),
+        );
+        checks.check(
+            "allowlist absent -> shell.exec asks",
+            matches!(&before, Ok(d) if d.get("decision").and_then(|v| v.as_str()) == Some("ask")),
+        );
+        let amended = call(
+            &akernel,
+            "guard.allowlist.amend",
+            json!({ "rule": { "program": "rm", "args": ["-rf"], "decision": "deny" } }),
+        );
+        checks.check(
+            "allowlist amend appends a deny rule",
+            matches!(&amended, Ok(d) if d.get("changed").and_then(|v| v.as_bool()) == Some(true)),
+        );
+        let after = call(
+            &akernel,
+            "guard.check",
+            json!({ "action": { "kind": "shell.exec", "target": "rm -rf /" }, "scope": "workspace" }),
+        );
+        checks.check(
+            "allowlist deny wins before policy for shell.exec",
+            matches!(&after, Ok(d)
+                if d.get("decision").and_then(|v| v.as_str()) == Some("deny")
+                    && d.get("reason").and_then(|v| v.as_str()).map(|r| r.contains("allowlist deny")).unwrap_or(false)),
+        );
     }
 
     // 9. protocol robustness: unknown method and malformed request never crash

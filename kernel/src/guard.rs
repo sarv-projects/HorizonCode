@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::execpolicy::{self, Decision};
+pub use crate::execpolicy::{network_rule_from_value, prefix_rule_from_value};
 use crate::time::{iso_from_unix_millis, now_millis, parse_iso_millis};
 
 type Rule = (&'static str, &'static str, &'static str);
@@ -243,6 +245,59 @@ impl Guard {
             });
         }
 
+        // Command allowlist (FEAT-002, docs/11 R1): for shell.exec ONLY, consult
+        // the declarative allowlist BEFORE the policy rules so an allowlist
+        // `deny` wins (R1) and an allowlist `allow` can admit. A non-match or an
+        // `ask` returns `None`/`Ask` and falls through to the EXISTING flow
+        // unchanged — so shell.exec with no allowlist file present behaves
+        // EXACTLY as today (ask). A malformed allowlist is a typed refusal
+        // (fail closed), never silently ignored.
+        if action.kind == "shell.exec" {
+            // Reduced-form argv split: whitespace tokenization. Wrapper
+            // unwrapping (env/timeout/...), quote handling and a tree-sitter
+            // per-segment split are DEFERRED (residual recorded in docs/28); a
+            // conservative whitespace split never widens authority because a
+            // non-match falls through to the ask default.
+            let argv: Vec<String> = action
+                .target
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            if !argv.is_empty() {
+                let policy = execpolicy::load(&self.state_dir)
+                    .map_err(|e| PolicyError::Allowlist(e.to_string()))?;
+                if let Some(policy) = policy {
+                    match policy.evaluate_command(&argv) {
+                        Some(Decision::Deny) => {
+                            return Ok(GuardDecision {
+                                decision: "deny".to_string(),
+                                reason: format!(
+                                    "allowlist deny: {} matches a deny rule (fingerprint {})",
+                                    action.target,
+                                    policy.fingerprint()
+                                ),
+                                lease_id: None,
+                            });
+                        }
+                        Some(Decision::Allow) => {
+                            return Ok(GuardDecision {
+                                decision: "allow".to_string(),
+                                reason: format!(
+                                    "allowlist allow: {} matches an allow rule (fingerprint {})",
+                                    action.target,
+                                    policy.fingerprint()
+                                ),
+                                lease_id: None,
+                            });
+                        }
+                        // Ask or None: no allowlist admission — fall through to
+                        // the existing policy/lease/grant/ask flow unchanged.
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         let scope = scope.filter(|s| !s.is_empty()).unwrap_or("*");
         let now_ms = now_millis();
 
@@ -338,6 +393,37 @@ impl Guard {
             ),
             lease_id: None,
         })
+    }
+
+    /// Append an allowlist prefix rule at runtime (FEAT-002). File-locked
+    /// append-dedup under `<state-dir>/allowlist.json`; the rule's own examples
+    /// are validated before it is persisted (codex R8). Returns
+    /// `(changed, fingerprint)`: `changed` is false when the rule was already
+    /// present (dedup). A malformed-on-disk allowlist is a typed refusal.
+    pub fn amend_allow_prefix_rule(
+        &self,
+        rule: &execpolicy::PrefixRule,
+    ) -> Result<(bool, String), PolicyError> {
+        let changed = execpolicy::amend_allow_prefix_rule(&self.state_dir, rule)
+            .map_err(|e| PolicyError::Allowlist(e.to_string()))?;
+        let policy = execpolicy::load(&self.state_dir)
+            .map_err(|e| PolicyError::Allowlist(e.to_string()))?
+            .unwrap_or_default();
+        Ok((changed, policy.fingerprint()))
+    }
+
+    /// Append an allowlist network rule at runtime (FEAT-002). As
+    /// `amend_allow_prefix_rule`, dedup-by-content under the advisory lock.
+    pub fn amend_network_rule(
+        &self,
+        rule: &execpolicy::NetworkRule,
+    ) -> Result<(bool, String), PolicyError> {
+        let changed = execpolicy::amend_network_rule(&self.state_dir, rule)
+            .map_err(|e| PolicyError::Allowlist(e.to_string()))?;
+        let policy = execpolicy::load(&self.state_dir)
+            .map_err(|e| PolicyError::Allowlist(e.to_string()))?
+            .unwrap_or_default();
+        Ok((changed, policy.fingerprint()))
     }
 
     /// Create and remember a lease; returns it with a fresh uuid v4 id. `owner`
@@ -459,6 +545,11 @@ pub enum PolicyError {
     /// rewrite this policy in place — path checks cannot see hard links. A
     /// policy that another name can rewrite is refused, not served.
     Hardlinked(String),
+    /// The command allowlist (`<state-dir>/allowlist.json`) is present but
+    /// malformed. Surfaced through the SAME typed-refusal channel as a bad
+    /// `policy.json` (fail closed, never silently ignored); the message is the
+    /// `execpolicy::AllowlistError` display, already `HZ_PRECONDITION_FAILED`.
+    Allowlist(String),
 }
 
 impl std::fmt::Display for PolicyError {
@@ -484,6 +575,9 @@ impl std::fmt::Display for PolicyError {
                 "HZ_PRECONDITION_FAILED: {}: policy.json must have exactly one link (metadata nlink > 1); refusing to serve a policy another name can rewrite",
                 path
             ),
+            // The AllowlistError display is already a typed HZ_PRECONDITION_FAILED
+            // string; pass it through verbatim so the bad-rule index survives.
+            PolicyError::Allowlist(detail) => write!(f, "{}", detail),
         }
     }
 }
