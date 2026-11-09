@@ -214,6 +214,25 @@ function argString(args: Record<string, unknown>, ...names: string[]): string | 
 }
 
 /**
+ * The first file path an `apply_patch` body names, for a stable coarse
+ * admission target (the tool re-guards every file itself). Reads only the
+ * freeform grammar's `*** Add/Update/Delete File:` headers; returns undefined
+ * when none is present (a malformed patch the parser will reject downstream).
+ */
+function firstApplyPatchPath(input: string): string | undefined {
+  for (const raw of input.split("\n")) {
+    const line = raw.trim();
+    for (const marker of ["*** Add File: ", "*** Update File: ", "*** Delete File: "]) {
+      if (line.startsWith(marker)) {
+        const p = line.slice(marker.length).trim();
+        if (p !== "") return p;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * The guard action a tool call implies, using the same path resolution the tools
  * themselves use. Every registered tool appears in the mapping table below or
  * in `SESSION_STATE_TOOLS`; a tool with neither is refused before execution
@@ -244,6 +263,19 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
     case "edit": {
       const file = argString(args, "path", "file_path", "file");
       return file ? { kind: "fs.write", target: resolved(file) } : undefined;
+    }
+    case "apply_patch": {
+      // The patch text carries one or more file operations; the tool issues a
+      // per-file `fs.write` guard for every one of them. The coarse loop-level
+      // admission is a single `fs.write` keyed to the first file the patch
+      // names (so the approval and the cache have a stable target), falling
+      // back to a digest of the patch when no path can be read out.
+      const input = typeof args.input === "string" ? args.input : "";
+      const first = firstApplyPatchPath(input);
+      return {
+        kind: "fs.write",
+        target: first !== undefined ? resolved(first) : `apply_patch ${sha256Hex(input).slice(0, 16)}`,
+      };
     }
     case "shell":
     case "bash": {
