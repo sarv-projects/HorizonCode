@@ -1537,7 +1537,7 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 | `ToolDeclarationV1` anatomy and mandatory fields | DESIGNED | §2.1, §3.1, §11.1 |
 | Declaration generation from one source of truth + completeness gate | DESIGNED | §2.2, §11.1 |
 | Registry, namespace ranks, resolution algorithm | DESIGNED | §2.3, §3.2, §11.2 |
-| `tool_search` deferred discovery and admission | DESIGNED (reduced form TESTED — §2.4.1, FEAT-002: additive `Tool.exposure`/`searchInfo`, data-driven `tool_search`, per-session discovery; `preview` ships Deferred) | §2.4, §2.4.1, §3.3, §11.2; `docs/28` ruling 40 |
+| `tool_search` deferred discovery and admission | DESIGNED (reduced form TESTED — §2.4.1, FEAT-002: additive `Tool.exposure`/`searchInfo`, data-driven `tool_search`, per-session discovery; `preview` ships Deferred) | §2.4, §2.4.1, §3.3, §11.2; `docs/28` ruling 45 |
 | Execution pipeline + per-stage fail-closed rules | DESIGNED | §2.5, §3.4, §7.1, §11.3 |
 | Settlement, `UNKNOWN` and reconciliation hand-off | DESIGNED | §2.5 (R-tools-36/37), §7.1, §11.3 |
 | Origin typing (`SessionBatch` / `UserAction` / `ManagedRun` / `ManagedRoot`) | DESIGNED | §2.5 (R-tools-38), §9.5 |

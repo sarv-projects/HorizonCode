@@ -309,7 +309,7 @@ impl Guard {
         // origin + DenySource) BEFORE policy; an Allow admits; an Ask or an
         // observe-mode AllowAndRecord falls through to the existing net.fetch
         // flow (observe mode admits without blocking; the content-free record
-        // emission is deferred to the egress proxy per docs/28 ruling 41, so the
+        // emission is deferred to the egress proxy per docs/28 ruling 43, so the
         // would-be verdict is not surfaced in the reason today).
         // An unparseable target is a DENY candidate (fail closed).
         // A malformed egress.json is a typed refusal (fail closed), never
@@ -317,7 +317,7 @@ impl Guard {
         //
         // Spawn-with-network intent is NOT cleanly derivable from a spawn
         // target here, so this consult is scoped to net.fetch; spawn-with-network
-        // is a documented follow-up (docs/28 ruling 41).
+        // is a documented follow-up (docs/28 ruling 43).
         if action.kind == "net.fetch" {
             if let Some(policy) =
                 egress::load(&self.state_dir).map_err(|e| PolicyError::Egress(e.to_string()))?
@@ -352,7 +352,7 @@ impl Guard {
                         // flow so the policy-layer answer (ask, by default)
                         // stands. The would-be verdict is intentionally NOT
                         // surfaced here: content-free record emission is deferred
-                        // to the egress proxy (docs/28 ruling 41), so `would` is
+                        // to the egress proxy (docs/28 ruling 43), so `would` is
                         // dropped for now.
                         let _ = would;
                     }

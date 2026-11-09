@@ -56,7 +56,7 @@
 // consumers are the runtime admission seam (shell.exec/spawn GuardDecision
 // metadata and the TUI approval prompt that actually widens a single call) and
 // a model-facing tool surface, which are a DEFERRED follow-up (see the module
-// header and docs/28 ruling 42): the kernel reports the fail-closed posture
+// header and docs/28 ruling 44): the kernel reports the fail-closed posture
 // over `sandbox.report` today, the one-shot widen wires later. They are
 // exercised by the `#[cfg(test)]` suite below; `allow(dead_code)` documents
 // that they are contract-and-data now, wiring later, rather than accidentally

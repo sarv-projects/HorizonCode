@@ -1,5 +1,5 @@
 /**
- * speculation.test.ts — Tier-3 speculative execution coordinator (docs/28 ruling 44).
+ * speculation.test.ts — Tier-3 speculative execution coordinator (docs/28 ruling 47).
  *
  * The whole point is a SAFETY invariant, and these tests make it checkable:
  *  (a) normalizeSpeculationEffect REJECTS any effect that is not pure or

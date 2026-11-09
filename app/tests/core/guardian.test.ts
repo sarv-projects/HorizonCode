@@ -1,6 +1,6 @@
 /**
  * guardian.test.ts — Tier-3 guardian: deterministic verdicts, advisory by
- * default, opt-in enforcing, capability-detected fallback (docs/28 ruling 45).
+ * default, opt-in enforcing, capability-detected fallback (docs/28 ruling 48).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
