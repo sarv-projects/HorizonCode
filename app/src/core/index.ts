@@ -283,14 +283,36 @@ class HzRuntimeImpl implements HzRuntime {
         ? `${plan.skipped.length} change(s) cannot be put back (content not kept, or the change created the file) and were left as they are`
         : "";
     if (restorable.length === 0) {
-      const summary =
-        `nothing to rewind to checkpoint ${n}: no restorable change was recorded after it` +
+      // No file to put back, but the conversational rewind still applies: a
+      // rewind to a checkpoint with no later file changes must still cut the
+      // transcript back to the checkpoint's boundary (FEAT-002). Boundary-safe,
+      // same invariant as above.
+      const truncation = this.store.truncateMessages(this.session.id, checkpoint.messageIndex);
+      const transcriptNote =
+        truncation.removed > 0
+          ? `removed ${truncation.removed} transcript message(s)` +
+            (truncation.adjustedTo !== checkpoint.messageIndex
+              ? ` (boundary moved earlier to ${truncation.adjustedTo} to keep a tool-call group whole)`
+              : "")
+          : "removed no transcript messages";
+      const fileNote =
+        `no restorable change was recorded after checkpoint ${n}` +
         (skippedNote === "" ? "" : ` \u2014 ${skippedNote}`);
+      const summary =
+        truncation.removed > 0
+          ? `rewound to checkpoint ${n}: ${transcriptNote} \u2014 ${fileNote}`
+          : `nothing to rewind to checkpoint ${n}: ${fileNote} \u2014 ${transcriptNote}`;
       await this.append(streamFor(this.session.id), "rewind.plan", {
         checkpoint: checkpoint.id,
         restored: [],
         refused: [],
         skipped: plan.skipped.map((s) => s.rel),
+      });
+      await this.append(streamFor(this.session.id), "rewind.conversation", {
+        checkpoint: checkpoint.id,
+        messageIndex: checkpoint.messageIndex,
+        removed: truncation.removed,
+        adjustedTo: truncation.adjustedTo,
       });
       return summary;
     }
@@ -364,6 +386,16 @@ class HzRuntimeImpl implements HzRuntime {
         this.note(`could not issue a receipt for the rewound write ${item.rel}: ${errorMessage(err)}`);
       }
     }
+    // FEAT-002 conversational rewind, ADDITIVE to the file-side restore above
+    // (wave-14c shipped the file side only). The checkpoint recorded the
+    // session's message count at the boundary; truncate the transcript back to
+    // it. `truncateMessages` is boundary-safe: it never leaves a dangling
+    // assistant tool_call in the kept prefix (it moves the cut earlier if the
+    // naive boundary would split a tool-call group), so the kept history stays
+    // provider-replayable. The kernel event log stays append-only — the rewind
+    // is recorded below as a NEW forward event, never a log edit.
+    const truncation = this.store.truncateMessages(this.session.id, checkpoint.messageIndex);
+
     const parts: string[] = [
       restored.length > 0
         ? `restored ${restored.length} change(s) from before checkpoint ${n}: ${restored.join(", ")}`
@@ -371,12 +403,30 @@ class HzRuntimeImpl implements HzRuntime {
     ];
     if (refused.length > 0) parts.push(`refused ${refused.length}: ${refused.join("; ")}`);
     if (skippedNote !== "") parts.push(skippedNote);
+    if (truncation.removed > 0) {
+      const adjusted =
+        truncation.adjustedTo !== checkpoint.messageIndex
+          ? ` (boundary moved earlier to ${truncation.adjustedTo} to keep a tool-call group whole)`
+          : "";
+      parts.push(`removed ${truncation.removed} transcript message(s)${adjusted}`);
+    } else {
+      parts.push("removed no transcript messages");
+    }
     const summary = parts.join(" \u2014 ");
     await this.append(streamFor(this.session.id), "rewind.apply", {
       checkpoint: checkpoint.id,
       restored,
       refused,
       skipped: plan.skipped.map((s) => s.rel),
+    });
+    // Append-only forward audit event for the conversational truncation. The
+    // past log records are untouched; this records that the rewind happened and
+    // what it removed, so `verify` still passes and the history is auditable.
+    await this.append(streamFor(this.session.id), "rewind.conversation", {
+      checkpoint: checkpoint.id,
+      messageIndex: checkpoint.messageIndex,
+      removed: truncation.removed,
+      adjustedTo: truncation.adjustedTo,
     });
     return summary;
   }
