@@ -105,7 +105,10 @@ describe("tool exposure gating", () => {
 
   test("(d) a Hidden tool is NEVER in toolSpecs() and a CodeModeOnly tool is excluded too", () => {
     __resetToolDiscoveryForTests();
-    // Use a local fixture tool to assert the filter without registering it.
+    // Register real fixtures in the actual registry and assert through the real
+    // toolSpecs()/getTool — so this guards the registry's own hidden /
+    // code_mode_only branch, not a reimplemented copy of the filter. Restored
+    // in a finally so the registry is left exactly as found.
     const hidden: Tool = {
       name: "hidden-fixture",
       description: "never exposed",
@@ -122,15 +125,29 @@ describe("tool exposure gating", () => {
     };
     expect(exposureOf(hidden)).toBe("hidden");
     expect(exposureOf(codeModeOnly)).toBe("code_mode_only");
-    // Simulate inclusion in the registry gate: neither passes the Direct/discovered filter.
-    const gated = (t: Tool): boolean => {
-      const e = exposureOf(t);
-      if (e === "direct") return true;
-      if (e === "deferred") return isDiscovered(SESSION, t.name);
-      return false;
-    };
-    expect(gated(hidden)).toBe(false);
-    expect(gated(codeModeOnly)).toBe(false);
+    tools.push(hidden, codeModeOnly);
+    try {
+      // getTool resolves them (dispatch is not gated by exposure)...
+      expect(getTool("hidden-fixture")).toBeDefined();
+      expect(getTool("cmo-fixture")).toBeDefined();
+      // ...but the real spec builder never exposes them, with or without a
+      // session, and even after an attempted discovery of their names.
+      for (const sid of [undefined, SESSION]) {
+        const names = toolSpecs(sid).map((s) => s.name);
+        expect(names).not.toContain("hidden-fixture");
+        expect(names).not.toContain("cmo-fixture");
+      }
+      discoverDeferredTools(SESSION, ["hidden-fixture", "cmo-fixture"]);
+      const afterDiscovery = toolSpecs(SESSION).map((s) => s.name);
+      expect(afterDiscovery).not.toContain("hidden-fixture");
+      expect(afterDiscovery).not.toContain("cmo-fixture");
+    } finally {
+      tools.splice(tools.indexOf(hidden), 1);
+      tools.splice(tools.indexOf(codeModeOnly), 1);
+    }
+    // The registry is back to its original shape.
+    expect(getTool("hidden-fixture")).toBeUndefined();
+    expect(getTool("cmo-fixture")).toBeUndefined();
   });
 
   test("deferredSearchCandidates is data-driven and includes preview", () => {
