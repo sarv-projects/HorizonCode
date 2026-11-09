@@ -49,6 +49,8 @@ import { instructionPrompt, loadInstructionBlocks } from "./instructions";
 // staged diffs with /changes and applies them with /apply (each apply passes
 // the ordinary guard/approval path).
 import { stageWrite, unifiedDiff } from "./plan";
+import { computeTurnDiff } from "./turn-diff";
+import { liveEntries } from "../tools/change-journal";
 // The MCP tool registry (docs/09 §4.7): mcp__ tools admit as `mcp.invoke`.
 import { mcpAdmissionFor } from "./mcp/registry";
 // Hooks v1 (docs/15 H2–H4 reduced form): pre/post tool middleware that can
@@ -1746,6 +1748,13 @@ export async function runTurn(
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) break;
 
+      // FEAT-003: capture the journal boundary just before the turn's tool
+      // batch runs. The entries this session can see now are the "before" set;
+      // anything appended while the batch runs is a change THIS turn made. Plan
+      // mode stages writes without recording to the journal, so a plan-mode
+      // turn produces no new entries and therefore no turn.diff.
+      const journalBoundary = new Set(liveEntries(deps.sessionId).map((e) => (e as { id?: string }).id));
+
       // NF-072: shared calls in a segment run concurrently; an exclusive call
       // is its own barrier. All-settled: one call's failure cancels no sibling.
       for (const segment of batchSegments(turn.toolCalls)) {
@@ -1775,6 +1784,25 @@ export async function runTurn(
         );
         if (fatal) break;
       }
+      // FEAT-003: the entries recorded during THIS turn are those appended
+      // since the boundary above. Aggregate them into one net diff per file and
+      // emit a single turn.diff event, independent of per-tool output. Only
+      // when at least one file actually changed (files > 0); a read-only turn,
+      // or a plan-mode turn that only staged, emits nothing. This is a UI/
+      // runtime facade event (see contracts.ts), not a durable kernel event.
+      try {
+        const turnEntries = liveEntries(deps.sessionId).filter((e) => !journalBoundary.has((e as { id?: string }).id));
+        if (turnEntries.length > 0) {
+          const { diff, files, truncated } = computeTurnDiff(turnEntries);
+          if (files > 0) {
+            emit(deps.callbacks, { type: "turn.diff", turn: calls, files, diff, truncated });
+          }
+        }
+      } catch {
+        // The turn diff is a best-effort observability surface: never let it
+        // break the run. A failure here just means no turn.diff for this turn.
+      }
+
       if (fatal) {
         exit = { terminal: "failed", detail: "internal_error" };
         break;
