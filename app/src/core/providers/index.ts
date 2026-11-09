@@ -18,10 +18,13 @@ import { createGoogleProvider } from "./google";
 import { createMockProvider } from "./mock";
 import { createOllamaProvider } from "./ollama";
 import { createOpenAiProvider } from "./openai";
+import { createOpenAiCompatibleProvider } from "./openai-compatible";
 
 export { createMockProvider, MOCK_GREETING } from "./mock";
 export { createAnthropicProvider, toAnthropicMessages, toAnthropicTools } from "./anthropic";
 export { createOpenAiProvider, toOpenAiMessages, toOpenAiTools } from "./openai";
+export { createOpenAiCompatibleProvider } from "./openai-compatible";
+export type { OpenAiCompatibleOptions } from "./openai-compatible";
 export { createGoogleProvider, toGoogleContents, toGoogleTools } from "./google";
 export { createOllamaProvider, toOllamaMessages, toOllamaTools } from "./ollama";
 
@@ -67,6 +70,19 @@ function unknownProviderProvider(id: string, validNames: readonly string[]): Pro
 /** The provider the runtime will talk to. */
 export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): Provider {
   if (opts.mockFlag) return createMockProvider();
+
+  // A registered (config-declared) provider resolves to the generic
+  // openai-compatible adapter — endpoint + credential as DATA, never code. An
+  // entry that wanted a key but could not find one reports it the same way a
+  // built-in does; a keyless entry (kind "none", no key declared) streams.
+  const resolved = config.resolved;
+  if (resolved) {
+    if (resolved.credential.kind === "none" && resolved.wantsKey) {
+      return missingKeyProvider(resolved.name, "HZ_API_KEY or the provider's envKey");
+    }
+    return createOpenAiCompatibleProvider({ name: resolved.name, baseUrl: resolved.baseUrl, credential: resolved.credential });
+  }
+
   switch (config.provider) {
     case "anthropic":
       return config.apiKey
