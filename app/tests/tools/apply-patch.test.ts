@@ -95,6 +95,23 @@ describe("apply_patch parser", () => {
     expect(parse("*** Add File: a.txt\n+hi").ok).toBe(false);
     expect(parse("*** Begin Patch\n*** Add File: a.txt\n+hi").ok).toBe(false);
   });
+
+  test("flags a move destination that collides with another named op (issue 3)", () => {
+    // '*** Move to: b.txt' targets b.txt, which the patch also Adds -> collision.
+    const r = parse(wrap("*** Add File: b.txt\n+seed\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-x\n+y"));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("Duplicate move destination for file: b.txt");
+  });
+
+  test("flags two move destinations onto the same path (issue 3)", () => {
+    const r = parse(
+      wrap("*** Update File: a.txt\n*** Move to: z.txt\n@@\n-x\n+y\n*** Update File: b.txt\n*** Move to: z.txt\n@@\n-p\n+q"),
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("Duplicate move destination for file: z.txt");
+  });
 });
 
 /* ------------------------------ canonicalize ------------------------------ */
@@ -156,6 +173,79 @@ describe("apply_patch effects", () => {
     expect(existsSync(path.join(ws, "a.txt"))).toBe(false);
     expect(readFixture(ws, "b.txt")).toBe("x\nY\n");
     expect(r.output).toContain("moved 1");
+  });
+});
+
+/* ---------------------- create-path overwrite safety (issue 1) ------------ */
+
+describe("apply_patch create-path overwrite safety", () => {
+  test("Add File onto an existing path is refused (no overwrite, no data loss)", async () => {
+    const ws = makeWorkspace({ "a.txt": "original\n" });
+    const ctx = mockToolContext({ cwd: ws });
+    const r = await applyPatchTool.execute({ input: wrap("*** Add File: a.txt\n+clobber") }, ctx);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("Add File refused");
+    expect(r.error).toContain("already exists");
+    // The original content is untouched.
+    expect(readFixture(ws, "a.txt")).toBe("original\n");
+  });
+
+  test("a move onto an existing destination journals the destination's real preimage", async () => {
+    const ws = makeWorkspace({ "a.txt": "x\ny\n", "dest.txt": "DESTINATION-ORIGINAL\n" });
+    const ctx = await ctxHavingRead(ws, ["a.txt"]);
+    const { lastChangeFor } = await import("../../src/tools/change-journal");
+    const r = await applyPatchTool.execute(
+      { input: wrap("*** Update File: a.txt\n*** Move to: dest.txt\n@@\n x\n-y\n+Y") },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    // The destination was overwritten with the moved content ...
+    expect(readFixture(ws, "dest.txt")).toBe("x\nY\n");
+    // ... but the journal recorded its real preimage so undo can restore it
+    // (NOT `before: null`, which is the data-loss bug this fix closes).
+    const entry = lastChangeFor(ctx.sessionId, path.join(ws, "dest.txt"));
+    expect(entry).toBeDefined();
+    expect(entry?.before).toBe("DESTINATION-ORIGINAL\n");
+  });
+
+  test("a move onto a brand-new destination still journals before: null", async () => {
+    const ws = makeWorkspace({ "a.txt": "x\ny\n" });
+    const ctx = await ctxHavingRead(ws, ["a.txt"]);
+    const { lastChangeFor } = await import("../../src/tools/change-journal");
+    const r = await applyPatchTool.execute(
+      { input: wrap("*** Update File: a.txt\n*** Move to: fresh.txt\n@@\n x\n-y\n+Y") },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    const entry = lastChangeFor(ctx.sessionId, path.join(ws, "fresh.txt"));
+    expect(entry).toBeDefined();
+    expect(entry?.before).toBe(null);
+  });
+});
+
+/* --------------------- partial application across ops (issue 2) ----------- */
+
+describe("apply_patch partial application reporting", () => {
+  test("a mid-patch failure names the ops that already applied", async () => {
+    const ws = makeWorkspace({ "a.txt": "keep\n" });
+    const ctx = await ctxHavingRead(ws, ["a.txt"]);
+    // Op 1 (update a.txt) succeeds; op 2 (Add File onto the now-existing b.txt
+    // we create in op... ) — instead use op 2 = Delete of a missing file, which
+    // fails its preimage read, after op 1 already wrote.
+    const r = await applyPatchTool.execute(
+      {
+        input: wrap("*** Update File: a.txt\n@@\n-keep\n+done\n*** Delete File: missing.txt"),
+      },
+      ctx,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("file not found");
+    expect(r.error).toContain("already applied before this failure");
+    expect(r.error).toContain("updated a.txt");
+    // Op 1's write did land (there is no cross-op rollback — the named residual).
+    expect(readFixture(ws, "a.txt")).toBe("done\n");
   });
 });
 

@@ -211,10 +211,15 @@ export function parse(text: string): ParseResult {
       i += 1;
 
       let movePath: string | undefined;
-      // An optional '*** Move to:' immediately follows the Update header.
+      // An optional '*** Move to:' immediately follows the Update header. The
+      // destination is a path the patch WRITES, so it joins the duplicate set:
+      // a move onto a path the patch otherwise names (or onto another move
+      // target) is a collision and is flagged exactly like a duplicate op.
       if (i < rawLines.length && (rawLines[i] as string).startsWith(PATCH_MARKERS.moveTo)) {
         movePath = (rawLines[i] as string).slice(PATCH_MARKERS.moveTo.length).trim();
         if (movePath === "") return err("apply_patch: Move to requires a path");
+        const moveDup = noteDuplicate("move destination", movePath);
+        if (moveDup !== undefined) return err(moveDup);
         i += 1;
       }
 

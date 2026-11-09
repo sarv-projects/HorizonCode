@@ -25,9 +25,26 @@
  * Line endings: a LOCAL helper normalises to LF for matching and detects a
  * file's dominant ending for the write-back (another stream owns the shared
  * line-endings module; this module deliberately does not import it).
+ *
+ * Create-path safety (mirrors write.ts's discipline, implemented locally so
+ * this module does not import write.ts): an `*** Add File:` whose target
+ * already exists is REFUSED — the grammar means "new file", and silently
+ * overwriting would destroy content with no undo preimage. A move DESTINATION
+ * that already exists is not refused (a move may legitimately replace a file),
+ * but its real bytes are read and JOURNALLED as the `before` preimage so undo
+ * can restore the clobbered content; a brand-new destination journals
+ * `before: null` as before.
+ *
+ * NAMED RESIDUAL — cross-op atomicity: a multi-op patch applies its ops in
+ * source order and returns on the FIRST failure, so ops that already succeeded
+ * stay written to disk; there is no all-or-nothing staging/rollback across ops.
+ * Each individual effect is still undoable via the change journal, and the
+ * failure message names which ops already applied so the model/user can
+ * recover. Full staging-and-atomic-commit across ops is deliberately left as a
+ * follow-up.
  */
 
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
@@ -67,6 +84,14 @@ function fromLines(lines: string[], eol: "\r\n" | "\n"): string {
 }
 
 /* ------------------------------- fuzz ladder ------------------------------ */
+
+/** True when `resolved` names an existing filesystem entry (file, dir, …). */
+async function pathExists(resolved: string): Promise<boolean> {
+  return stat(resolved).then(
+    () => true,
+    () => false,
+  );
+}
 
 /** Confinement: the resolved path must stay inside the workspace/cwd. */
 function escapesCwd(cwd: string, resolved: string): boolean {
@@ -304,6 +329,16 @@ async function applyOp(
     const resolved = resolvePath(ctx.cwd, op.path);
     const rel = relPath(ctx.cwd, resolved);
     if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
+    // Add File means a NEW file: refuse when the target already exists rather
+    // than silently clobbering content we have no undo preimage for. (write.ts
+    // enforces the same read-before-overwrite discipline; here the grammar is
+    // stricter — Add never overwrites.)
+    if (await pathExists(resolved)) {
+      return {
+        ok: false,
+        error: `apply_patch: Add File refused: ${rel} already exists (Add File creates a new file; use '*** Update File:' to modify it)`,
+      };
+    }
     const guarded = await guardAndPreimage(resolved, rel, "Add", false, ctx);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
     const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
@@ -359,8 +394,15 @@ async function applyOp(
   const destResolved = resolvePath(ctx.cwd, op.movePath);
   const destRel = relPath(ctx.cwd, destResolved);
   if (escapesCwd(ctx.cwd, destResolved)) return { ok: false, error: `apply_patch: move destination escapes the workspace: ${op.movePath}` };
-  const destGuarded = await guardAndPreimage(destResolved, destRel, "Create", false, ctx);
+  // A move may legitimately land on an existing file. Unlike Add File we do not
+  // refuse, but we must NOT journal `before: null` and silently destroy the
+  // destination's content: read its real bytes first (when `needsPreimage`,
+  // guardAndPreimage returns that preimage) so undo can restore what the move
+  // clobbered. A brand-new destination returns `before: null` as before.
+  const destExists = await pathExists(destResolved);
+  const destGuarded = await guardAndPreimage(destResolved, destRel, "Create", destExists, ctx);
   if (destGuarded.ok !== true) return { ok: false, error: destGuarded.error };
+  const destBefore = destGuarded.before; // the clobbered file's real preimage, or null for a new file
   const outcome = await writeAtomic(destResolved, after, ctx);
   if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
   try {
@@ -368,11 +410,21 @@ async function applyOp(
   } catch (e) {
     return { ok: false, error: `apply_patch: moved content to ${destRel} but could not remove ${rel}: ${msg(e)}` };
   }
-  recordChange(ctx.sessionId, { path: destResolved, rel: destRel, before: null, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
+  recordChange(ctx.sessionId, { path: destResolved, rel: destRel, before: destBefore, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
   recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
   noteRead(ctx, destResolved);
   summary.moved.push(`${rel} -> ${destRel}`);
   return { ok: true, fuzz };
+}
+
+/** A compact "added X; updated Y; …" list of ops that already landed, for the error. */
+function summarizeApplied(summary: { added: string[]; updated: string[]; deleted: string[]; moved: string[] }): string {
+  const parts: string[] = [];
+  if (summary.added.length > 0) parts.push(`added ${summary.added.join(", ")}`);
+  if (summary.updated.length > 0) parts.push(`updated ${summary.updated.join(", ")}`);
+  if (summary.deleted.length > 0) parts.push(`deleted ${summary.deleted.join(", ")}`);
+  if (summary.moved.length > 0) parts.push(`moved ${summary.moved.join(", ")}`);
+  return parts.join("; ");
 }
 
 export const applyPatchTool: Tool = {
@@ -405,9 +457,17 @@ export const applyPatchTool: Tool = {
       const warnings: PatchWarning[] = [];
       let fuzz = 0;
 
+      // Ops apply in source order. There is NO cross-op rollback (named residual
+      // in this module's header), so on a mid-patch failure the ops that already
+      // landed stay on disk — name them in the error so the caller can recover
+      // (each is individually undoable via the change journal).
       for (const op of parsed.patch.ops) {
         const r = await applyOp(op, ctx, summary, warnings);
-        if (r.ok !== true) return fail(r.error);
+        if (r.ok !== true) {
+          const applied = summarizeApplied(summary);
+          const note = applied === "" ? "no ops were applied before this failure" : `already applied before this failure: ${applied}`;
+          return fail(`${r.error} (${note})`);
+        }
         fuzz = Math.max(fuzz, r.fuzz);
       }
 
