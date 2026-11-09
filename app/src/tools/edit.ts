@@ -13,6 +13,7 @@ import { sha256Hex } from "../core/canon";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { detectLineEnding } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
 
 function fail(error: string): ToolResult {
@@ -47,6 +48,143 @@ function replaceFirst(hay: string, oldStr: string, next: string): string {
   const i = hay.indexOf(oldStr);
   if (i === -1) return hay;
   return hay.slice(0, i) + next + hay.slice(i + oldStr.length);
+}
+
+/* ------------------------------ CRLF / LF view ----------------------------- */
+
+/**
+ * CRLF safety (FEAT-001). Every rung matches against an LF VIEW of the file
+ * (before.replaceAll("\r\n","\n")), the same bytes `read` shows the model, so a
+ * CRLF or mixed-ending file neither blocks a match nor leaks "\r" into the
+ * old/new strings. On write, untouched regions keep their exact original bytes
+ * and the replacement block takes the matched region's native ending, so a CRLF
+ * file is NEVER rewritten to LF wholesale (per-region preservation, like
+ * opencode's withRegionEndings).
+ *
+ * The exact path maps view offsets back to the original bytes through the list
+ * of removed-"\r" positions; the fuzzy path works on a line model that carries
+ * each original line's own ending alongside the LF-view lines.
+ *
+ * An explicit endings-only escape (old/new differ only in "\r") is intentionally
+ * OUT OF SCOPE for FEAT-001: with LF-only old/new strings there is nothing to
+ * request a bare ending flip, the normalisation already keeps endings stable,
+ * and adding the branch would carry no test surface in this feature. FEAT-002
+ * may revisit it.
+ */
+const CRLF = "\r\n";
+
+/** The LF view of `source`, plus the ascending SOURCE offsets of each removed "\r". */
+interface LfView {
+  view: string;
+  removed: number[];
+}
+
+function toLfView(source: string): LfView {
+  if (!source.includes("\r")) return { view: source, removed: [] };
+  let view = "";
+  const removed: number[] = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === "\r" && source[i + 1] === "\n") {
+      removed.push(i); // drop the "\r"; the "\n" is copied next iteration
+      continue;
+    }
+    view += source[i];
+  }
+  return { view, removed };
+}
+
+/**
+ * Map a view offset back to the original source offset. Each removed "\r" that
+ * sat before the mapped point shifts the source offset by +1. `removed` holds
+ * SOURCE offsets; the i-th removed "\r" sat after (removed[i] - i) view chars,
+ * so count how many removed entries precede `viewOffset` view chars.
+ */
+function viewToSource(removed: number[], viewOffset: number): number {
+  let low = 0;
+  let high = removed.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if ((removed[mid] as number) - mid < viewOffset) low = mid + 1;
+    else high = mid;
+  }
+  return viewOffset + low;
+}
+
+/**
+ * Exact-path replacement that preserves endings: match on the LF view, map the
+ * matched view offsets back to source offsets, and give the replacement the
+ * ending detected over the matched source region. Untouched source bytes are
+ * copied verbatim, so CRLF survives outside the edit. For a pure-LF file this
+ * is byte-identical to the old slice-and-splice.
+ */
+function replaceExactPreserving(source: string, lf: LfView, oldLf: string, newLf: string, all: boolean): string {
+  let out = "";
+  let viewFrom = 0;
+  let srcFrom = 0;
+  for (;;) {
+    const i = lf.view.indexOf(oldLf, viewFrom);
+    if (i === -1) break;
+    const srcStart = viewToSource(lf.removed, i);
+    const srcEnd = viewToSource(lf.removed, i + oldLf.length);
+    const regionEnding = detectLineEnding(source.slice(srcStart, srcEnd));
+    out += source.slice(srcFrom, srcStart) + newLf.split("\n").join(regionEnding);
+    viewFrom = i + oldLf.length;
+    srcFrom = srcEnd;
+    if (!all) break;
+  }
+  return out + source.slice(srcFrom);
+}
+
+/**
+ * The fuzzy rungs index lines exactly as the pre-CRLF code did:
+ * fileLines = lf.view.split("\n"). That array has a trailing "" when the view
+ * ends in "\n", and every reported line number / candidate window stays
+ * byte-identical to the A-5 fixtures. The only new thing tracked alongside it
+ * is each line break's ORIGINAL ending bytes so the splice can restore them.
+ *
+ * endings[k] is the ending that followed fileLines[k] in the source ("\r\n",
+ * "\n", or "" when there was no break after it). There is one fewer break than
+ * fileLines has entries, so the final entry's ending is "".
+ */
+interface FuzzyModel {
+  fileLines: string[];
+  endings: string[];
+}
+
+function fuzzyModel(source: string, view: string): FuzzyModel {
+  const fileLines = view.split("\n");
+  const endings: string[] = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === "\n") endings.push(i > 0 && source[i - 1] === "\r" ? CRLF : "\n");
+  }
+  endings.push(""); // the final view line has no trailing break
+  return { fileLines, endings };
+}
+
+/**
+ * Splice `replacement` (LF-view lines) into the file between view-line indices
+ * [start, end]. Untouched head/tail lines are rejoined with their ORIGINAL
+ * endings, so a CRLF file stays CRLF everywhere it is not edited. The
+ * replacement block takes the ending detected over the matched region's native
+ * endings; the break that followed the region's last line (endings[end]) is
+ * preserved on the replacement's last line (it may be "" at an unterminated
+ * EOF), matching the old join-on-"\n" shape for a pure-LF file.
+ */
+function spliceWithEndings(model: FuzzyModel, start: number, end: number, replacement: string[]): string {
+  // Detect over the matched region's break bytes (joined with a non-break filler
+  // so detectLineEnding only sees the endings themselves).
+  const regionEnding = detectLineEnding(model.endings.slice(start, end).join("x"));
+  const tailBoundaryEnding = model.endings[end] as string;
+  let out = "";
+  for (let k = 0; k < start; k += 1) out += (model.fileLines[k] as string) + (model.endings[k] as string);
+  for (let r = 0; r < replacement.length; r += 1) {
+    const last = r === replacement.length - 1;
+    out += (replacement[r] as string) + (last ? tailBoundaryEnding : regionEnding);
+  }
+  for (let k = end + 1; k < model.fileLines.length; k += 1) {
+    out += (model.fileLines[k] as string) + (model.endings[k] as string);
+  }
+  return out;
 }
 
 /**
@@ -325,16 +463,25 @@ export const editTool: Tool = {
         return fail(`file not found: ${rel}`);
       }
 
-      const matches = countOccurrences(before, oldStr);
+      // CRLF safety: match against the LF VIEW the model sees. The old/new
+      // strings are normalised to LF too (models emit LF; this is defensive
+      // against a stray "\r"), and every rung below works on the view.
+      const lf = toLfView(before);
+      const oldLf = oldStr.replaceAll(CRLF, "\n");
+      const newLf = newStr.replaceAll(CRLF, "\n");
+
+      const matches = countOccurrences(lf.view, oldLf);
       let after: string;
       let rung: EditRung = "exact";
 
       if (matches > 0) {
         if (matches > 1 && !all) {
-          const lines = occurrenceLines(before, oldStr).join(", ");
+          const lines = occurrenceLines(lf.view, oldLf).join(", ");
           return fail(`found ${matches} matches in ${rel} (lines ${lines}); set all:true or provide more context`);
         }
-        after = all ? replaceAll(before, oldStr, newStr) : replaceFirst(before, oldStr, newStr);
+        // Splice into the ORIGINAL bytes, giving the replacement the matched
+        // region's native ending; untouched regions keep their exact endings.
+        after = replaceExactPreserving(before, lf, oldLf, newLf, all);
       } else {
         // Read-before-write (audit finding 2), applied where the guesswork is: an
         // exact-string edit carries its own preimage text, but a fuzzy rung
@@ -353,9 +500,12 @@ export const editTool: Tool = {
         reflections.set(key, attempts);
         const fuzzyDisabled = attempts > MAX_EDIT_REFLECTIONS;
 
-        const fileLines = before.split("\n");
-        const oldLines = oldStr.split("\n");
-        const newLines = newStr.split("\n");
+        // The fuzzy rungs match on the LF view's lines, carried by a model that
+        // also tracks each original line's native ending for the splice.
+        const model = fuzzyModel(before, lf.view);
+        const fileLines = model.fileLines;
+        const oldLines = oldLf.split("\n");
+        const newLines = newLf.split("\n");
 
         let found: Candidate | null = null;
         if (!fuzzyDisabled) {
@@ -381,7 +531,9 @@ export const editTool: Tool = {
         rung = found.rung;
         const window = fileLines.slice(found.start, found.end + 1);
         const replacement = reindent(newLines, commonIndentPrefix(window));
-        after = [...fileLines.slice(0, found.start), ...replacement, ...fileLines.slice(found.end + 1)].join("\n");
+        // Splice into the original line model: head/tail lines keep their exact
+        // bytes, the replacement block takes the matched region's native ending.
+        after = spliceWithEndings(model, found.start, found.end, replacement);
       }
 
       const replacements = matches > 0 ? (all ? matches : 1) : 1;
