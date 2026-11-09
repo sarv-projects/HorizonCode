@@ -22,12 +22,13 @@
  *     responsibility for the replacement.
  */
 
-import { readFile, mkdir, stat, type Stats } from "node:fs/promises";
+import { readFile, mkdir, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { realpathish } from "../core/paths";
-import { writeAtomic } from "./atomic-write";
+import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { noteRead, wasRead } from "./read-ledger";
@@ -76,7 +77,12 @@ function describeChange(before: Snapshot, after: Snapshot): string {
 
 /** True when the buffer is valid UTF-8: decode and re-encode must be lossless. */
 function isUtf8(buf: Uint8Array): boolean {
-  return Buffer.from(buf.toString("utf8"), "utf8").equals(Buffer.from(buf));
+  // Decode as UTF-8 and re-encode: a lossless round-trip means the bytes were
+  // valid UTF-8. The original bytes are wrapped as a Buffer view (over the same
+  // backing store, no copy) so the comparison typechecks under both the
+  // @types/bun and @types/node `Buffer.from` overloads.
+  const original = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+  return Buffer.from(original.toString("utf8"), "utf8").equals(original);
 }
 
 export const writeTool: Tool = {
@@ -195,7 +201,7 @@ export const writeTool: Tool = {
 
       await mkdir(path.dirname(resolved), { recursive: true });
       const outcome = await writeAtomic(resolved, content, ctx);
-      if (!outcome.ok) return fail(outcome.refusal);
+      if (isRefused(outcome)) return fail(outcome.refusal);
 
       recordChange(ctx.sessionId, {
         path: resolved,

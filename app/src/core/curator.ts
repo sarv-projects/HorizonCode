@@ -544,7 +544,7 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
   const list = Array.isArray(proposals) ? proposals : [];
   list.forEach((candidate, index) => {
     const verdict = validateProposal(candidate, transcript);
-    if (!verdict.ok) {
+    if (verdict.ok === false) {
       result.refused.push({ index, reason: verdict.reason, detail: verdict.detail });
       return;
     }

@@ -167,7 +167,7 @@ export async function fetchWithRetry(
       await delay(waitMs, signal);
     } catch (err) {
       lastError = err;
-      if (signal?.aborted === true || attempt >= attempts) throw err;
+      if (signal?.aborted || attempt >= attempts) throw err;
       const waitMs = backoffDelay(attempt, { baseDelayMs, maxDelayMs, retryAfterMs: null });
       policy.onRetry?.({ attempt, error: err, delayMs: waitMs });
       await delay(waitMs, signal);

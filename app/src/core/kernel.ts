@@ -1012,10 +1012,10 @@ export class LocalKernel {
    * would consult it and one approval would admit two effects. The Rust kernel
    * mints identically (`mint_bound_lease`).
    */
-  private mintBoundLease(kind: GuardKind, target: string, grant: Lease, now: number): Lease {
+  private mintBoundLease(kind: GuardKind, target: string, grant: OwnedLease, now: number): OwnedLease {
     const grantRemaining = Date.parse(grant.expiry) - now;
     const ttl = Math.min(BOUND_LEASE_MS, Number.isFinite(grantRemaining) ? Math.max(0, grantRemaining) : 0);
-    const lease: Lease = {
+    const lease: OwnedLease = {
       leaseId: newId(),
       kind,
       pattern: target,

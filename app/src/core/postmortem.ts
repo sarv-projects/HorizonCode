@@ -318,7 +318,10 @@ export async function recordPostmortem(input: RecordPostmortemInput): Promise<Po
   }
   const transcript = normalizeTranscript(input.transcript);
   const toolCalls = normalizeToolCalls(input.toolCalls);
-  const detail = typeof input.detail === "string" && input.detail !== "" ? input.detail : null;
+  // PostmortemDetail is a closed set of non-empty string literals (see its
+  // definition above), so `typeof === "string"` already excludes undefined and
+  // every admissible value is non-empty — the former `!== ""` guard was dead.
+  const detail = typeof input.detail === "string" ? input.detail : null;
   const now =
     typeof input.now === "number" && Number.isSafeInteger(Math.floor(input.now)) ? Math.floor(input.now) : Date.now();
 

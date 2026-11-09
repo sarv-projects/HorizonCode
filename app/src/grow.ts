@@ -105,7 +105,7 @@ import { scopeFor } from "./core/loop";
 import { kernelStateDir, workspaceStateDir } from "./core/paths";
 import { loadPostmortems, postmortemPath, type PostmortemRecord } from "./core/postmortem";
 import { TITLE_MAX_CHARS, type ReviewProposalV1 } from "./core/review";
-import { writeAtomic } from "./tools/atomic-write";
+import { isRefused, writeAtomic } from "./tools/atomic-write";
 import { recordChange } from "./tools/change-journal";
 import { noteRead } from "./tools/read-ledger";
 
@@ -548,7 +548,7 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
     return 2;
   }
   const found = findProposal(load.proposals, idArg);
-  if (!found.ok) {
+  if (found.ok === false) {
     if (found.reason === "ambiguous") {
       io.err(`--apply ${idArg}: ambiguous; it matches ${found.candidates.length} proposals: ${found.candidates.join(", ")}`);
     } else {
@@ -628,7 +628,7 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
     await mkdir(path.dirname(target), { recursive: true });
     const ctx = growToolContext(kernel, workspace);
     const outcome = await writeAtomic(target, content, ctx);
-    if (!outcome.ok) {
+    if (isRefused(outcome)) {
       io.err(`write failed: ${outcome.refusal}`);
       return 1;
     }

@@ -26,7 +26,8 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { lstat, open, readFile, rename, stat, unlink, type FileHandle, type Stats } from "node:fs/promises";
+import { lstat, open, readFile, rename, stat, unlink, type FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import type { ToolContext } from "../contracts";
 import { realpathish } from "../core/paths";
@@ -39,6 +40,15 @@ function msg(e: unknown): string {
 export type AtomicWriteOutcome =
   | { ok: true; openedAs: string; bytes: number }
   | { ok: false; refusal: string };
+
+/**
+ * Narrow an outcome to its refusal arm. The native TS7 compiler does not
+ * narrow this discriminated union on a bare `!outcome.ok`, so callers that
+ * need `outcome.refusal` use this guard to reach the `{ ok: false }` member.
+ */
+export function isRefused(outcome: AtomicWriteOutcome): outcome is Extract<AtomicWriteOutcome, { ok: false }> {
+  return !outcome.ok;
+}
 
 /** Same file, by device + inode. `undefined` when either side is missing. */
 export function sameIdentity(a: Stats | undefined, b: Stats | undefined): boolean {
