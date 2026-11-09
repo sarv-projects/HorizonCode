@@ -47,8 +47,21 @@ import { kernelStateDir as resolveKernelStateDir } from "./paths";
 import { birthIdentityOf, readProcessFacts, type ProcessIdentity } from "./worker-identity";
 import { startOwnerDeathSupervisor } from "./supervisor";
 
-/** The Bun subprocess type, narrowed to what callers use (pid/stdio/kill/exited). */
-export type OwnedProc = ReturnType<typeof Bun.spawn>;
+/**
+ * The Bun subprocess type, narrowed to what callers use (pid/stdio/kill/exited).
+ *
+ * `Bun.spawn` types stdout/stderr as `number | ReadableStream` because the
+ * stdio mode is only known at runtime. spawnOwned pins `stdin:'ignore'` and
+ * `stdout:'pipe'`/`stderr:'pipe'` by default (see the single Bun.spawn call
+ * below), so for the owned path those two streams are always ReadableStreams.
+ * We reflect that in the type so callers can consume them without re-narrowing
+ * a `number` branch that this path never produces. Callers that opt into a
+ * different mode (`ignore`/`inherit`) must guard themselves.
+ */
+export type OwnedProc = Omit<ReturnType<typeof Bun.spawn>, "stdout" | "stderr"> & {
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
+};
 
 export type SpawnStdio = "pipe" | "ignore" | "inherit";
 

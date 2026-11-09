@@ -75,7 +75,7 @@ import {
   type CheckpointView,
 } from "./checkpoints";
 import { consumeChange, reloadFromDisk } from "../tools/change-journal";
-import { writeAtomic } from "../tools/atomic-write";
+import { isRefused, writeAtomic } from "../tools/atomic-write";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -342,7 +342,7 @@ class HzRuntimeImpl implements HzRuntime {
         }
       }
       const outcome = await writeAtomic(entry.path, entry.before, ctx);
-      if (!outcome.ok) {
+      if (isRefused(outcome)) {
         refused.push(`${item.rel}: ${outcome.refusal.split("\n")[0]}`);
         continue;
       }

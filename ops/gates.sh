@@ -14,6 +14,7 @@
 #   kernel-selftest       kernel/target/release/hz-kernel --selftest
 #                         --state-dir <fresh tmpdir> (release-built first when
 #                         the binary is absent)
+#   ts-typecheck          bun run typecheck in app/ (tsc --noEmit)
 #   ts-suite              bun test in app/
 #   e2e-headless-smoke    printf 'list files' | ./bin/hzcode --workspace <fresh>
 #                         -> exit 0, the mock's tool exchange in the output, and
@@ -99,6 +100,7 @@ fi
 GATES=(
   rust-kernel-suite
   kernel-selftest
+  ts-typecheck
   ts-suite
   e2e-headless-smoke
   e2e-budget-rail
@@ -164,6 +166,16 @@ gate_kernel_selftest() {
   local state
   state="$(mktemp -d "$WORK_DIR/selftest.XXXXXX")"
   "$bin" --selftest --state-dir "$state"
+}
+
+gate_ts_typecheck() {
+  if [ -z "$BUN" ]; then
+    printf 'bun not found — looked on PATH and at $HOME/.bun/bin/bun\n'
+    return 1
+  fi
+  # tsc --noEmit (via the app's "typecheck" script): a type error is a gate
+  # failure before the suite ever runs, so a RED compile fails fast and cheap.
+  ( cd "$ROOT/app" && "$BUN" run typecheck )
 }
 
 gate_ts_suite() {

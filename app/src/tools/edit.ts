@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
-import { writeAtomic } from "./atomic-write";
+import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { noteRead, wasRead } from "./read-ledger";
@@ -421,7 +421,7 @@ export const editTool: Tool = {
       // header of ./verified-open.ts). Not `truncate(0)` + `write`: a crash between
       // those two calls left the file at ZERO BYTES with nothing able to restore it.
       const outcome = await writeAtomic(resolved, after, ctx);
-      if (!outcome.ok) return fail(outcome.refusal);
+      if (isRefused(outcome)) return fail(outcome.refusal);
       const verified = (await readFile(resolved)).toString("utf8") === after;
       if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 

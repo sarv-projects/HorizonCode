@@ -1201,7 +1201,7 @@ function projectChange(
     return { ok: false, error: "edit requires old and new strings" };
   }
   const projected = projectExactEdit(before, args.old, args.new, args.all === true);
-  if (!projected.ok) {
+  if (projected.ok === false) {
     return {
       ok: false,
       error: `edit: ${projected.error} in ${rel} — while staging only the exact rung is available; use write with the full intended content, or exit plan mode`,
@@ -1222,7 +1222,7 @@ function planModeOutcome(
   }
   if (name !== "write" && name !== "edit") return undefined;
   const projected = projectChange(name, args, deps.workspace);
-  if (!projected.ok) {
+  if (projected.ok === false) {
     const message = `plan mode: ${projected.error}`;
     return { result: { ok: false, output: message, error: message } };
   }
