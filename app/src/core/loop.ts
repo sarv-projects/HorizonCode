@@ -349,11 +349,13 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       return { kind: "shell.exec", target: command };
     }
     case "shell_session": {
-      // The interactive-exec tool, modelled exactly on preview's admission:
-      // `start` runs a command, so it is the same shell.exec admission the tool
-      // itself performs (one approval, not two). `write` and `close` only touch
-      // an already-admitted live session (admitted at its start), so they are
-      // session-state — never a second shell.exec for the same command.
+      // The interactive-exec tool: `start` runs a command, so it is the same
+      // shell.exec admission the tool itself performs (one approval, not two).
+      // `write` is NOT covered by the start approval: a live shell/REPL runs
+      // whatever is typed, so the tool admits each input line as its own
+      // shell.exec (target = the line) before writing, and the call is
+      // session-state here only because one call can carry several lines (the
+      // tool, not this table, does the per-line admission). `close` only kills.
       const sessionMode = argString(args, "mode");
       const sessionCommand = argString(args, "command");
       if (sessionMode !== "start" || sessionCommand === undefined) return undefined;
@@ -394,7 +396,9 @@ export function taskHead(text: string, max = 120): string {
  * mirror): they are mapped — never silently unguarded — but need no kernel
  * guard action. `todo` is session state; `preview`'s spawn path is guarded as
  * described in the mapping above; `undo` reads the session's own change journal
- * to find its target and guards that entry inside the tool.
+ * to find its target and guards that entry inside the tool. `shell_session`
+ * `write`/`close` are mapped here and `write` guards each typed input line as
+ * shell.exec inside the tool (a start approval never covers later input).
  */
 export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session", "tool_search"] as const;
 
