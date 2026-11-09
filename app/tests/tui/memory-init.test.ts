@@ -228,4 +228,20 @@ describe("/memory lazy listing", () => {
     runMemoryCommand("memory", root, d.renderer, { home, sessionId: "other" });
     expect(d.plain()).not.toContain("loaded this session");
   });
+
+  test("lists nested files skipped because the lazy budget is used up", () => {
+    const { root, home } = repo();
+    put(root, "AGENTS.md", "root rules");
+    const big = `${"q".repeat(99)}\n`.repeat(400);
+    for (let i = 0; i < 6; i += 1) put(root, `d${i}/AGENTS.md`, `${i}\n${big}`);
+    const eager = loadInstructionBlocks(root, { home }).blocks;
+    const lazy = lazyInstructionsFor(root, "sess-budget", eager);
+    for (let i = 0; i < 6; i += 1) lazy.discover(`d${i}/f.ts`);
+    const skipped = lazy.skippedForBudget();
+    expect(skipped.length).toBeGreaterThan(0);
+    const c = capture();
+    runMemoryCommand("memory", root, c.renderer, { home, sessionId: "sess-budget" });
+    const out = c.plain();
+    for (const rel of skipped) expect(out).toContain(`nested, not loaded (lazy budget used up): ${rel}`);
+  });
 });
