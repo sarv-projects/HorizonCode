@@ -113,6 +113,8 @@ function selfContainedSearch(
   let skippedLarge = 0;
   let skippedBudget = 0;
   let lexUncertain = 0;
+  // One work budget for the whole call: total stall is bounded regardless of file count.
+  const budget = { steps: 0 };
 
   const scanFile = (abs: string, rel: string): void => {
     if (globMatch && !globMatch(rel)) return;
@@ -128,7 +130,7 @@ function selfContainedSearch(
       return;
     }
     const source = buf.toString("utf8");
-    const scan = scanPattern(pat, source, { lang: lang ?? langFromPath(abs) });
+    const scan = scanPattern(pat, source, { lang: lang ?? langFromPath(abs), budget });
     if (scan.skipped === "budget") {
       skippedBudget += 1;
       return;
@@ -381,7 +383,7 @@ export const astSearchTool: Tool = {
         }
         if (self.skippedBudget > 0) {
           notices.push(
-            `[skipped: ${self.skippedBudget} file(s) exceeded the matcher work budget (pattern too ambiguous, e.g. several '$$$'); results are incomplete]`,
+            `[skipped: ${self.skippedBudget} file(s) not scanned or cut short by the matcher work budget (pattern too ambiguous or file too repetitive); results are incomplete]`,
           );
         }
         if (self.lexUncertain > 0) {
