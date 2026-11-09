@@ -20,6 +20,14 @@
  * NF-073 budget rails: `RunBudget` / `RunExit` are the v0.1 shape of the loop
  * safety rails (docs/24 §B NF-073; docs/28 §3 ruling 15).
  *
+ * Provider credentials: `Credential` (Providers section) is the additive v0.1
+ * shape for how a provider is authenticated. v1 implements `apiKey` and `none`
+ * fully (the existing env/config key resolution feeds `apiKey`; `ollama` is
+ * `none`). The `oauth` arm is RESERVED, not yet used by any code path — it is
+ * declared now so later additive OAuth work (PKCE loopback + token refresh,
+ * following opencode `plugin/provider/chatgpt.ts`) extends an existing contract
+ * rather than making a second breaking change to this LAW file.
+ *
  * Kernel state layout (under --state-dir; default `<workspace>/.hz/state/kernel`
  * canonical, or `<workspace>/.hzcode/kernel` in a legacy workspace, honoured in
  * place — the rule lives in app/src/core/paths.ts):
@@ -225,6 +233,17 @@ export interface Provider {
   name: string;
   stream(req: ProviderRequest): AsyncIterable<ProviderEvent>;
 }
+
+/**
+ * How a provider is authenticated (additive v0.1 shape; see the file header).
+ * v1 implements `apiKey` and `none`; `oauth` is RESERVED for later additive
+ * OAuth work (PKCE loopback + token refresh) and is not yet consumed by any
+ * code path.
+ */
+export type Credential =
+  | { kind: "apiKey"; value: string }
+  | { kind: "oauth"; accessToken: string; refreshToken?: string; expiresAt?: string }
+  | { kind: "none" };
 
 /* -------------------------- Runtime facade (UI) -------------------------- */
 
