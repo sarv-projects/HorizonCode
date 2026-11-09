@@ -17,7 +17,10 @@
  *   - `$NAME`      captures exactly ONE source token (an identifier, number,
  *                  string literal or a single punctuation token).
  *   - `$$$NAME`    captures a (possibly EMPTY) run of consecutive source tokens
- *                  — the variadic capture, for argument lists and bodies.
+ *                  — the variadic capture, for argument lists and bodies. It is
+ *                  matched SHORTEST-first over bracket-balanced `() [] {}` spans,
+ *                  so `foo($$$A)` ends at that call's own `)`. A trailing
+ *                  `$$$A` with nothing after it therefore binds the empty run.
  *   - any other pattern token (an identifier, number, string literal or a
  *                  punctuation token) matches the SAME token verbatim.
  *   - whitespace between pattern tokens is insignificant: `foo( $A )` and
@@ -39,7 +42,7 @@
  * ledger, the atomic write and the spawn admission on top of this.
  */
 
-/** Largest source this matcher will tokenize (bytes). Larger -> empty result. */
+/** Largest source this matcher will tokenize (bytes). Larger -> `skipped: "too-large"`, never "no match". */
 export const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 /** Largest token count accepted for source or pattern. */
 export const MAX_TOKENS = 200_000;
@@ -57,10 +60,18 @@ export interface Token {
   byteStart: number;
   /** Byte offset one past the last character of the token in the source. */
   byteEnd: number;
+  /** UTF-16 index of the first character of the token in the source string. */
+  idxStart: number;
+  /** UTF-16 index one past the last character of the token. */
+  idxEnd: number;
   /** 1-based line of the first character. */
   line: number;
   /** 1-based column (in UTF-16 code units) of the first character. */
   column: number;
+  /** 1-based line of the position one past the last character. */
+  endLine: number;
+  /** 1-based column one past the last character (correct for multi-line tokens). */
+  endColumn: number;
 }
 
 /** One structural match returned by matchPattern. */
@@ -77,11 +88,54 @@ export interface Match {
   metaVariables: Record<string, string>;
 }
 
+/** Why a source could not be scanned at all (never "no match"). */
+export type SkipReason = "too-large" | "too-many-tokens" | "pattern-too-large";
+
 /** Result of rewriteMatches: the transformed text, the match count and ranges. */
 export interface RewriteResult {
   text: string;
   count: number;
   changes: Array<{ byteStart: number; byteEnd: number; before: string; after: string }>;
+  /** True when MAX_MATCHES was hit and more matches exist: the rewrite is PARTIAL. */
+  truncated: boolean;
+  /** Set when the source/pattern was too large to scan (count is then 0 but NOT "no match"). */
+  skipped: SkipReason | null;
+  /** Count of string tokens that ran unterminated (ambiguous lexing for this language). */
+  lexIssues: number;
+}
+
+/** Lexical family: which comment / quote conventions the tokenizer applies. */
+export type LangFamily = "c" | "rust" | "hash";
+
+export interface LexOptions {
+  /** Language hint or file extension (`rs`, `py`, `.ts`, ...). Unknown -> "c" family. */
+  lang?: string;
+}
+
+const RUST_LANGS = new Set(["rs", "rust"]);
+const HASH_LANGS = new Set(["py", "python", "rb", "ruby", "sh", "bash", "zsh", "yml", "yaml", "toml"]);
+
+/** Map a language hint (`rust`, `.py`, `ts`, ...) to a lexical family. */
+export function langFamily(lang: string | undefined): LangFamily {
+  if (!lang) return "c";
+  const l = lang.toLowerCase().replace(/^\./, "");
+  if (RUST_LANGS.has(l)) return "rust";
+  if (HASH_LANGS.has(l)) return "hash";
+  return "c";
+}
+
+/** Language hint from a file path's extension (no dot), or undefined. */
+export function langFromPath(file: string): string | undefined {
+  const base = file.slice(file.lastIndexOf("/") + 1);
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1) : undefined;
+}
+
+export interface LexResult {
+  tokens: Token[];
+  /** String tokens that hit a newline/EOF before their closing quote. */
+  unterminated: number;
+  skipped: SkipReason | null;
 }
 
 const IDENT_START = /[A-Za-z_$]/;
@@ -98,18 +152,29 @@ function isWhitespace(ch: string): boolean {
  * tokens. Whitespace is discarded (its only role is to separate tokens); byte
  * offsets and 1-based line/column are tracked so matches report real ranges.
  *
- * The lexer is intentionally language-agnostic and small: it recognises the
- * cross-language lexical shapes (C-like identifiers incl. `$`/`_`, decimal and
- * `0x`/`0b`/float numbers, `'`/`"`/backtick string literals with backslash
- * escapes, line `//` and block `/* * /` comments skipped as whitespace) and
- * treats every other non-whitespace character as a single-character
- * punctuation token. It is NOT a full parser — it is the structural granularity
- * ast-grep-style matching needs without a grammar per language.
+ * Lexical conventions follow a small language FAMILY (see `langFamily`):
+ *   - "c" (default): `//` and block comments; `'` `"` strings end at a newline
+ *     (an unterminated one is counted in `unterminated`); backtick strings may
+ *     span lines.
+ *   - "rust": as "c", but a `'` is a char literal only when it is `'x'` or
+ *     `'\..'`; otherwise it is a lifetime tick (punctuation), so `<'a>` does not
+ *     swallow the code after it.
+ *   - "hash" (Python, Ruby, shell, YAML, TOML): `#` line comments; no `//` or
+ *     block comments (Python `//` is floor division); Python triple-quoted
+ *     strings may span lines.
+ *
+ * It is NOT a full parser: it is the structural granularity ast-grep-style
+ * matching needs without a grammar per language.
  */
-export function tokenize(src: string): Token[] {
+export function lex(src: string, opts: LexOptions = {}): LexResult {
   const tokens: Token[] = [];
-  if (typeof src !== "string") return tokens;
-  if (Buffer.byteLength(src, "utf8") > MAX_SOURCE_BYTES) return tokens;
+  const result: LexResult = { tokens, unterminated: 0, skipped: null };
+  if (typeof src !== "string") return result;
+  if (Buffer.byteLength(src, "utf8") > MAX_SOURCE_BYTES) {
+    result.skipped = "too-large";
+    return result;
+  }
+  const family = langFamily(opts.lang);
 
   const n = src.length;
   let i = 0;
@@ -133,7 +198,10 @@ export function tokenize(src: string): Token[] {
   };
 
   while (i < n) {
-    if (tokens.length > MAX_TOKENS) break;
+    if (tokens.length > MAX_TOKENS) {
+      result.skipped = "too-many-tokens";
+      return result;
+    }
     const ch = src[i] as string;
 
     if (isWhitespace(ch)) {
@@ -141,88 +209,124 @@ export function tokenize(src: string): Token[] {
       continue;
     }
 
-    // Line comment: skip to the newline (treated as whitespace).
-    if (ch === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") advance(1);
-      continue;
-    }
-    // Block comment: skip to the closing */ (treated as whitespace).
-    if (ch === "/" && src[i + 1] === "*") {
-      advance(2);
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) advance(1);
-      if (i < n) advance(2);
-      continue;
+    if (family === "hash") {
+      if (ch === "#") {
+        while (i < n && src[i] !== "\n") advance(1);
+        continue;
+      }
+    } else {
+      // Line comment: skip to the newline (treated as whitespace).
+      if (ch === "/" && src[i + 1] === "/") {
+        while (i < n && src[i] !== "\n") advance(1);
+        continue;
+      }
+      // Block comment: skip to the closing */ (treated as whitespace).
+      if (ch === "/" && src[i + 1] === "*") {
+        advance(2);
+        while (i < n && !(src[i] === "*" && src[i + 1] === "/")) advance(1);
+        if (i < n) advance(2);
+        continue;
+      }
     }
 
     const startByte = byte;
+    const startIdx = i;
     const startLine = line;
     const startColumn = column;
+    const push = (kind: Token["kind"]): void => {
+      tokens.push({
+        kind,
+        text: src.slice(startIdx, i),
+        byteStart: startByte,
+        byteEnd: byte,
+        idxStart: startIdx,
+        idxEnd: i,
+        line: startLine,
+        column: startColumn,
+        endLine: line,
+        endColumn: column,
+      });
+    };
 
-    // String / template literal with backslash escapes.
-    if (ch === '"' || ch === "'" || ch === "`") {
-      const quote = ch;
-      const from = i;
-      advance(1);
-      while (i < n && src[i] !== quote) {
+    // Rust: a `'` that is not a char literal is a lifetime tick (punctuation).
+    if (family === "rust" && ch === "'") {
+      const next = src[i + 1];
+      let charLen = 0; // UTF-16 units of the char literal body, 0 when not a char literal
+      if (next === "\\") {
+        charLen = -1; // escape: scan to the closing quote below
+      } else if (next !== undefined) {
+        const cp = src.codePointAt(i + 1) as number;
+        const w = cp > 0xffff ? 2 : 1;
+        if (src[i + 1 + w] === "'") charLen = w;
+      }
+      if (charLen === 0) {
+        advance(1);
+        push("punct");
+        continue;
+      }
+    }
+
+    // Python triple-quoted strings may span lines.
+    if (family === "hash" && (ch === '"' || ch === "'") && src[i + 1] === ch && src[i + 2] === ch) {
+      advance(3);
+      while (i < n && !(src[i] === ch && src[i + 1] === ch && src[i + 2] === ch)) {
         if (src[i] === "\\" && i + 1 < n) advance(2);
         else advance(1);
       }
-      if (i < n) advance(1); // the closing quote
-      tokens.push({
-        kind: "string",
-        text: src.slice(from, i),
-        byteStart: startByte,
-        byteEnd: byte,
-        line: startLine,
-        column: startColumn,
-      });
+      if (i < n) advance(3);
+      else result.unterminated += 1;
+      push("string");
+      continue;
+    }
+
+    // String / template literal with backslash escapes. `'` and `"` end at a
+    // newline (unterminated); a backtick string may span lines.
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch;
+      advance(1);
+      let closed = false;
+      while (i < n) {
+        const c = src[i] as string;
+        if (c === quote) {
+          closed = true;
+          break;
+        }
+        if (c === "\n" && quote !== "`") break;
+        if (c === "\\" && i + 1 < n) advance(2);
+        else advance(1);
+      }
+      if (closed) advance(1); // the closing quote
+      else result.unterminated += 1;
+      push("string");
       continue;
     }
 
     // Number: decimal / hex / binary / float / exponent. Kept simple: a run of
     // digits, letters (for 0x/0b/e), dots and underscores starting at a digit.
     if (DIGIT.test(ch)) {
-      const from = i;
       while (i < n && /[0-9A-Fa-fxXbBoO._]/.test(src[i] as string)) advance(1);
-      tokens.push({
-        kind: "number",
-        text: src.slice(from, i),
-        byteStart: startByte,
-        byteEnd: byte,
-        line: startLine,
-        column: startColumn,
-      });
+      push("number");
       continue;
     }
 
     // Identifier (letters, digits after the first, `_` and `$`).
     if (IDENT_START.test(ch)) {
-      const from = i;
       while (i < n && IDENT_PART.test(src[i] as string)) advance(1);
-      tokens.push({
-        kind: "identifier",
-        text: src.slice(from, i),
-        byteStart: startByte,
-        byteEnd: byte,
-        line: startLine,
-        column: startColumn,
-      });
+      push("identifier");
       continue;
     }
 
     // Everything else: one punctuation token (single character).
     advance(1);
-    tokens.push({
-      kind: "punct",
-      text: ch,
-      byteStart: startByte,
-      byteEnd: byte,
-      line: startLine,
-      column: startColumn,
-    });
+    push("punct");
   }
 
-  return tokens;
+  return result;
+}
+
+/** Tokenize `src` (see `lex`); a too-large source yields no tokens. */
+export function tokenize(src: string, opts: LexOptions = {}): Token[] {
+  return lex(src, opts).tokens;
 }
 
 /** A pattern token: a literal source token, or a metavariable hole. */
@@ -250,8 +354,10 @@ const META_VARIADIC = /^\$\$\$([A-Za-z_][A-Za-z0-9_]*)$/;
  * one identifier `$A` and `$$$A` as one identifier `$$$A`, so a metavariable is
  * recognised by its text here rather than by re-lexing.
  */
-function parsePattern(pattern: string): PatternPart[] {
-  const toks = tokenize(pattern);
+function parsePattern(pattern: string, opts: LexOptions): { parts: PatternPart[]; skipped: SkipReason | null } {
+  const lexed = lex(pattern, opts);
+  if (lexed.skipped !== null) return { parts: [], skipped: "pattern-too-large" };
+  const toks = lexed.tokens;
   const parts: PatternPart[] = [];
   for (const tok of toks) {
     if (tok.kind === "identifier") {
@@ -268,7 +374,7 @@ function parsePattern(pattern: string): PatternPart[] {
     }
     parts.push({ meta: "literal", token: tok });
   }
-  return parts;
+  return { parts, skipped: null };
 }
 
 /** The source text a span of tokens [from, to) covers, verbatim. */
@@ -276,24 +382,11 @@ function spanText(src: string, tokens: Token[], from: number, to: number): strin
   if (to <= from) return "";
   const first = tokens[from] as Token;
   const last = tokens[to - 1] as Token;
-  return src.slice(byteToIndex(src, first.byteStart), byteToIndex(src, last.byteEnd));
+  return src.slice(first.idxStart, last.idxEnd);
 }
 
-/**
- * Convert a byte offset to a UTF-16 string index. The tokenizer tracks both, so
- * this only runs when a slice is needed; it walks from the start once per call,
- * which is bounded by MAX_SOURCE_BYTES and only used for the (few) emitted
- * matches — never inside the hot match loop.
- */
-function byteToIndex(src: string, byteOffset: number): number {
-  if (byteOffset <= 0) return 0;
-  let byte = 0;
-  for (let idx = 0; idx < src.length; idx += 1) {
-    if (byte >= byteOffset) return idx;
-    byte += Buffer.byteLength(src[idx] as string, "utf8");
-  }
-  return src.length;
-}
+const OPENERS = "([{";
+const CLOSERS = ")]}";
 
 /**
  * Try to match `parts` (pattern) against `tokens` (source) starting at source
@@ -310,7 +403,9 @@ function matchAt(
   const bindings: Record<string, string> = {};
 
   // A small backtracking matcher over the two sequences. Variadic parts are the
-  // only source of nondeterminism; they are matched greedily-then-shrinking.
+  // only source of nondeterminism; they are matched SHORTEST-first and only over
+  // bracket-BALANCED spans, so `foo($$$A)` ends at the call's own `)` and never
+  // runs across sibling calls or out of an enclosing group.
   function go(pi: number, si: number): number | null {
     if (pi === parts.length) return si;
     const part = parts[pi] as PatternPart;
@@ -333,10 +428,22 @@ function matchAt(
       const vari = part as PatternVariadic;
       const prior = bindings[vari.name];
       const hadPrior = prior !== undefined;
-      // Try the longest span first, then shrink, so a trailing literal can still
-      // anchor. Bounded by MAX_VARIADIC_SPAN and the remaining source.
+      // Grow the span one token at a time (shortest viable terminator wins).
+      // A span is a candidate only when its () [] {} nesting is balanced, and
+      // growth stops at a closer that would leave the enclosing group.
+      // Bounded by MAX_VARIADIC_SPAN and the remaining source.
       const maxSpan = Math.min(MAX_VARIADIC_SPAN, tokens.length - si);
-      for (let span = maxSpan; span >= 0; span -= 1) {
+      let depth = 0;
+      for (let span = 0; span <= maxSpan; span += 1) {
+        if (span > 0) {
+          const t = tokens[si + span - 1] as Token;
+          if (t.kind === "punct") {
+            if (OPENERS.includes(t.text)) depth += 1;
+            else if (CLOSERS.includes(t.text)) depth -= 1;
+          }
+          if (depth < 0) break;
+        }
+        if (depth !== 0) continue;
         const captured = spanText(src, tokens, si, si + span);
         if (hadPrior && prior !== captured) continue;
         bindings[vari.name] = captured;
@@ -361,19 +468,42 @@ function matchAt(
   return { end, bindings };
 }
 
-/**
- * Find every structural match of `pattern` in `source`. Matches are
- * non-overlapping and left-to-right: after a match ending at token index `e`,
- * the next search resumes at `e` (or `start + 1` for an empty match, which only
- * a pattern of entirely-empty variadics could produce). Bounded by MAX_MATCHES.
- */
-export function matchPattern(pattern: string, source: string): Match[] {
-  const parts = parsePattern(pattern);
-  const matches: Match[] = [];
-  if (parts.length === 0) return matches;
+/** Outcome of a full scan: the matches plus honest signals about what was NOT done. */
+export interface ScanResult {
+  matches: Match[];
+  /** True when MAX_MATCHES was reached and at least one more match exists. */
+  truncated: boolean;
+  /** Set when the source or pattern was too large to scan (matches is empty). */
+  skipped: SkipReason | null;
+  /** String tokens that ran unterminated in the source (ambiguous lexing). */
+  lexIssues: number;
+}
 
-  const tokens = tokenize(source);
-  if (tokens.length === 0 || tokens.length > MAX_TOKENS) return matches;
+/**
+ * Find every structural match of `pattern` in `source`, reporting truncation
+ * and skips explicitly. Matches are non-overlapping and left-to-right: after a
+ * match ending at token index `e`, the next search resumes at `e` (or
+ * `start + 1` for an empty match, which only a pattern of entirely-empty
+ * variadics could produce). Bounded by MAX_MATCHES.
+ */
+export function scanPattern(pattern: string, source: string, opts: LexOptions = {}): ScanResult {
+  const out: ScanResult = { matches: [], truncated: false, skipped: null, lexIssues: 0 };
+  const pp = parsePattern(pattern, opts);
+  if (pp.skipped !== null) {
+    out.skipped = pp.skipped;
+    return out;
+  }
+  const parts = pp.parts;
+  if (parts.length === 0) return out;
+
+  const lexed = lex(source, opts);
+  out.lexIssues = lexed.unterminated;
+  if (lexed.skipped !== null) {
+    out.skipped = lexed.skipped;
+    return out;
+  }
+  const tokens = lexed.tokens;
+  if (tokens.length === 0) return out;
 
   let si = 0;
   while (si < tokens.length) {
@@ -385,19 +515,22 @@ export function matchPattern(pattern: string, source: string): Match[] {
     const from = si;
     const to = hit.end;
     if (to > from) {
+      if (out.matches.length >= MAX_MATCHES) {
+        out.truncated = true;
+        break;
+      }
       const first = tokens[from] as Token;
       const last = tokens[to - 1] as Token;
-      matches.push({
+      out.matches.push({
         startLine: first.line,
         startColumn: first.column,
-        endLine: last.line,
-        endColumn: last.column + (last.text.length - 0),
+        endLine: last.endLine,
+        endColumn: last.endColumn,
         byteStart: first.byteStart,
         byteEnd: last.byteEnd,
-        text: source.slice(byteToIndex(source, first.byteStart), byteToIndex(source, last.byteEnd)),
+        text: source.slice(first.idxStart, last.idxEnd),
         metaVariables: { ...hit.bindings },
       });
-      if (matches.length >= MAX_MATCHES) break;
       si = to;
     } else {
       // An empty match (all-variadic pattern bound to nothing): advance one
@@ -405,7 +538,12 @@ export function matchPattern(pattern: string, source: string): Match[] {
       si += 1;
     }
   }
-  return matches;
+  return out;
+}
+
+/** Matches only (see `scanPattern` for the truncation / skip signals). */
+export function matchPattern(pattern: string, source: string, opts: LexOptions = {}): Match[] {
+  return scanPattern(pattern, source, opts).matches;
 }
 
 /**
@@ -431,21 +569,53 @@ function expandTemplate(template: string, bindings: Record<string, string>): str
  * number of matches replaced, and the byte ranges that changed. Zero matches
  * returns the source unchanged with count 0.
  */
-export function rewriteMatches(source: string, pattern: string, template: string): RewriteResult {
-  const matches = matchPattern(pattern, source);
-  if (matches.length === 0) return { text: source, count: 0, changes: [] };
+export function rewriteMatches(
+  source: string,
+  pattern: string,
+  template: string,
+  opts: LexOptions = {},
+): RewriteResult {
+  const scan = scanPattern(pattern, source, opts);
+  const matches = scan.matches;
+  const signals = { truncated: scan.truncated, skipped: scan.skipped, lexIssues: scan.lexIssues };
+  if (matches.length === 0) return { text: source, count: 0, changes: [], ...signals };
 
+  // Match ranges are byte offsets; map them to string indices in ONE pass.
+  const idx = byteIndexMap(source, matches);
   const changes: RewriteResult["changes"] = [];
   let out = "";
-  let cursorByte = 0;
-  for (const m of matches) {
+  let cursor = 0;
+  matches.forEach((m, k) => {
+    const [from, to] = idx[k] as [number, number];
     const before = m.text;
     const after = expandTemplate(template, m.metaVariables);
-    out += source.slice(byteToIndex(source, cursorByte), byteToIndex(source, m.byteStart));
+    out += source.slice(cursor, from);
     out += after;
-    cursorByte = m.byteEnd;
+    cursor = to;
     changes.push({ byteStart: m.byteStart, byteEnd: m.byteEnd, before, after });
+  });
+  out += source.slice(cursor);
+  return { text: out, count: matches.length, changes, ...signals };
+}
+
+/** Byte-range -> UTF-16 index range for each (ascending, non-overlapping) match, in one pass. */
+function byteIndexMap(source: string, matches: Match[]): Array<[number, number]> {
+  const res: Array<[number, number]> = [];
+  let byte = 0;
+  let idx = 0;
+  const seek = (target: number): number => {
+    while (idx < source.length && byte < target) {
+      const cp = source.codePointAt(idx) as number;
+      const w = cp > 0xffff ? 2 : 1;
+      byte += Buffer.byteLength(source.slice(idx, idx + w), "utf8");
+      idx += w;
+    }
+    return idx;
+  };
+  for (const m of matches) {
+    const from = seek(m.byteStart);
+    const to = seek(m.byteEnd);
+    res.push([from, to]);
   }
-  out += source.slice(byteToIndex(source, cursorByte));
-  return { text: out, count: matches.length, changes };
+  return res;
 }

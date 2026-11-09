@@ -22,7 +22,7 @@
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
-import { rewriteMatches } from "./ast-match";
+import { MAX_MATCHES, MAX_SOURCE_BYTES, langFromPath, rewriteMatches } from "./ast-match";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
@@ -93,7 +93,32 @@ export const astEditTool: Tool = {
         );
       }
 
-      const rewrite = rewriteMatches(before, pat, out);
+      // Lexical family from the lang hint, else the file extension (Rust
+      // lifetimes, Python/shell `#` comments and `//` floor division).
+      const lang = typeof args.lang === "string" && args.lang !== "" ? args.lang : langFromPath(resolved);
+      const rewrite = rewriteMatches(before, pat, out, { lang });
+      // A rewrite that cannot be COMPLETE and CORRECT must fail loudly, never
+      // report success for a partial or unscanned file.
+      if (rewrite.skipped === "pattern-too-large") {
+        return fail("pattern is too large for the structural matcher (nothing written)");
+      }
+      if (rewrite.skipped !== null) {
+        return fail(
+          `skipped: ${rel} is too large for the structural matcher (limit ${MAX_SOURCE_BYTES} bytes / token cap); nothing written`,
+        );
+      }
+      if (rewrite.truncated) {
+        return fail(
+          `refused: more than ${MAX_MATCHES} structural matches in ${rel}; a partial rewrite would leave the file inconsistent (nothing written). Narrow the pattern.`,
+        );
+      }
+      if (rewrite.lexIssues > 0) {
+        return fail(
+          `refused: ${rel} has ${rewrite.lexIssues} string literal(s) the built-in lexer cannot close on one line ` +
+            `(language-specific quoting?); structural rewrite could mis-pair code (nothing written). ` +
+            `Pass lang or use edit.`,
+        );
+      }
       if (rewrite.count === 0) {
         return fail(`no structural match for the pattern in ${rel} (nothing written)`);
       }
