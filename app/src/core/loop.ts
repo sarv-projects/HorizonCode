@@ -115,6 +115,7 @@ import type { KernelClient } from "./kernel";
 import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import type { PermissionMode } from "./permission-mode";
 import { modeAutoApproves, modeRefusal } from "./permission-mode";
+import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
 
@@ -800,6 +801,22 @@ export class GuardGate {
       this.remember(waiting as GuardAction, { leaseId: undefined });
       if (this.pending !== null && this.pending === waiting) this.pending = null;
       return true;
+    }
+    // Advisory guardian (docs/28 ruling 60): runs only on an ASKED action. It
+    // annotates the prompt; with HORIZON_GUARDIAN=enforce a deny refuses. It
+    // can never grant, and a kernel deny never reaches here.
+    if (waiting) {
+      try {
+        const review = await reviewAction(proposedFromGuardAction(req.kind, waiting), req.title, deterministicClassifier, { mode: guardianModeFromEnv() });
+        if (review.blocked) {
+          if (this.pending !== null && this.pending === waiting) this.pending = null;
+          return false;
+        }
+        const line = guardianLine(review);
+        if (line !== undefined) req = { ...req, guardian: line };
+      } catch {
+        // advisory only: a guardian failure never changes the decision
+      }
     }
     try {
       // The handler sees the action so an "always" answer can be scoped to its

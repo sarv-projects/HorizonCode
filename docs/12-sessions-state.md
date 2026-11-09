@@ -852,3 +852,5 @@ Every path below is `[planned]`: the workspace today holds `kernel/tests/integra
 7. **Re-home upcaster**: the re-home event is `hz.session.moved` (RC-1, `06` §4.6 G-1); what remains is the upcaster for the superseded `created` + `reattachedFrom` encoding at implementation time (`06` §10 item 1).
 
 
+
+> **Guardian surfacing (`docs/28` ruling 60).** Nothing new is persisted; the guardian line is display-only on the approval request.

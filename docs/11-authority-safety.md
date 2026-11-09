@@ -1918,3 +1918,5 @@ Every capability below is **`DESIGNED`** *as a specification claim* — with one
 5. **Local root attacker is out of scope** (§7.17.1). This is a limit, not a defect; it is stated so no reader infers protection we do not provide.
 
 > **Session fork (`docs/28` ruling 59).** A fork is a user action that copies settled history only and writes one `session.fork` event to a new stream; it grants nothing, and the child runs under the process's current mode and config (no wider than a fresh `/new`). Narrowing by parent posture (S-46) is not implemented.
+
+> **Guardian surfacing (`docs/28` ruling 60).** The advisory guardian runs only after the kernel answered "ask" and can only annotate or (with `HORIZON_GUARDIAN=enforce`) refuse a deny-verdict ask; it never grants and never overrides a kernel deny. Model-path inputs are JSON-encoded inside `<data>` delimiters.

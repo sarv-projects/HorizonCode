@@ -787,3 +787,5 @@ Paths use the single planned convention `packages/<pkg>/test/<file>` (`_conventi
 Known inherited limitation that this document MUST NOT paper over: the ancestor kernel refuses two edits to the same file inside one message (`stale_preimage`), which is why R83 mandates sequential application with explicit preimage recomputation rather than a silent bulk apply (source: `/data/home/forge/repo-tour/horizoncode/HANDOFF.md`).
 
 > **Session fork (`docs/28` ruling 59).** `/fork` branches the chat into a new session and switches to it (the notice names both ids); `/fork n` cuts at checkpoint n from `/rewind`; `/sessions` lists recent sessions, marks the current one with `*` and shows `(fork of <id> at message <k>)`. Both need an idle chat.
+
+> **Guardian surfacing (`docs/28` ruling 60).** An approval prompt shows `· guardian: flag - <reason>` (or `deny`) on its own line when the guardian objects; allow shows nothing.
