@@ -2917,3 +2917,145 @@ fn malformed_egress_policy_is_a_typed_refusal() {
         "ask"
     );
 }
+
+/* --------------------------- 9. sandbox-mode ladder --------------------------- */
+
+// FEAT-004: the fail-closed SandboxMode ladder is reachable over the additive
+// NDJSON method `sandbox.report`. On this host (and the gVisor deployment class)
+// there is NO active Landlock LSM, so FS-confined modes (read-only /
+// workspace-write) must FAIL CLOSED: a SANDBOX_UNAVAILABLE outcome by default,
+// or a completeness=partial report with a non-empty residual + explicit backend
+// when the caller opts into a partial boundary — NEVER a silent 'enforced',
+// NEVER silently unconfined. danger-full-access reports no enforced dimension
+// (docs/11 S4). Escalation args are validated (paired + non-empty) before
+// anything. Every test drives the real binary over the NDJSON protocol.
+
+#[test]
+fn sandbox_report_fs_mode_is_unavailable_not_silently_enforced() {
+    let dir = TempDir::new("sandbox-unavailable");
+    let mut kernel = Kernel::start(dir.path());
+
+    for mode in ["read-only", "workspace-write"] {
+        let result = kernel.ok("sandbox.report", json!({ "mode": mode }));
+        assert_eq!(
+            result["status"],
+            json!("sandbox_unavailable"),
+            "FS-confined mode {} must fail closed, not report enforced: {}",
+            mode,
+            result
+        );
+        assert_eq!(result["mode"], json!(mode));
+        let reason = result["reason"].as_str().unwrap_or("");
+        assert!(
+            reason.contains("SANDBOX_UNAVAILABLE"),
+            "the reason must be the typed SANDBOX_UNAVAILABLE outcome: {}",
+            result
+        );
+        assert!(!reason.is_empty(), "the reason must be non-empty: {}", result);
+    }
+}
+
+#[test]
+fn sandbox_report_partial_has_nonempty_residual_and_explicit_backend() {
+    let dir = TempDir::new("sandbox-partial");
+    let mut kernel = Kernel::start(dir.path());
+
+    // A tolerant caller (allowPartial) receives a PARTIAL report with the FS
+    // dimension unsupported, a non-empty residual, and an explicit backend
+    // name or 'none' (docs/11 S2/S5) — never a silent 'enforced'.
+    let result = kernel.ok(
+        "sandbox.report",
+        json!({ "mode": "workspace-write", "allowPartial": true }),
+    );
+    assert_eq!(result["status"], json!("report"), "{}", result);
+    assert_eq!(result["completeness"], json!("partial"), "{}", result);
+    assert_eq!(result["backend"], json!("none"), "{}", result);
+
+    let dims = result["dimensions"].as_array().expect("dimensions array");
+    let fs = dims
+        .iter()
+        .find(|d| d["dimension"] == json!("filesystem"))
+        .expect("a filesystem dimension");
+    assert_eq!(fs["guarantee"], json!("unsupported"), "FS must not be enforced: {}", result);
+    assert_ne!(fs["guarantee"], json!("enforced"));
+    assert_eq!(fs["backend"], json!("none"), "{}", result);
+    assert!(
+        !fs["residual"].as_str().unwrap_or("").is_empty(),
+        "FS residual must be non-empty (docs/11 S2): {}",
+        result
+    );
+
+    // Every below-enforced dimension carries a non-empty residual and an
+    // explicit backend (a name or 'none') — no silent fallback (S5).
+    for d in dims {
+        let backend = d["backend"].as_str().unwrap_or("");
+        assert!(!backend.is_empty(), "backend must be explicit: {}", d);
+        if d["guarantee"] != json!("enforced") {
+            assert!(
+                !d["residual"].as_str().unwrap_or("").is_empty(),
+                "a below-enforced dimension must carry a residual: {}",
+                d
+            );
+        }
+    }
+}
+
+#[test]
+fn sandbox_report_danger_full_access_has_no_enforced_dimension() {
+    let dir = TempDir::new("sandbox-danger");
+    let mut kernel = Kernel::start(dir.path());
+
+    let result = kernel.ok("sandbox.report", json!({ "mode": "danger-full-access" }));
+    assert_eq!(result["status"], json!("report"), "{}", result);
+    assert_eq!(result["backend"], json!("none"), "{}", result);
+    let dims = result["dimensions"].as_array().expect("dimensions array");
+    assert!(
+        dims.iter().all(|d| d["guarantee"] != json!("enforced")),
+        "danger-full-access must report NO enforced dimension (docs/11 S4): {}",
+        result
+    );
+}
+
+#[test]
+fn sandbox_report_validates_escalation_args_over_the_protocol() {
+    let dir = TempDir::new("sandbox-escalation-args");
+    let mut kernel = Kernel::start(dir.path());
+
+    // lone sandbox_permissions (no justification) -> typed refusal
+    let message = kernel.err(
+        "sandbox.report",
+        json!({ "mode": "read-only", "sandboxPermissions": "workspace-write" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("escalation arguments"), "{}", message);
+
+    // lone justification (no sandbox_permissions) -> typed refusal
+    let message = kernel.err(
+        "sandbox.report",
+        json!({ "mode": "read-only", "justification": "please let me write" }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+
+    // empty justification with permissions -> typed refusal
+    let message = kernel.err(
+        "sandbox.report",
+        json!({ "mode": "read-only", "sandboxPermissions": "workspace-write", "justification": "   " }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+
+    // an unknown mode is refused (fail-closed, never a silent default)
+    let message = kernel.err("sandbox.report", json!({ "mode": "wide-open" }));
+    assert!(message.contains("not a known mode"), "{}", message);
+
+    // a well-formed escalation pairing is accepted (still fails closed on FS):
+    // the args validate, then the FS-confined mode yields SANDBOX_UNAVAILABLE.
+    let result = kernel.ok(
+        "sandbox.report",
+        json!({
+            "mode": "workspace-write",
+            "sandboxPermissions": "danger-full-access",
+            "justification": "need full access for this one call"
+        }),
+    );
+    assert_eq!(result["status"], json!("sandbox_unavailable"), "{}", result);
+}

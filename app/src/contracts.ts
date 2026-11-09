@@ -215,6 +215,110 @@ export const EGRESS_DEFAULT_HOLD_TIMEOUT_SECS = 600;
 export const EGRESS_BLOCKED_REQUEST_CAPACITY = 256;
 
 /**
+ * Fail-closed per-call SandboxMode ladder (FEAT-004) — mirrors
+ * kernel/src/sandbox.rs byte-for-byte in semantics. Modeled on dsh's
+ * escalation.ts (research/compare-ohmypi-deepseek.md §2.4). The kernel reports
+ * the enforcement posture of a requested mode against the LIVE host
+ * capabilities over the additive "sandbox.report" method and FAILS CLOSED: a
+ * mode that requires FS confinement unavailable on the host returns a typed
+ * SANDBOX_UNAVAILABLE (HZ_PRECONDITION_FAILED class), NEVER a silent "enforced",
+ * NEVER silently unconfined (docs/11 S1/S4). No GuardDecision wire field was
+ * added — the decision still carries only {decision, reason, leaseId?}; this
+ * contract is the sandbox report shape only. DEFAULT_POLICY is unchanged.
+ */
+export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+/**
+ * The strictly-WIDER modes a one-shot escalation may target FROM a mode (dsh
+ * WIDER_MODES). read-only is the floor (nothing escalates TO it);
+ * danger-full-access is the ceiling (nothing is wider).
+ */
+export const SANDBOX_WIDER_MODES: Record<SandboxMode, SandboxMode[]> = {
+  "read-only": ["workspace-write", "danger-full-access"],
+  "workspace-write": ["danger-full-access"],
+  "danger-full-access": [],
+};
+/**
+ * The schema-enum escalation targets (dsh ESCALATION_TARGETS): the modes a
+ * caller may ask to escalate to. read-only is the floor and is deliberately
+ * absent — nothing escalates to it.
+ */
+export const SANDBOX_ESCALATION_TARGETS: SandboxMode[] = ["workspace-write", "danger-full-access"];
+/**
+ * The model-facing denial marker (dsh sandboxDenialMarker(mode)), byte-for-byte
+ * from escalation.ts: `[sandbox: file access denied under ${mode} mode]`.
+ */
+export function sandboxDenialMarker(mode: SandboxMode): string {
+  return `[sandbox: file access denied under ${mode} mode]`;
+}
+/**
+ * The model-facing escalation-hint marker (dsh escalationHintMarker(subject)),
+ * byte-for-byte from escalation.ts. The source separates "available" from
+ * "retry" with an EM DASH (U+2014) — preserved exactly, as this is model-facing
+ * text. Matches kernel/src/sandbox.rs::escalation_hint_marker byte-for-byte.
+ */
+export function escalationHintMarker(subject: string): string {
+  return `[sandbox: escalation available \u2014 retry this exact ${subject} once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]`;
+}
+/**
+ * The paired escalation arguments that widen a single call (dsh
+ * sandbox_permissions + justification). They travel TOGETHER and the
+ * justification is non-empty (validateEscalationArgs). sandbox_permissions is a
+ * strictly-wider mode per SANDBOX_WIDER_MODES.
+ */
+export interface SandboxEscalationArgs {
+  sandbox_permissions: SandboxMode;
+  justification: string; // non-empty
+}
+/**
+ * Per-call enforcement completeness (dsh full|partial). A consumer needing the
+ * absolute boundary can reject "partial".
+ */
+export type EnforcementCompleteness = "full" | "partial";
+/**
+ * The guarantee level for a single sandbox dimension (docs/11 S2/S3 guarantee
+ * vector). Below "enforced" the DimensionReport.residual is non-empty.
+ */
+export type SandboxGuarantee = "enforced" | "best_effort" | "unsupported";
+/**
+ * One dimension of the guarantee vector. `residual` is NON-EMPTY whenever the
+ * guarantee is below "enforced" (docs/11 S2/S3); `backend` is an explicit
+ * mechanism name or "none" (docs/11 S5: no silent fallback).
+ */
+export interface SandboxDimensionReport {
+  dimension: string; // e.g. "filesystem" | "network" | "process" | "resources"
+  guarantee: SandboxGuarantee;
+  backend: string; // explicit mechanism name or "none"
+  residual: string; // non-empty when guarantee !== "enforced"
+}
+/**
+ * A per-call enforcement report for a requested mode (status "report"). backend
+ * is the primary confinement backend name or "none" (S5). unavailableReason is
+ * present when a required mechanism was absent but a partial boundary was
+ * tolerated (so completeness is "partial" rather than SANDBOX_UNAVAILABLE).
+ * danger-full-access reports NO dimension as "enforced" (S4).
+ */
+export interface EnforcementReport {
+  status: "report";
+  mode: SandboxMode;
+  completeness: EnforcementCompleteness;
+  backend: string;
+  dimensions: SandboxDimensionReport[];
+  unavailableReason?: string;
+}
+/**
+ * The typed SANDBOX_UNAVAILABLE outcome (status "sandbox_unavailable"): a mode
+ * requires a dimension the host cannot enforce, so the kernel FAILS CLOSED
+ * rather than running unconfined (HZ_PRECONDITION_FAILED class, docs/11 S1/S4).
+ */
+export interface SandboxUnavailable {
+  status: "sandbox_unavailable";
+  mode: SandboxMode;
+  reason: string; // typed SANDBOX_UNAVAILABLE reason
+}
+/** The sandbox.report outcome: either a report (possibly partial) or unavailable. */
+export type EnforcementOutcome = EnforcementReport | SandboxUnavailable;
+
+/**
  * Built-in policy used when <state-dir>/policy.json is absent.
  * Evaluation: deny > lease > ask > allow (docs/11 R1; docs/28 ruling 23).
  * Any matching deny wins; then an unexpired matching lease; then any matching
@@ -474,6 +578,24 @@ export interface KernelRequestMap {
     params: { kind?: AllowlistRuleKind; rule: AllowlistPrefixRule | AllowlistNetworkRule };
     result: { changed: boolean; fingerprint: string };
   };
+  // FEAT-004 (additive): report the fail-closed enforcement posture of a
+  // requested SandboxMode against the LIVE host capabilities. Validates the
+  // optional escalation args (sandbox_permissions + justification travel
+  // together, justification non-empty) BEFORE anything, and FAILS CLOSED — a
+  // mode that requires FS confinement unavailable on the host yields a typed
+  // SANDBOX_UNAVAILABLE outcome, NEVER a silent "enforced". allowPartial lets a
+  // tolerant caller receive a completeness="partial" report instead. The NDJSON
+  // envelope is unchanged. Mirrors kernel/src/protocol.rs "sandbox.report"
+  // byte-for-byte in semantics.
+  "sandbox.report": {
+    params: {
+      mode: SandboxMode;
+      sandboxPermissions?: SandboxMode;
+      justification?: string;
+      allowPartial?: boolean;
+    };
+    result: EnforcementOutcome;
+  };
 }
 
 export type KernelMethod = keyof KernelRequestMap;
@@ -488,6 +610,7 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "guard.lease",
   "guard.grant",
   "guard.allowlist.amend",
+  "sandbox.report",
 ];
 
 /* ------------------------------ Hashing ------------------------------ */
