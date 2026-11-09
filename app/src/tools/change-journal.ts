@@ -574,6 +574,18 @@ export function consumeChange(sessionId: string, entry: ChangeEntry): boolean {
   return true;
 }
 
+/**
+ * ADDITIVE (FEAT-003): a read-only snapshot of the live change records this
+ * session can see, oldest -> newest. It is exactly the view `lastChange` /
+ * `lastChangeFor` read (its workspace journal plus this session's leftovers),
+ * returned whole so a caller can diff a before/after boundary across one model
+ * turn. No existing signature or behaviour changes; this only exposes the
+ * already-merged live set. The returned array is a fresh copy.
+ */
+export function liveEntries(sessionId: string): ChangeEntry[] {
+  return [...mergedEntries(sessionId)];
+}
+
 /** For tests and diagnostics: live entries in this session's workspace journal. */
 export function journalSize(sessionId: string): number {
   const workspace = workspaceFor(sessionId);

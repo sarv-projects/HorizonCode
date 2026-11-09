@@ -352,6 +352,12 @@ export const previewTool: Tool = {
   // NF-072: a lifecycle tool — an exclusive call is its own barrier in a batch.
   concurrencyClass: "exclusive",
 
+  // Research §1.6: preview is a niche dev-server tool, a natural Deferred
+  // candidate. It is absent from the default spec list and discovered on demand
+  // via the `tool_search` meta-tool, matched over the keywords below.
+  exposure: "deferred",
+  searchInfo: { keywords: ["preview", "dev server", "serve", "localhost", "http", "port"] },
+
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
       const action = args.action;

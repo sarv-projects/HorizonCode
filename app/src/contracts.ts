@@ -398,6 +398,20 @@ export interface ToolResult {
   error?: string;
 }
 
+/**
+ * Tool exposure class (research §1.6, codex ToolExposure reference). Controls
+ * which specs the model sees in the default tool list; it never changes a
+ * tool's dispatch resolution (getTool resolves any registered tool by name).
+ *
+ *  - "direct"         initial spec list — the model sees it from turn one.
+ *  - "deferred"       absent from the default specs; discovered at runtime via
+ *                     the `tool_search` meta-tool (matched over its searchInfo),
+ *                     then visible+callable for the rest of that session.
+ *  - "code_mode_only" only exposed inside a nested code-mode child tool list.
+ *  - "hidden"         never exposed in any spec list.
+ */
+export type ToolExposure = "direct" | "deferred" | "code_mode_only" | "hidden";
+
 export interface Tool {
   name: string;
   description: string;
@@ -408,6 +422,21 @@ export interface Tool {
    * its own barrier. Mutating and lifecycle tools are exclusive.
    */
   concurrencyClass?: "shared" | "exclusive";
+  /**
+   * Exposure class (research §1.6). ADDITIVE and optional: absent === "direct",
+   * exactly as an absent `concurrencyClass` === "shared". A tool that sets no
+   * exposure keeps today's behavior unchanged — it appears in the default spec
+   * list and is callable. Only non-Direct tools (deferred/hidden/code_mode_only)
+   * are gated out of the default specs; see tools/index.ts toolSpecs().
+   */
+  exposure?: ToolExposure;
+  /**
+   * Discovery surface for Deferred tools (research §1.6). ADDITIVE and optional.
+   * `name` and `description` already live on Tool; `keywords` is the extra
+   * matching surface the data-driven `tool_search` scores a query against.
+   * Only meaningful for exposure === "deferred".
+   */
+  searchInfo?: { keywords: string[] };
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -501,6 +530,16 @@ export type RuntimeEvent =
   | { type: "notice"; message: string }
   | { type: "error"; message: string }
   | ({ type: "context.usage" } & ContextUsage)
+  // ADDITIVE (FEAT-003): the per-turn aggregated file diff. This is a
+  // harness-side UI/runtime facade event, exactly like `context.usage` and
+  // `turn.done` above -- a computed surface the loop emits for the TUI, NOT a
+  // durable kernel event. The kernel event catalogue (docs/_conventions.md §6)
+  // is a CLOSED 44-name set and stays unchanged; adding a RuntimeEvent variant
+  // does not touch it. One event per model turn that changed >=1 file:
+  // `diff` is the aggregated unified diff across every file edited in the turn
+  // (one net diff per file), `files` is how many files changed, `truncated` is
+  // set when the total line cap clipped the diff.
+  | { type: "turn.diff"; turn: number; files: number; diff: string; truncated?: boolean }
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {

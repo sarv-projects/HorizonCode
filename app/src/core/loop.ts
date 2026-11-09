@@ -34,7 +34,7 @@ import type {
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
-import { getTool, toolSpecs } from "../tools";
+import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
@@ -54,6 +54,8 @@ import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 // staged diffs with /changes and applies them with /apply (each apply passes
 // the ordinary guard/approval path).
 import { stageWrite, unifiedDiff } from "./plan";
+import { computeTurnDiff } from "./turn-diff";
+import { liveEntries } from "../tools/change-journal";
 // The MCP tool registry (docs/09 §4.7): mcp__ tools admit as `mcp.invoke`.
 import { mcpAdmissionFor } from "./mcp/registry";
 // Hooks v1 (docs/15 H2–H4 reduced form): pre/post tool middleware that can
@@ -368,7 +370,7 @@ export function taskHead(text: string, max = 120): string {
  * described in the mapping above; `undo` reads the session's own change journal
  * to find its target and guards that entry inside the tool.
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session", "tool_search"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };
@@ -1179,7 +1181,10 @@ async function collectAssistant(
   // never a history rewrite and never a forgeable user turn.
   if (rails?.hookContext !== undefined && rails.hookContext !== "") railParts.push(rails.hookContext);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
-  const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
+  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
+  // discovered via `tool_search` joins the specs; by default (no discovery) the
+  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
+  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
   // newest provider usage, plus the tail counted locally since that turn, or
   // the whole-prompt estimate before any usage has been seen.
@@ -1347,6 +1352,15 @@ async function executeTool(
   }
   const tool = getTool(call.name);
   if (!tool || (deps.toolFilter !== undefined && !deps.toolFilter(call.name))) {
+    return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
+  }
+  // Research §1.6 (defense in depth): a Hidden tool never appears in specs, and
+  // an undiscovered Deferred tool is not in this session's specs — so the model
+  // should never name one. If it does anyway, refuse at dispatch with the same
+  // shape as the unknown/filtered path. Dispatch for Direct and discovered
+  // Deferred tools is unchanged.
+  const exposure = exposureOf(tool);
+  if (exposure === "hidden" || (exposure === "deferred" && !isDiscovered(deps.sessionId, call.name)) || exposure === "code_mode_only") {
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
   }
 
@@ -1955,6 +1969,12 @@ export async function runTurn(
         }
       }
       if (loopHardStop) break;
+      // FEAT-003: capture the journal boundary just before the turn's tool
+      // batch runs. The entries this session can see now are the "before" set;
+      // anything appended while the batch runs is a change THIS turn made. Plan
+      // mode stages writes without recording to the journal, so a plan-mode
+      // turn produces no new entries and therefore no turn.diff.
+      const journalBoundary = new Set(liveEntries(deps.sessionId).map((e) => (e as { id?: string }).id));
 
       // NF-072: shared calls in a segment run concurrently; an exclusive call
       // is its own barrier. All-settled: one call's failure cancels no sibling.
@@ -1998,6 +2018,25 @@ export async function runTurn(
         );
         if (fatal) break;
       }
+      // FEAT-003: the entries recorded during THIS turn are those appended
+      // since the boundary above. Aggregate them into one net diff per file and
+      // emit a single turn.diff event, independent of per-tool output. Only
+      // when at least one file actually changed (files > 0); a read-only turn,
+      // or a plan-mode turn that only staged, emits nothing. This is a UI/
+      // runtime facade event (see contracts.ts), not a durable kernel event.
+      try {
+        const turnEntries = liveEntries(deps.sessionId).filter((e) => !journalBoundary.has((e as { id?: string }).id));
+        if (turnEntries.length > 0) {
+          const { diff, files, truncated } = computeTurnDiff(turnEntries);
+          if (files > 0) {
+            emit(deps.callbacks, { type: "turn.diff", turn: calls, files, diff, truncated });
+          }
+        }
+      } catch {
+        // The turn diff is a best-effort observability surface: never let it
+        // break the run. A failure here just means no turn.diff for this turn.
+      }
+
       if (fatal) {
         exit = { terminal: "failed", detail: "internal_error" };
         break;
