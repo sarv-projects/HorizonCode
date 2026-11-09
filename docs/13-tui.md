@@ -1,4 +1,6 @@
 # 13 — Terminal UI (`hzcode tui`)
+> **Print mode (`docs/28` ruling 57).** `hzcode -p` never opens the chat bar or an approval prompt, even on a TTY; stdout carries only the chosen format (`text`, `json`, `stream-json`), notices and errors go to stderr.
+
 
 > **Agent presets (stage 3, `docs/28` ruling 56).** A nested child run started with a `profile` prints one `profile: <name>` line behind the dim bar before its first nested line (renderer reads the additive `profile` on `subagent.event`).
 >

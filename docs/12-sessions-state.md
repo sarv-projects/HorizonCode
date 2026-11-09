@@ -1,4 +1,6 @@
 # 12 — Sessions, State, Persistence & Time Travel
+> **Print mode (`docs/28` ruling 57).** `hzcode -p` runs one turn in a normal session (`--continue` applies) and reports its `sessionId` in the result object.
+
 
 > **Agent presets (stage 3, `docs/28` ruling 56).** A profiled subagent still writes its own child session (titled `subagent: ...`) and receipts; the profile name rides only the parent's `subagent.event` stream, not a session column. Pinning `{id, revision, digest}` on the session (docs/05 4.9) is not built.
 >
