@@ -32,6 +32,11 @@ export const agentTool: Tool = {
         description:
           "The task for the subagent. Write it self-contained: the subagent cannot see this conversation.",
       },
+      profile: {
+        type: "string",
+        description:
+          "Optional preset: explore, plan, code or review (a user preset may be listed below). A preset only narrows the subagent's tools. Omit for the generic subagent.",
+      },
       max_steps: {
         type: "number",
         description: `Model turns the subagent may use (default ${DEFAULT_STEPS}, max ${MAX_STEPS}).`,
@@ -54,7 +59,11 @@ export const agentTool: Tool = {
           error: "delegation unavailable",
         };
       }
-      return await ctx.delegate(task, clampSteps(args.max_steps));
+      if (args.profile !== undefined && typeof args.profile !== "string") {
+        return { ok: false, output: "", error: "profile must be a string" };
+      }
+      const profile = typeof args.profile === "string" && args.profile.trim() !== "" ? args.profile.trim() : undefined;
+      return await ctx.delegate(task, clampSteps(args.max_steps), profile);
     } catch (e) {
       return { ok: false, output: "", error: e instanceof Error ? e.message : String(e) };
     }

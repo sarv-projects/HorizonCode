@@ -1,5 +1,7 @@
 # 11 — Authority, Safety & Trust
 
+> **Agent presets (stage 3, `docs/28` ruling 56).** A subagent preset can only narrow tools: an allow-list outside the ceiling (every tool except `agent`) is refused with `profile_ceiling_widens`. Presets grant no lease and skip no approval; read-only presets simply hold no write, edit or shell tool. Workspace preset files are repository content and their prompt text is untrusted-surface input, bounded by that narrowing rule.
+>
 > The execution constitution. How HorizonCode decides who may do what, confines it, proves it happened, and refuses to claim more than it can prove.
 
 ---

@@ -24,6 +24,7 @@ import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
 import { buildChildPrompt, staticChildPrompt } from "./prompt";
+import { resolvePreset, type AgentPreset, type PresetOptions } from "./agent-profiles";
 
 /** The child prompt is fixed: a subagent reports, it does not converse. */
 export const SUBAGENT_SYSTEM_PROMPT = staticChildPrompt();
@@ -95,6 +96,13 @@ export interface NestedRunOptions {
   workspace: string;
   task: string;
   maxSteps?: number;
+  /**
+   * Optional preset name (agent-profiles.ts, docs/15 §3.6). It only narrows
+   * the child's tools; an unknown or widening preset fails the call.
+   */
+  profile?: string;
+  /** Test seam: the home directory user presets are read from. */
+  presetOptions?: PresetOptions;
   model: string;
   provider: Provider;
   kernel: KernelClient;
@@ -120,13 +128,24 @@ export interface NestedRunOptions {
 export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   const task = typeof opts?.task === "string" ? opts.task.trim() : "";
   if (task === "") return { ok: false, output: "", error: "task is required" };
+  let preset: AgentPreset | undefined;
+  if (typeof opts.profile === "string" && opts.profile.trim() !== "") {
+    const resolved = resolvePreset(opts.workspace, opts.profile.trim(), opts.presetOptions);
+    if ("error" in resolved) return { ok: false, output: "", error: resolved.error };
+    preset = resolved.preset;
+  }
+  const allowed: readonly string[] = preset !== undefined ? preset.tools : BASE_TOOL_NAMES;
+  const model = preset?.model ?? opts.model;
+  // The caller's max_steps wins only downward: a preset cap bounds it.
+  const requested = opts.maxSteps ?? preset?.maxSteps;
+  const steps = clampSteps(preset?.maxSteps !== undefined && requested !== undefined ? Math.min(requested, preset.maxSteps) : requested);
   const title = subagentTitle(task);
   const session = opts.store.createSession(title);
   let forwarded = 0;
   const deps: LoopDeps = {
     workspace: opts.workspace,
     sessionId: session.id,
-    model: opts.model,
+    model,
     provider: opts.provider,
     kernel: opts.kernel,
     store: opts.store,
@@ -147,7 +166,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
             ? { type: "notice", message: "child events capped" }
             : bounded;
         try {
-          opts.onEvent({ type: "subagent.event", agentId: session.id, name: "agent", depth: 1, event: out });
+          opts.onEvent({ type: "subagent.event", agentId: session.id, name: "agent", depth: 1, event: out, ...(preset !== undefined ? { profile: preset.name } : {}) });
         } catch {
           /* a sink failure must not fail the delegated run */
         }
@@ -160,12 +179,13 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // either: the child re-enters approval in both transports.
     sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
-    systemOverride: buildChildPrompt(opts.workspace, new Date(), { tools: BASE_TOOL_NAMES, kernelMode: typeof opts.kernel?.mode === "string" ? opts.kernel.mode : "untrusted" }),
+    systemOverride: buildChildPrompt(opts.workspace, new Date(), { tools: allowed, kernelMode: typeof opts.kernel?.mode === "string" ? opts.kernel.mode : "untrusted" }) +
+      (preset !== undefined ? `\n\n${preset.prompt}` : ""),
     // Base seven only: a subagent delegates to no one and drives no previews.
-    toolFilter: (name) => (BASE_TOOL_NAMES as readonly string[]).includes(name),
-    maxProviderCalls: clampSteps(opts.maxSteps),
+    toolFilter: (name) => allowed.includes(name),
+    maxProviderCalls: steps,
     // NF-073: the child's step slice sits under the parent's shared ceiling.
-    ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: clampSteps(opts.maxSteps) }) : undefined,
+    ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: steps }) : undefined,
     // No `delegate`: a subagent can never spawn subagents.
   };
   // H1 subagent.start/subagent.stop (the child session boundary): OBSERVATION

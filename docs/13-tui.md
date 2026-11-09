@@ -1,5 +1,7 @@
 # 13 — Terminal UI (`hzcode tui`)
 
+> **Agent presets (stage 3, `docs/28` ruling 56).** A nested child run started with a `profile` prints one `profile: <name>` line behind the dim bar before its first nested line (renderer reads the additive `profile` on `subagent.event`).
+>
 > The TUI is the primary product surface (ADR-001). This document fixes its rendering model, component tree, input model, streaming rules, diff/approval surfaces, theming, accessibility, performance budgets and statuses. It does not describe the agent; it describes the glass.
 
 ---

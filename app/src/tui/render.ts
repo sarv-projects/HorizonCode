@@ -158,10 +158,17 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
   };
 
   const nestedCount = new Map<string, number>();
+  const profileShown = new Set<string>();
 
   /** One child event, indented under the agent card behind a dim bar. */
-  const handleNested = (agentId: string, inner: RuntimeEvent): void => {
+  const handleNested = (agentId: string, inner: RuntimeEvent, profile?: string): void => {
     if (!inner || typeof inner !== "object") return;
+    // The profile name rides the card: one header line before a profiled child's first line.
+    if (typeof profile === "string" && profile !== "" && !profileShown.has(agentId)) {
+      profileShown.add(agentId);
+      ensureLineStart();
+      write("  " + dim("\u2502") + " " + dim("profile: ") + bold(sanitizeText(profile)) + "\n");
+    }
     let line = "";
     if (inner.type === "tool.card") {
       const name = sanitizeText(inner.name) || "tool";
@@ -196,7 +203,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     if (!ev || typeof ev !== "object") return;
     switch (ev.type) {
       case "subagent.event":
-        handleNested(String(ev.agentId), ev.event);
+        handleNested(String(ev.agentId), ev.event, ev.profile);
         break;
       case "turn.diff": {
         const files = typeof ev.files === "number" ? ev.files : 0;

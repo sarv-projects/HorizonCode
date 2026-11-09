@@ -397,8 +397,9 @@ export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
  * A nested delegation run: the `agent` tool asks the runtime to execute `task`
  * in its own child session and return the subagent's final report. The runtime
  * supplies it on the tool context; a tool without one cannot delegate.
+ * `profile` (additive, docs/15 §3.6) names a narrowing preset for the child.
  */
-export type DelegateRunner = (task: string, maxSteps?: number) => Promise<ToolResult>;
+export type DelegateRunner = (task: string, maxSteps?: number, profile?: string) => Promise<ToolResult>;
 
 export interface ToolContext {
   cwd: string;
@@ -568,7 +569,7 @@ export type RuntimeEvent =
   // notice, error and the child's final assistant.done, truncates text, and
   // caps the number of events per child; the TUI renders them nested under
   // the agent card and the server relays them as ordinary `session.event`s.
-  | { type: "subagent.event"; agentId: string; name: string; depth: number; event: RuntimeEvent }
+  | { type: "subagent.event"; agentId: string; name: string; depth: number; event: RuntimeEvent; profile?: string }
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {

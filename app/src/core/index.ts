@@ -711,11 +711,12 @@ class HzRuntimeImpl implements HzRuntime {
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
-          delegate: (task, maxSteps) =>
+          delegate: (task, maxSteps, profile) =>
             runNested({
               workspace: this.workspace,
               task,
               maxSteps,
+              profile,
               model: this.currentModel,
               provider: this.provider,
               kernel: this.kernel,
