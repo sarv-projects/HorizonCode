@@ -2,6 +2,8 @@
 
 > **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-17 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
 >
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Twelve feature branches are merged and TESTED on the integration branch (typecheck 0 errors; `bun test` 1250 pass / 11 root-only fail of 1261; `cargo test` 47 + 50; selftest 25 checks). Nothing is RELEASED. The per-feature map is `28-implementation-status.md` §1; the done / partial / not-started table is `../CURRENT_RUN.md` §5.0.
+>
 > Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-17).
 
 This directory is the authoritative specification for HorizonCode, a coding agent designed as the strict superset of the state of the art, with an execution constitution: model reasoning is separated from the authority to mutate.

@@ -497,6 +497,19 @@ Deliberate non-steals, consolidated from the three reports:
 
 ---
 
+### 5.11 Specialised agent presets (Kiro CLI, Freebuff/Codebuff), added 2026-11-09
+
+Source: the public Freebuff README (github.com/CodebuffAI/codebuff, read 2026-11-09) and Kiro CLI's planner/coder/reviewer split. Both route work through specialised agents: file-finding agents map the project before editing, implementation and review agents divide the work, and a cheap model tier handles specialist tasks such as file finding. Not cloned; no code copied.
+
+| Idea | HorizonCode today | Proposal | Tier |
+|---|---|---|---|
+| Named presets (explore, plan, code, review) | one generic `agent` tool (task + step cap) | optional `profile` arg on `agent`; each preset is data: tool allow-list via `LoopDeps.toolFilter`, prompt block, optional model override, step cap | 1 |
+| Cheap model for context gathering | per-model routing exists, no per-subagent model | `explore` preset may name a cheaper model; falls back to the parent model | 2 |
+| Reviewer pass | none | `review` preset: read-only, returns findings with file:line | 2 |
+| User-defined agents | `AgentProfileV1` DESIGNED (`15` §2.6, §3.6) | `.hz/agents/*.md` front-matter, user-config only, narrowing-only (`profile_ceiling_widens` refusal) | 3 |
+
+Status: NOT STARTED. Presets may only narrow authority; a preset can never add a tool the parent run cannot use. CURRENT_RUN §5.0.1 has the analysis.
+
 ## Related documents
 
 - `audit/pass3/` — the four reports this shortlist consolidates (historical class)
