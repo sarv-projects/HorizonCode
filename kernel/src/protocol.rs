@@ -13,6 +13,7 @@ use crate::canon::error_response;
 use crate::eventlog::{AnchorConfig, EventLog};
 use crate::guard::{self, Guard, GuardAction, Lease};
 use crate::receipts::Receipts;
+use crate::sandbox;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -162,6 +163,107 @@ impl Kernel {
                 serde_json::to_value(grant).map_err(|e| format!("cannot serialize grant: {}", e))
             }
 
+            // FEAT-002: append a rule to the runtime command allowlist
+            // (<state-dir>/allowlist.json), file-locked append-dedup. Additive,
+            // mirrored in contracts.ts KERNEL_METHODS + KernelRequestMap; the
+            // NDJSON envelope is unchanged. An unknown `kind` is refused the way
+            // guard.lease refuses an unknown action kind. Returns
+            // {changed, fingerprint}.
+            "guard.allowlist.amend" => {
+                let rule = params
+                    .get("rule")
+                    .filter(|v| v.is_object())
+                    .ok_or_else(|| "guard.allowlist.amend.rule must be an object".to_string())?;
+                // Default to a prefix (command) rule; "network" for an egress rule.
+                let kind = params
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("prefix");
+                let (changed, fingerprint) = match kind {
+                    "prefix" => {
+                        let parsed = guard::prefix_rule_from_value(rule)
+                            .map_err(|e| e.to_string())?;
+                        self.guard
+                            .amend_allow_prefix_rule(&parsed)
+                            .map_err(|e| e.to_string())?
+                    }
+                    "network" => {
+                        let parsed = guard::network_rule_from_value(rule)
+                            .map_err(|e| e.to_string())?;
+                        self.guard
+                            .amend_network_rule(&parsed)
+                            .map_err(|e| e.to_string())?
+                    }
+                    other => {
+                        return Err(format!(
+                            "guard.allowlist.amend.kind {:?} is unknown; expected \"prefix\" or \"network\"",
+                            other
+                        ))
+                    }
+                };
+                Ok(json!({ "changed": changed, "fingerprint": fingerprint }))
+            }
+
+            // FEAT-004: report the fail-closed per-call SandboxMode enforcement
+            // posture against the LIVE host capabilities. Additive, mirrored in
+            // contracts.ts KERNEL_METHODS + KernelRequestMap; the NDJSON
+            // envelope is unchanged. Validates the requested mode and the
+            // optional escalation args (sandbox_permissions + justification must
+            // travel together, justification non-empty) BEFORE anything, and
+            // FAILS CLOSED: a mode that requires FS confinement unavailable here
+            // returns a typed SANDBOX_UNAVAILABLE (HZ_PRECONDITION_FAILED class)
+            // — NEVER a silent 'enforced', NEVER silently unconfined. A caller
+            // that can tolerate a partial boundary passes {"allowPartial":true}
+            // to receive an EnforcementReport with completeness=partial instead.
+            "sandbox.report" => {
+                let mode = sandbox_mode_param(params, "mode")?;
+
+                // Validate the escalation pairing up front (dsh
+                // validateEscalationArgs): sandbox_permissions + justification
+                // travel together, justification non-empty. Applying the
+                // one-shot widen itself needs an approver/UI the kernel does not
+                // own, so the kernel validates-and-reports; the effective mode
+                // reported is the requested mode (the widen is a runtime seam).
+                let raw_permissions = match params.get("sandboxPermissions") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => {
+                        let s = v.as_str().ok_or_else(|| {
+                            "sandbox.report.sandboxPermissions must be a string".to_string()
+                        })?;
+                        Some(sandbox::SandboxMode::parse(s).ok_or_else(|| {
+                            format!("sandbox.report.sandboxPermissions {:?} is not a known mode", s)
+                        })?)
+                    }
+                };
+                let raw_justification = match params.get("justification") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_str().ok_or_else(|| {
+                        "sandbox.report.justification must be a string".to_string()
+                    })?),
+                };
+                // Only validate the pairing when either half was supplied: a
+                // bare report (no escalation) is legal.
+                if raw_permissions.is_some() || raw_justification.is_some() {
+                    sandbox::validate_escalation_args(raw_permissions, raw_justification)
+                        .map_err(|e| e.to_string())?;
+                }
+
+                // An FS-confined mode demands full FS enforcement unless the
+                // caller opts into a partial boundary.
+                let allow_partial = match params.get("allowPartial") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => {
+                        return Err("sandbox.report.allowPartial must be a boolean".to_string())
+                    }
+                };
+                let demand_full = mode.requires_fs_confinement() && !allow_partial;
+
+                let caps = sandbox::capabilities();
+                let outcome = sandbox::enforce(mode, caps, demand_full);
+                Ok(outcome.to_json())
+            }
+
             other => Err(format!("unknown method: {}", other)),
         }
     }
@@ -174,6 +276,19 @@ fn string_param(params: &Value, key: &str) -> Result<String, String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .ok_or_else(|| format!("{} must be a non-empty string", key))
+}
+
+/// A required `SandboxMode` param (FEAT-004): a non-empty wire string that must
+/// parse to a known mode, else a typed refusal (fail-closed — never a silent
+/// default to a wider or narrower mode).
+fn sandbox_mode_param(params: &Value, key: &str) -> Result<sandbox::SandboxMode, String> {
+    let raw = params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("sandbox.report.{} must be a non-empty string", key))?;
+    sandbox::SandboxMode::parse(raw)
+        .ok_or_else(|| format!("sandbox.report.{} {:?} is not a known mode", key, raw))
 }
 
 fn number_param(params: &Value, key: &str) -> Option<u64> {
