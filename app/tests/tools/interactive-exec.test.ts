@@ -235,6 +235,163 @@ describe("shell_session: guard admission", () => {
   });
 });
 
+describe("shell_session: write is admitted per input line (start approval does not cover input)", () => {
+  /** Start `cat` (a stdin reader) with an allowing start, then return its id. */
+  async function startCat(ctx: ReturnType<typeof mockToolContext>): Promise<string> {
+    const start = await interactiveExecTool.execute({ mode: "start", command: "cat" }, ctx);
+    expect(start.ok).toBe(true);
+    return (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+  }
+
+  test("approving the start does NOT authorize a later `rm -rf x`: a deny rule refuses and nothing is written", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({ "x/keep.txt": "keep" });
+      const ctx = mockToolContext({
+        cwd: ws,
+        decision: (a) => (a.target.startsWith("rm ") ? { decision: "deny", reason: "rm is denied" } : { decision: "allow" }),
+      });
+      const sessionId = await startCat(ctx);
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf x\n" }, ctx);
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe("denied by policy: rm is denied");
+      expect(ctx.guardCalls.at(-1)).toEqual({ kind: "shell.exec", target: "rm -rf x" });
+      // Nothing reached stdin: cat has echoed nothing.
+      const probe = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
+      expect(probe.output).not.toContain("rm -rf");
+    });
+  });
+
+  test("an ask prompts with the session command + input; approve writes, decline writes nothing", async () => {
+    await withNoPty(async () => {
+      const askRm = (a: { target: string }) => (a.target.startsWith("rm ") ? ({ decision: "ask" } as const) : ({ decision: "allow" } as const));
+      const declineCtx = mockToolContext({ decision: askRm, approve: false });
+      const id1 = await startCat(declineCtx);
+      const declined = await interactiveExecTool.execute({ mode: "write", sessionId: id1, input: "rm -rf x\n" }, declineCtx);
+      expect(declined.ok).toBe(false);
+      expect(declined.error).toBe("declined by user");
+      expect(declineCtx.approveCalls.at(-1)).toEqual({
+        title: "Send input to interactive session",
+        detail: "cat <- rm -rf x",
+        kind: "shell.exec",
+      });
+      const probe = await interactiveExecTool.execute({ mode: "write", sessionId: id1, input: "" }, declineCtx);
+      expect(probe.output).not.toContain("rm -rf");
+
+      const okCtx = mockToolContext({ decision: askRm, approve: true });
+      const id2 = await startCat(okCtx);
+      const approved = await interactiveExecTool.execute({ mode: "write", sessionId: id2, input: "rm -rf x\n" }, okCtx);
+      expect(approved.ok).toBe(true);
+      expect(approved.output).toContain("rm -rf x"); // cat echoed it (never executed by a shell)
+      expect(okCtx.approveCalls.length).toBe(1);
+    });
+  });
+
+  test("every line of a multi-line write is admitted; one denied line refuses the whole write", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "bad" ? { decision: "deny" } : { decision: "allow" }) });
+      const sessionId = await startCat(ctx);
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "good\nbad\n" }, ctx);
+      expect(r.ok).toBe(false);
+      expect(ctx.guardCalls.map((a) => a.target)).toEqual(["cat", "good", "bad"]);
+      const probe = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
+      expect(probe.output).not.toContain("good");
+    });
+  });
+
+  test("a command split across writes is admitted as the joined line", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "rm -rf x" ? { decision: "deny" } : { decision: "allow" }) });
+      const sessionId = await startCat(ctx);
+      expect((await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf" }, ctx)).ok).toBe(true);
+      const second = await interactiveExecTool.execute({ mode: "write", sessionId, input: " x\n" }, ctx);
+      expect(second.ok).toBe(false);
+      expect(ctx.guardCalls.at(-1)).toEqual({ kind: "shell.exec", target: "rm -rf x" });
+    });
+  });
+
+  test("the approval names the exact input as the action, so an always grant is exact-input only", async () => {
+    await withNoPty(async () => {
+      const seen: Array<{ target: string }> = [];
+      const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }) });
+      const origApprove = ctx.approve.bind(ctx);
+      ctx.approve = async (req, action) => {
+        if (action !== undefined) seen.push(action);
+        return origApprove(req);
+      };
+      const sessionId = await startCat(ctx);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo hi\n" }, ctx);
+      // The only action an `always` answer can be scoped to is this exact line.
+      expect(seen).toEqual([{ kind: "shell.exec", target: "echo hi" }]);
+    });
+  });
+
+  test("blank input (a bare Enter) needs no admission and still reaches a stdin reader", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext();
+      const sessionId = await startCat(ctx);
+      const before = ctx.guardCalls.length;
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "\n" }, ctx);
+      expect(r.ok).toBe(true);
+      expect(ctx.guardCalls.length).toBe(before);
+    });
+  });
+});
+
+describe("shell_session: control characters and incomplete lines", () => {
+  async function startCat(ctx: ReturnType<typeof mockToolContext>): Promise<string> {
+    const start = await interactiveExecTool.execute({ mode: "start", command: "cat" }, ctx);
+    return (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+  }
+
+  test("input with line-editing control characters is refused and nothing is guarded or written", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ cwd: makeWorkspace() });
+      const sessionId = await startCat(ctx);
+      const before = ctx.guardCalls.length;
+      for (const input of ["ls\x15rm -rf x\n", "a\x7fb\n", "x\x03\n", "\x1b[Ahi\n", "q\x17\n", "\x04"]) {
+        const r = await interactiveExecTool.execute({ mode: "write", sessionId, input }, ctx);
+        expect(r.ok).toBe(false);
+        expect(r.error).toContain("control characters");
+      }
+      expect(ctx.guardCalls.length).toBe(before);
+      expect((await interactiveExecTool.execute({ mode: "write", sessionId, input: "tab\there\n" }, ctx)).ok).toBe(true);
+    });
+  });
+
+  test("an unterminated fragment is not admitted or prompted; the completed line is, once", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }), approve: true });
+      const sessionId = await startCat(ctx);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -r" }, ctx);
+      expect(ctx.approveCalls.length).toBe(0);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: "f x\n" }, ctx);
+      expect(ctx.approveCalls.length).toBe(1);
+      expect(ctx.guardCalls.at(-1)).toEqual({ kind: "shell.exec", target: "rm -rf x" });
+    });
+  });
+
+  test("a long line is shown whole in the prompt and the guard target is exact; over 4000 is refused", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }), approve: true });
+      const sessionId = await startCat(ctx);
+      const long = "p".repeat(3000) + "; tail-marker";
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: long + "\n" }, ctx);
+      expect(ctx.approveCalls.at(-1)?.detail).toContain(long);
+      expect(ctx.guardCalls.at(-1)?.target).toBe(long);
+      const before = ctx.guardCalls.length;
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "x".repeat(4001) + "\n" }, ctx);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("too long");
+      expect(ctx.guardCalls.length).toBe(before);
+      // 2000 CJK chars = 6000 UTF-8 bytes: under 4000 characters but over the tty byte limit.
+      const cjk = await interactiveExecTool.execute({ mode: "write", sessionId, input: "\u6f22".repeat(2000) + "\n" }, ctx);
+      expect(cjk.ok).toBe(false);
+      expect(cjk.error).toContain("too long");
+      expect(ctx.guardCalls.length).toBe(before);
+    });
+  });
+});
+
 describe("canUseInteractivePty (pure helper) + argv selection", () => {
   test("true when a backend is available and HZ_NO_PTY is unset", () => {
     expect(canUseInteractivePty({ backendAvailable: true, noPtyEnv: undefined })).toBe(true);
@@ -293,5 +450,109 @@ describe("shell_session: PTY integration (when a backend is obtainable)", () => 
     } finally {
       if (before !== undefined) process.env.HZ_NO_PTY = before;
     }
+  });
+});
+
+describe("shell_session: guard on the real PTY path with a real bash", () => {
+  test("typed commands are admitted per line and control-character edits are refused", async () => {
+    if (Bun.which("script") === null) return;
+    const before = process.env.HZ_NO_PTY;
+    delete process.env.HZ_NO_PTY;
+    try {
+      const ws = makeWorkspace({ "x/keep.txt": "keep" });
+      const ctx = mockToolContext({
+        cwd: ws,
+        decision: (a) => (a.target.startsWith("rm ") ? { decision: "deny", reason: "rm is denied" } : { decision: "allow" }),
+      });
+      const start = await interactiveExecTool.execute({ mode: "start", command: "bash --norc --noprofile -i" }, ctx);
+      expect(start.ok).toBe(true);
+      const sessionId = (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+      const edited = await interactiveExecTool.execute({ mode: "write", sessionId, input: "ls\x15rm -rf x\n" }, ctx);
+      expect(edited.ok).toBe(false);
+      expect(edited.error).toContain("control characters");
+      const denied = await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf x\n" }, ctx);
+      expect(denied.error).toBe("denied by policy: rm is denied");
+      const ok = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo pty-ok-$((20+22))\n" }, ctx);
+      expect(ok.ok).toBe(true);
+      await Bun.sleep(300);
+      const out = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
+      expect(ok.output + out.output).toContain("pty-ok-42");
+      expect(require("node:fs").existsSync(ws + "/x/keep.txt")).toBe(true);
+    } finally {
+      if (before !== undefined) process.env.HZ_NO_PTY = before;
+    }
+  });
+});
+
+describe("shell_session: bare CR cannot join two admitted lines (pipe mode)", () => {
+  test("CR is normalized to a newline so executed lines equal admitted lines", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({});
+      const ctx = mockToolContext({ cwd: ws, decision: () => ({ decision: "allow" }) });
+      const start = await interactiveExecTool.execute({ mode: "start", command: "bash --norc --noprofile" }, ctx);
+      const sessionId = (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+      const first = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo AAA\r" }, ctx);
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo BBB\n" }, ctx);
+      await Bun.sleep(300);
+      const out = first.output + r.output + (await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx)).output;
+      expect(out).toContain("AAA");
+      expect(out).toContain("BBB");
+      expect(out).not.toContain("AAA\recho");
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+    });
+  });
+});
+
+describe("shell_session: invisible Unicode and per-write ceilings", () => {
+  async function startBash(ctx: ReturnType<typeof mockToolContext>): Promise<string> {
+    const start = await interactiveExecTool.execute({ mode: "start", command: "bash --norc --noprofile" }, ctx);
+    return (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+  }
+
+  test("bidi, zero-width and line-separator characters are refused before the guard", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({});
+      let calls = 0;
+      const ctx = mockToolContext({ cwd: ws, decision: () => (calls++, { decision: "allow" }) });
+      const sessionId = await startBash(ctx);
+      const before = calls;
+      for (const ch of ["\u202e", "\u2066", "\u200b", "\u2060", "\ufeff", "\u2028", "\u2029", "\u200f"]) {
+        const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: `echo a${ch}b\n` }, ctx);
+        expect(r.ok).toBe(false);
+        expect(r.error ?? "").toContain("invisible or direction-changing Unicode");
+      }
+      expect(calls).toBe(before);
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+    });
+  });
+
+  test("start refuses an invisible-Unicode command before the guard", async () => {
+    const ws = makeWorkspace({});
+    let calls = 0;
+    const ctx = mockToolContext({ cwd: ws, decision: () => (calls++, { decision: "allow" }) });
+    const r = await interactiveExecTool.execute({ mode: "start", command: "echo a\u202eb" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error ?? "").toContain("invisible or direction-changing Unicode");
+    expect(calls).toBe(0);
+  });
+
+  test("more than 64 lines or 64 KiB in one write is refused before the guard", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({});
+      let calls = 0;
+      const ctx = mockToolContext({ cwd: ws, decision: () => (calls++, { decision: "allow" }) });
+      const sessionId = await startBash(ctx);
+      const before = calls;
+      const many = await interactiveExecTool.execute({ mode: "write", sessionId, input: "true\n".repeat(65) }, ctx);
+      expect(many.ok).toBe(false);
+      expect(many.error ?? "").toContain("too large for one write");
+      const big = await interactiveExecTool.execute({ mode: "write", sessionId, input: ("#" + "x".repeat(3000) + "\n").repeat(22) }, ctx);
+      expect(big.ok).toBe(false);
+      expect(big.error ?? "").toContain("too large for one write");
+      expect(calls).toBe(before);
+      const ok = await interactiveExecTool.execute({ mode: "write", sessionId, input: "true\n".repeat(64) }, ctx);
+      expect(ok.ok).toBe(true);
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+    });
   });
 });

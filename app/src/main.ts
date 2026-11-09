@@ -16,6 +16,7 @@ import * as path from "node:path";
 import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
 import { createServer } from "./core/server";
+import { liveStdin } from "./core/stdin-live";
 import { createApprovalUi, installApprovalHandler, runHeadless, runInteractive } from "./tui";
 import { errorMessage } from "./tui/style";
 
@@ -157,7 +158,8 @@ type CoreModule = {
 async function runServe(opts: CliOptions, workspace: string): Promise<number> {
   const server = createServer({
     workspace,
-    input: process.stdin,
+    // Live worker-backed reader: Bun batches pipe stdin until EOF (stdin-live.ts).
+    input: liveStdin(),
     // One protocol line per frame to stdout; nothing else is ever written here.
     output: (line: string) => process.stdout.write(line),
     mock: opts.mock,

@@ -3,8 +3,9 @@
  *
  * Discovery, most general first: user `~/.config/horizon/AGENTS.md`, the
  * workspace chain from the repository root down to the working directory
- * (`AGENTS.md` per directory), then `.hz/AGENTS.md` -- with every `ZH.md` at
- * the same positions afterwards (R122's deterministic order). Both files in
+ * (`AGENTS.md` per directory), then `.hz/AGENTS.md` -- with every `CLAUDE.md`
+ * (a peer, deduplicated against AGENTS.md) and then every `ZH.md` at the same
+ * positions afterwards (R122's deterministic order). Both files in
  * one directory are included; the pair is counted as a conflict for the
  * report, and the locale decides which is authoritative when they disagree.
  *
@@ -30,7 +31,7 @@ export interface InstructionBlock {
   path: string;
   /** Display name: the path relative to the workspace when inside it, else the absolute path. */
   rel: string;
-  kind: "agents" | "zh";
+  kind: "agents" | "claude" | "zh";
   text: string;
   truncated: boolean;
 }
@@ -121,8 +122,13 @@ export function loadInstructionBlocks(workspace: string, opts: InstructionOption
   const blocks: InstructionBlock[] = [];
   const report: InstructionReport = { files: 0, truncated: 0, totalBytes: 0, totalCapped: false, conflicts: 0, skipped: [] };
 
-  for (const kind of ["agents", "zh"] as const) {
-    const name = kind === "agents" ? "AGENTS.md" : "ZH.md";
+  // CLAUDE.md is a peer of AGENTS.md (same positions, caps and no-authority
+  // framing). Repositories often symlink or copy one to the other, so a CLAUDE.md
+  // whose real path or text equals an already-loaded block is skipped silently.
+  const seenReal = new Set<string>();
+  const seenText = new Set<string>();
+  for (const kind of ["agents", "claude", "zh"] as const) {
+    const name = kind === "agents" ? "AGENTS.md" : kind === "claude" ? "CLAUDE.md" : "ZH.md";
     for (const position of positions) {
       const file = path.join(position.dir, name);
       let bytes: number;
@@ -147,6 +153,15 @@ export function loadInstructionBlocks(workspace: string, opts: InstructionOption
         report.skipped.push(`${file} (unreadable)`);
         continue;
       }
+      if (kind === "claude") {
+        let real = file;
+        try {
+          real = realpathSync(file);
+        } catch {
+          /* keep the lexical path */
+        }
+        if (seenReal.has(real) || seenText.has(text.trim())) continue;
+      }
       // A file that does not fit the REMAINING total is skipped, not cut in
       // half: a directive truncated mid-sentence is worse than an absent one,
       // and a later smaller file may still fit the budget.
@@ -162,6 +177,14 @@ export function loadInstructionBlocks(workspace: string, opts: InstructionOption
         : file.startsWith(ws + path.sep)
           ? path.relative(ws, file)
           : file;
+      if (kind === "agents") {
+        try {
+          seenReal.add(realpathSync(file));
+        } catch {
+          /* lexical only */
+        }
+        seenText.add(text.trim());
+      }
       blocks.push({ path: file, rel, kind, text: cut.text, truncated: cut.truncated });
       report.files += 1;
       report.totalBytes += cutBytes;

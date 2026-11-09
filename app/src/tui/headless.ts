@@ -8,7 +8,7 @@
  */
 
 import readline from "node:readline";
-import type { RunExit, Runtime } from "../contracts";
+import type { RunExit, Runtime, RuntimeEvent } from "../contracts";
 import { exitCodeFor } from "../core/loop";
 import { createRenderer } from "./render";
 import { bold, cyan, errorMessage, sanitizeText, setColorEnabled } from "./style";
@@ -90,12 +90,22 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
   };
   process.on("SIGTERM", onSigterm);
 
+  // Stdout stays the transcript only: a turn.diff is reduced to its summary
+  // line on STDERR (docs/13, docs/14); the diff body is never printed here.
+  const headlessEvent = (ev: RuntimeEvent): void => {
+    if (ev && ev.type === "turn.diff") {
+      if (ev.files >= 1) process.stderr.write(`\u00b7 changed ${ev.files} file${ev.files === 1 ? "" : "s"}\n`);
+      return;
+    }
+    renderer.handle(ev);
+  };
+
   const answer = async (raw: string): Promise<void> => {
     const text = sanitizeText(raw).trim();
     if (text === "") return;
     renderer.line(bold(cyan(PROMPT)) + text);
     try {
-      const result = await opts.runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
+      const result = await opts.runtime.send(text, { onEvent: (ev) => headlessEvent(ev) });
       lastExit = result.exit ?? lastExit;
     } catch (err) {
       // A throw here is an internal error, not a success. Recording it keeps the

@@ -119,3 +119,42 @@ describe("compactArgs", () => {
     expect(compactArgs(circular)).toBe("[unserialisable]");
   });
 });
+
+describe("nested subagent events and turn.diff (S1 P2/P3)", () => {
+  const BAR = "\u2502";
+  test("child tool cards render indented under the agent card behind a bar", () => {
+    const c = captured();
+    const wrap = (event: Parameters<typeof c.renderer.handle>[0]) =>
+      c.renderer.handle({ type: "subagent.event", agentId: "s1", name: "agent", depth: 1, event });
+    wrap({ type: "tool.card", callId: "c", name: "read", args: { path: "a.ts" }, status: "running" });
+    wrap({ type: "tool.card", callId: "c", name: "read", args: {}, status: "ok", summary: "12 lines" });
+    expect(c.text()).toBe(`  ${BAR} ${CARD} read({"path":"a.ts"})\n  ${BAR}   ${CORNER} ok: 12 lines\n`);
+  });
+
+  test("nested output is capped with a marker", () => {
+    const c = captured();
+    for (let i = 0; i < 60; i++) {
+      c.renderer.handle({ type: "subagent.event", agentId: "s2", name: "agent", depth: 1, event: { type: "notice", message: `n${i}` } });
+    }
+    const lines = c.text().trim().split("\n");
+    expect(lines.length).toBe(31);
+    expect(lines[30]).toContain("more child output hidden");
+  });
+
+  test("turn.diff renders a changed summary and a capped diff", () => {
+    const c = captured();
+    const diff = ["--- a/x", "+++ b/x", "@@ -1 +1 @@", ...Array.from({ length: 100 }, (_, i) => `+line${i}`)].join("\n");
+    c.renderer.handle({ type: "turn.diff", turn: 1, files: 1, diff });
+    const text = c.text();
+    expect(text.startsWith("\u00b7 changed 1 file\n")).toBe(true);
+    expect(text).toContain("  +line0\n");
+    expect(text).not.toContain("+line99");
+    expect(text).toMatch(/\u2026 \d+ more lines\n$/);
+  });
+
+  test("turn.diff with zero files prints nothing", () => {
+    const c = captured();
+    c.renderer.handle({ type: "turn.diff", turn: 1, files: 0, diff: "" });
+    expect(c.text()).toBe("");
+  });
+});

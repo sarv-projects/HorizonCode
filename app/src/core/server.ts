@@ -55,6 +55,7 @@ import type {
 } from "../contracts";
 import { HZ_PROTO, SESSION_EVENT_METHOD, SERVER_METHODS } from "../contracts";
 import { createRuntime, type HzRuntime } from "./index";
+import { resolveKernelBinary } from "./kernel";
 import { SessionStore } from "./session";
 
 const SERVER_VERSION = "0.1.0";
@@ -191,6 +192,17 @@ export function createServer(opts: ServerOptions): ServerHandle {
     return runtime;
   }
 
+  /**
+   * Before any session exists the real mode is not known yet, but it is not
+   * "unknown" either: createRuntime starts the Rust kernel exactly when
+   * resolveKernelBinary finds one (side-effect free, no state dir touched), and
+   * otherwise runs the local fallback. A session opened later reports the
+   * measured mode and takes over.
+   */
+  function predictKernelMode(): KernelMode {
+    return resolveKernelBinary() !== undefined ? "trusted" : "untrusted";
+  }
+
   async function handleHello(): Promise<unknown> {
     // Reduced S35 handshake shape: the proto/version a client verifies against,
     // the workspace, the kernel mode and the implemented capabilities.
@@ -198,7 +210,7 @@ export function createServer(opts: ServerOptions): ServerHandle {
       proto: HZ_PROTO,
       version: SERVER_VERSION,
       workspace: opts.workspace,
-      kernelMode: kernelMode ?? "unknown",
+      kernelMode: kernelMode ?? predictKernelMode(),
       capabilities: { methods: [...SERVER_METHODS], transports: ["stdio"], singleAttach: true },
     };
   }

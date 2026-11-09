@@ -170,3 +170,16 @@ describe("shell tool", () => {
     expect(ctx.guardCalls.length).toBe(0);
   });
 });
+
+describe("shell tool: invisible Unicode", () => {
+  test("a command with a bidi override or zero-width character is refused before running", async () => {
+    for (const ch of ["\u202e", "\u200b", "\u2066", "\ufeff", "\u2028"]) {
+      let guarded = 0;
+      const ctx = mockToolContext({ decision: () => (guarded++, { decision: "allow" }) });
+      const r = await shellTool.execute({ command: `echo a${ch}b` }, ctx);
+      expect(r.ok).toBe(false);
+      expect(r.error ?? "").toContain("invisible or direction-changing Unicode");
+      expect(guarded).toBe(0);
+    }
+  });
+});

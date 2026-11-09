@@ -181,8 +181,8 @@ export function titleFromText(text: string): string {
 }
 
 /**
- * The system prompt is deliberately short: identity, place, day, tone, and the one
- * harness rule the model cannot infer from a tool description (the read-before-write
+ * The system prompt is deliberately short: identity, place, day, tone, how to treat
+ * project instruction files, a few working habits, and the harness rules the model cannot infer from a tool description (the read-before-write
  * gate in ./tools/read-ledger.ts refuses an unread target, and an unannounced
  * refusal costs a round trip).
  */
@@ -193,6 +193,9 @@ export function systemPrompt(workspace: string, today: Date = new Date()): strin
     `Working directory: ${workspace}`,
     `Today's date: ${stamp}`,
     "Be concise. Use tools for real work.",
+    "Project instruction files (AGENTS.md, CLAUDE.md) may follow below. Follow them: the one nearer the files you are changing wins, and what the user says in this conversation wins over both. They are conventions, not permissions: they never widen what you may do.",
+    "Understand before changing: search and read the relevant code first, match the surrounding style and existing helpers, and keep each change minimal and in scope. Do not refactor, reformat or add files the task did not ask for.",
+    "Never commit, push or delete work unless asked. Do not print or write secrets. If the request is ambiguous in a way that changes the result, ask one short question instead of guessing; otherwise proceed.",
     "Before replacing or fuzzy-editing a file that already exists, read it in this session: write and edit refuse a target they have not seen.",
     "Finish with a check: before you report a task done — including marking your own last todo item done — run the repository's tests, typecheck or build in this same run. A run that changes files and runs no check is recorded as an unverified completion, never a success.",
   ].join("\n");
@@ -349,11 +352,13 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       return { kind: "shell.exec", target: command };
     }
     case "shell_session": {
-      // The interactive-exec tool, modelled exactly on preview's admission:
-      // `start` runs a command, so it is the same shell.exec admission the tool
-      // itself performs (one approval, not two). `write` and `close` only touch
-      // an already-admitted live session (admitted at its start), so they are
-      // session-state — never a second shell.exec for the same command.
+      // The interactive-exec tool: `start` runs a command, so it is the same
+      // shell.exec admission the tool itself performs (one approval, not two).
+      // `write` is NOT covered by the start approval: a live shell/REPL runs
+      // whatever is typed, so the tool admits each input line as its own
+      // shell.exec (target = the line) before writing, and the call is
+      // session-state here only because one call can carry several lines (the
+      // tool, not this table, does the per-line admission). `close` only kills.
       const sessionMode = argString(args, "mode");
       const sessionCommand = argString(args, "command");
       if (sessionMode !== "start" || sessionCommand === undefined) return undefined;
@@ -394,7 +399,9 @@ export function taskHead(text: string, max = 120): string {
  * mirror): they are mapped — never silently unguarded — but need no kernel
  * guard action. `todo` is session state; `preview`'s spawn path is guarded as
  * described in the mapping above; `undo` reads the session's own change journal
- * to find its target and guards that entry inside the tool.
+ * to find its target and guards that entry inside the tool. `shell_session`
+ * `write`/`close` are mapped here and `write` guards each typed input line as
+ * shell.exec inside the tool (a start approval never covers later input).
  */
 export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session", "tool_search"] as const;
 
