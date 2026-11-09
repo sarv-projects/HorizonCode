@@ -609,8 +609,15 @@ fn anchor_check(
 /// and parse every record on every append (measured 1.25 ms at 200 records →
 /// 12.3 ms at 2,200). The cache is keyed by path and stores the file state
 /// (len, mtime) it describes, the offset just past the last complete line, and
-/// the tail record. On a match the tail is returned without a read; when the
-/// file grew, only the delta from the cached offset is parsed and must chain
+/// the tail record. On a (len, mtime) match the cached tail is NOT trusted
+/// blindly: an in-place rewrite that preserves byte length and lands within the
+/// same mtime tick leaves (len, mtime) unchanged, so the cached last-record
+/// region is cheaply re-read from disk and its `seq`/`hash` confirmed to still
+/// match the cached entry before the tail is served. If that re-read fails,
+/// does not parse, or disagrees (the same-length/same-mtime-tick forgery), the
+/// entry is dropped and the whole file is rescanned so the real (tampered) tail
+/// is seen and the append is refused by the anchor check. When the file grew,
+/// only the delta from the cached offset is parsed and must chain
 /// (first new record's `prevHash` equals the cached hash); on shrink, rewrite,
 /// an unchainable delta or any read error the whole file is rescanned exactly
 /// as before. `note_appended` refreshes the entry after this process appends.
@@ -630,9 +637,15 @@ pub fn tail_of(path: &Path) -> Result<(u64, Option<String>, Option<Value>), Stri
     };
 
     if let Some(entry) = cache_get(path) {
-        // Nothing changed on disk: the cached tail is the file's tail.
+        // (len, mtime) match: likely unchanged, but an in-place rewrite that
+        // preserves byte length within the same mtime tick leaves both equal.
+        // Re-read only the cached last-record region and confirm it still
+        // matches before trusting the cached tail; otherwise drop and rescan.
         if entry.len == len && entry.mtime == mtime {
-            return Ok((entry.seq, entry.hash.clone(), entry.record.clone()));
+            if cached_tail_still_on_disk(path, &entry) {
+                return Ok((entry.seq, entry.hash.clone(), entry.record.clone()));
+            }
+            cache_drop(path);
         }
         // The file grew: read only the new bytes; the delta must chain.
         if meta.is_some() && entry.len < len {
@@ -845,6 +858,64 @@ fn extend_tail_from_delta(
         hash,
         record,
     })
+}
+
+/// Cheaply confirm the cached tail record is still the one on disk when
+/// (len, mtime) matched. An in-place rewrite that preserves byte length and
+/// lands in the same mtime tick is invisible to the (len, mtime) key, so we
+/// re-read ONLY the last record's byte region (the serialized-record-plus-`\n`
+/// span ending at `entry.line_end`, via the same narrow open+seek+read_exact
+/// `extend_tail_from_delta` uses), parse it, and
+/// require its `seq` and `hash` to still equal the cached entry's. Returns
+/// `false` on any read/parse error or disagreement, so the caller drops the
+/// stale entry and falls back to a full rescan (which sees the tampered tail).
+fn cached_tail_still_on_disk(path: &Path, entry: &TailCacheEntry) -> bool {
+    // An empty chain has no last-record bytes to re-validate; trust the entry
+    // only if it genuinely described an empty file ending at a line boundary.
+    let Some(record) = &entry.record else {
+        return entry.len == 0 && entry.line_end == 0;
+    };
+    // The cached tail's last line is `<serialized record>\n`, written just past
+    // `line_end`'s preceding complete line. Its serialized length lets us read
+    // exactly that record's byte region `[start, line_end)` and no more.
+    let Ok(serialized) = serde_json::to_string(record) else {
+        return false;
+    };
+    // The record plus its trailing newline must fit inside the cached file; the
+    // last line starts one line-length-plus-newline before the last boundary.
+    let line_bytes = serialized.len() as u64 + 1;
+    if entry.line_end > entry.len || line_bytes > entry.line_end {
+        return false;
+    }
+    let start = entry.line_end - line_bytes;
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return false;
+    }
+    let mut buf = vec![0u8; line_bytes as usize];
+    if file.read_exact(&mut buf).is_err() {
+        return false;
+    }
+    let Ok(text) = String::from_utf8(buf) else {
+        return false;
+    };
+    // The region is the last record line plus its trailing newline.
+    let Some(body) = text.strip_suffix('\n') else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    let seq = value.get("seq").and_then(|v| v.as_u64());
+    let hash = value
+        .get("hash")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    // The record's identity (seq + hash) must still match what we cached; an
+    // in-place same-length rewrite that changes the hash is caught here.
+    seq == Some(entry.seq) && hash == entry.hash
 }
 
 pub fn read_lines(path: &Path) -> Result<Vec<String>, String> {
