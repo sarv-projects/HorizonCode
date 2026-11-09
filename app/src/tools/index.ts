@@ -5,6 +5,8 @@ import type { Tool, ToolSpec } from "../contracts";
 // is the builtins. One lookup order for the whole loop (getTool/toolSpecs).
 import { getMcpTool, mcpToolSpecs } from "../core/mcp/registry";
 import { agentTool } from "./agent";
+import { astEditTool } from "./ast-edit";
+import { astSearchTool } from "./ast-search";
 import { codemodeTool } from "./codemode";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
@@ -30,6 +32,8 @@ export const tools: Tool[] = [
   agentTool,
   codemodeTool,
   previewTool,
+  astSearchTool,
+  astEditTool,
 ];
 
 /** The seven base tools; the delegation tool is deliberately excluded here. */
