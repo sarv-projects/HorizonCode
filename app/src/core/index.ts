@@ -30,6 +30,7 @@ import type {
   RuntimeEvent,
   RunExit,
   RuntimeOptions,
+  SessionForkPayload,
   ToolContext,
   ToolResult,
 } from "../contracts";
@@ -130,6 +131,16 @@ export interface HzRuntime extends Runtime {
    * overwritten). Returns the summary line the TUI prints.
    */
   rewindTo?(n: number): Promise<string>;
+  /**
+   * Session fork (docs/12 S-45): copy this session's transcript (all of it, or
+   * the first `at` messages, boundary-safe) into a NEW session with forkedFrom
+   * lineage. The parent is untouched and this runtime stays on it; the child's
+   * kernel stream starts with a `session.fork` event naming the parent stream
+   * and its head seq. Resume the child with `switchSession` or `createRuntime`.
+   */
+  forkSession?(at?: number): Promise<SessionInfo>;
+  /** Move this runtime onto an existing session of this workspace (resume). */
+  switchSession?(sessionId: string): HzRuntime;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -230,6 +241,41 @@ class HzRuntimeImpl implements HzRuntime {
   newSession(title = "New chat"): HzRuntime {
     const previous = this.session;
     this.session = this.store.createSession(title);
+    this.leases.length = 0;
+    void this.logSessionEnd(previous.id);
+    void this.logSessionStart();
+    return this;
+  }
+
+  async forkSession(at?: number): Promise<SessionInfo> {
+    const parentStream = streamFor(this.session.id);
+    let parentSeq = 0;
+    try {
+      const events = await this.kernel.readEvents(parentStream, 1);
+      parentSeq = events.reduce((max, ev) => Math.max(max, ev.seq), 0);
+    } catch {
+      /* an unreadable parent log records seq 0; the fork itself still works */
+    }
+    const child = this.store.forkSession(this.session.id, { at, parentSeq });
+    const payload: SessionForkPayload = {
+      parentSessionId: this.session.id,
+      parentStream,
+      parentSeq,
+      messageIndex: child.forkedFrom?.messageIndex ?? 0,
+    };
+    // A fork is a NEW stream whose first event references the parent; the
+    // parent's log is never written to (append-only, no rewrite).
+    await this.append(streamFor(child.id), EventTypes.sessionFork, payload);
+    return child;
+  }
+
+  switchSession(sessionId: string): HzRuntime {
+    const next = this.store.getSession(sessionId);
+    if (!next) throw new Error(`no session ${sessionId} in this workspace`);
+    const previous = this.session;
+    // Resume runs the same transcript repair createRuntime runs on open.
+    this.store.repairDanglingToolCalls(next.id);
+    this.session = next;
     this.leases.length = 0;
     void this.logSessionEnd(previous.id);
     void this.logSessionStart();

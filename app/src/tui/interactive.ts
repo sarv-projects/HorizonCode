@@ -13,6 +13,7 @@ import * as path from "node:path";
 import type { ContextUsage, RunExit, Runtime } from "../contracts";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
+import type { SessionInfo } from "../core/session";
 import type { PermissionMode } from "../core/permission-mode";
 import { PERMISSION_MODES, describeMode, isPermissionMode, modeBadge, parsePermissionMode, permissionModeError } from "../core/permission-mode";
 import { historyFilePath } from "../core/paths";
@@ -46,6 +47,8 @@ export interface CheckpointView {
   label: string;
   /** The journal entry ids the checkpoint covers (the list's change count). */
   changes: readonly string[];
+  /** Transcript length at the checkpoint (what `/fork <n>` cuts at), when known. */
+  messageIndex?: number;
 }
 
 /** Extras the core runtime may or may not expose yet; each one is optional. */
@@ -65,6 +68,10 @@ type RuntimeWithExtras = Runtime & {
   /** Rewind hooks. An older core simply does not offer them; nothing breaks. */
   checkpoints?: () => ReadonlyArray<CheckpointView>;
   rewindTo?: (n: number) => Promise<string>;
+  /** Session fork hooks (optional like the rest). */
+  forkSession?: (at?: number) => Promise<SessionInfo>;
+  switchSession?: (sessionId: string) => unknown;
+  sessions?: () => ReadonlyArray<SessionInfo>;
 };
 
 export interface InteractiveOptions {
@@ -160,6 +167,8 @@ function printHelp(r: Renderer): void {
     ["/changes", "review staged changes and diffs"],
     ["/apply", "write the staged changes"],
     ["/discard", "drop the staged changes"],
+    ["/fork [n]", "branch this chat into a new session (n = checkpoint number, else everything so far)"],
+    ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
     ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
     ["/memory", "which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias /instructions)"],
     ["/init", "draft an AGENTS.md for this repo (staged; you review it, then /apply)"],
@@ -487,6 +496,71 @@ function listCheckpoints(runtime: Runtime, renderer: Renderer): void {
   if (views.length > REWIND_LIST_LIMIT) {
     renderer.notice(`... ${views.length - REWIND_LIST_LIMIT} older checkpoint(s) \u2014 /rewind <n> takes the number from this list`);
   }
+}
+
+/** One /sessions row: id, title, and the fork lineage when there is one. */
+export function describeSession(s: SessionInfo, currentId?: string): string {
+  const mark = s.id === currentId ? "* " : "  ";
+  const lineage =
+    s.forkedFrom !== undefined
+      ? ` (fork of ${s.forkedFrom.sessionId} at message ${s.forkedFrom.messageIndex})`
+      : "";
+  return `${mark}${s.id}  ${s.title}${lineage}`;
+}
+
+/**
+ * /fork [n] and /sessions. `/fork` copies the transcript into a new session
+ * and moves this chat onto it (the original stays as it was and can be resumed
+ * by id); `/fork n` cuts at checkpoint n's message index. Returns false when
+ * `name` is not one of the two.
+ */
+export async function runForkCommand(
+  name: string,
+  arg: string,
+  runtime: Runtime,
+  renderer: Renderer,
+): Promise<boolean> {
+  const rt = runtime as RuntimeWithExtras;
+  if (name === "sessions") {
+    if (typeof rt.sessions !== "function") {
+      notSupported(renderer, "sessions", "sessions");
+      return true;
+    }
+    for (const s of rt.sessions()) renderer.line(describeSession(s, runtime.sessionId));
+    return true;
+  }
+  if (name !== "fork") return false;
+  if (typeof rt.forkSession !== "function" || typeof rt.switchSession !== "function") {
+    notSupported(renderer, "forkSession", "fork");
+    return true;
+  }
+  let at: number | undefined;
+  const text = arg.trim();
+  if (text !== "") {
+    const n = Number(text);
+    if (!Number.isInteger(n) || n < 1) {
+      renderer.notice("usage: /fork [n] \u2014 n is a checkpoint number from /rewind");
+      return true;
+    }
+    const cp = typeof rt.checkpoints === "function" ? rt.checkpoints().find((c) => c.n === n) : undefined;
+    const idx = cp?.messageIndex;
+    if (typeof idx !== "number") {
+      renderer.notice(`no checkpoint ${n} to fork at \u2014 /rewind lists them`);
+      return true;
+    }
+    at = idx;
+  }
+  try {
+    const parentId = runtime.sessionId;
+    const child = await rt.forkSession(at);
+    rt.switchSession(child.id);
+    renderer.notice(
+      `forked ${parentId} -> ${child.id} (${child.forkedFrom?.messageIndex ?? 0} message(s) copied); the original is untouched`,
+    );
+  } catch (err) {
+    renderer.notice(`could not fork: ${errorMessage(err)}`);
+  }
+  return true;
 }
 
 /**
@@ -872,6 +946,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // The plan commands own their notices; the prompt (and its badge) is
         // reprinted by the common showPrompt() at the end of runSlash.
         await runPlanCommand(name, arg, runtime, renderer, planState);
+        break;
+      }
+      case "fork":
+      case "sessions": {
+        if (busy) {
+          renderer.notice(`/${name} needs an idle chat: try again when the current answer ends`);
+          break;
+        }
+        await runForkCommand(name, arg, runtime, renderer);
         break;
       }
       case "rewind": {

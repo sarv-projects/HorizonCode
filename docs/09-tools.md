@@ -1570,3 +1570,5 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 - Skill/plugin contributed tools are designed to enter through the same pipeline; no upstream repo was surveyed deeply enough to claim the pattern is field-proven — see the sources in §1 for what was actually read.
 
 ---
+
+> **Session fork (`docs/28` ruling 59).** Forking adds no tool and no admission kind: it is a user action (slash command or server method) that copies settled transcript rows. A fork's tool-call groups are never split; the copy starts at a safe boundary.

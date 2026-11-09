@@ -1917,3 +1917,4 @@ Every capability below is **`DESIGNED`** *as a specification claim* — with one
 4. **Windows and macOS sandbox backends are design-only here.** `source: /data/home/forge/repo-tour/codex/codex-rs/windows-sandbox-rs/src/lib.rs` and the macOS `.sbpl` policies are the reference material; neither is implemented in the ancestor project.
 5. **Local root attacker is out of scope** (§7.17.1). This is a limit, not a defect; it is stated so no reader infers protection we do not provide.
 
+> **Session fork (`docs/28` ruling 59).** A fork is a user action that copies settled history only and writes one `session.fork` event to a new stream; it grants nothing, and the child runs under the process's current mode and config (no wider than a fresh `/new`). Narrowing by parent posture (S-46) is not implemented.

@@ -6,7 +6,9 @@
 
 > **Agent presets (stage 3, `docs/28` ruling 56).** A profiled subagent still writes its own child session (titled `subagent: ...`) and receipts; the profile name rides only the parent's `subagent.event` stream, not a session column. Pinning `{id, revision, digest}` on the session (docs/05 4.9) is not built.
 >
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED on the integration branch: conversational rewind (`SessionStore.truncateMessages` boundary-safe, `rewindTo(n)` truncates the transcript to the checkpoint and appends a `rewind.conversation` event) on top of the file-side checkpoints of wave 14c, and admission-queue recovery on open/resume. NOT STARTED: session fork and branch, cross-process locking for sessions, checkpoints and the change journal, workspace snapshots. See `28-implementation-status.md` §1.
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED on the integration branch: conversational rewind (`SessionStore.truncateMessages` boundary-safe, `rewindTo(n)` truncates the transcript to the checkpoint and appends a `rewind.conversation` event) on top of the file-side checkpoints of wave 14c, and admission-queue recovery on open/resume. Session fork now ships (ruling 59). NOT STARTED: cross-process locking for sessions, checkpoints and the change journal, workspace snapshots. See `28-implementation-status.md` §1.
+
+> **Session fork (`docs/28` ruling 59).** `/fork [n]` and `session.fork` ship: a new session with a copy of the transcript (boundary-safe, optionally up to a checkpoint's message index), `forkedFrom` lineage on the session row, and a new kernel stream whose first event is `session.fork` naming the parent stream and seq. The parent is never modified. Resume works on forks. Posture narrowing (S-46) and a CLI verb are still NOT STARTED.
 
 > What is durable, where it lives, who may write it, how it is rebuilt, how it is moved between machines, and exactly what survives each kind of death.
 
