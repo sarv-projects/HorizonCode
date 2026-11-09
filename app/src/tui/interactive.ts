@@ -10,10 +10,11 @@
 import * as readline from "node:readline";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { ContextUsage, Runtime, ToolSpec } from "../contracts";
+import type { ContextUsage, RunExit, Runtime } from "../contracts";
 import { unifiedDiff } from "../core/plan";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
+import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting } from "./banner";
 import { createRenderer, diffBlock, type Renderer } from "./render";
@@ -59,8 +60,6 @@ type RuntimeWithExtras = Runtime & {
   checkpoints?: () => ReadonlyArray<CheckpointView>;
   rewindTo?: (n: number) => Promise<string>;
 };
-
-const toolSpecs = (toolsModule as { toolSpecs?: () => ToolSpec[] }).toolSpecs;
 
 export interface InteractiveOptions {
   runtime: Runtime;
@@ -165,19 +164,62 @@ function printHelp(r: Renderer): void {
   printWrapped(r, "  Ctrl+C  stop the current answer (again to leave)   Ctrl+D  leave   \u2191/\u2193  earlier messages", dim);
 }
 
-function showTools(r: Renderer): void {
-  let specs: ToolSpec[] = [];
-  try {
-    specs = toolSpecs ? toolSpecs() ?? [] : [];
-  } catch {
-    specs = [];
+/**
+ * The /files report. Every registered tool lands in exactly one bucket, so the
+ * counts add up to the registry size: visible to the model now, deferred (the
+ * model unlocks it through tool_search), or hidden by the model->tool routing
+ * table for the active model/provider.
+ */
+export function describeTools(runtime: Runtime): { visible: string[]; deferred: string[]; routed: string[]; total: number } | undefined {
+  const all = (toolsModule as { tools?: ReadonlyArray<{ name?: string }> }).tools;
+  const exposureOf = (toolsModule as { exposureOf?: (t: unknown) => string }).exposureOf;
+  const isDiscovered = (toolsModule as { isDiscovered?: (id: string | undefined, name: string) => boolean }).isDiscovered;
+  if (!Array.isArray(all) || typeof exposureOf !== "function") return undefined;
+  const routing = resolveToolRoutingConfig({ model: runtime.model, provider: runtime.providerName });
+  const visible: string[] = [];
+  const deferred: string[] = [];
+  const routed: string[] = [];
+  for (const tool of all) {
+    const name = tool?.name;
+    if (typeof name !== "string" || name === "") continue;
+    const exposure = exposureOf(tool);
+    if (!routing.isToolEnabled(name)) routed.push(name);
+    else if (exposure === "deferred" && !(isDiscovered?.(runtime.sessionId, name) ?? false)) deferred.push(name);
+    else if (exposure === "hidden" || exposure === "code_mode_only") continue;
+    else visible.push(name);
   }
-  if (specs.length === 0) {
+  return { visible, deferred, routed, total: visible.length + deferred.length + routed.length };
+}
+
+/**
+ * One line naming how a turn ended, for every turn alike (plan mode too). A
+ * clean turn_end stays silent; anything else says why the run stopped.
+ */
+export function exitLine(exit: RunExit | undefined): string | undefined {
+  if (exit === undefined || (exit.terminal === "succeeded" && (exit.detail === undefined || exit.detail === "turn_end"))) {
+    return undefined;
+  }
+  return `turn ended: ${exit.terminal}${exit.detail !== undefined ? ` (${exit.detail})` : ""}`;
+}
+
+function showTools(r: Renderer, runtime: Runtime): void {
+  let report: ReturnType<typeof describeTools>;
+  try {
+    report = describeTools(runtime);
+  } catch {
+    report = undefined;
+  }
+  if (report === undefined || report.total === 0) {
     r.notice("no tools are registered in this build yet");
     return;
   }
-  const names = specs.map((spec) => spec?.name).filter((name): name is string => typeof name === "string" && name !== "");
-  r.notice(`tools (${names.length}): ${names.join(", ")}`);
+  r.notice(`tools (${report.total} registered): ${report.visible.length} available now: ${report.visible.join(", ")}`);
+  if (report.deferred.length > 0) {
+    r.notice(`  ${report.deferred.length} deferred (the assistant finds them with tool_search): ${report.deferred.join(", ")}`);
+  }
+  if (report.routed.length > 0) {
+    r.notice(`  ${report.routed.length} hidden for ${runtime.model} (model tool routing): ${report.routed.join(", ")}`);
+  }
 }
 
 /* ------------------------------ plan mode ------------------------------ */
@@ -548,7 +590,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     renderer.ensureLineStart();
     try {
-      await runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
+      const result = await runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
+      const line = exitLine(result?.exit);
+      if (line !== undefined) {
+        renderer.ensureLineStart();
+        renderer.notice(line);
+      }
     } catch (err) {
       renderer.error(`request failed: ${errorMessage(err)}`);
     } finally {
@@ -647,7 +694,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         await showOrSetModel(arg);
         break;
       case "files":
-        showTools(renderer);
+        showTools(renderer, runtime);
         break;
       case "context":
         showContext();

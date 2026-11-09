@@ -28,6 +28,7 @@ import type {
   Runtime,
   RuntimeCallbacks,
   RuntimeEvent,
+  RunExit,
   RuntimeOptions,
   ToolContext,
   ToolResult,
@@ -645,7 +646,7 @@ class HzRuntimeImpl implements HzRuntime {
     }
   }
 
-  send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean }> {
+  send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
     // Turns are serialized: a second send waits for the first to finish.
     const run = this.sendQueue.then(
       () => this.runSend(text, cb),
@@ -658,10 +659,10 @@ class HzRuntimeImpl implements HzRuntime {
     return run;
   }
 
-  private async runSend(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean }> {
+  private async runSend(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
     if (this.closed) {
       emit(cb, { type: "error", message: "this runtime is closed" });
-      return { text: "", aborted: false };
+      return { text: "", aborted: false, exit: { terminal: "failed", detail: "internal_error" } };
     }
     const controller = new AbortController();
     this.controller = controller;
@@ -735,7 +736,15 @@ class HzRuntimeImpl implements HzRuntime {
     } catch (err) {
       emit(cb, { type: "error", message: `runtime error: ${errorMessage(err)}` });
       emit(cb, { type: "turn.done" });
-      return { text: "", aborted: controller.signal.aborted };
+      // Every outcome carries an exit (plan-mode turns included), so a caller
+      // never has to guess whether a missing exit meant success.
+      return {
+        text: "",
+        aborted: controller.signal.aborted,
+        exit: controller.signal.aborted
+          ? { terminal: "interrupted", detail: "aborted" }
+          : { terminal: "failed", detail: "internal_error" },
+      };
     } finally {
       if (this.controller === controller) this.controller = undefined;
       if (this.active === cb) this.active = undefined;

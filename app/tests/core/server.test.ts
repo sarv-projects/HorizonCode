@@ -161,8 +161,8 @@ describe("single-attach server (FEAT-002)", () => {
     expect(hello.proto).toBe(HZ_PROTO);
     expect(hello.workspace).toBe(workspace);
     expect(typeof hello.version).toBe("string");
-    // hello may precede the first session open, so the mode is still unknown.
-    expect(["trusted", "untrusted", "unknown"]).toContain(hello.kernelMode as string);
+    // hello precedes the first session open, yet the mode is real, never "unknown".
+    expect(["trusted", "untrusted"]).toContain(hello.kernelMode as string);
     const caps = hello.capabilities as { methods: string[]; transports: string[]; singleAttach: boolean };
     expect(caps.methods).toContain("session.prompt");
     expect(caps.transports).toEqual(["stdio"]);
