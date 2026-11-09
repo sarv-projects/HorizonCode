@@ -3,18 +3,23 @@
  *
  * `mockFlag` (the --mock flag or an empty key) forces the offline provider so the
  * chat always works; a real provider without a key reports that clearly instead
- * of failing with an opaque 401.
+ * of failing with an opaque 401. Ollama is the exception: a local server needs
+ * no key, and a refused connection is already the readable error.
  */
 
 import type { Provider, ProviderEvent } from "../../contracts";
 import type { HzConfig } from "../config";
 import { createAnthropicProvider } from "./anthropic";
+import { createGoogleProvider } from "./google";
 import { createMockProvider } from "./mock";
+import { createOllamaProvider } from "./ollama";
 import { createOpenAiProvider } from "./openai";
 
 export { createMockProvider, MOCK_GREETING } from "./mock";
 export { createAnthropicProvider, toAnthropicMessages, toAnthropicTools } from "./anthropic";
 export { createOpenAiProvider, toOpenAiMessages, toOpenAiTools } from "./openai";
+export { createGoogleProvider, toGoogleContents, toGoogleTools } from "./google";
+export { createOllamaProvider, toOllamaMessages, toOllamaTools } from "./ollama";
 
 export interface MakeProviderOptions {
   /** Force the offline mock provider regardless of the configuration. */
@@ -47,6 +52,13 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
       return config.apiKey
         ? createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
         : missingKeyProvider("openai", "OPENAI_API_KEY");
+    case "google":
+      return config.apiKey
+        ? createGoogleProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+        : missingKeyProvider("google", "GEMINI_API_KEY or GOOGLE_API_KEY");
+    case "ollama":
+      // No key required: a local server (a key only fronts a proxy deployment).
+      return createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl });
     default:
       return createMockProvider();
   }

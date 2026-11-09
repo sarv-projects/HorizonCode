@@ -202,7 +202,7 @@ e2e_run() {
   shift 4
   local out="$WORK_DIR/$label.out" status=0
   local -a envv=(
-    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u HZ_API_KEY -u HZ_MODEL -u HZ_BASE_URL
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u HZ_API_KEY -u HZ_MODEL -u HZ_BASE_URL
     -u HZ_MAX_STEPS -u HZ_MAX_TOKENS -u HZ_MAX_WALL_MS
     HOME="$E2E_HOME" PATH="$E2E_PATH" HZ_PROVIDER=mock
   )
