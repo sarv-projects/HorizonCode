@@ -33,6 +33,7 @@ import type {
   ToolResult,
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
+import { AdmissionQueue } from "./admission";
 import { loadConfig, type HzConfig, type McpConfig } from "./config";
 import { KernelClient } from "./kernel";
 import {
@@ -698,12 +699,30 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   if (opts?.continueSession) session = store.latestSession();
   if (!session) session = store.createSession();
 
-  // A run killed between "append the assistant message with its tool calls" and
-  // "append the tool result" leaves an unanswered call, and every real provider
-  // refuses to replay that history — which made a crash permanently brick the
-  // session. Repair it on open, for a resumed session and for a fresh one alike
-  // (a fresh session has no rows, so this is a no-op). Idempotent.
+  // Crash-recovery on open is TWO complementary repairs, not one — see external
+  // audit finding 2 and the dsh ToolCallRecovery reference. A run killed between
+  // "append the assistant message with its tool calls" and "append the tool
+  // result" leaves two distinct kinds of damage, and each mechanism heals one:
+  //
+  //   - repairDanglingToolCalls repairs the TRANSCRIPT: an assistant tool call
+  //     with no following tool result is answered with a synthetic UNKNOWN
+  //     result (the dsh ToolCallRecovery pairing invariant). Without it every
+  //     real provider refuses to replay the history and the session is bricked.
+  //
+  //   - recoverInterrupted settles the ADMISSION FIFO: a 'running' row left by
+  //     the killed turn becomes 'unknown' (evidence 'interrupted'), which HALTS
+  //     its followers instead of silently replaying a turn whose effect may or
+  //     may not have happened.
+  //
+  // They are complementary, never duplicative: one keeps the provider-replayable
+  // history valid, the other keeps the work-queue honest. recoverInterrupted was
+  // defined but called from nowhere on the live path (external audit finding 2);
+  // wiring it here, beside repairDanglingToolCalls and BEFORE the first turn can
+  // run, closes that finding — a resumed server session (FEAT-003) reuses this
+  // same entry point. Both run for a resumed session and a fresh one alike (a
+  // fresh session has no rows, so each is a no-op). Both are idempotent.
   const repaired = store.repairDanglingToolCalls(session.id);
+  const interrupted = new AdmissionQueue(store).recoverInterrupted(session.id);
 
   let impl: HzRuntimeImpl | null = null;
   const kernel = new KernelClient({
@@ -747,6 +766,16 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     impl.note(
       `repaired ${repaired.repaired} interrupted tool call(s) left by a run that was killed mid-execution ` +
         `(${repaired.calls.join(", ")}) — each was answered with UNKNOWN; verify the real state before trusting it`,
+    );
+  }
+  if (interrupted.length > 0) {
+    // The admission side of the same crash: a turn that was 'running' when the
+    // process died is now 'unknown' and will never be silently replayed. It
+    // halts its followers until a human resolves it (requeue/drop/cancel).
+    impl.note(
+      `settled ${interrupted.length} interrupted admission row(s) left 'running' by a killed run ` +
+        `(${interrupted.join(", ")}) — each is now 'unknown' (evidence 'interrupted') and will never be replayed; ` +
+        `resolve it before the queue can advance`,
     );
   }
   // MCP servers: user-config only, spawned via the spawn-kind admission, and
