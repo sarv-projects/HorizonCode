@@ -483,3 +483,22 @@ describe("shell_session: guard on the real PTY path with a real bash", () => {
     }
   });
 });
+
+describe("shell_session: bare CR cannot join two admitted lines (pipe mode)", () => {
+  test("CR is normalized to a newline so executed lines equal admitted lines", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({});
+      const ctx = mockToolContext({ cwd: ws, decision: () => ({ decision: "allow" }) });
+      const start = await interactiveExecTool.execute({ mode: "start", command: "bash --norc --noprofile" }, ctx);
+      const sessionId = (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+      const first = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo AAA\r" }, ctx);
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo BBB\n" }, ctx);
+      await Bun.sleep(300);
+      const out = first.output + r.output + (await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx)).output;
+      expect(out).toContain("AAA");
+      expect(out).toContain("BBB");
+      expect(out).not.toContain("AAA\recho");
+      await interactiveExecTool.execute({ mode: "close", sessionId }, ctx);
+    });
+  });
+});

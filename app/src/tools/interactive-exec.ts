@@ -507,7 +507,12 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
     dropSession(session);
     return { ok: true, output: out };
   }
-  const input = typeof args.input === "string" ? args.input : "";
+  const rawInput = typeof args.input === "string" ? args.input : "";
+  // Normalize every newline form to "\n" BEFORE admission and the write. Admission
+  // splits on \r too, but a piped bash does not: it would run "a\rb" as ONE
+  // command while the guard saw "a" and "b". Writing the normalized text makes
+  // the admitted lines exactly the lines the shell executes, on PTY and pipe.
+  const input = rawInput.replace(/\r\n|\r/g, "\n");
   if (CONTROL_CHARS.test(input)) {
     return fail("control characters are not allowed in shell_session input (only tab and newline)");
   }
