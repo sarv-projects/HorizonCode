@@ -7,8 +7,9 @@
  *
  * The default provider is `mock`, so `hzcode` starts a working chat with no
  * configuration at all. A provider-specific key in the environment
- * (ANTHROPIC_API_KEY / OPENAI_API_KEY) is treated as configuration of that
- * provider, but it never overrides an explicitly chosen one.
+ * (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / GOOGLE_API_KEY) is
+ * treated as configuration of that provider, but it never overrides an
+ * explicitly chosen one. Ollama needs no key at all: it is a local server.
  */
 
 import { readFileSync } from "node:fs";
@@ -17,14 +18,16 @@ import * as path from "node:path";
 import type { RunBudget } from "../contracts";
 import { userConfigDir } from "./paths";
 
-export type ProviderName = "anthropic" | "openai" | "mock";
+export type ProviderName = "anthropic" | "openai" | "google" | "ollama" | "mock";
 
-export const PROVIDER_NAMES: readonly ProviderName[] = ["anthropic", "openai", "mock"];
+export const PROVIDER_NAMES: readonly ProviderName[] = ["anthropic", "openai", "google", "ollama", "mock"];
 
 /** Model used when nothing else is configured, per provider. */
 export const DEFAULT_MODELS: Record<ProviderName, string> = {
   anthropic: "claude-sonnet-4-5",
   openai: "gpt-4o-mini",
+  google: "gemini-2.5-flash",
+  ollama: "llama3.1",
   mock: "mock-1",
 };
 
@@ -32,6 +35,8 @@ export const DEFAULT_MODELS: Record<ProviderName, string> = {
 export const DEFAULT_BASE_URLS: Record<Exclude<ProviderName, "mock">, string> = {
   anthropic: "https://api.anthropic.com",
   openai: "https://api.openai.com",
+  google: "https://generativelanguage.googleapis.com",
+  ollama: "http://127.0.0.1:11434",
 };
 
 export interface HzConfig {
@@ -107,7 +112,9 @@ function envNumber(value: string | undefined): number | undefined {
 function normalizeProvider(value: string | undefined): ProviderName | undefined {
   if (!value) return undefined;
   const lower = value.toLowerCase();
-  return lower === "anthropic" || lower === "openai" || lower === "mock" ? lower : undefined;
+  return lower === "anthropic" || lower === "openai" || lower === "google" || lower === "ollama" || lower === "mock"
+    ? lower
+    : undefined;
 }
 
 /** The slug an MCP server id must match so the tool-name grammar round-trips. */
@@ -216,12 +223,14 @@ export function readConfigFile(file: string = defaultConfigPath()): ConfigFile {
 function detectProvider(env: EnvLike): ProviderName | undefined {
   if (str(env.ANTHROPIC_API_KEY)) return "anthropic";
   if (str(env.OPENAI_API_KEY)) return "openai";
+  if (str(env.GEMINI_API_KEY) || str(env.GOOGLE_API_KEY)) return "google";
   return undefined;
 }
 
 function providerKey(provider: ProviderName, env: EnvLike): string | undefined {
   if (provider === "anthropic") return str(env.ANTHROPIC_API_KEY);
   if (provider === "openai") return str(env.OPENAI_API_KEY);
+  if (provider === "google") return str(env.GEMINI_API_KEY) ?? str(env.GOOGLE_API_KEY);
   return undefined;
 }
 
@@ -289,7 +298,7 @@ export function describeConfig(config: HzConfig): string {
 
 /** True when the provider needs a key and does not have one yet. */
 export function missingKey(config: HzConfig): string | null {
-  if (config.provider === "mock") return null;
+  if (config.provider === "mock" || config.provider === "ollama") return null;
   if (config.apiKey) return null;
-  return config.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+  return config.provider === "anthropic" ? "ANTHROPIC_API_KEY" : config.provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY";
 }

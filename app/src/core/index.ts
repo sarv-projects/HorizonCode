@@ -61,6 +61,21 @@ import { startMcpManager, type McpManager } from "./mcp";
 import { getTool } from "../tools";
 import { noteRead } from "../tools/read-ledger";
 import { canonicalJson, sha256Hex } from "./canon";
+// Wave-14c rewind: the durable checkpoint store (the TUI's /rewind) sits on the
+// change journal; a restore runs through the same `write` tool route /apply
+// uses, so a rewind takes exactly the guard, approval, ledger and journal path
+// a live write takes (no second writer).
+import {
+  checkpointByNumber,
+  checkpointViews,
+  changesSince,
+  listCheckpoints,
+  recordCheckpoint,
+  rewindPlan,
+  type CheckpointView,
+} from "./checkpoints";
+import { consumeChange, reloadFromDisk } from "../tools/change-journal";
+import { writeAtomic } from "../tools/atomic-write";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -90,6 +105,18 @@ export interface HzRuntime extends Runtime {
   applyPlan(): Promise<string>;
   /** Discard one staged change, or all; returns how many were dropped. */
   discardPlan(rel?: string): number;
+  /**
+   * Wave-14c rewind: the workspace's checkpoints, newest first and 1-numbered
+   * (`/rewind <n>` takes `n`). Optional so a stripped runtime can omit it; the
+   * TUI degrades with a typed "not supported" line.
+   */
+  checkpoints?(): CheckpointView[];
+  /**
+   * Put back the files the workspace changed after checkpoint `n` (never the
+   * checkpoint's own changes; a file that moved on since is refused, not
+   * overwritten). Returns the summary line the TUI prints.
+   */
+  rewindTo?(n: number): Promise<string>;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -220,6 +247,137 @@ class HzRuntimeImpl implements HzRuntime {
 
   discardPlan(rel?: string): number {
     return discardStaged(this.session.id, rel);
+  }
+
+  /** The workspace's checkpoints, newest first, numbered for `/rewind <n>`. */
+  checkpoints(): CheckpointView[] {
+    return checkpointViews(listCheckpoints(this.workspace).checkpoints);
+  }
+
+  /**
+   * Rewind the workspace to checkpoint `n` (the TUI's /rewind <n>). Only the
+   * live journal entries recorded AFTER that checkpoint that the checkpoint
+   * itself does not cover are put back, newest first; each restore takes the
+   * exact route `undo` takes — guard, approval on ask, the journal's
+   * stale-check, an atomic write, a consume tombstone — so a file that moved on
+   * since the recorded change wrote it is refused and named, never overwritten.
+   * The consumed entry is tombstoned on success, so a reload cannot resurrect
+   * it and a second rewind of the same checkpoint has nothing left to put back
+   * (a rewind is idempotent; it is deliberately not itself journaled, exactly
+   * like undo's restore). The plan itself never writes (checkpoints.rewindPlan
+   * is pure), so a refusal leaves the workspace exactly as it was.
+   */
+  async rewindTo(n: number): Promise<string> {
+    const load = listCheckpoints(this.workspace);
+    const checkpoint = checkpointByNumber(load, n);
+    if (checkpoint === undefined) {
+      const note = load.corrupt === true ? ` (the checkpoint store is corrupt: ${load.reason ?? "unreadable"})` : "";
+      throw new Error(`no checkpoint ${n} in this workspace${note}`);
+    }
+    const plan = rewindPlan(this.workspace, checkpoint.id);
+    if (plan.refusal !== undefined) throw new Error(plan.refusal);
+    const restorable = plan.restores.filter((item) => item.restorable);
+    const skippedNote =
+      plan.skipped.length > 0
+        ? `${plan.skipped.length} change(s) cannot be put back (content not kept, or the change created the file) and were left as they are`
+        : "";
+    if (restorable.length === 0) {
+      const summary =
+        `nothing to rewind to checkpoint ${n}: no restorable change was recorded after it` +
+        (skippedNote === "" ? "" : ` \u2014 ${skippedNote}`);
+      await this.append(streamFor(this.session.id), "rewind.plan", {
+        checkpoint: checkpoint.id,
+        restored: [],
+        refused: [],
+        skipped: plan.skipped.map((s) => s.rel),
+      });
+      return summary;
+    }
+    const ctx: ToolContext = {
+      cwd: this.workspace,
+      workspace: this.workspace,
+      sessionId: this.session.id,
+      signal: new AbortController().signal,
+      guard: (action: GuardAction) =>
+        this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
+      approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),
+      receipt: (rec) => this.kernel.issueReceipt(rec),
+    };
+    const restored: string[] = [];
+    const refused: string[] = [];
+    for (const item of restorable) {
+      // Re-read the entry fresh: an earlier restore in this loop just tombstoned
+      // the journal view the plan was computed from (the plan carries ids, not
+      // payloads).
+      const entry = reloadFromDisk(this.workspace).entries.find((e) => e.id === item.entryId);
+      if (entry === undefined || entry.before === null) {
+        refused.push(`${item.rel}: the recorded content is no longer available`);
+        continue;
+      }
+      let current: string | null = null;
+      try {
+        current = readFileSync(entry.path).toString("utf8");
+      } catch {
+        current = null;
+      }
+      if (current === null || sha256Hex(current) !== entry.afterSha256) {
+        refused.push(`${item.rel}: changed since the recorded change wrote it \u2014 refusing to overwrite a concurrent edit`);
+        continue;
+      }
+      // Same consent path as the write this reverses (tools/undo.ts).
+      const action: GuardAction = { kind: "fs.write", target: entry.path };
+      const decision = await ctx.guard(action);
+      if (decision.decision === "deny") {
+        refused.push(`${item.rel}: denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
+        continue;
+      }
+      if (decision.decision === "ask") {
+        const approved = await ctx.approve(
+          { title: `Rewind: restore ${item.rel}`, detail: `reverts the ${entry.tool} recorded after checkpoint ${n}`, kind: "fs.write" },
+          action,
+        );
+        if (!approved) {
+          refused.push(`${item.rel}: declined by user`);
+          continue;
+        }
+      }
+      const outcome = await writeAtomic(entry.path, entry.before, ctx);
+      if (!outcome.ok) {
+        refused.push(`${item.rel}: ${outcome.refusal.split("\n")[0]}`);
+        continue;
+      }
+      // The entry is spent: tombstone it so a reload cannot resurrect it and a
+      // second rewind of the same checkpoint finds nothing to put back.
+      consumeChange(this.session.id, entry);
+      // The workspace now holds the restored bytes -- later edits are legitimate.
+      noteRead(ctx, entry.path);
+      restored.push(item.rel);
+      try {
+        await this.kernel.issueReceipt({
+          action: "tool.execute",
+          tool: "rewind",
+          argsDigest: sha256Hex(canonicalJson({ checkpoint: checkpoint.id, entryId: entry.id, rel: item.rel })),
+          resultDigest: sha256Hex(entry.before),
+        });
+      } catch (err) {
+        this.note(`could not issue a receipt for the rewound write ${item.rel}: ${errorMessage(err)}`);
+      }
+    }
+    const parts: string[] = [
+      restored.length > 0
+        ? `restored ${restored.length} change(s) from before checkpoint ${n}: ${restored.join(", ")}`
+        : "restored nothing",
+    ];
+    if (refused.length > 0) parts.push(`refused ${refused.length}: ${refused.join("; ")}`);
+    if (skippedNote !== "") parts.push(skippedNote);
+    const summary = parts.join(" \u2014 ");
+    await this.append(streamFor(this.session.id), "rewind.apply", {
+      checkpoint: checkpoint.id,
+      restored,
+      refused,
+      skipped: plan.skipped.map((s) => s.rel),
+    });
+    return summary;
   }
 
   /**
@@ -376,6 +534,32 @@ class HzRuntimeImpl implements HzRuntime {
     await this.append(streamFor(sessionId), EventTypes.sessionEnd, { sessionId });
   }
 
+  /**
+   * Record one checkpoint for the turn that just completed: the ids of every
+   * live journal entry THIS session wrote inside the turn's window (wave-14c).
+   * Every completed turn is a checkpoint — a time boundary the human can rewind
+   * to — zero-change turns included. Best-effort: a failed checkpoint must
+   * never fail the turn, and a corrupt journal read is a notice, never an
+   * empty `changes` (which would claim the turn changed nothing).
+   */
+  private recordTurnCheckpoint(userText: string, turnStartedAt: number): void {
+    try {
+      const since = changesSince(this.workspace, turnStartedAt, this.session.id);
+      if (since.corrupt === true) {
+        this.note(
+          "no checkpoint was recorded for this turn: the change journal is unreadable, so what the turn changed cannot be verified",
+        );
+        return;
+      }
+      const firstLine = userText.trim().split(/\r?\n/, 1)[0] ?? "";
+      recordCheckpoint(this.workspace, this.session.id, this.store.messageCount(this.session.id), since.entries.map((entry) => entry.id), {
+        label: firstLine.slice(0, 80),
+      });
+    } catch (err) {
+      this.note(`could not record a checkpoint for this turn: ${errorMessage(err)}`);
+    }
+  }
+
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean }> {
     // Turns are serialized: a second send waits for the first to finish.
     const run = this.sendQueue.then(
@@ -423,7 +607,8 @@ class HzRuntimeImpl implements HzRuntime {
           emit(cb, event);
         },
       };
-      return await runTurn(
+      const turnStartedAt = Date.now();
+      const outcome = await runTurn(
         {
           workspace: this.workspace,
           sessionId: this.session.id,
@@ -457,6 +642,11 @@ class HzRuntimeImpl implements HzRuntime {
         },
         userContent,
       );
+      // Wave-14c: record the turn's checkpoint AFTER the run completed. The
+      // label is the user's first line; the change ids come from the durable
+      // journal's window, so a resumed process still rewinds by file state.
+      this.recordTurnCheckpoint(text, turnStartedAt);
+      return outcome;
     } catch (err) {
       emit(cb, { type: "error", message: `runtime error: ${errorMessage(err)}` });
       emit(cb, { type: "turn.done" });
@@ -575,7 +765,7 @@ export { loadConfig, describeConfig, missingKey, DEFAULT_MODELS } from "./config
 export type { HzConfig, ProviderName } from "./config";
 export { KernelClient, LocalKernel, resolveKernelBinary } from "./kernel";
 export { SessionStore, type SessionInfo } from "./session";
-export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider } from "./providers";
+export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider, createGoogleProvider, createOllamaProvider } from "./providers";
 export { systemPrompt, MAX_PROVIDER_CALLS, HISTORY_LIMIT, MAX_CONSECUTIVE_FORMAT_ERRORS } from "./loop";
 export { BudgetLedger, budgetCountdownLine, exitCodeFor } from "./loop";
 export type { BudgetStop, BudgetCountdown } from "./loop";

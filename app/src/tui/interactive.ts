@@ -32,6 +32,18 @@ export interface StagedChangeView {
   diff?: string;
 }
 
+/** What the TUI needs from one checkpoint; a core checkpoint view fits as-is. */
+export interface CheckpointView {
+  /** 1-based newest-first number: what `/rewind <n>` takes. */
+  n: number;
+  /** Epoch milliseconds the checkpoint was recorded at. */
+  at: number;
+  /** Human label; empty = unlabelled (the list prints "(no label)"). */
+  label: string;
+  /** The journal entry ids the checkpoint covers (the list's change count). */
+  changes: readonly string[];
+}
+
 /** Extras the core runtime may or may not expose yet; each one is optional. */
 type RuntimeWithExtras = Runtime & {
   newSession?: () => unknown;
@@ -43,6 +55,9 @@ type RuntimeWithExtras = Runtime & {
   stagedChanges?: () => ReadonlyArray<StagedChangeView>;
   applyPlan?: () => Promise<string>;
   discardPlan?: () => number;
+  /** Rewind hooks. An older core simply does not offer them; nothing breaks. */
+  checkpoints?: () => ReadonlyArray<CheckpointView>;
+  rewindTo?: (n: number) => Promise<string>;
 };
 
 const toolSpecs = (toolsModule as { toolSpecs?: () => ToolSpec[] }).toolSpecs;
@@ -139,6 +154,7 @@ function printHelp(r: Renderer): void {
     ["/changes", "review staged changes and diffs"],
     ["/apply", "write the staged changes"],
     ["/discard", "drop the staged changes"],
+    ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
     ["/exit", "leave (Ctrl+D also works)"],
   ];
   const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
@@ -186,8 +202,8 @@ function readPlanMode(runtime: Runtime): boolean {
 }
 
 /** One typed refusal line for a command whose runtime hook is absent. */
-function notSupported(renderer: Renderer, method: string): void {
-  renderer.notice(`not supported by this runtime: ${method} \u2014 this core build does not expose the plan-mode hook`);
+function notSupported(renderer: Renderer, method: string, hook = "plan-mode"): void {
+  renderer.notice(`not supported by this runtime: ${method} \u2014 this core build does not expose the ${hook} hook`);
 }
 
 /** State the plan commands share with runInteractive: the badge follows it. */
@@ -322,6 +338,98 @@ function discardStagedPlan(runtime: Runtime, renderer: Renderer): void {
   } catch (err) {
     renderer.notice(`could not discard the staged plan: ${errorMessage(err)}`);
   }
+}
+
+/* -------------------------------- rewind -------------------------------- */
+
+/** How many checkpoints bare /rewind lists (the newest page). */
+const REWIND_LIST_LIMIT = 10;
+
+/** The list line's time stamp: local `YYYY-MM-DD HH:MM` (the human's clock). */
+function checkpointTime(at: unknown): string {
+  const when = new Date(typeof at === "number" && Number.isFinite(at) ? at : Number.NaN);
+  if (Number.isNaN(when.getTime())) return "unknown time";
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return (
+    `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ` +
+    `${pad(when.getHours())}:${pad(when.getMinutes())}`
+  );
+}
+
+/** One `n) time \u2014 label, N change(s)` line of the checkpoint list. */
+function checkpointListLine(view: CheckpointView): string {
+  const n = typeof view?.n === "number" && Number.isInteger(view.n) && view.n > 0 ? view.n : 0;
+  const rawLabel = typeof view?.label === "string" ? view.label : "";
+  const label = sanitizeText(rawLabel).replace(/\s+/g, " ").trim() || "(no label)";
+  const count = Array.isArray(view?.changes) ? view.changes.length : 0;
+  return (
+    `  ${bold(`${n})`)} ${checkpointTime(view?.at)} \u2014 ${label}, ${count} change${count === 1 ? "" : "s"}`
+  );
+}
+
+/** The runtime's checkpoints, or a typed absence; never throws into the chat. */
+function listCheckpoints(runtime: Runtime, renderer: Renderer): void {
+  const list = (runtime as RuntimeWithExtras).checkpoints;
+  if (typeof list !== "function") {
+    notSupported(renderer, "checkpoints", "rewind");
+    return;
+  }
+  let views: ReadonlyArray<CheckpointView>;
+  try {
+    const raw = list.call(runtime) as ReadonlyArray<CheckpointView> | undefined;
+    views = Array.isArray(raw) ? raw : [];
+  } catch (err) {
+    renderer.notice(`could not list checkpoints: ${errorMessage(err)}`);
+    return;
+  }
+  if (views.length === 0) {
+    renderer.notice("no checkpoints yet \u2014 a checkpoint is recorded after each turn");
+    return;
+  }
+  renderer.notice(`checkpoints (newest first, ${views.length} total):`);
+  for (const view of views.slice(0, REWIND_LIST_LIMIT)) renderer.line(checkpointListLine(view));
+  if (views.length > REWIND_LIST_LIMIT) {
+    renderer.notice(`... ${views.length - REWIND_LIST_LIMIT} older checkpoint(s) \u2014 /rewind <n> takes the number from this list`);
+  }
+}
+
+/**
+ * The /rewind slash command: bare `/rewind` lists the newest checkpoints,
+ * `/rewind <n>` asks the runtime to rewind to one. Follows the plan-mode
+ * slice's contract exactly: every runtime method is optional, an absent hook
+ * prints one typed "not supported" line, and a throwing hook is reported
+ * rather than fatal. Returns false when `name` is not the rewind command, so
+ * the caller's command table decides the unknown-command answer.
+ */
+export async function runRewindCommand(
+  name: string,
+  arg: string,
+  runtime: Runtime,
+  renderer: Renderer,
+): Promise<boolean> {
+  if (name !== "rewind") return false;
+  if (arg === "") {
+    listCheckpoints(runtime, renderer);
+    return true;
+  }
+  const n = Number(arg);
+  if (!Number.isInteger(n) || n < 1) {
+    renderer.notice("usage: /rewind <n> \u2014 bare /rewind lists the newest checkpoints");
+    return true;
+  }
+  const rewind = (runtime as RuntimeWithExtras).rewindTo;
+  if (typeof rewind !== "function") {
+    notSupported(renderer, "rewindTo", "rewind");
+    return true;
+  }
+  try {
+    const summary = await Promise.resolve(rewind.call(runtime, n));
+    const line = typeof summary === "string" && summary.trim() !== "" ? summary.trim() : `checkpoint ${n}`;
+    renderer.notice(`rewound: ${line}`);
+  } catch (err) {
+    renderer.notice(`could not rewind: ${errorMessage(err)}`);
+  }
+  return true;
 }
 
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
@@ -551,6 +659,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // The plan commands own their notices; the prompt (and its badge) is
         // reprinted by the common showPrompt() at the end of runSlash.
         await runPlanCommand(name, arg, runtime, renderer, planState);
+        break;
+      }
+      case "rewind": {
+        // Rewind owns its notices too; an old core prints one typed line.
+        await runRewindCommand(name, arg, runtime, renderer);
         break;
       }
       default:
