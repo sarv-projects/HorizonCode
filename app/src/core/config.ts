@@ -55,6 +55,15 @@ export interface HzConfig {
    * malformed entry must never stop the chat from starting.
    */
   mcp?: McpConfig;
+  /**
+   * Language servers, default OFF (docs/09 §4.7). As with MCP, only entries
+   * from the USER config file are eligible: a language server runs with the
+   * user's authority, so a workspace cannot name one. With no `lsp` section the
+   * value is undefined and nothing is started. Entries that do not parse are
+   * skipped and named in `rejected`; a malformed entry never stops the chat
+   * from starting. The server list is pure config DATA — no command is baked in.
+   */
+  lsp?: LspConfig;
   /** Where the values came from, for the banner and for debugging. */
   sources: {
     provider: "env" | "file" | "detected" | "default";
@@ -83,6 +92,31 @@ export interface McpConfig {
   rejected: string[];
 }
 
+/** One configured language server (stdio only). */
+export interface LspServerConfig {
+  /** The slug that names this server: `[a-z0-9-]+`. */
+  id: string;
+  /** The program to start (spawned through the one owned-spawn path). */
+  command: string;
+  args?: string[];
+  /** Extra environment entries for the child; hzcode's env is scrubbed first. */
+  env?: Record<string, string>;
+  /**
+   * File extensions this server handles, WITHOUT the leading dot and
+   * lowercased (e.g. `["ts", "tsx"]`). Non-empty.
+   */
+  extensions: string[];
+  /** Files/dirs that mark the project root (e.g. `["tsconfig.json"]`). */
+  rootMarkers?: string[];
+}
+
+/** The parsed `lsp` config section: what to start, and what was skipped. */
+export interface LspConfig {
+  servers: LspServerConfig[];
+  /** One readable line per entry that was malformed and skipped. */
+  rejected: string[];
+}
+
 export type EnvLike = Record<string, string | undefined>;
 
 interface ConfigFile {
@@ -91,6 +125,7 @@ interface ConfigFile {
   baseUrl?: unknown;
   apiKey?: unknown;
   mcp?: unknown;
+  lsp?: unknown;
 }
 
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
@@ -197,6 +232,114 @@ export function parseMcpConfig(value: unknown): McpConfig | undefined {
   return { servers, rejected };
 }
 
+/** The slug a language server id must match, matching the MCP grammar. */
+const LSP_SERVER_ID = /^[a-z0-9-]+$/;
+
+/**
+ * Validate one `lsp.servers[]` entry. Returns the normalized server, or a
+ * readable reason string — never throws: a malformed entry is a skip that gets
+ * named, not a startup failure. Mirrors parseMcpServer.
+ */
+export function parseLspServer(value: unknown, index: number): LspServerConfig | string {
+  const where = `lsp.servers[${index}]`;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return `${where} is not an object`;
+  const raw = value as Record<string, unknown>;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (id === "" || !LSP_SERVER_ID.test(id)) {
+    return `${where}.id must match [a-z0-9-] (got ${JSON.stringify(raw.id ?? null)})`;
+  }
+  const command = typeof raw.command === "string" ? raw.command.trim() : "";
+  if (command === "") return `${where}.command must be a non-empty string`;
+  let args: string[] | undefined;
+  if (raw.args !== undefined) {
+    if (!Array.isArray(raw.args) || raw.args.some((arg) => typeof arg !== "string")) {
+      return `${where}.args must be an array of strings`;
+    }
+    args = raw.args as string[];
+  }
+  let env: Record<string, string> | undefined;
+  if (raw.env !== undefined) {
+    if (raw.env === null || typeof raw.env !== "object" || Array.isArray(raw.env)) {
+      return `${where}.env must be an object of strings`;
+    }
+    for (const [key, item] of Object.entries(raw.env as Record<string, unknown>)) {
+      if (typeof item !== "string") return `${where}.env.${key} must be a string`;
+    }
+    env = { ...(raw.env as Record<string, string>) };
+  }
+  if (!Array.isArray(raw.extensions) || raw.extensions.length === 0) {
+    return `${where}.extensions must be a non-empty array of strings`;
+  }
+  const extensions: string[] = [];
+  for (const ext of raw.extensions as unknown[]) {
+    if (typeof ext !== "string" || ext.trim() === "") {
+      return `${where}.extensions must be a non-empty array of strings`;
+    }
+    // Normalize: dotless, lowercased, so matching is by the bare extension.
+    extensions.push(ext.trim().replace(/^\.+/, "").toLowerCase());
+  }
+  let rootMarkers: string[] | undefined;
+  if (raw.rootMarkers !== undefined) {
+    if (!Array.isArray(raw.rootMarkers) || raw.rootMarkers.some((m) => typeof m !== "string")) {
+      return `${where}.rootMarkers must be an array of strings`;
+    }
+    rootMarkers = raw.rootMarkers as string[];
+  }
+  const server: LspServerConfig = { id, command, extensions };
+  if (args !== undefined) server.args = args;
+  if (env !== undefined) server.env = env;
+  if (rootMarkers !== undefined) server.rootMarkers = rootMarkers;
+  return server;
+}
+
+/**
+ * Parse the `lsp` section of the config file. `undefined` means "no lsp
+ * section" (or nothing usable in it); rejected entries are collected, never
+ * thrown. Default OFF: absent section -> undefined. Mirrors parseMcpConfig.
+ */
+export function parseLspConfig(value: unknown): LspConfig | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { servers: [], rejected: ["lsp must be an object with an optional `servers` array"] };
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.servers === undefined) return undefined;
+  if (!Array.isArray(raw.servers)) return { servers: [], rejected: ["lsp.servers must be an array"] };
+  const servers: LspServerConfig[] = [];
+  const rejected: string[] = [];
+  const ids = new Set<string>();
+  (raw.servers as unknown[]).forEach((item, index) => {
+    const parsed = parseLspServer(item, index);
+    if (typeof parsed === "string") {
+      rejected.push(parsed);
+      return;
+    }
+    if (ids.has(parsed.id)) {
+      rejected.push(`lsp.servers[${index}] duplicates server id ${JSON.stringify(parsed.id)}; skipped`);
+      return;
+    }
+    ids.add(parsed.id);
+    servers.push(parsed);
+  });
+  if (servers.length === 0 && rejected.length === 0) return undefined;
+  return { servers, rejected };
+}
+
+/**
+ * The configured language servers that handle a file, selected by its dotless,
+ * lowercased extension. Pure: returns `[]` for an undefined config or an
+ * unconfigured extension.
+ */
+export function lspServersForFile(config: LspConfig | undefined, absPath: string): LspServerConfig[] {
+  if (config === undefined) return [];
+  const dot = absPath.lastIndexOf(".");
+  const slash = Math.max(absPath.lastIndexOf("/"), absPath.lastIndexOf("\\"));
+  if (dot <= slash + 1) return []; // no extension, or a dotfile with no extension
+  const ext = absPath.slice(dot + 1).toLowerCase();
+  if (ext === "") return [];
+  return config.servers.filter((server) => server.extensions.includes(ext));
+}
+
 /**
  * Read the config file. Anything unreadable, malformed or of the wrong shape is
  * treated as absent: a broken config file must never stop the chat from starting.
@@ -274,6 +417,7 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   if (envWall !== undefined) budget.maxWallMs = envWall;
 
   const mcp = parseMcpConfig(fromFile.mcp);
+  const lsp = parseLspConfig(fromFile.lsp);
 
   return {
     provider,
@@ -282,6 +426,7 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
     apiKey,
     budget: Object.keys(budget).length > 0 ? budget : undefined,
     mcp,
+    lsp,
     sources: {
       provider: providerSource,
       model: envModel ? "env" : fileModel ? "file" : "default",
