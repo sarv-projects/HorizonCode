@@ -20,7 +20,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
-import { matchPattern } from "./ast-match";
+import { langFromPath, scanPattern } from "./ast-match";
 import { isBinary, relPath, resolvePath } from "./helpers";
 
 const MAX_RESULTS = 200;
@@ -30,6 +30,27 @@ const MAX_CANDIDATES = 50_000;
 // Same runtime-state and vendored exclusions grep.ts applies: `.hz`/`.hzcode`
 // hold kernel files and ledgers, never source.
 const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".hz", ".hzcode"]);
+
+/** Bounds on the external ast-grep child (mutable so tests can shrink them). */
+export const externalLimits = { timeoutMs: 30_000, maxBytes: 8 * 1024 * 1024 };
+
+function makeGlob(globFilter: string | undefined): ((rel: string) => boolean) | null {
+  if (!globFilter) return null;
+  let matcher: Bun.Glob;
+  try {
+    matcher = new Bun.Glob(globFilter);
+  } catch {
+    return null;
+  }
+  return (rel) => matcher.match(rel) || matcher.match(path.basename(rel));
+}
+
+/** True when any directory segment of `rel` is a SKIP_DIRS entry. */
+function inSkippedDir(rel: string): boolean {
+  const segs = rel.split(/[\\/]/);
+  segs.pop();
+  return segs.some((seg) => SKIP_DIRS.has(seg));
+}
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -83,30 +104,34 @@ function selfContainedSearch(
   root: string,
   globFilter: string | undefined,
   cwd: string,
-): { results: string[]; capped: boolean } {
-  let matcher: Bun.Glob | null = null;
-  if (globFilter) {
-    try {
-      matcher = new Bun.Glob(globFilter);
-    } catch {
-      matcher = null;
-    }
-  }
+  lang: string | undefined,
+): { results: string[]; capped: boolean; skippedLarge: number } {
+  const globMatch = makeGlob(globFilter);
 
   const results: string[] = [];
   let capped = false;
+  let skippedLarge = 0;
 
   const scanFile = (abs: string, rel: string): void => {
-    if (matcher && !matcher.match(rel) && !matcher.match(path.basename(rel))) return;
+    if (globMatch && !globMatch(rel)) return;
     let buf: Buffer;
     try {
       buf = readFileSync(abs);
     } catch {
       return;
     }
-    if (buf.length > MAX_FILE_BYTES || isBinary(buf)) return;
+    if (isBinary(buf)) return;
+    if (buf.length > MAX_FILE_BYTES) {
+      skippedLarge += 1;
+      return;
+    }
     const source = buf.toString("utf8");
-    for (const m of matchPattern(pat, source)) {
+    const scan = scanPattern(pat, source, { lang: lang ?? langFromPath(abs) });
+    if (scan.skipped !== null) {
+      skippedLarge += 1;
+      return;
+    }
+    for (const m of scan.matches) {
       results.push(formatMatch(rel, m.startLine, m.startColumn, m.text, m.metaVariables));
       if (results.length >= MAX_RESULTS) return;
     }
@@ -140,7 +165,7 @@ function selfContainedSearch(
   try {
     rootIsFile = statSync(root).isFile();
   } catch {
-    return { results, capped };
+    return { results, capped, skippedLarge };
   }
   if (rootIsFile) candidates.push(root);
   else walk(root);
@@ -149,24 +174,31 @@ function selfContainedSearch(
     if (results.length >= MAX_RESULTS) break;
     scanFile(abs, relPath(cwd, abs));
   }
-  return { results, capped };
+  return { results, capped, skippedLarge };
 }
 
 /**
  * Run the external `ast-grep` through the guarded spawn path. The command is
- * admitted as a `shell.exec` GuardAction (deny -> fail; ask -> approve) BEFORE
- * any child is started, then spawned with spawnOwned (NF-071 ledger). Its
- * `--json` stream is parsed into grep-style lines. Returns null when the
- * backend could not serve the search (so the caller degrades to the matcher).
+ * admitted as a `shell.exec` GuardAction (ask -> approve) BEFORE any child is
+ * started, then spawned with spawnOwned (NF-071 ledger). Its `--json` stream is
+ * parsed into grep-style lines and filtered with the SAME glob / SKIP_DIRS
+ * rules as the built-in matcher, so results do not depend on the host.
+ *
+ * Every failure of the accelerator DEGRADES to the built-in matcher with a
+ * notice (a `shell.exec` deny/decline, spawn failure, nonzero exit, timeout,
+ * output over the byte cap, unparseable output). The guard decision is honoured
+ * (no spawn happens on deny) but a policy that forbids shell commands must not
+ * disable structural search, which needs no shell.
  */
 async function externalSearch(
   exe: string,
   pat: string,
   root: string,
   lang: string | undefined,
+  globFilter: string | undefined,
   cwd: string,
   ctx: ToolContext,
-): Promise<{ ok: true; results: string[] } | { ok: false; denied?: string } | null> {
+): Promise<{ results: string[] } | { degrade: string }> {
   const cmd = [exe, "run", "--pattern", pat, "--json"];
   if (lang) cmd.push("--lang", lang);
   cmd.push(root);
@@ -175,14 +207,14 @@ async function externalSearch(
   const action: GuardAction = { kind: "shell.exec", target: commandString };
   const decision = await ctx.guard(action);
   if (decision.decision === "deny") {
-    return { ok: false, denied: `denied by policy${decision.reason ? `: ${decision.reason}` : ""}` };
+    return { degrade: `shell.exec denied by policy${decision.reason ? `: ${decision.reason}` : ""}` };
   }
   if (decision.decision === "ask") {
     const approved = await ctx.approve(
       { title: "Run ast-grep", detail: commandString, kind: "shell.exec" },
       action,
     );
-    if (!approved) return { ok: false, denied: "declined by user" };
+    if (!approved) return { degrade: "shell.exec declined by user" };
   }
 
   let proc: Awaited<ReturnType<typeof spawnOwned>>["proc"];
@@ -194,46 +226,73 @@ async function externalSearch(
       longLived: false,
     }));
   } catch {
-    return null;
+    return { degrade: "ast-grep could not be started" };
   }
 
-  const results: string[] = [];
   const decoder = new TextDecoder();
   const reader = proc.stdout.getReader();
   let out = "";
+  let timedOut = false;
+  let overflow = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      proc.kill(9);
+    } catch {
+      /* already gone */
+    }
+  }, externalLimits.timeoutMs);
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       out += decoder.decode(value, { stream: true });
+      if (out.length > externalLimits.maxBytes) {
+        overflow = true;
+        try {
+          proc.kill(9);
+        } catch {
+          /* already gone */
+        }
+        break;
+      }
     }
   } catch {
     /* stream closed early */
   }
+  clearTimeout(timer);
   try {
     reader.cancel();
   } catch {
     /* ignore */
   }
+  let exitCode: number | null = null;
   try {
-    await proc.exited;
+    exitCode = await proc.exited;
   } catch {
     /* ignore */
   }
 
+  if (timedOut) return { degrade: `ast-grep timed out after ${externalLimits.timeoutMs}ms` };
+  if (overflow) return { degrade: `ast-grep output exceeded ${externalLimits.maxBytes} bytes` };
+  if (exitCode !== 0) return { degrade: `ast-grep exited with code ${exitCode}` };
+
   // ast-grep --json emits one JSON array of matches. Be lenient: accept either a
   // single array or newline-delimited objects.
   const parsed = parseAstGrepJson(out, cwd);
-  if (parsed === null) return null;
-  for (const line of parsed) {
-    results.push(line);
+  if (parsed === null) return { degrade: "ast-grep output was not parseable" };
+  const globMatch = makeGlob(globFilter);
+  const results: string[] = [];
+  for (const entry of parsed) {
+    if (entry.rel !== "" && (inSkippedDir(entry.rel) || (globMatch !== null && !globMatch(entry.rel)))) continue;
+    results.push(entry.line);
     if (results.length >= MAX_RESULTS) break;
   }
-  return { ok: true, results };
+  return { results };
 }
 
 /** Parse ast-grep `--json` output into grep-style lines, or null on garbage. */
-function parseAstGrepJson(out: string, cwd: string): string[] | null {
+function parseAstGrepJson(out: string, cwd: string): Array<{ rel: string; line: string }> | null {
   const text = out.trim();
   if (text === "") return [];
   let items: unknown;
@@ -254,7 +313,7 @@ function parseAstGrepJson(out: string, cwd: string): string[] | null {
     items = lines;
   }
   if (!Array.isArray(items)) return null;
-  const results: string[] = [];
+  const results: Array<{ rel: string; line: string }> = [];
   for (const item of items) {
     if (item === null || typeof item !== "object") continue;
     const obj = item as Record<string, any>;
@@ -264,7 +323,7 @@ function parseAstGrepJson(out: string, cwd: string): string[] | null {
     const startCol = typeof range?.start?.column === "number" ? range.start.column + 1 : 0;
     const matchText = typeof obj.text === "string" ? obj.text : "";
     const rel = file === "" ? "" : relPath(cwd, path.resolve(cwd, file));
-    results.push(`${rel}:${startLine}:${startCol}: ${matchText.split("\n")[0] ?? ""}`);
+    results.push({ rel, line: `${rel}:${startLine}:${startCol}: ${matchText.split("\n")[0] ?? ""}` });
   }
   return results;
 }
@@ -302,17 +361,21 @@ export const astSearchTool: Tool = {
       const notices: string[] = [];
 
       if (exe !== null) {
-        const ext = await externalSearch(exe, pat, root, lang, ctx.cwd, ctx);
-        if (ext !== null && ext.ok === false) return fail(ext.denied ?? "denied");
-        if (ext !== null && ext.ok) results = ext.results;
-        else notices.push("[ast-grep unavailable: degraded to the built-in structural matcher]");
+        const ext = await externalSearch(exe, pat, root, lang, globFilter, ctx.cwd, ctx);
+        if ("results" in ext) results = ext.results;
+        else notices.push(`[ast-grep unavailable (${ext.degrade}): degraded to the built-in structural matcher]`);
       }
 
       if (results === null) {
-        const self = selfContainedSearch(pat, root, globFilter, ctx.cwd);
+        const self = selfContainedSearch(pat, root, globFilter, ctx.cwd, lang);
         results = self.results;
         if (self.capped) {
           notices.push(`[incomplete: stopped after ${MAX_CANDIDATES} candidate files; narrow the path]`);
+        }
+        if (self.skippedLarge > 0) {
+          notices.push(
+            `[skipped: ${self.skippedLarge} file(s) too large for the structural matcher; results are incomplete]`,
+          );
         }
       }
 

@@ -1,10 +1,10 @@
 /** ast_search — self-contained matcher, guard, and the guarded external path. */
 
-import { chmodSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { GuardAction } from "../../src/contracts";
-import { astSearchTool } from "../../src/tools/ast-search";
+import { astSearchTool, externalLimits } from "../../src/tools/ast-search";
 import { makeWorkspace, mockToolContext, withoutRipgrep, writeFixture } from "./helpers";
 
 const TREE: Record<string, string> = {
@@ -106,18 +106,132 @@ describe("ast_search tool", () => {
     expect(r.output).toContain("src/a.ts:1:11: foo(bar)");
   });
 
-  test("external backend present but DENIED at the shell.exec guard: no spawn, failure", async () => {
+  test("shell.exec DENIED: no spawn, degrades to the matcher with a notice (review issue 7)", async () => {
     const ws = makeWorkspace(TREE);
-    const fake = path.join(ws, "fake-ast-grep");
+    const marker = path.join(ws, "spawned.marker");
+    const fake = writeFixture(ws, "fake-ast-grep", `#!/usr/bin/bash\ntouch ${marker}\n`);
+    chmodSync(fake, 0o755);
     const ctx = mockToolContext({
       cwd: ws,
       decision: (action) => (action.kind === "shell.exec" ? { decision: "deny", reason: "no exec" } : { decision: "allow" }),
     });
-    const r = await withFakeAstGrep(fake, () => astSearchTool.execute({ pat: "foo($A)" }, ctx));
-    expect(r.ok).toBe(false);
-    expect(r.error).toBe("denied by policy: no exec");
-    // The shell.exec guard was consulted (admission precedes any spawn).
+    const r = await withFakeAstGrep(fake, () => astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, ctx));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("src/a.ts:1:11: foo(bar)");
+    expect(r.output).toContain("shell.exec denied by policy: no exec");
     expect(ctx.guardCalls.some((g) => g.kind === "shell.exec")).toBe(true);
+    expect(existsSync(marker)).toBe(false); // admission precedes spawn: denied means never started
+  });
+
+  test("external nonzero exit with empty stdout degrades instead of 'No matches.' (review issue 5)", async () => {
+    const ws = makeWorkspace(TREE);
+    const fake = writeFixture(ws, "fake-ast-grep", "#!/usr/bin/bash\nexit 2\n");
+    chmodSync(fake, 0o755);
+    const r = await withFakeAstGrep(fake, () =>
+      astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, mockToolContext({ cwd: ws })),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("src/a.ts:1:11: foo(bar)");
+    expect(r.output).toContain("exited with code 2");
+  });
+
+  test("external malformed JSON degrades to the matcher (review issue 5)", async () => {
+    const ws = makeWorkspace(TREE);
+    const fake = writeFixture(ws, "fake-ast-grep", "#!/usr/bin/bash\nprintf 'not json'\n");
+    chmodSync(fake, 0o755);
+    const r = await withFakeAstGrep(fake, () =>
+      astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, mockToolContext({ cwd: ws })),
+    );
+    expect(r.output).toContain("not parseable");
+    expect(r.output).toContain("src/a.ts:1:11: foo(bar)");
+  });
+
+  test("external results honour glob and SKIP_DIRS like the built-in path (review issue 5)", async () => {
+    const ws = makeWorkspace(TREE);
+    const items = [
+      { file: "src/a.ts", text: "foo(bar)", range: { start: { line: 0, column: 10 } } },
+      { file: "node_modules/pkg/i.ts", text: "foo(x)", range: { start: { line: 0, column: 0 } } },
+      { file: ".hz/state.ts", text: "foo(y)", range: { start: { line: 0, column: 0 } } },
+      { file: "docs/notes.md", text: "foo(ignored)", range: { start: { line: 0, column: 0 } } },
+    ];
+    const fake = writeFixture(ws, "fake-ast-grep", `#!/usr/bin/bash\nprintf '%s' '${JSON.stringify(items)}'\n`);
+    chmodSync(fake, 0o755);
+    const r = await withFakeAstGrep(fake, () =>
+      astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, mockToolContext({ cwd: ws })),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toBe("src/a.ts:1:11: foo(bar)");
+  });
+
+  test("external child that hangs is killed at the timeout and degrades (review issue 6)", async () => {
+    const ws = makeWorkspace(TREE);
+    const fake = writeFixture(ws, "fake-ast-grep", "#!/usr/bin/bash\nexec sleep 30\n");
+    chmodSync(fake, 0o755);
+    const saved = externalLimits.timeoutMs;
+    externalLimits.timeoutMs = 300;
+    try {
+      const t0 = Date.now();
+      const r = await withFakeAstGrep(fake, () =>
+        astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, mockToolContext({ cwd: ws })),
+      );
+      expect(Date.now() - t0).toBeLessThan(10_000);
+      expect(r.output).toContain("timed out");
+      expect(r.output).toContain("src/a.ts:1:11: foo(bar)");
+    } finally {
+      externalLimits.timeoutMs = saved;
+    }
+  });
+
+  test("external output over the byte cap is cut off and degrades (review issue 6)", async () => {
+    const ws = makeWorkspace(TREE);
+    const fake = writeFixture(ws, "fake-ast-grep", "#!/usr/bin/bash\nexec yes xxxxxxxxxxxxxxxx\n");
+    chmodSync(fake, 0o755);
+    const saved = externalLimits.maxBytes;
+    externalLimits.maxBytes = 4096;
+    try {
+      const r = await withFakeAstGrep(fake, () =>
+        astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, mockToolContext({ cwd: ws })),
+      );
+      expect(r.output).toContain("exceeded 4096 bytes");
+      expect(r.output).toContain("src/a.ts:1:11: foo(bar)");
+    } finally {
+      externalLimits.maxBytes = saved;
+    }
+  });
+
+  test("built-in path skips SKIP_DIRS and honours glob", async () => {
+    const ws = makeWorkspace({
+      "src/a.ts": "foo(1)\n",
+      "node_modules/p/i.ts": "foo(2)\n",
+      ".hz/s.ts": "foo(3)\n",
+      "src/b.py": "foo(4)\n",
+    });
+    const r = await withoutRipgrep(() =>
+      astSearchTool.execute({ pat: "foo($A)", glob: "*.ts" }, mockToolContext({ cwd: ws })),
+    );
+    expect(r.output).toBe("src/a.ts:1:1: foo(1)\nmeta: A=1");
+  });
+
+  test("more than MAX_RESULTS matches shows the truncation notice", async () => {
+    const ws = makeWorkspace({ "a.ts": "foo(1);\n".repeat(300) });
+    const r = await withoutRipgrep(() => astSearchTool.execute({ pat: "foo($A)" }, mockToolContext({ cwd: ws })));
+    expect(r.output).toContain("[truncated: first 200 matches shown]");
+    expect(r.output.split("\n").filter((l) => l.startsWith("a.ts:")).length).toBe(200);
+  });
+
+  test("a file too large for the matcher is reported, not silently 'No matches.' (review issue 4)", async () => {
+    const ws = makeWorkspace({ "big.ts": `foo(1);${" ".repeat(4 * 1024 * 1024 + 10)}`, "small.ts": "bar(1)\n" });
+    const r = await withoutRipgrep(() => astSearchTool.execute({ pat: "foo($A)" }, mockToolContext({ cwd: ws })));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("No matches.");
+    expect(r.output).toContain("skipped: 1 file(s) too large");
+  });
+
+  test("Rust lifetimes do not hide later matches in search (review issue 3)", async () => {
+    const ws = makeWorkspace({ "x.rs": "fn x<'a>(v:&'a str){ foo(1) } fn y<'b>(){ foo(2) }\n" });
+    const r = await withoutRipgrep(() => astSearchTool.execute({ pat: "foo($A)" }, mockToolContext({ cwd: ws })));
+    expect(r.output).toContain("foo(1)");
+    expect(r.output).toContain("foo(2)");
   });
 
   test("requires a pattern", async () => {

@@ -121,4 +121,68 @@ describe("ast_edit tool", () => {
     expect((await astEditTool.execute({ path: "f", out: "y" }, ctx)).error).toBe("pat is required");
     expect((await astEditTool.execute({ path: "f", pat: "x" }, ctx)).error).toBe("out is required");
   });
+
+  test("sibling calls with $$$ are all rewritten correctly (review issue 1)", async () => {
+    const ws = makeWorkspace({ "f.ts": "foo(a); bar(b);\nfoo(c);\n" });
+    const ctx = mockToolContext({ cwd: ws });
+    await readFirst(ctx, "f.ts");
+    const r = await astEditTool.execute({ path: "f.ts", pat: "foo($$$A)", out: "baz($$$A)" }, ctx);
+    expect(r.ok).toBe(true);
+    expect(r.output).toBe("Replaced 2 structural match(es) in f.ts");
+    expect(readFixture(ws, "f.ts")).toBe("baz(a); bar(b);\nbaz(c);\n");
+  });
+
+  test("more than 1000 matches fails and writes nothing (review issue 2)", async () => {
+    const src = "foo(1);\n".repeat(1500);
+    const ws = makeWorkspace({ "f.ts": src });
+    const ctx = mockToolContext({ cwd: ws });
+    await readFirst(ctx, "f.ts");
+    const r = await astEditTool.execute({ path: "f.ts", pat: "foo($A)", out: "bar($A)" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("more than 1000 structural matches");
+    expect(readFixture(ws, "f.ts")).toBe(src);
+  });
+
+  test("oversize file fails as skipped, not as no-match (review issue 4)", async () => {
+    const src = `foo(1);\n${" ".repeat(4 * 1024 * 1024 + 10)}`;
+    const ws = makeWorkspace({ "f.ts": src });
+    const ctx = mockToolContext({ cwd: ws });
+    await readFirst(ctx, "f.ts");
+    const r = await astEditTool.execute({ path: "f.ts", pat: "foo($A)", out: "bar($A)" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("too large");
+    expect(r.error).not.toContain("no structural match");
+    expect(readFixture(ws, "f.ts")).toBe(src);
+  });
+
+  test("Rust lifetimes: every match is rewritten, none missed (review issue 3)", async () => {
+    const src = "fn x<'a>(v:&'a str){ foo(1) } fn y<'b>(){ foo(2) }\n";
+    const ws = makeWorkspace({ "f.rs": src });
+    const ctx = mockToolContext({ cwd: ws });
+    await readFirst(ctx, "f.rs");
+    const r = await astEditTool.execute({ path: "f.rs", pat: "foo($A)", out: "bar($A)" }, ctx);
+    expect(r.ok).toBe(true);
+    expect(readFixture(ws, "f.rs")).toBe(src.replace("foo(1)", "bar(1)").replace("foo(2)", "bar(2)"));
+  });
+
+  test("ambiguous quoting (unterminated string) refuses the rewrite (review issue 3)", async () => {
+    const src = "it's\nfoo(1)\n";
+    const ws = makeWorkspace({ "f.txt": src });
+    const ctx = mockToolContext({ cwd: ws });
+    await readFirst(ctx, "f.txt");
+    const r = await astEditTool.execute({ path: "f.txt", pat: "foo($A)", out: "bar($A)" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("cannot close");
+    expect(readFixture(ws, "f.txt")).toBe(src);
+  });
+
+  test("path outside the workspace is refused and nothing is written", async () => {
+    const ws = makeWorkspace({ "f.ts": "foo(a);\n" });
+    const outside = makeWorkspace({ "o.ts": "foo(a);\n" });
+    const ctx = mockToolContext({ cwd: ws, decision: (a) => (a.target.startsWith(ws) ? { decision: "allow" } : { decision: "deny", reason: "outside workspace" }) });
+    const r = await astEditTool.execute({ path: path.join(outside, "o.ts"), pat: "foo($A)", out: "bar($A)" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("denied by policy: outside workspace");
+    expect(readFixture(outside, "o.ts")).toBe("foo(a);\n");
+  });
 });
