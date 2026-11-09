@@ -56,6 +56,13 @@ import { mcpAdmissionFor } from "./mcp/registry";
 // failure is a notice (see hooks.ts for the named differences from HookV1).
 import { loadHooks, runPostToolHooks, runPreToolHooks, type HooksConfig } from "./hooks";
 import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
+// SAFETY-RAILS (FEAT-002): three self-contained loop-level guards, wired here
+// minimally — loop-detection before dispatch, repeat-tool after execute, and
+// the mistake tracker on error. The modules are pure; the loop imports them,
+// never the reverse.
+import { LoopDetectionTracker } from "./guards/loop-detection";
+import { MistakeTracker } from "./guards/mistake-tracker";
+import { RepeatToolGuard } from "./guards/repeat-tool";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -1402,6 +1409,18 @@ async function issueToolReceipt(
   }
 }
 
+/**
+ * What one `runToolCall` reports back to the batch loop: the locally counted
+ * context cost, and the two facts the SAFETY-RAILS mistake tracker reads — the
+ * tool's ok flag and whether it was a plan-mode staged call (staged calls
+ * changed nothing, so they are never a `tool_execution_failed` mistake).
+ */
+interface ToolCallOutcome {
+  tokens: number;
+  ok: boolean;
+  staged: boolean;
+}
+
 async function runToolCall(
   deps: LoopDeps,
   gate: GuardGate,
@@ -1409,7 +1428,7 @@ async function runToolCall(
   faults: RunFaults,
   evidence: RunEvidence,
   hooks: HooksConfig,
-): Promise<number> {
+): Promise<ToolCallOutcome> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
   emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
@@ -1520,8 +1539,11 @@ async function runToolCall(
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
     ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
   });
-  // The locally counted context cost of this message (NF-074(a) tail).
-  return FRAMING_CHARGE_TOKENS + estimateTokens(content);
+  // The locally counted context cost of this message (NF-074(a) tail), plus
+  // the outcome the mistake-tracker rail needs: a tool that returned ok:false
+  // is a `tool_execution_failed` mistake, while a plan-mode staged call changed
+  // nothing and is not a failure.
+  return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok, staged: executed.staged === true };
 }
 
 /**
@@ -1539,6 +1561,13 @@ function classifyFailure(exit: RunExit): FailureClass {
     case "tokens":
     case "wall_clock":
       return "budget";
+    // SAFETY-RAILS: the two new terminal details map to the existing coarse
+    // `unknown` class. FailureClass (postmortem.ts) is a closed set this stream
+    // does not own, so no new class is introduced; the exit's terminal + detail
+    // already carry the precise outcome, which is all the growth loop needs.
+    case "tool_loop":
+    case "consecutive_mistakes":
+      return "unknown";
     default:
       return "unknown";
   }
@@ -1617,12 +1646,24 @@ export async function runTurn(
     let calls = 0;
     let consecutiveFormatErrors = 0;
     let corrective: string | undefined;
+    // SAFETY-RAILS (rail 1): the loop-detection soft nudge, on its own channel
+    // so the format-error corrective reset cannot clear it. It rides the next
+    // step's system rail alongside `corrective`.
+    let loopNudge: string | undefined;
     // One report per run, not one per dispatch: the compaction numbers describe
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
+    // SAFETY-RAILS (FEAT-002): one instance of each guard per run. A runTurn
+    // call processes exactly one new user prompt, so a fresh guard set is itself
+    // the per-prompt clear the repeat-tool rail requires; clear() below is the
+    // explicit statement of that, so the semantics do not depend on scope alone.
+    const loopDetection = new LoopDetectionTracker();
+    const mistakes = new MistakeTracker();
+    const repeatTool = new RepeatToolGuard();
+    repeatTool.clear();
 
     for (;;) {
       // The single sentinel: budgets are checked before every dispatch, under
@@ -1681,10 +1722,11 @@ export async function runTurn(
         );
       }
       await logEvent(deps, faults, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
+      const combinedCorrective = [corrective, loopNudge].filter((part) => part !== undefined && part !== "").join("\n");
       const turn = await collectAssistant(deps, history, {
         pinned,
         budgetLine: budgetCountdownLine(ledger.countdown()),
-        corrective,
+        corrective: combinedCorrective === "" ? undefined : combinedCorrective,
         anchorBase,
         appendedTokens,
         instructions,
@@ -1721,7 +1763,19 @@ export async function runTurn(
       if (turn.error) {
         emit(deps.callbacks, { type: "error", message: turn.error });
         await logEvent(deps, faults, EventTypes.error, { message: turn.error });
-        exit = { terminal: "failed", detail: "provider_error" };
+        // SAFETY-RAILS: a provider error is an `api_error` mistake. The run
+        // always ends here on the FIRST provider error with the existing
+        // `provider_error` detail; the tracker only changes the detail once the
+        // consecutive-mistake limit is reached across turns of the same run.
+        const outcome = mistakes.record({ reason: "api_error", details: turn.error });
+        exit =
+          outcome.action === "stop"
+            ? { terminal: "failed", detail: "consecutive_mistakes" }
+            : { terminal: "failed", detail: "provider_error" };
+        if (outcome.action === "stop") {
+          emit(deps.callbacks, { type: "error", message: outcome.message });
+          await logEvent(deps, faults, EventTypes.error, { message: outcome.message });
+        }
         break;
       }
       if (deps.signal.aborted || turn.stopReason === "abort") {
@@ -1734,8 +1788,43 @@ export async function runTurn(
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) break;
 
+      // SAFETY-RAILS (rail 1): identical-tool-call loop detection, BEFORE the
+      // batch is dispatched. A soft verdict (the 3rd identical call) adds a
+      // nudge to the corrective that rides the next step's system rail, exactly
+      // like the format-error corrective; a hard verdict (the 5th) stops the
+      // run with `tool_loop` before anything is executed.
+      let loopHardStop = false;
+      // A fresh batch re-derives the nudge: it is cleared here and re-set only
+      // if a soft verdict fires for a call in THIS batch, so a non-repeated call
+      // (which the tracker's own state resets) does not leave a stale nudge.
+      loopNudge = undefined;
+      for (const call of turn.toolCalls) {
+        const verdict = loopDetection.inspect({ name: call.name, input: parseArguments(call.arguments).args });
+        if (verdict.kind === "hard") {
+          emit(deps.callbacks, { type: "error", message: verdict.message ?? "tool-call loop detected" });
+          await logEvent(deps, faults, EventTypes.error, { message: verdict.message, detail: "tool_loop" });
+          exit = { terminal: "failed", detail: "tool_loop" };
+          loopHardStop = true;
+          break;
+        }
+        if (verdict.kind === "soft" && verdict.message !== undefined) {
+          // The soft nudge rides the next step's system rail like the format
+          // corrective, but on its OWN channel so the format-error reset below
+          // (which clears `corrective` on a clean batch) cannot wipe it: a
+          // repeated CLEAN call is exactly when the nudge must survive.
+          loopNudge = verdict.message;
+          emit(deps.callbacks, { type: "notice", message: verdict.message });
+        }
+      }
+      if (loopHardStop) break;
+
       // NF-072: shared calls in a segment run concurrently; an exclusive call
       // is its own barrier. All-settled: one call's failure cancels no sibling.
+      // SAFETY-RAILS (rails 2/3): the per-call ok flag is captured here but the
+      // repeat-tool reminder and the `tool_execution_failed` mistake accounting
+      // run AFTER the batch settles, iterating turn.toolCalls in order, so the
+      // chain and the tracker stay deterministic regardless of concurrency.
+      const toolOk = new Map<string, boolean>();
       for (const segment of batchSegments(turn.toolCalls)) {
         if (deps.signal.aborted) {
           aborted = true;
@@ -1744,8 +1833,16 @@ export async function runTurn(
         await Promise.all(
           segment.map((call) =>
             runToolCall(deps, gate, call, faults, evidence, hooks)
-              .then((tokens) => {
-                appendedTokens += tokens;
+              .then((outcome) => {
+                appendedTokens += outcome.tokens;
+                // A plan-mode staged call changed nothing: not a failure. A
+                // call whose arguments did not parse is a FORMAT error, counted
+                // by the format cap / `invalid_tool_call` axis below — not a
+                // `tool_execution_failed` mistake, so it is excluded here to
+                // avoid double-counting the same batch on both axes.
+                if (!outcome.staged && parseArguments(call.arguments).error === undefined) {
+                  toolOk.set(call.id, outcome.ok);
+                }
               })
               .catch((err) => {
                 if (err instanceof TranscriptAppendError) {
@@ -1769,6 +1866,46 @@ export async function runTurn(
       }
       if (aborted) break;
 
+      // SAFETY-RAILS (rail 3): the repeat-tool reminder, POST-execute and in
+      // deterministic order, so a denied or failed call still advances the
+      // chain. The reminder is advisory — injected as a user message with a
+      // clear source marker, never a veto.
+      for (const call of turn.toolCalls) {
+        const reminder = repeatTool.observe(call.name, parseArguments(call.arguments).args);
+        if (reminder === undefined) continue;
+        const content = `[repeat-tool-reminder] ${reminder}`;
+        try {
+          deps.store.appendMessage(deps.sessionId, { role: "user", content });
+        } catch (err) {
+          faults.noteTranscript(call.name, err);
+        }
+        emit(deps.callbacks, { type: "notice", message: reminder });
+      }
+
+      // SAFETY-RAILS (rail 2): a tool that returned ok:false is a
+      // `tool_execution_failed` mistake; a batch with at least one clean,
+      // successful tool call resets the tracker. This axis is SEPARATE from the
+      // format cap below (invalid-JSON batches never reach here with a tool
+      // result). Recorded once per failing batch, in order.
+      let batchHadToolFailure = false;
+      let batchHadToolSuccess = false;
+      for (const call of turn.toolCalls) {
+        const ok = toolOk.get(call.id);
+        if (ok === false) batchHadToolFailure = true;
+        else if (ok === true) batchHadToolSuccess = true;
+      }
+      if (batchHadToolFailure) {
+        const outcome = mistakes.record({ reason: "tool_execution_failed" });
+        if (outcome.action === "stop") {
+          exit = { terminal: "failed", detail: "consecutive_mistakes" };
+          emit(deps.callbacks, { type: "error", message: outcome.message });
+          await logEvent(deps, faults, EventTypes.error, { message: outcome.message });
+          break;
+        }
+      } else if (batchHadToolSuccess) {
+        mistakes.reset();
+      }
+
       // NF-073(c): a batch in which no call carried parseable JSON is a
       // format-error step; any clean call resets the streak. The corrective
       // note rides the next step's system rail (mid-history system roles are
@@ -1786,6 +1923,14 @@ export async function runTurn(
           type: "notice",
           message: `the model sent invalid tool arguments (${consecutiveFormatErrors}/${MAX_CONSECUTIVE_FORMAT_ERRORS})`,
         });
+        // SAFETY-RAILS (rail 2): a pure-format-error batch is ALSO an
+        // `invalid_tool_call` mistake. This advances the mistake tracker in
+        // ADDITION to the format cap below — the two axes are independent and
+        // both still fire. The NF-073 format cap keeps priority for a
+        // pure-format run (its detail is `format_errors`), so it is checked
+        // first; the mistake-tracker stop only takes over when the format cap
+        // has not already stopped this run.
+        const mistakeOutcome = mistakes.record({ reason: "invalid_tool_call" });
         if (consecutiveFormatErrors >= MAX_CONSECUTIVE_FORMAT_ERRORS) {
           exit = { terminal: "failed", detail: "format_errors" };
           emit(deps.callbacks, {
@@ -1793,6 +1938,12 @@ export async function runTurn(
             message: `stopping: ${MAX_CONSECUTIVE_FORMAT_ERRORS} consecutive turns of invalid tool arguments`,
           });
           await logEvent(deps, faults, EventTypes.error, { message: "format_error_cap", count: consecutiveFormatErrors });
+          break;
+        }
+        if (mistakeOutcome.action === "stop") {
+          exit = { terminal: "failed", detail: "consecutive_mistakes" };
+          emit(deps.callbacks, { type: "error", message: mistakeOutcome.message });
+          await logEvent(deps, faults, EventTypes.error, { message: mistakeOutcome.message });
           break;
         }
       } else if (cleanCalls > 0) {
