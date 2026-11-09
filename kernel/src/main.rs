@@ -8,6 +8,7 @@
 //! State dir defaults to $HZ_STATE_DIR, then ~/.hzcode/kernel.
 
 mod canon;
+mod egress;
 mod eventlog;
 mod execpolicy;
 mod guard;
