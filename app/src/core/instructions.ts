@@ -205,3 +205,111 @@ export function instructionPrompt(blocks: readonly InstructionBlock[], report: I
   }
   return "\n\n" + lines.join("\n") + "\n";
 }
+
+/* --------------------- per-model instruction templates --------------------- */
+
+/**
+ * Per-model/family prompt selection (research/compare-codex-grok.md §1.7's
+ * `render_model_instructions`, reduced form). Codex ships a distinct prompt per
+ * model file and a missing template logs a warning and returns empty — never
+ * crashes. HorizonCode keeps ONE base prompt and appends an OPTIONAL per-model
+ * block the same data-driven way routing resolves (model-tool-routing.ts): a
+ * case-insensitive substring match on the model id and/or provider id selects
+ * the block, and a miss returns "" (fail-soft).
+ *
+ * Today the only family with a block is GPT/Codex, which is routed to the
+ * `apply_patch` tool (model-tool-routing.ts) and so needs to be told the exact
+ * freeform grammar markers; other models keep the find/replace `edit` tool and
+ * have no per-model block.
+ */
+export interface ModelInstructionTemplate {
+  /** A human-readable label (diagnostics only). */
+  name: string;
+  /** Case-insensitive substrings; a match on any one satisfies the model side. */
+  modelIdIncludes?: string[];
+  /** Case-insensitive substrings; a match on any one satisfies the provider side. */
+  providerIdIncludes?: string[];
+  /** The block appended to the system prompt when this template matches. */
+  text: string;
+}
+
+/**
+ * The exact `apply_patch` grammar block for the GPT/Codex family. The markers
+ * here MUST stay byte-identical to the ones the apply_patch tool parses
+ * (app/src/tools/apply-patch.ts) and names in its description.
+ */
+const APPLY_PATCH_INSTRUCTION_BLOCK = [
+  "Editing files: you are routed to the apply_patch tool (the find/replace edit tool is not available to you). Call apply_patch with a single `input` string in the freeform patch grammar:",
+  "*** Begin Patch",
+  "*** Add File: <path>      (every body line starts with '+')",
+  "*** Update File: <path>   ('@@' context headers; body lines are ' ' context, '-' deletion, '+' addition; optional '*** End of File'; optional '*** Move to: <path>' to rename)",
+  "*** Delete File: <path>",
+  "*** End Patch",
+  "Keep the patch minimal; include a few unchanged context lines around each change so the chunk can be located.",
+].join("\n");
+
+/** The per-model instruction table, matched the same way routing rules are. */
+export const MODEL_INSTRUCTION_TEMPLATES: readonly ModelInstructionTemplate[] = [
+  {
+    name: "gpt-codex-apply-patch",
+    modelIdIncludes: ["codex", "gpt"],
+    providerIdIncludes: ["openai"],
+    text: APPLY_PATCH_INSTRUCTION_BLOCK,
+  },
+] as const;
+
+export interface ResolveModelInstructionsArgs {
+  /** The active model id (e.g. `gpt-4o-mini`, `claude-sonnet-4-5`). */
+  model: string;
+  /** The active provider id (e.g. `openai`, `anthropic`). */
+  provider: string;
+  /** Override the template table (tests); defaults to MODEL_INSTRUCTION_TEMPLATES. */
+  templates?: readonly ModelInstructionTemplate[];
+  /** Where a fail-soft miss warning goes (tests); defaults to console.warn. */
+  warn?: (message: string) => void;
+}
+
+/** Case-insensitive "does any needle appear as a substring of hay?" */
+function templateIncludesAny(hay: string, needles: readonly string[] | undefined): boolean {
+  if (needles === undefined || needles.length === 0) return false;
+  const lower = hay.toLowerCase();
+  return needles.some((needle) => typeof needle === "string" && needle !== "" && lower.includes(needle.toLowerCase()));
+}
+
+/**
+ * Resolve the per-model instruction block for the active model/provider, or ""
+ * when none matches. FAIL-SOFT (docs §1.7): a miss NEVER throws — it emits a
+ * single warning via `warn` (console.warn by default) and returns the empty
+ * string so the base prompt rides alone. A malformed template table or a
+ * non-string model/provider is coerced to a miss, not an exception.
+ *
+ * The first matching template wins (table order). A template matches when any
+ * present predicate class (model id OR provider id) has a matching substring,
+ * the same disjunction routing uses.
+ */
+export function resolveModelInstructions(args: ResolveModelInstructionsArgs): string {
+  const warn = typeof args?.warn === "function" ? args.warn : (message: string) => console.warn(message);
+  try {
+    const model = typeof args?.model === "string" ? args.model : "";
+    const provider = typeof args?.provider === "string" ? args.provider : "";
+    const templates = args?.templates ?? MODEL_INSTRUCTION_TEMPLATES;
+    for (const template of templates) {
+      const hasModel = Array.isArray(template.modelIdIncludes) && template.modelIdIncludes.length > 0;
+      const hasProvider = Array.isArray(template.providerIdIncludes) && template.providerIdIncludes.length > 0;
+      const matched =
+        (!hasModel && !hasProvider) ||
+        (hasModel && templateIncludesAny(model, template.modelIdIncludes)) ||
+        (hasProvider && templateIncludesAny(provider, template.providerIdIncludes));
+      if (matched && typeof template.text === "string" && template.text !== "") return template.text;
+    }
+    // A miss is normal for most models; it is still recorded so an operator can
+    // see which model ran without a tailored block (fail-soft, never fatal).
+    warn(`no per-model instruction template for model "${model}" (provider "${provider}"); using the base prompt only`);
+    return "";
+  } catch (err) {
+    // Fail-soft is absolute: a template-table defect must degrade to the base
+    // prompt, never crash the run.
+    warn(`per-model instruction resolution failed: ${err instanceof Error ? err.message : String(err)}; using the base prompt only`);
+    return "";
+  }
+}
