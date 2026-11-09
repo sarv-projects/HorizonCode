@@ -1,4 +1,6 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
+> **Print mode (`docs/28` ruling 57).** The print result counts distinct top-level tool calls (`toolCalls`) and lists files named by the turn diffs (`changedFiles`); no tool changes.
+
 
 > **Agent presets (stage 3, `docs/28` ruling 56).** The shipped `agent` tool takes an optional `profile`. A preset narrows the child's tool allow-list (read-only for explore, plan and review); the child still gets no parent leases (R-tools-32) and every effect re-enters guard and approval. `SubagentSpecV1` grants, fleets and `readOnlyProfile()` stay DESIGNED.
 >
