@@ -1650,7 +1650,12 @@ export async function runTurn(
       // window ride with it (compaction.ts). The store is never rewritten — this
       // view is re-derived from the rows on every dispatch, so a resume after a
       // crash recomputes the same pinned block.
-      const view = compactHistory(deps.store.history(deps.sessionId));
+      // The window IS the loop's history limit: a transcript at or under it is
+      // untouched. (Live-run finding, 2026-11-09: this call omitted the options
+      // object, so `limit` fell back to 1 in compaction.ts and every dispatch
+      // elided the whole transcript down to one message. No typecheck existed
+      // to catch the missing argument; the pipeline now has one.)
+      const view = compactHistory(deps.store.history(deps.sessionId), { limit: HISTORY_LIMIT });
       const history = view.history;
       if (view.compacted && !compactionAnnounced) {
         // The elision is reported, never silent: a notice for the human of this

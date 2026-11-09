@@ -7,6 +7,12 @@
     "start": "bun run src/main.ts",
     "eval": "bun run src/eval-run.ts",
     "grow": "bun run src/grow.ts",
+    "typecheck": "bunx tsc --noEmit -p .",
     "check": "bun build src/main.ts --target=bun --outdir=/tmp/hz-b-app"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
   }
 }
