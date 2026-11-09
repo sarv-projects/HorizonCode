@@ -1,5 +1,7 @@
 # 11 — Authority, Safety & Trust
-> **Print mode approvals (`docs/28` ruling 57).** `hzcode -p` is non-interactive: the approval UI is built non-interactive, so any action that needs a human is denied (fail closed). Named permission modes that relax this are a separate feature.
+> **Permission modes (`docs/28` ruling 58).** `default | plan | accept-edits | read-only` is a policy layer above the kernel guard: it narrows or answers an ask and can never turn a kernel `deny` into an allow. `accept-edits` answers only in-workspace `fs.write` asks (not `.git`/`.hz`, not shell, net, spawn, MCP or outside writes). There is NO bypass/yolo mode: it would also answer exfiltration and shell asks with only the fixed kernel deny list left, so `yolo`/`bypass` are refused. The mode is opt-in per run (`--permission-mode`, `/mode`), shown as a prompt badge, never persisted by the app, and only the USER config may set a default (no workspace file is read for it).
+
+> **Print mode approvals (`docs/28` ruling 57).** `hzcode -p` is non-interactive: the approval UI is built non-interactive, so any action that needs a human is denied (fail closed). `-p --permission-mode accept-edits` answers only in-workspace write asks (ruling 58); everything else stays denied.
 
 
 > **Agent presets (stage 3, `docs/28` ruling 56).** A subagent preset can only narrow tools: an allow-list outside the ceiling (every tool except `agent`) is refused with `profile_ceiling_widens`. Presets grant no lease and skip no approval; read-only presets simply hold no write, edit or shell tool. Workspace preset files are repository content and their prompt text is untrusted-surface input, bounded by that narrowing rule.

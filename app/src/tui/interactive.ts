@@ -13,6 +13,8 @@ import * as path from "node:path";
 import type { ContextUsage, RunExit, Runtime } from "../contracts";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
+import type { PermissionMode } from "../core/permission-mode";
+import { PERMISSION_MODES, describeMode, isPermissionMode, modeBadge, parsePermissionMode, permissionModeError } from "../core/permission-mode";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
@@ -54,6 +56,9 @@ type RuntimeWithExtras = Runtime & {
   /** Plan-mode hooks. An older core simply does not offer them; nothing breaks. */
   setPlanMode?: (on: boolean) => unknown;
   planMode?: () => boolean;
+  /** Permission-mode hooks (permission-mode.ts); optional like the plan ones. */
+  permissionMode?: () => PermissionMode;
+  setPermissionMode?: (mode: PermissionMode) => unknown;
   stagedChanges?: () => ReadonlyArray<StagedChangeView>;
   applyPlan?: () => Promise<string>;
   discardPlan?: () => number;
@@ -151,6 +156,7 @@ function printHelp(r: Renderer): void {
     ["/files", "tools the assistant can use"],
     ["/context", "what the next request will carry"],
     ["/plan [on|off]", "toggle plan mode (writes are staged)"],
+    ["/mode [name]", "show or set the permission mode: default, plan, accept-edits, read-only"],
     ["/changes", "review staged changes and diffs"],
     ["/apply", "write the staged changes"],
     ["/discard", "drop the staged changes"],
@@ -231,8 +237,53 @@ function showTools(r: Renderer, runtime: Runtime): void {
 const CHANGES_DIFF_LINES = 20;
 
 /** The chat bar, with the PLAN badge ahead of the prompt when plan mode is on. */
-export function planPrompt(planOn: boolean): string {
-  return (planOn ? bold(yellow("PLAN")) + " " : "") + bold(cyan(PROMPT));
+export function planPrompt(planOn: boolean, mode: PermissionMode = "default"): string {
+  const badge = planOn ? "PLAN" : modeBadge(mode);
+  return (badge !== "" ? bold(yellow(badge)) + " " : "") + bold(cyan(PROMPT));
+}
+
+/** The runtime's permission mode, or "default" when the core does not say. */
+export function readPermissionMode(runtime: Runtime): PermissionMode {
+  const read = (runtime as RuntimeWithExtras).permissionMode;
+  if (typeof read !== "function") return "default";
+  try {
+    const mode = read.call(runtime);
+    return isPermissionMode(mode) ? mode : "default";
+  } catch {
+    return "default";
+  }
+}
+
+/**
+ * /mode [name]: show or set the permission mode. Session-only (nothing is
+ * written to config) and never a bypass: yolo/bypass names get the refusal.
+ * Returns the mode now in force so the caller can redraw the badge.
+ */
+export function runModeCommand(arg: string, runtime: Runtime, renderer: Renderer): PermissionMode {
+  const extras = runtime as RuntimeWithExtras;
+  const current = readPermissionMode(runtime);
+  if (arg === "") {
+    renderer.notice(`permission mode: ${describeMode(current)}. Set with /mode ${PERMISSION_MODES.join("|")}`);
+    return current;
+  }
+  const next = parsePermissionMode(arg);
+  if (next === undefined) {
+    renderer.notice(permissionModeError(arg));
+    return current;
+  }
+  if (typeof extras.setPermissionMode !== "function") {
+    notSupported(renderer, "setPermissionMode", "permission-mode");
+    return current;
+  }
+  try {
+    extras.setPermissionMode.call(runtime, next);
+  } catch (err) {
+    renderer.notice(`could not change permission mode: ${errorMessage(err)}`);
+    return readPermissionMode(runtime);
+  }
+  const now = readPermissionMode(runtime);
+  renderer.notice(`permission mode now ${describeMode(now)}`);
+  return now;
 }
 
 /** The runtime's current plan-mode flag, or false when it does not say. */
@@ -682,7 +733,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     typedGuardArmed = false;
     if (blank) renderer.write("\n");
     try {
-      rl.setPrompt(planPrompt(planState.on));
+      rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
       rl.prompt();
     } catch {
       /* terminal went away */
@@ -717,7 +768,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const drainQueue = async (): Promise<void> => {
     while (!exiting && queued.length > 0) {
       const next = queued.shift() as string;
-      renderer.write(planPrompt(planState.on) + sanitizeText(next) + "\n");
+      renderer.write(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(next) + "\n");
       await sendTurn(next);
     }
   };
@@ -809,6 +860,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "context":
         showContext();
         break;
+      case "mode":
+        runModeCommand(arg, runtime, renderer);
+        // /mode plan flips the runtime's plan flag: keep the badge in step.
+        planState.on = readPlanMode(runtime);
+        break;
       case "plan":
       case "changes":
       case "apply":
@@ -873,7 +929,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const waiter = answerWaiter;
       answerWaiter = null;
       try {
-        rl.setPrompt(planPrompt(planState.on));
+        rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
       } catch {
         /* ignore */
       }
@@ -911,9 +967,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   rl.on("close", () => finish(0));
 
+  // A non-default permission mode is never silent at startup.
+  const startMode = readPermissionMode(runtime);
+  if (startMode !== "default") renderer.notice(`permission mode: ${describeMode(startMode)}`);
+
   const initial = (opts.initialMessage ?? "").trim();
   if (initial !== "") {
-    renderer.line(planPrompt(planState.on) + sanitizeText(initial));
+    renderer.line(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(initial));
     void handleUserLine(initial);
   } else {
     showPrompt();

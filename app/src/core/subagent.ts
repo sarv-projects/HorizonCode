@@ -24,6 +24,7 @@ import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
 import { buildChildPrompt, staticChildPrompt } from "./prompt";
+import type { PermissionMode } from "./permission-mode";
 import { resolvePreset, type AgentPreset, type PresetOptions } from "./agent-profiles";
 
 /** The child prompt is fixed: a subagent reports, it does not converse. */
@@ -117,6 +118,8 @@ export interface NestedRunOptions {
   sessionLeases?: Lease[];
   /** The parent's instance approval handler; the process one when absent. */
   approve?: ApprovalHandler;
+  /** The parent's permission mode: a child is never looser than its parent. */
+  permissionMode?: PermissionMode;
   /** NF-073: the parent run's ledger — the child gets its own step slice but shares the ceiling. */
   ledger?: BudgetLedger;
 }
@@ -179,6 +182,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // either: the child re-enters approval in both transports.
     sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
+    permissionMode: opts.permissionMode,
     systemOverride: buildChildPrompt(opts.workspace, new Date(), { tools: allowed, kernelMode: typeof opts.kernel?.mode === "string" ? opts.kernel.mode : "untrusted" }) +
       (preset !== undefined ? `\n\n${preset.prompt}` : ""),
     // Base seven only: a subagent delegates to no one and drives no previews.

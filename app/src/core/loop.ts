@@ -113,6 +113,8 @@ import {
 } from "./output-budget";
 import type { KernelClient } from "./kernel";
 import { resolvedInside, resolveSymlinkChain } from "./kernel";
+import type { PermissionMode } from "./permission-mode";
+import { modeAutoApproves, modeRefusal } from "./permission-mode";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
 
@@ -680,6 +682,12 @@ export class GuardGate {
     private readonly handler: () => ApprovalHandler,
     /** The session every check from this gate speaks for (owner-scoped leases). */
     private readonly sessionId?: string,
+    /**
+     * The permission mode (permission-mode.ts): a layer ABOVE the kernel guard
+     * that can refuse (read-only) or answer an ask (accept-edits). It never
+     * turns a kernel deny into anything else.
+     */
+    private readonly mode?: PermissionMode,
   ) {}
 
   private familyOf(action: GuardAction): string {
@@ -748,6 +756,9 @@ export class GuardGate {
    */
   async check(action: GuardAction, parent?: GuardAction): Promise<GuardDecision> {
     return this.serialize(async () => {
+      // The mode narrows first: a refused kind never reaches the cache or the kernel.
+      const refused = modeRefusal(this.mode, action);
+      if (refused !== undefined) return { decision: "deny" as const, reason: refused };
       // A tool-level check rides the loop decision only for the action the loop
       // actually admitted: same kind AND same target. A check for a different
       // action is never answered by the parent's admission — that is the same
@@ -783,6 +794,13 @@ export class GuardGate {
   private async approveNow(req: ApprovalRequest, action?: GuardAction): Promise<boolean> {
     const waiting = action ?? this.pending ?? undefined;
     let ok = false;
+    // accept-edits answers an in-workspace fs.write ask. Reached only after the
+    // kernel said "ask" (a deny returns before approve is ever called).
+    if (modeAutoApproves(this.mode, waiting, this.workspace, pathInsideWorkspace)) {
+      this.remember(waiting as GuardAction, { leaseId: undefined });
+      if (this.pending !== null && this.pending === waiting) this.pending = null;
+      return true;
+    }
     try {
       // The handler sees the action so an "always" answer can be scoped to its
       // target, and the kernel client so the lease is minted for THIS session:
@@ -989,6 +1007,11 @@ export interface LoopDeps {
    * and code_mode are refused; read-only tools are unaffected.
    */
   planMode?: boolean;
+  /**
+   * Permission mode (permission-mode.ts), read-only or accept-edits; `plan` is
+   * carried by `planMode` above. Narrows/auto-answers above the kernel guard.
+   */
+  permissionMode?: PermissionMode;
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
   /**
@@ -1897,7 +1920,7 @@ export async function runTurn(
       return `${projectBlocks}\n\n${perModel}\n`;
     })();
 
-    const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
+    const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId, deps.permissionMode);
     // Plan mode rides the system rail: the model is told what staging means on
     // every step, so a long planning turn cannot drift into treating a staged
     // change as applied (the rail survives trims; history does not).

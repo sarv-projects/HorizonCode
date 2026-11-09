@@ -1,5 +1,7 @@
 # 14 — Surfaces (headless, server, web, desktop, IDE/ACP, MCP server, SDKs)
 
+> **Permission modes (`docs/28` ruling 58).** `hzcode --permission-mode <m>` works with chat, pipes and `-p` (a non-default mode prints one stderr line; stdout stays clean). `hzcode serve` does not take a mode yet.
+>
 > **Headless print mode (`docs/28` ruling 57).** `hzcode -p [text] --output-format text|json|stream-json` runs one non-interactive turn (prompt from stdin when `-p` has no text). `json` prints one result object `{type:"result", result, sessionId, exit:{terminal,detail?,code}, usage, toolCalls, changedFiles}`; `stream-json` prints one RuntimeEvent per line then that object. The exit code is `exitCodeFor` (0/1/3/4/5/130/143; a missing prompt or bad format is 2). The line-per-message mode is unchanged.
 >
 > **Agent presets (stage 3, `docs/28` ruling 56).** `subagent.event` frames, relayed as `session.event` in server mode, carry an optional `profile` string (additive) when the child ran under a preset.

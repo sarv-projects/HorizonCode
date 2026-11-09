@@ -1,4 +1,6 @@
 # 13 — Terminal UI (`hzcode tui`)
+> **Permission modes (`docs/28` ruling 58).** `/mode [default|plan|accept-edits|read-only]` shows or sets the mode; a non-default mode puts a bold yellow badge (`PLAN`, `ACCEPT-EDITS`, `READ-ONLY`) before the prompt and prints one notice at chat start. `/mode yolo` is refused with the reason.
+
 > **Print mode (`docs/28` ruling 57).** `hzcode -p` never opens the chat bar or an approval prompt, even on a TTY; stdout carries only the chosen format (`text`, `json`, `stream-json`), notices and errors go to stderr.
 
 

@@ -15,6 +15,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
+import type { PermissionMode } from "./core/permission-mode";
+import { describeMode, parsePermissionMode, permissionModeError } from "./core/permission-mode";
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
 import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
@@ -33,6 +35,7 @@ const HELP = [
   "  --mock               offline demo, no key   --version    print the version",
   "  -p, --print [text]   one non-interactive turn, print the answer (prompt from stdin if no text)",
   "  --output-format <f>  with -p: text (default) | json | stream-json",
+  "  --permission-mode <m>  default | plan | accept-edits | read-only (no bypass mode; /mode in chat)",
   "  --max-steps <n>      cap model steps per turn (0 = unlimited)",
   "  --max-tokens <n>     cap tokens per turn    --max-wall-ms <n>  cap wall clock per turn",
 ].join("\n");
@@ -50,6 +53,7 @@ interface CliOptions {
   printText?: string;
   outputFormat?: PrintFormat;
   budget?: RunBudget;
+  permissionMode?: PermissionMode;
   errors: string[];
 }
 
@@ -124,6 +128,13 @@ function parseArgs(argv: string[]): CliOptions {
         const value = nextValue();
         if (value !== undefined && (PRINT_FORMATS as readonly string[]).includes(value)) opts.outputFormat = value as PrintFormat;
         else opts.errors.push("--output-format needs text, json or stream-json");
+        break;
+      }
+      case "--permission-mode": {
+        const value = nextValue();
+        const mode = parsePermissionMode(value);
+        if (mode !== undefined) opts.permissionMode = mode;
+        else opts.errors.push(`--permission-mode: ${permissionModeError(value)}`);
         break;
       }
       case "--mock":
@@ -309,11 +320,19 @@ async function main(): Promise<number> {
       continueSession: opts.continueSession,
       mock: opts.mock,
       budget: opts.budget,
+      permissionMode: opts.permissionMode,
     });
   } catch (err) {
     process.stderr.write(`\u26a0 could not start a session: ${errorMessage(err)}\n`);
     process.stderr.write("  (the runtime lives in app/src/core \u2014 nothing else is needed to start chatting)\n");
     return 1;
+  }
+
+  // A non-default mode is never silent: -p and pipes get one stderr line (the
+  // chat shows a badge and its own notice).
+  const startMode = (runtime as { permissionMode?: () => PermissionMode }).permissionMode?.call(runtime);
+  if (!interactive && startMode !== undefined && startMode !== "default") {
+    process.stderr.write(`hzcode: permission mode ${describeMode(startMode)}\n`);
   }
 
   // Approvals: the guard asks, the chat surface answers (deny when nobody can).
