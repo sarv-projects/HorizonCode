@@ -270,6 +270,8 @@ describe("every tool passes an admission", () => {
       shell_session: { mode: "start", command: "echo hi" },
       lsp: { op: "diagnostics", path: "a.ts" },
       tool_search: { query: "preview dev server" },
+      ast_search: { pat: "foo($A)" },
+      ast_edit: { path: "a.ts", pat: "foo($A)", out: "bar($A)" },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {

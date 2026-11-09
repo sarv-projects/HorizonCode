@@ -291,6 +291,13 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const root = argString(args, "path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
     }
+    case "ast_search": {
+      // Structural search reads under a root, exactly like grep. The external
+      // ast-grep backend, when present, is admitted a SECOND time as shell.exec
+      // inside the tool before any spawn (see tools/ast-search.ts).
+      const root = argString(args, "path", "dir", "cwd") ?? ".";
+      return { kind: "fs.read", target: resolved(root) };
+    }
     case "repo_map": {
       const root = argString(args, "path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
@@ -312,6 +319,11 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
         kind: "fs.write",
         target: first !== undefined ? resolved(first) : `apply_patch ${sha256Hex(input).slice(0, 16)}`,
       };
+    }
+    case "ast_edit": {
+      // A structural rewrite of one file: the same fs.write admission as edit.
+      const file = argString(args, "path", "file_path", "file");
+      return file ? { kind: "fs.write", target: resolved(file) } : undefined;
     }
     case "shell":
     case "bash": {

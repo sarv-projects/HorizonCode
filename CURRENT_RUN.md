@@ -61,6 +61,10 @@ Every row below is backed by commands the integrator ran in this workspace (meth
 | **Preview servers** (start/stop/status) | **VERIFIED** | same suite + wave-12 tools-hardening: live URL capture, process-group kill (pid gone), env scrubbed; cwd confined to the workspace with the approval naming cwd + resolved command; **process-global registry — `close()` stops every live preview** |
 | Everything else in docs 00–30 (the tool catalog in `docs/09-tools.md` §4 — authoritative — memory tiers, compaction, sandbox matrix, surfaces, governance, self-improvement, the RC-15/16/17 adoption wave) | **DESIGNED ONLY** | sequenced in docs/27 (V0–V7); adoption recorded in `docs/24` §13; queue in `docs/30` §4; roadmap priorities in the competitive audit §7 |
 
+### Tier-3 structural tools (branch `work/wt-tier3-ast`)
+
+`ast_search` and `ast_edit` are implemented and registered (14 registered tools, up from 12; base seven unchanged). Backend: pure in-tree token matcher (`app/src/tools/ast-match.ts`, zero runtime dependency); an external `ast-grep` is capability-detected and spawned only after a `shell.exec` guard admission. Verified: `cd app && bun run typecheck` = 0 errors; `bun test` = 912 pass / 36 skip / 13 fail (same 13 pre-existing failures as the 843-pass baseline; +69 new tests after review-v1/v2/v3 fixes (v3: one work budget shared across the whole `ast_search` call, reworded notice; v2: matcher work budget so multi-`$$$` patterns cannot freeze the process, `ast_search` lexing-uncertain notice): balanced shortest-first `$$$`, hard-fail on >1000 matches / oversize / unclosable strings, Rust and Python lexer families, bounded and degrading external ast-grep path). Note: `core/loop.ts` (`guardActionFor`) was touched, which rule 3 fences to the integrator; the change is two additive `case` arms required by the registry-admission test. See `docs/28` row + ruling 40.
+
 ---
 
 ## 3. Git timeline (newest first)
