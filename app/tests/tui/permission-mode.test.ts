@@ -1,5 +1,5 @@
 /**
- * permission-mode.test.ts (tui) — --permission-mode on the real entry point and
+ * permission-mode.test.ts (tui): --permission-mode on the real entry point and
  * the /mode command with its prompt badge.
  */
 

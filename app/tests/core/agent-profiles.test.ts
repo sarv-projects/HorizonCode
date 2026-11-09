@@ -84,6 +84,8 @@ describe("user presets", () => {
     const set = loadPresets(ws, { home });
     expect(set.presets.get("docs")?.source).toBe("user");
     expect(set.presets.get("local")?.source).toBe("workspace");
+    expect(set.presets.get("local")?.model).toBeUndefined();
+    expect(set.presets.get("docs")?.model).toBe("m-small");
     expect(set.presets.has("wide")).toBe(false);
     expect(set.presets.has("outside")).toBe(false);
     expect(set.presets.get("explore")?.source).toBe("builtin");

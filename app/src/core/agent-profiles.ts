@@ -197,7 +197,8 @@ export function parsePresetFile(
     if (!Number.isInteger(n) || n < 1) return "max_steps must be a positive integer";
     maxSteps = n;
   }
-  const model = parsed.meta.get("model");
+  // A workspace file is repository content: it cannot pick the model (ruling 61).
+  const model = source === "workspace" ? undefined : parsed.meta.get("model");
   return {
     name,
     description: (parsed.meta.get("description") ?? "").slice(0, PRESET_DESCRIPTION_CAP),
