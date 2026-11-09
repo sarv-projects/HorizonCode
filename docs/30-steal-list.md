@@ -209,9 +209,299 @@ Ordered by value ÷ effort. Items 1–5 are cheap, mostly local, and directly st
 
 ---
 
+## 5. Second steal wave - seven external sources (opencode, cline, codex, oh-my-pi re-verified, grok-build, Claude Code, DeepSeek harness)
+
+> **Append-only extension (second wave).** This section consolidates three new research reports covering seven additional sources. It does **not** restate the pass-3 taxonomy: §0-§4 above (sources table, oh-my-pi claim check, families A-1..J-5, register `NF-071`..`NF-075`, the 11-item queue) stay intact and are referenced by id. New entries are organised **by source** (§5.1-§5.7), then **cross-cut by value-over-effort tier** in a consolidated table (§5.8). Nothing here is a status claim. Per status discipline, **no new NF numbers are assigned** (the register stays closed until a future revision adopts them) and **no level above DESIGNED is claimed**. Where a steal touches a wire/durable schema or a tool/provider interface, `app/src/contracts.ts` is named as the owner (contracts.ts is law). Dispositions reuse the existing vocabulary: `extends NF-###` / `extends doc NN` / `extends A-#..J-#` / `new candidate`.
+
+### 5.0 Sources and provenance (second wave)
+
+| Source | Clone path (under `/projects/sandbox/externals/`) | Report | Character |
+|---|---|---|---|
+| opencode | `externals/opencode` | `research/steal-opencode-cline.md` (Part A, Part C queue) | TS/Bun monorepo; data-driven providers, cache-breakpoint engine, line-ending-safe edit engine, background compaction |
+| cline | `externals/cline` | `research/steal-opencode-cline.md` (Part B, Part C queue) | Extracted agent SDK (`sdk/packages/core`); command-guard, loop/mistake trackers, user provider registry, GPT-5 apply_patch |
+| codex (OpenAI) | `externals/codex` | `research/steal-ohmypi-codex.md` (Part 1, Part 3 tiers) | Rust `codex-rs/` (~128 crates); OS sandbox layers, execpolicy allowlist, apply-patch grammar, per-model prompt files |
+| oh-my-pi (re-verified) | `externals/oh-my-pi` | `research/steal-ohmypi-codex.md` (Part 2, Part 3 tiers) | NEW findings only: LSP/DAP subsystem, speculative execution, bash PTY selection, fuzzy edit thresholds |
+| grok-build (xai-org) | `externals/grok-build` | `research/steal-grok-claude-deepseek.md` (Part 2, Part 4 tiers) | Rust; per-origin egress proxy, hashline edit anchors, multi-dialect tools, dream-consolidation memory |
+| Claude Code (anthropics) | `externals/claude-code` | `research/steal-grok-claude-deepseek.md` (Part 3, Part 4 tiers) | SDK/docs + `mods/` + `examples/` only (see provenance note); hook lifecycle, permission modes, subagent presets |
+| DeepSeek harness (`dsh`) | `externals/deepseek-harness` | `research/steal-grok-claude-deepseek.md` (Part 1, Part 4 tiers) | TS Cordis microkernel; capability seams, in-history prompt update, fail-closed sandbox ladder, PTC runtime |
+
+**Provenance notes (recorded verbatim).**
+
+- **Claude Code clone ships docs/SDK/mods only - there is NO agent source.** `externals/claude-code` (`0ed9469`) contains the CHANGELOG, the `mods/` function-hook packs (`agents-md`, `sec-default`, `privacy`, `diff`, `telemetry`), enterprise `examples/` (settings, MDM, gateway, hooks), and the plugin marketplace manifest. The architecture referenced in §5.6 is drawn from those published docs + `mods/` + `examples/`, not from a private agent implementation.
+- **DeepSeek harness was located and cloned THIS session.** The org publishes many model repos (`DeepSeek-V3`, `-R1`, `DeepSeek-V3.2-Exp`); only `deepseek-ai/deepseek-harness` is an actual agent/coding harness. It was cloned this session to `externals/deepseek-harness` (20,665 files; v0.2.2-rc.1, "Everything is a Plugin").
+- **oh-my-pi appears in BOTH passes.** oh-my-pi was already consolidated in the pass-3 set (see §0 and the A/B/C/G/H/I/J rows and `NF-072`/`NF-074`). The second wave **re-verifies** those against current source and adds ONLY what the prior pass missed: the LSP/DAP subsystem, speculative execution across turns, bash PTY selection, and the named fuzzy edit thresholds. Mechanisms already captured in §2/§3 are not re-listed here.
+
+### 5.1 opencode (`externals/opencode`)
+
+TS/Bun monorepo with a clean `packages/ai` (provider/transport) vs `packages/core` (sessions/tools/permissions/compaction) split. Entries below are new relative to §2/§3; overlaps with landed NFs are framed as extend/sharpen.
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Fail loud on an unknown provider: the `default` arm of `makeProvider` silently returns the mock today; make it an `error` event naming known providers; keep mock behind the explicit `--mock`/`HZ_PROVIDER=mock` flag | `externals/opencode/packages/core/src/v1/config/provider.ts` (declarative provider schema) | `app/src/core/providers/index.ts` (the closed `switch` with silent mock fallback, ~line 62) | new candidate |
+| LF-view edit matching with byte-accurate CRLF mapping + per-region ending preservation (`matchView`/`withRegionEndings`/`alignLines`); three-tier in-pass ladder (exact -> Unicode-normalised -> trailing-whitespace-insensitive) | `externals/opencode/packages/core/src/tool/plugin/edit.ts` | `app/src/tools/edit.ts` | extends NF-069 (extends A-1..A-5) |
+| Vote-based "closest numbered lines" miss hint + "newString already present, edit may already be applied" branch, gated on read permission | `externals/opencode/packages/core/src/tool/plugin/edit.ts` (`missHint`) | `app/src/tools/edit.ts` | extends NF-069 (extends A-3) |
+| Interpolate concrete OS/shell into the shell tool description at request time rather than a static string | `externals/opencode/packages/core/src/tool/plugin/shell.ts` (`description(shell)`) | `app/src/tools/shell.ts` | extends doc 09 |
+| Invalid-tool-JSON replay: synthesise a paired tool result carrying the byte-for-byte raw input + "not valid JSON" message instead of failing the turn | `externals/opencode/packages/ai/src/loop.ts` (`invalidCall`/`withInvalidCalls`) | `app/src/core/loop.ts` | extends NF-073 (extends C-4) |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| `openai-compatible` protocol adapter keyed by `{ baseURL, apiKey, modelId }` so DeepSeek/Groq/Together/OpenRouter/xAI/vLLM are config, not one file per vendor | `externals/opencode/packages/ai/src/protocols/` (~50 adapters grouped by wire format) | `app/src/core/providers/`; interface owner `app/src/contracts.ts` (provider/model info) | new candidate |
+| Cache-breakpoint planner: up to 4 breakpoints (`BREAKPOINT_CAP`), tail advances per tool result, per-route table skips OpenAI/Gemini implicit caching | `externals/opencode/packages/ai/src/cache-policy.ts` | `app/src/core/providers/` request builder | extends NF-005 (extends B-4) |
+| Hold-then-swap background compaction keyed to remaining cache TTL: summarise the just-cached prefix, HOLD it, swap only when compaction is due | `externals/opencode/packages/core/src/session/compaction.ts` | `app/src/core/compaction.ts` | extends NF-075 (extends NF-005) |
+| Debounced MCP reconcile on a tools-changed event (100 ms) + binary-resource spill-to-artifact + schema-gated JSON parse of text results | `externals/opencode/packages/core/src/tool/plugin/mcp.ts` | `app/src/core/mcp/` | extends NF-074 (MCP) |
+| Typed decision helper (`predicate`/`choice`/`score` with calibrated probabilities) for effort/difficulty routing instead of free-text judgments | `externals/opencode/packages/ai/src/decision.ts` | `app/src/core/evals.ts`, `app/src/core/metrics.ts` | extends C-11 (doc 07/10) |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Rope / order-statistic indexing for large-file paging + negative-offset tail read so `read(path, offset=-100)` is cheap on huge files | `externals/opencode/packages/core/src/tool/read-filesystem.ts` | `app/src/tools/read.ts` | extends NF-074 (extends B-9) |
+| Per-parsed-command shell permission + durable resource-scoped grants (`{action, resource}` saved rows) so `a && rm -rf b` is evaluated on `rm` specifically | `externals/opencode/packages/core/src/permission/saved.ts`, `permission/sql.ts`, `shell/parse.ts` | `app/src/tools/shell.ts`, `kernel/src/permm.rs` | extends kernel perms |
+
+### 5.2 cline (`externals/cline`)
+
+Reusable agent core extracted into `sdk/packages/core/src`. Strengths are a pragmatic tool set, a shell command-guard, per-model tool routing, safety trackers, and a user-extensible provider registry.
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Identical-tool-call loop detection keyed on a sorted-key JSON signature: soft nudge @3, hard stop @5 (catches semantic repetition the format-error cap does not) | `externals/cline/sdk/packages/core/src/runtime/safety/loop-detection.ts` | `app/src/core/loop.ts`, `app/src/core/hooks.ts` | extends NF-073 |
+| Mistake taxonomy (`api_error`/`invalid_tool_call`/`tool_execution_failed`) separate from the format cap + "stopped, state preserved, resume with a new prompt" message so a capped run is resumable | `externals/cline/sdk/packages/core/src/runtime/safety/mistake-tracker.ts` | `app/src/core/loop.ts` | extends NF-073 |
+| Batch-tolerant `read` with a union input schema + per-item result/error array (never fail the whole call on one bad path) | `externals/cline/sdk/packages/core/src/extensions/tools/definitions.ts` | `app/src/tools/read.ts` | extends NF-074 |
+| Harden clarify/terminal tools: refuse to fabricate a dismissed answer; evidence-demanding run-completion guidance ("run the tests", "re-read the task") | `externals/cline/sdk/packages/core/src/extensions/tools/definitions.ts` (`ask_question`, `submit_and_exit`) | `app/src/tools/agent.ts`, `app/src/tools/todo.ts` | extends doc 10 |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Command-guard for a read-only/plan lane: data-masking (heredocs/quotes/comments) + wrapper skipping (`sudo env xargs timeout`) + in-place-edit flag detection (`sed -i`, `curl -o`) + redirect-target allowlist, pure TS, zero deps | `externals/cline/sdk/packages/core/src/extensions/tools/command-guard.ts` | `app/src/tools/shell.ts`, `app/src/core/plan.ts`, `kernel/src/guard.rs` | new candidate |
+| `apply_patch` tool with the GPT-5 freeform grammar (`*** Begin Patch`/`Add|Update|Delete File`/`Move to:`/`@@`), fuzz-factor reporting, cwd confinement | `externals/cline/sdk/packages/core/src/extensions/tools/executors/apply-patch.ts`, `apply-patch-parser.ts` | `app/src/tools/` (new patch tool); schema owner `app/src/contracts.ts` | new candidate |
+| Declarative model->tool routing table (`{modelIdIncludes, providerIdIncludes, enable[], disable[]}`) routing GPT/Codex to `apply_patch` and Claude/Gemini to find/replace | `externals/cline/sdk/packages/core/src/extensions/tools/model-tool-routing.ts` | `app/src/tools/index.ts`; tool-exposure schema owner `app/src/contracts.ts` | new candidate |
+| Shared `line-endings` helper across edit/write/patch: detect native EOL, chunk math in LF space, restore on write (a conclusion opencode reached independently) | `externals/cline/sdk/packages/core/src/extensions/tools/executors/line-endings.ts` | `app/src/tools/edit.ts`, `app/src/tools/write.ts` | extends NF-069 |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| User provider registry: register `{ name, baseURL, apiKey, protocol, models[] | modelsSourceUrl }` at runtime; model discovery that FAILS LOUD (unreachable host/bad key reaches the caller, never an empty list) | `externals/cline/sdk/packages/core/src/services/providers/local-provider-service.ts`, `local-provider-registry.ts` | `app/src/core/config.ts`, `app/src/core/providers/`; schema owner `app/src/contracts.ts` | new candidate |
+| Typed hook taxonomy (`beforeRun`/`afterRun`/`beforeModel`/`afterModel`/`beforeTool`/`afterTool`/`onEvent`) so rails/loop-detection/budgets are hooks, not inlined branches | `externals/cline/sdk/packages/core/src/runtime/orchestration/session-runtime-orchestrator.ts` | `app/src/core/hooks.ts`, `app/src/core/loop.ts` | extends doc 08 |
+| Uniform `restrictToCwd` / `..`-escape rejection across every write-capable tool; idle-timeout respawn + compiled-runtime launcher (`BUN_BE_BUN=1`) for JS helpers | `externals/cline/sdk/packages/core/src/runtime/tools/subprocess-sandbox.ts` | `app/src/tools/write.ts`, `app/src/tools/edit.ts` | extends NF-071 |
+
+### 5.3 codex (`externals/codex`)
+
+OpenAI Codex, Rust `codex-rs/`. codex independently confirms NF-072 (per-tool parallel flag at `tools/router.rs::tool_supports_parallel`). New relative to §2/§3:
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Self-documenting provider-removal errors: `WireApi` deserialization rejects removed values with an embedded "How to fix: ... More info: <url>" message; built-in defaults + user `model_providers` config that override at runtime | `externals/codex/codex-rs/model-provider-info/src/lib.rs` | `app/src/core/providers/index.ts`; config/schema owner `app/src/contracts.ts` | new candidate |
+| Graduated fuzzy context ladder for patch hunks: exact -> trailing-whitespace -> trim -> Unicode-fold (dashes/quotes/odd-spaces to ASCII), eof-anchored search; lenient-by-default parse (`PARSE_IN_STRICT_MODE=false`) | `externals/codex/codex-rs/apply-patch/src/seek_sequence.rs`, `parser.rs` | `app/src/tools/edit.ts` | extends NF-069 (extends A-1..A-3) |
+| Per-model prompt templates selected from model metadata, fail-soft (missing template -> warn + empty, never crash) | `externals/codex/codex-rs/prompts/src/model_instructions.rs`, `core/gpt-5.2-codex_prompt.md` | `app/src/core/instructions.ts` | extends doc 10 (extends H-4) |
+| Model-visible exec output format: `Exit code`, `Wall time` (0.1s), `Total output lines` only when truncated, then `Output:` | `externals/codex/codex-rs/core/src/tools/mod.rs` (`format_exec_output_for_model`) | `app/src/tools/shell.ts` | extends NF-074 |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| OS-level sandbox layering for shell/codemode: `no_new_privs` + seccomp network isolation + bubblewrap FS isolation + bundled-binary digest verify (exit 8 on mismatch); declarative `execpolicy` allowlist (`PrefixRule`/`NetworkRule`, sorted `fingerprint()` equality, `amend` at runtime) | `externals/codex/codex-rs/linux-sandbox/src/{seccomp.rs,bwrap.rs,bundled_bwrap.rs}`, `execpolicy/src/policy.rs` | `kernel/src/guard.rs`, `kernel/src/permm.rs`; `DEFAULT_POLICY` owner `app/src/contracts.ts` | extends NF-016/NF-023 (extends J-3) |
+| Unified interactive exec: one stateful terminal tool pair (`exec_command` + `write_stdin`), PTY-backed, with a cached-approval auto-retry at `SandboxType::None` on sandbox denial (no re-prompt) | `externals/codex/codex-rs/core/src/unified_exec/mod.rs` | `app/src/tools/shell.ts` | new candidate |
+| Streaming retry with server-advised backoff that cannot extend configured limits (`INITIAL_CONNECTION_RETRY_DELAY=5s`, `MAX_CONNECTION_RETRY_DELAY=60s`; `Retry-After` controls timing, never the retry count) | `externals/codex/codex-rs/core/src/responses_retry.rs` | `app/src/core/providers/` (retry) | extends NF-073 (extends C-5) |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Server mode + rollout/daemon recovery: a long-lived process TUI/ACP clients attach to, with the event log as the rollout for crash recovery | `externals/codex/codex-rs/core/src/rollout.rs`, `session/daemon_recovery.rs`, `app-server-daemon` | `app/src/main.ts`, `kernel/src/eventlog.rs`; protocol owner `app/src/contracts.ts` | new candidate |
+| Tool exposure classes (`Direct`/`Deferred`/`CodeModeOnly`/`Hidden`) + a `tool_search` meta-tool so rare/large tools cost no spec tokens until discovered | `externals/codex/codex-rs/core/src/tools/registry.rs` (`ToolExposure`) | `app/src/tools/index.ts`, `app/src/core/loop.ts`; schema owner `app/src/contracts.ts` | extends NF-072 |
+| Turn diff tracker as a first-class surface: accumulate one unified diff per turn and emit a `TurnDiffEvent` independent of per-tool output | `externals/codex/codex-rs/core/src/turn_diff_tracker.rs` | `app/src/core/loop.ts`, TUI | new candidate |
+| Guardian-style action classifier reviewing proposed actions against instructions | `externals/codex/codex-rs/core/src/guardian/`, `prompts/templates/guardian/classifier_instructions.md` | `app/src/core/review.ts` | extends doc 10 |
+
+### 5.4 oh-my-pi (re-verified, NEW findings only) (`externals/oh-my-pi`)
+
+Only mechanisms the pass-3 audit did not capture. The marketing numbers remain NOT VERIFIABLE (see §1); keep the H-7 metric contract.
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Fuzzy edit thresholds as a tuned prior: `DEFAULT_FUZZY_THRESHOLD=0.95`, `SEQUENCE_FUZZY_THRESHOLD=0.92`, `FALLBACK_THRESHOLD=0.8`, `CONTEXT_FUZZY_THRESHOLD=0.8`, `CHARACTER_MATCH_THRESHOLD=0.92`, `DOMINANT_FUZZY_MIN_CONFIDENCE=0.97` with `DOMINANT_FUZZY_DELTA=0.08`; diff-shaped failure previews up to `MAX_RECORDED_MATCHES=5` (5 lines x 80 chars) | `externals/oh-my-pi/crates/pi-edit/src/fuzzy.rs` | `app/src/tools/edit.ts` | extends NF-069 (extends A-3) |
+| Diagnostics-ledger / fresh-only error reporting: strip `file:line:col` to a location-independent `diagnosticIdentity`, return only unseen messages so repeated diagnostics are not re-charged to context | `externals/oh-my-pi/packages/coding-agent/src/lsp/diagnostics-ledger.ts` | `app/src/core/loop.ts`, `app/src/tools/edit.ts` | extends NF-074 |
+| Cross-check and align output-budget constants against the verified source: `MIN_FITTED_OUTPUT_TOKENS=1024`, `MESSAGE_FRAMING_TOKENS=16`, `OUTPUT_FIT_HEADWAY_TOKENS=64`, margin divisor 10; usage anchor from the newest assistant turn; skip-fit cases (`stopsOutputAtContextWindow`, OpenRouter self-cap, no window) | `externals/oh-my-pi/packages/agent/src/output-budget.ts` | `app/src/core/output-budget.ts` | extends NF-074 (extends B-6) |
+| Bash interceptor as a configurable regex rule table (`DEFAULT_BASH_INTERCEPTOR_RULES`) with a quote-aware tokenizer (`skipShellWord`), generalising the `cat`->read interception to grep/find/sed | `externals/oh-my-pi/packages/coding-agent/src/tools/bash-interceptor.ts` | `app/src/tools/shell.ts` | extends NF-074 |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| LSP loop: writethrough (sync content to servers, force tsserver to observe new paths pre-`didOpen`, grace-window wait) + inline diagnostics returned with the edit result + multi-server mux | `externals/oh-my-pi/packages/coding-agent/src/lsp/{client.ts,writethrough.ts,diagnostics.ts,workspace-diagnostics.ts,lspmux.ts}` | new `app/src/core/lsp/` + `app/src/tools/edit.ts`, `app/src/tools/write.ts` | new candidate |
+| Bash PTY selection + interactive bash: decide per command whether to run under a PTY vs piped so interactive programs work | `externals/oh-my-pi/packages/coding-agent/src/tools/{bash-pty-selection.ts,bash-interactive.ts}` | `app/src/tools/shell.ts` | new candidate |
+| Cross-process locking + mutation queue + concurrent-edit conflict detection | `externals/oh-my-pi/packages/coding-agent/src/tools/{file-mutation-queue.ts,conflict-detect.ts,bash-worktree-rewrite.ts}` | `kernel/` (lock owner), `app/src/tools/write.ts` | new candidate |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Speculative execution across turns: a dependency-graphed candidate scheduler running side-effect-free calls ahead of commit, then commit/discard on host validation (generalises NF-072's within-batch parallelism) | `externals/oh-my-pi/packages/agent/src/speculative-execution.ts` | `app/src/core/loop.ts` | extends NF-072 |
+| DAP (debugger) tool: full launch/attach, breakpoints (line/function/data/instruction), `evaluate`, `readMemory`, `disassemble` | `externals/oh-my-pi/packages/coding-agent/src/dap/{client.ts,session.ts}` | new `app/src/tools/` debug tool | new candidate |
+| AST-structural edit + search tools above the textual edit/grep for safer large refactors | `externals/oh-my-pi/packages/coding-agent/src/tools/{ast-edit.ts,ast-grep.ts}`, `crates/pi-ast` | `app/src/tools/edit.ts`, `app/src/tools/index.ts` | new candidate |
+
+### 5.5 grok-build (xai-org) (`externals/grok-build`)
+
+Rust; strongest on network egress, edit anchoring, and multi-dialect tools.
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Bash command splitting + per-sub-command risk scoring: split a compound shell line and risk-score each segment instead of approving the whole string | `externals/grok-build/crates/codegen/xai-grok-permission-rules/src/{bash_command_splitting.rs,exec_risk.rs}` | `app/src/core/loop.ts` (`admissionFor`/guard), `app/src/tools/shell.ts` | extends NF-073 (extends D-5) |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Hashline edit anchors (`LINE:localhash[:chunkfp]`): three schemes (ContentOnly / ChunkFingerprint over 16-line chunks / CheckpointChain from 32-line checkpoints); `validate() -> Valid|Stale|OutOfRange`; `find_shifted()` searches +-15 lines; truncated anchors rejected as `Stale` (cannot silently degrade) | `externals/grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build_hashline/scheme.rs` | `app/src/tools/read.ts`, `app/src/tools/edit.ts` + a new `anchor.ts` | extends NF-069/052 |
+| Multi-dialect tool compatibility: optional `codex`/`opencode`/`claude` tool-name aliases over one canonical `ToolKind`/`ToolNamespace` taxonomy with a versioned `_meta` envelope, so a model runs with the dialect it was trained on | `externals/grok-build/crates/codegen/xai-grok-tools/src/implementations/` (`codex/`, `opencode/`, `claude_alias.rs`, `tool_taxonomy.rs`) | `app/src/tools/index.ts` + a taxonomy module; schema owner `app/src/contracts.ts` | new candidate |
+| Folder-trust + source-identity gating: a program named by a workspace stays off until the folder is trusted | `externals/grok-build/crates/codegen/xai-grok-permission-rules/src/{folder_trust.rs,source_identity.rs,trust.rs}` | `app/src/core/config.ts`, `kernel/src/permm.rs` | extends doc 11 |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Egress proxy with per-origin `Allow|AllowAndRecord|Deny|Ask`: `Ask` parks the connection; two-level hold budgets (`DEFAULT_MAX_HELD=16`, `DEFAULT_MAX_HELD_PER_CALL=8`, `DEFAULT_HOLD_TIMEOUT=600s` then auto-403); observe mode (`AllowAndRecord{would}`) for safe rollout | `externals/grok-build/crates/codegen/xai-grok-egress-proxy/src/decider.rs` | new `kernel/` egress capability + `app/src/core/` proxy client; wire/policy owner `app/src/contracts.ts` | new candidate |
+| Memory retrieval + background "dream" consolidation: embeddings + BM25 + MMR + query expansion; read-before-write self-edits; protected `MEMORY.md` manifest | `externals/grok-build/crates/codegen/xai-grok-memory/src/{storage_v2.rs,v2_consolidation.rs,mmr.rs,batch_dream*.rs}` | `app/src/core/curator.ts`, `app/src/core/review.ts` | extends NF-075 |
+| Server-side hosted tools (web search executed by the provider) ANDed with per-model capability | `externals/grok-build/crates/.../xai-grok-agent/src/agent.rs` (`hosted_tools`) | `app/src/core/providers/`, `app/src/tools/index.ts`; capability owner `app/src/contracts.ts` | new candidate |
+
+### 5.6 Claude Code SDK/docs (`externals/claude-code`)
+
+The extensibility, permission, and lifecycle-hook reference. Agent source is closed; see the provenance note in §5.0 (docs/SDK/`mods/`/`examples/` only).
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Subagent description token budget: warn when non-built-in subagent descriptions exceed 15000 tokens of combined context; lean read-only "explore" preset that starts without the instructions file + git status (`omitClaudeMd`) | `externals/claude-code` published subagents docs (`code.claude.com/docs/en/sub-agents`) | `app/src/tools/agent.ts`, `app/src/core/subagent.ts`, `app/src/core/instructions.ts` | extends doc 10 |
+| Exit-code hook contract: exit 2 blocks the tool and shows stderr to the model, exit 1 shows stderr to the user only, exit 0 proceeds; worked `grep`->`rg` `PreToolUse` validator | `externals/claude-code/examples/hooks/bash_command_validator_example.py` | `app/src/core/hooks.ts` | extends doc 10 |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Richer hook lifecycle: add `SessionStart/End`, `PreCompact/PostCompact`, `SubagentStart/Stop`, `PermissionRequest/Denied`, `PreToolBatch/PostToolBatch`, plus HTTP / MCP-tool / LLM-prompt / subagent hook transports | `externals/claude-code/mods/` (hook packs, e.g. `mods/agents-md`) + published hooks docs (`code.claude.com/docs/en/hooks`) | `app/src/core/hooks.ts`, `app/src/core/loop.ts` emit points; event schema owner `app/src/contracts.ts` | extends doc 10 |
+| Permission modes (`default`/`acceptEdits`/`plan`/`auto`/`bypassPermissions`) with `allow`/`ask`/`deny` rule lists keyed by tool, plus a managed-settings override hierarchy (`allowManagedPermissionRulesOnly`, `disableBypassPermissionsMode`) | `externals/claude-code/examples/settings/` (`settings-strict.json`), `examples/mdm/` | `app/src/core/config.ts`, `kernel/src/permm.rs`; policy owner `app/src/contracts.ts` | extends doc 11 |
+| Bash network allowlist shape: `sandbox.network` with `allowedDomains`, `allowUnixSockets`, `allowLocalBinding`, `httpProxyPort` (adopt the allowlist shape, not the Bash-only coverage) + the CI egress-firewall `enforce` pattern | `externals/claude-code/examples/settings/settings-bash-sandbox.json`, `examples/` CI hardening (`egress-firewall.yaml`, `workflow-hardening.yml`) | `kernel/src/guard.rs` + egress client; policy owner `app/src/contracts.ts` | new candidate |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Agent SDK / headless `-p --output-format json` surface so non-TS callers drive the same loop (the "protocol is the API / SDKs" roadmap item) | `externals/claude-code` published SDK overview (`code.claude.com/docs/en/agent-sdk/overview`) | `app/src/main.ts` (headless mode exists); JSON-RPC/stdio protocol owner `app/src/contracts.ts` | new candidate |
+
+### 5.7 DeepSeek harness (`dsh`) (`externals/deepseek-harness`)
+
+The deepest and most directly transferable TS source; a Cordis microkernel where every capability is a plugin behind a Service Definition / Provider / Consumer seam.
+
+**Tier 1 - cheap, local, high value.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| `systemPromptUpdate: 'in-history'`: when the model reads the latest `system` message at any position, append a changed system prompt AFTER cached history instead of rewriting the leading message, so the KV-cache prefix survives a prompt change | `externals/deepseek-harness/packages/core/system-prompt/README.md`, `packages/llm/llm-deepseek/README.md` | `app/src/core/loop.ts` request assembly, `app/src/core/providers/anthropic.ts`/`openai.ts`; per-model capability flag owner `app/src/contracts.ts` | extends NF-005 |
+| Repeat-tool reminder guard at `[3,5,8]` exact-repeat counts (deep key-sorted canonical args), advisory never a veto, injected as a source-attributed synthetic user message, counted in post-execute (denied calls count too), cleared by a new user prompt | `externals/deepseek-harness/packages/guard/repeat-tool-reminder/README.md` | new `app/src/core/guards/repeat-tool.ts` hooked after tool results in `app/src/core/loop.ts` | extends NF-073 |
+| Stable provider failure codes + route-on-code (`NO_ADAPTER`, `MISSING_CREDENTIAL`, `AUTH`, `RATE_LIMIT`, `CONTEXT_WINDOW_EXCEEDED`, `QUOTA`, `ACCOUNT_QUOTA`) with one terminal `finish` shape per stream, so retry/compaction triggers route on code not message text | `externals/deepseek-harness/packages/llm/llm/README.md` | `app/src/core/providers/index.ts`; code union owner `app/src/contracts.ts` | extends NF-073 (extends H-5) |
+| Subagent delegation-scope statement + return guidance injected into every child ("scope fixed, do not retry the denied op, state the limitation"; "parent gets only your final answer") | `externals/deepseek-harness/packages/subagent/subagent/README.md` | `app/src/core/subagent.ts`, `app/src/tools/agent.ts` | extends NF-071 |
+| PTC tool-call allowance tied to timeout (`floor(timeoutMs/60000 x maxSubCallsPerMinute)`, default 2048 for a 2-min run) + infinite-loop termination message naming the limit; teach read-only concurrency in the SDK instructions | `externals/deepseek-harness/packages/core/tool-executor-ptc/README.md` | `app/src/tools/codemode.ts`, `app/src/tools/codemode-child.ts` | extends doc 09 (codemode) |
+
+**Tier 2 - next capability wave.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| Fail-closed sandbox with a per-call escalation ladder: `SandboxPolicy` rides each call (`read-only`/`workspace-write`/`danger-full-access`); cannot-enforce -> `SANDBOX_UNAVAILABLE` (never unconfined); enforcement completeness reported per call (`full`/`partial`); denied call may retry the exact call once with `sandbox_permissions` + `justification`, a wider mode needs approval and applies to that one call only | `externals/deepseek-harness/packages/sandbox/sandbox/README.md` | `kernel/src/guard.rs`, `app/src/core/kernel.ts`; policy/wire owner `app/src/contracts.ts` | extends NF-016/NF-023 |
+| Four-stage tool pipeline (`tools/pre-execute` allow/deny/ask -> monotonic `guard()` -> around-dispatch `execute` -> `post-execute` replace/attach-context -> observe `tools/result`) with conditional tools (`register(def,{when})`) and per-agent `restrict(filter)` masks | `externals/deepseek-harness/packages/core/tools/README.md` | `app/src/tools/index.ts`, `app/src/core/loop.ts` dispatch, `app/src/core/hooks.ts` | extends doc 09 |
+| Compaction split: a tool-result pruner that trims oversized outputs BEFORE summarizing + image-offload logged as one event and retried when a route rejects images | `externals/deepseek-harness/packages/compaction/README.md` | `app/src/core/compaction.ts`, `app/src/core/output-budget.ts` | extends NF-074 |
+| Deliverables recorder: a `present` tool declaring final files + a per-turn changed-file list with line counts from git snapshots, rendered at end of turn (client-only, not model-visible) | `externals/deepseek-harness/packages/deliverables/README.md` | new `app/src/core/deliverables.ts`, reuse `app/src/tools/change-journal.ts` | new candidate |
+
+**Tier 3 - richer / strategic.**
+
+| Steal | External evidence | HorizonCode target | Disposition |
+|---|---|---|---|
+| External agents as subagents: run Claude Code / Codex / an ACP agent as a one-shot child returning only a final answer (reasoning/tool-traffic/stderr kept out of the parent session) | `externals/deepseek-harness/packages/subagent/subagent-claude-code/README.md`, `packages/subagent/subagent/README.md` | new providers behind `app/src/core/subagent.ts`; protocol owner `app/src/contracts.ts` | extends NF-071 |
+| Capability-seam discipline (Service Definition / Provider / Consumer) applied to fs/subprocess/shell/sandbox so a remote-sandbox swap moves all execution tools at once, no per-tool forks | `externals/deepseek-harness/packages/core/README.md`, `docs/architecture.md` (Profiles and bundles) | architectural: `app/src/core/kernel.ts`, `app/src/core/providers/`; seam contracts owner `app/src/contracts.ts` | extends doc 03 (HLD) |
+| Configurable providers activated from config without restart (`LlmConfigurableProvider` with `defaultBaseURL`/`nativeAuth`/`baseURLEnv`; new model ids pass through with no re-registration); capability negotiation validated before any I/O | `externals/deepseek-harness/packages/llm/llm/README.md` | `app/src/core/providers/index.ts`, `app/src/core/config.ts`; schema owner `app/src/contracts.ts` | new candidate |
+
+### 5.8 Consolidated tiers across the second wave
+
+Cross-cutting the per-source subsections. Items flagged **CONVERGENT** appear in two or more independent sources (the merge test's ">=2 sources" half) and are the highest-confidence bets; the rest are uniquely user-noticeable within a single source.
+
+**Tier 1 (cheap, local).**
+
+| Item | Sources | HorizonCode target | Convergence |
+|---|---|---|---|
+| Fail-loud / self-documenting provider errors (stop defaulting to mock) | opencode §5.1, cline §5.2, codex §5.3, dsh §5.7 | `app/src/core/providers/index.ts` | CONVERGENT (4 sources) |
+| Edit ladder sharpening: Unicode-fold pass + fuzzy threshold priors + up-to-5 closest-line previews | opencode §5.1, codex §5.3, oh-my-pi §5.4 | `app/src/tools/edit.ts` (extends NF-069) | CONVERGENT (3 sources) |
+| Semantic repeat-call guard (soft/hard or `[3,5,8]` advisory) | cline §5.2, dsh §5.7 | `app/src/core/loop.ts` (extends NF-073) | CONVERGENT (2 sources) |
+| Stable provider failure codes, route-on-code | codex §5.3, dsh §5.7 | `app/src/core/providers/index.ts`, `app/src/contracts.ts` | CONVERGENT (2 sources) |
+| Bash interceptor / command->tool redirection as a rule table | oh-my-pi §5.4, codex §5.3 (prompt-level) | `app/src/tools/shell.ts` (extends NF-074) | CONVERGENT (2 sources) |
+| Per-request OS/shell in the shell tool description | opencode §5.1 | `app/src/tools/shell.ts` | single-source |
+
+**Tier 2 (next wave).**
+
+| Item | Sources | HorizonCode target | Convergence |
+|---|---|---|---|
+| Fail-closed sandbox + per-call escalation ladder + enforcement-completeness (`full`/`partial`) | dsh §5.7, Claude Code §5.6 (permission `auto`), codex §5.3 (OS layers) | `kernel/src/guard.rs`, `app/src/core/kernel.ts`, `app/src/contracts.ts` | CONVERGENT (3 sources) |
+| `openai-compatible` adapter + user/data-driven provider registry | opencode §5.1, cline §5.2, dsh §5.7, codex §5.3 | `app/src/core/providers/`, `app/src/core/config.ts`, `app/src/contracts.ts` | CONVERGENT (4 sources) |
+| Richer typed hook / tool-pipeline lifecycle (pre/post, allow/ask/deny) | dsh §5.7, Claude Code §5.6, cline §5.2 | `app/src/core/hooks.ts`, `app/src/tools/index.ts`, `app/src/core/loop.ts` | CONVERGENT (3 sources) |
+| KV-cache-preserving prompt/tool updates (append, do not rewrite the prefix) | dsh §5.7 (`in-history`), opencode §5.1 (cache planner), codex §5.3 (retained-tool-output) | `app/src/core/loop.ts`, `app/src/core/providers/`, `app/src/contracts.ts` | CONVERGENT (3 sources) |
+| `apply_patch` tool + model->tool routing for GPT/Codex models | cline §5.2, codex §5.3 | `app/src/tools/`, `app/src/tools/index.ts`, `app/src/contracts.ts` | CONVERGENT (2 sources) |
+| LSP post-edit diagnostics loop (writethrough + fresh-only ledger) | oh-my-pi §5.4 | new `app/src/core/lsp/`, `app/src/tools/edit.ts` | single-source (and a build-not-steal differentiator, see §5.10) |
+
+**Tier 3 (strategic).**
+
+| Item | Sources | HorizonCode target | Convergence |
+|---|---|---|---|
+| Per-call network egress authority (ask/allow/deny, parked connections, observe mode) | grok §5.5 (proxy), Claude Code §5.6 (bash allowlist + CI egress firewall) | new `kernel/` egress capability + `app/src/core/` client, `app/src/contracts.ts` | CONVERGENT (2 sources) |
+| Multi-dialect / provider-neutral tool + model layer | grok §5.5 (tool dialects), dsh §5.7 (provider-neutral seam) | `app/src/tools/index.ts`, `app/src/core/providers/`, `app/src/contracts.ts` | CONVERGENT (2 sources) |
+| External agents as one-shot subagents | dsh §5.7, Claude Code §5.6 (subagent model) | `app/src/core/subagent.ts`, `app/src/contracts.ts` | CONVERGENT (2 sources) |
+| Hashline edit anchors (address-level staleness + bounded shift recovery) | grok §5.5 | `app/src/tools/read.ts`, `app/src/tools/edit.ts` | single-source |
+| Server mode + daemon recovery / Agent SDK surface | codex §5.3, Claude Code §5.6 | `app/src/main.ts`, `kernel/src/eventlog.rs`, `app/src/contracts.ts` | CONVERGENT (2 sources) |
+| Memory retrieval + background consolidation | grok §5.5 | `app/src/core/curator.ts`, `app/src/core/review.ts` (extends NF-075) | single-source |
+
+### 5.9 Register-candidate note (proposals only)
+
+Following the §3 pattern, the items below MEET the merge test (>=2 independent sources OR uniquely user-noticeable) and are therefore the strongest candidates to propose as NEW register rows in a future revision. **These are PROPOSALS only.** Per status discipline they claim NO status (nothing above DESIGNED), and NO new NF numbers (NF-076+) are assigned here; the register stays closed until a revision adopts them. Where a candidate touches a wire/durable schema or a tool/provider interface, `app/src/contracts.ts` is the owner and must land the schema first.
+
+- **Per-call network egress authority** - ask/allow/deny per origin, parked connections, observe-mode rollout (grok §5.5 + Claude Code §5.6). contracts.ts owns the egress wire/policy shape. Convergent.
+- **Fail-closed sandbox + per-call escalation ladder** - `SANDBOX_UNAVAILABLE` never runs unconfined; one-call widen with justification; `full`/`partial` enforcement report (dsh §5.7 + Claude Code §5.6 + codex §5.3). Extends NF-016/NF-023. Convergent.
+- **Open / data-driven provider list** - fail-loud unknown provider + `openai-compatible` adapter + user provider registry (opencode §5.1 + cline §5.2 + codex §5.3 + dsh §5.7). contracts.ts owns the provider/model schema. Convergent; directly closes the named closed-provider-list weakness.
+- **Richer typed hook / tool-pipeline lifecycle** - named pre/post stages with allow/ask/deny and per-agent restriction (dsh §5.7 + Claude Code §5.6 + cline §5.2). contracts.ts owns the hook-event schema. Convergent.
+- **Hashline edit anchors** - address-level staleness detection with bounded +-15-line shift recovery (grok §5.5). Uniquely user-noticeable; extends NF-069/052.
+- **LSP post-edit diagnostics loop** - writethrough + fresh-only diagnostics ledger returned inline with the edit (oh-my-pi §5.4). Uniquely user-noticeable; see §5.10 (build-not-steal).
+
+### 5.10 What not to copy (second wave)
+
+Deliberate non-steals, consolidated from the three reports:
+
+- **oh-my-pi's 16,207-line `agent-session.ts` monolith** and its unverifiable marketing metrics (72% pass, -61% tokens) - steal the mechanisms, not the sprawl; keep the H-7 metric contract (§1 already ruled the numbers NOT VERIFIABLE).
+- **codex's full 128-crate breadth** (Bedrock/GCP/Windows-sandbox/realtime-voice/cloud-tasks) and its Responses-only `WireApi` lock-in - take the contracts (sandbox layering, execpolicy, exposure classes, self-documenting errors), keep HorizonCode's multi-wire support; do not adopt the single-wire constraint or the enterprise adapter matrix.
+- **grok's generated monorepo `Cargo.toml`** and ~80-crate sprawl - take the mechanisms (egress, hashline, memory), not the crate explosion.
+- **dsh's full Cordis framework dependency** - adopt the capability-seam contract and the loop/tool/guard mechanisms as native TS, not the Cordis runtime itself.
+- **Claude Code's Bash-only sandbox scope** (the sandbox does not cover Read/Write/WebSearch/WebFetch/MCP) - adopt its network-allowlist shape, not its coverage gap; HorizonCode's kernel-enforced all-tool model is the stronger posture.
+- **opencode's effect-TS + drizzle/SQLite rewrite and ~15k-line session monolith** - take the cache policy, decision API, edit engine, and compaction discipline, not the framework or the sprawl.
+- **cline's VS Code host layer** (webview/hostbridge) - HorizonCode is a TUI; take the SDK-core patterns only.
+
+**Build-not-steal differentiators.** Two of HorizonCode's weaknesses are things the competitors also lack, so they are opportunities to build a lead rather than copy: an OS-level sandbox (absent from opencode/cline/codex agent cores - opencode's `edit.ts` even carries a `// TODO: Add LSP ...` note; HorizonCode's Landlock direction per `docs/audit/landlock-spike-2026-11-08.md` is the differentiator) and a live post-edit LSP diagnostics loop (only oh-my-pi ships one among these seven; building HorizonCode's own closes a gap the others share).
+
+---
+
 ## Related documents
 
 - `audit/pass3/` — the four reports this shortlist consolidates (historical class)
 - `29-final-audit.md` — the twelve-repo audit and its own queue
 - `24-feature-catalog.md` — Section B rows `NF-071`…`NF-075` (adopted; RC-15(b)) and the `A.9` addendum these sources are recorded in
 - `27-implementation-plan.md` — current build plan
+- `research/steal-opencode-cline.md`, `research/steal-ohmypi-codex.md`, `research/steal-grok-claude-deepseek.md` - the three second-wave reports consolidated in §5 (opencode, cline, codex, oh-my-pi re-verified, grok-build, Claude Code SDK/docs, DeepSeek harness)
+- `externals/{opencode,cline,codex,oh-my-pi,grok-build,claude-code,deepseek-harness}` - the seven clones cited as second-wave evidence paths
