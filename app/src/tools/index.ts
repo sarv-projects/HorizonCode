@@ -6,6 +6,8 @@ import type { Tool, ToolExposure, ToolSpec } from "../contracts";
 import { getMcpTool, mcpToolSpecs } from "../core/mcp/registry";
 import { agentTool } from "./agent";
 import { applyPatchTool } from "./apply-patch";
+import { astEditTool } from "./ast-edit";
+import { astSearchTool } from "./ast-search";
 import { codemodeTool } from "./codemode";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
@@ -38,6 +40,8 @@ export const tools: Tool[] = [
   interactiveExecTool,
   lspTool,
   toolSearchTool,
+  astSearchTool,
+  astEditTool,
 ];
 
 /** The seven base tools; the delegation tool is deliberately excluded here. */
