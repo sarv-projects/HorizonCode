@@ -133,7 +133,7 @@ if (!SCRIPT) {
       expect(await waitFor(proc, "\u00b7 model mock-1")).toBe(true);
 
       proc.write("/files\n");
-      expect(await waitFor(proc, /tools \(\d+\): /)).toBe(true);
+      expect(await waitFor(proc, /tools \(\d+ registered\): \d+ available now: /)).toBe(true);
 
       proc.write("/nope\n");
       expect(await waitFor(proc, "unknown command /nope")).toBe(true);
@@ -146,8 +146,8 @@ if (!SCRIPT) {
       expect(run.timedOut).toBe(false);
       expect(run.code).toBe(0);
       // the tool list names real tools and stays in order
-      expect(out).toMatch(/tools \(\d+\): .*glob/);
-      expect(out).toMatch(/tools \(\d+\): .*shell/);
+      expect(out).toMatch(/tools \(\d+ registered\): [\s\S]*glob/);
+      expect(out).toMatch(/tools \(\d+ registered\): [\s\S]*shell/);
       expect(out.indexOf("\u00b7 model mock-1")).toBeLessThan(out.indexOf("tools ("));
       expect(out.indexOf("tools (")).toBeLessThan(out.indexOf("unknown command /nope"));
     },
