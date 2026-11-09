@@ -23,7 +23,11 @@
  * `rollout_reconstruction` and dsh's `ToolCallRecovery`, in reduced form: the
  * server is the leader that re-derives live state from durable state on attach.
  * The kernel event log is APPEND-ONLY — the server never edits past records; a
- * resume continues forward (new events, never a mutation of old ones).
+ * resume continues forward (new events, never a mutation of old ones). Resume
+ * is BY ID: `runtimeFor(id)` opens `createRuntime({ sessionId: id })`, so ANY
+ * session `session.list` advertises (`hz://session/<id>`) — not just the
+ * most-recently-touched one — can be prompted or subscribed; an unknown id
+ * fails closed as INVALID_PARAMS.
  *
  * ALL MUTATION GOES THROUGH THE RUNTIME (S4/S49): the server owns no DB writes
  * of its own. prompt -> runtime.send, rewind -> runtime.rewindTo, create/resume
@@ -51,6 +55,7 @@ import type {
 } from "../contracts";
 import { HZ_PROTO, SESSION_EVENT_METHOD, SERVER_METHODS } from "../contracts";
 import { createRuntime, type HzRuntime } from "./index";
+import { SessionStore } from "./session";
 
 const SERVER_VERSION = "0.1.0";
 
@@ -131,25 +136,22 @@ export function createServer(opts: ServerOptions): ServerHandle {
     // this single-attach connection a turn's events always stream: `subscribe`
     // additionally marks a session for ongoing notification, but a `prompt`
     // alone streams its own turn to whoever is attached to this connection.
+    // NOTE (v1): `subscribed` is NOT consulted here — on one connection every
+    // turn's events stream unconditionally. The set records subscribe intent
+    // and is the seam a multi-client server (S42–S44) would key per-connection
+    // fan-out on; it deliberately does not gate notification in single-attach.
     const params = { sessionId, event: ev };
     send({ method: SESSION_EVENT_METHOD, params } satisfies ServerNotification);
   }
 
-  /** Open (or reuse) the runtime for `sessionId`, or a fresh one when absent. */
-  async function openRuntime(sessionId: string | undefined, fresh: boolean): Promise<HzRuntime> {
-    if (!fresh && sessionId !== undefined) {
-      const live = runtimes.get(sessionId);
-      if (live !== undefined) return live;
-    }
-    // A fresh session: createRuntime with no continueSession. An attach/resume:
-    // createRuntime({ continueSession: true }) resumes the most-recently-touched
-    // session for the workspace, which is how the store addresses "the session
-    // to continue". Either way createRuntime runs both crash recoveries on open.
+  /** Open a FRESH session (session.create). Resume-by-id lives in runtimeFor. */
+  async function openFresh(): Promise<HzRuntime> {
+    // createRuntime with neither sessionId nor continueSession starts a new
+    // session; it still runs both crash recoveries (a no-op on fresh rows).
     const runtime = await createRuntime({
       workspace: opts.workspace,
       model: opts.model,
       mock: opts.mock === true,
-      continueSession: !fresh,
     });
     kernelMode = runtime.kernelMode;
     const id = runtime.sessionId;
@@ -162,18 +164,31 @@ export function createServer(opts: ServerOptions): ServerHandle {
   async function runtimeFor(sessionId: string): Promise<HzRuntime> {
     const live = runtimes.get(sessionId);
     if (live !== undefined) return live;
-    // Not live in this process yet: resume it from disk (createRuntime's
-    // recovery runs here — the rollout reconstruction seam). The store resumes
-    // the most-recently-touched session; a prompt/subscribe to any OTHER id is
-    // refused rather than silently retargeted.
-    const resumed = await openRuntime(undefined, false);
-    if (resumed.sessionId !== sessionId) {
+    // Not live in this process yet: resume THAT SPECIFIC session from disk
+    // (createRuntime's recovery runs here — the rollout reconstruction seam).
+    // createRuntime({ sessionId }) opens the requested id by id, so ANY session
+    // `session.list` advertised — not just the most-recently-touched one — can
+    // be prompted/subscribed. A sessionId unknown to this workspace fails closed
+    // inside createRuntime; surface it as INVALID_PARAMS, not an INTERNAL_ERROR.
+    let runtime: HzRuntime;
+    try {
+      runtime = await createRuntime({
+        workspace: opts.workspace,
+        model: opts.model,
+        mock: opts.mock === true,
+        sessionId,
+      });
+    } catch (err) {
       throw new ServerError(
         INVALID_PARAMS,
-        `session ${sessionId} is not the resumable session for this workspace (got ${resumed.sessionId})`,
+        `cannot resume session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    return resumed;
+    kernelMode = runtime.kernelMode;
+    const id = runtime.sessionId;
+    if (!runtimes.has(id)) order.push(id);
+    runtimes.set(id, runtime);
+    return runtime;
   }
 
   async function handleHello(): Promise<unknown> {
@@ -189,7 +204,7 @@ export function createServer(opts: ServerOptions): ServerHandle {
   }
 
   async function handleCreate(): Promise<unknown> {
-    const runtime = await openRuntime(undefined, true);
+    const runtime = await openFresh();
     return {
       sessionId: runtime.sessionId,
       model: runtime.model,
@@ -199,10 +214,25 @@ export function createServer(opts: ServerOptions): ServerHandle {
   }
 
   async function handleList(): Promise<unknown> {
-    // Any runtime can read the store; open a resume runtime only if none live.
-    const any = runtimes.size > 0 ? [...runtimes.values()][0] : await openRuntime(undefined, false);
+    // READ-ONLY: `session.list` must never create or touch a session. A live
+    // runtime can list from its own store; otherwise open a SessionStore
+    // directly for a read and close it — NOT createRuntime, which would fall
+    // through continueSession -> latestSession() -> createSession() and
+    // materialize an empty session on a workspace that has none.
+    const live = runtimes.size > 0 ? [...runtimes.values()][0] : undefined;
+    let infos;
+    if (live !== undefined) {
+      infos = live.sessions();
+    } else {
+      const store = new SessionStore(opts.workspace);
+      try {
+        infos = store.listSessions();
+      } finally {
+        store.close();
+      }
+    }
     // docs/14 S8: a session's identity is `hz://session/<id>`.
-    const sessions = (any as HzRuntime).sessions().map((s) => ({
+    const sessions = infos.map((s) => ({
       uri: `hz://session/${s.id}`,
       id: s.id,
       title: s.title,
@@ -286,12 +316,16 @@ export function createServer(opts: ServerOptions): ServerHandle {
     try {
       parsed = JSON.parse(trimmed);
     } catch {
-      // A malformed frame cannot be correlated to an id; answer with a null id.
-      send({ id: 0, error: { code: INVALID_PARAMS, message: "invalid JSON request line" } });
+      // A malformed frame cannot be correlated to an id; answer with JSON null
+      // (the JSON-RPC unmatchable id), NOT 0 — `0` is a legal correlation id
+      // and would collide with a real request. contracts.ts ServerResponse.id
+      // permits null for exactly this uncorrelated case.
+      send({ id: null, error: { code: INVALID_PARAMS, message: "invalid JSON request line" } });
       return;
     }
     if (!isRecord(parsed) || (typeof parsed.id !== "number" && typeof parsed.id !== "string")) {
-      send({ id: 0, error: { code: INVALID_PARAMS, message: "request needs a numeric or string id" } });
+      // Same: a frame with no scalar id cannot be correlated — answer with null.
+      send({ id: null, error: { code: INVALID_PARAMS, message: "request needs a numeric or string id" } });
       return;
     }
     id = parsed.id;

@@ -734,9 +734,12 @@ class HzRuntimeImpl implements HzRuntime {
 }
 
 /**
- * Bring up the runtime for one workspace. `continueSession` resumes the most
- * recently touched session; otherwise a fresh one starts (zero-config default:
- * provider `mock`, no key, kernel fallback when the Rust binary is absent).
+ * Bring up the runtime for one workspace. `sessionId` resumes that SPECIFIC
+ * session by id (server-mode resume-by-id — fails closed if the id is unknown);
+ * `continueSession` resumes the most recently touched session; otherwise a
+ * fresh one starts (zero-config default: provider `mock`, no key, kernel
+ * fallback when the Rust binary is absent). `sessionId` wins over
+ * `continueSession` when both are set.
  */
 export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
@@ -746,7 +749,19 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const store = new SessionStore(workspace);
 
   let session: SessionInfo | null = null;
-  if (opts?.continueSession) session = store.latestSession();
+  const wantId = typeof opts?.sessionId === "string" && opts.sessionId !== "" ? opts.sessionId : undefined;
+  if (wantId !== undefined) {
+    // Resume-by-id: open exactly the requested session. Fail closed if it is
+    // not in this workspace rather than silently retargeting to another one, so
+    // `session.list`'s per-id addressing is honest and a wrong id is a clean
+    // error, never a surprise write to a different session's transcript.
+    session = store.getSession(wantId);
+    if (!session) {
+      store.close();
+      throw new Error(`no session ${wantId} in this workspace`);
+    }
+  }
+  if (!session && opts?.continueSession) session = store.latestSession();
   if (!session) session = store.createSession();
 
   // Crash-recovery on open is TWO complementary repairs, not one — see external

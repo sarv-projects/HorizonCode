@@ -273,6 +273,15 @@ export interface RuntimeOptions {
   workspace: string;
   model?: string;
   continueSession?: boolean;
+  /**
+   * Resume a SPECIFIC existing session by id (ADDITIVE, server-mode resume-by-id).
+   * When set, createRuntime opens exactly that session instead of the
+   * most-recently-touched one (`continueSession`); a missing id fails closed.
+   * This is what lets `session.list`'s `hz://session/<id>` addressing be honest:
+   * any listed session — not just the latest — can be prompted/subscribed.
+   * `sessionId` takes precedence over `continueSession` when both are present.
+   */
+  sessionId?: string;
   mock?: boolean;
   /** NF-073 run budget overrides (0 or absent per dimension = unlimited). */
   budget?: RunBudget;
@@ -404,8 +413,15 @@ export interface ServerRequest {
   params?: unknown;
 }
 
-/** One response line: the request's `id` plus either a result or a typed error. */
-export type ServerResponse = { id: number | string } & (
+/**
+ * One response line: the request's `id` plus either a result or a typed error.
+ * `id` is `null` ONLY for a frame that could not be correlated to a request id
+ * (malformed JSON, or a missing/non-scalar `id`) — the JSON-RPC unmatchable id,
+ * which can never collide with a real `number | string` correlation id. Added
+ * ADDITIVELY: the shape of every *correlated* response (a real request's id +
+ * result/error) is unchanged.
+ */
+export type ServerResponse = { id: number | string | null } & (
   | { result: unknown }
   | { error: { code?: number; message: string } }
 );

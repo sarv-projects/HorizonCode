@@ -335,6 +335,101 @@ describe("single-attach server (FEAT-002)", () => {
     expect(adm[0]?.evidence).toBe("interrupted");
   });
 
+  test("(g) session.list on a FRESH empty workspace returns [] and creates NO session (read-only)", async () => {
+    const workspace = tempDir("hz-server-list-empty-");
+    const input = makeInput();
+    const out = makeOutput();
+    const server = createServer({ workspace, input: input.iterable, output: out.sink, mock: true });
+    const run = server.start();
+
+    input.push(JSON.stringify({ id: 1, method: "session.list" }));
+    const list = resultOf(await out.waitFor(1));
+    const sessions = list.sessions as Array<{ id: string }>;
+    // The list is empty AND nothing was materialized as a side effect.
+    expect(sessions).toEqual([]);
+    expect(server.sessionIds()).toEqual([]);
+
+    input.end();
+    await run;
+    await server.stop();
+
+    // THE revert check (read the bytes back through a fresh connection): a
+    // read-only list must leave the store with zero sessions and zero messages.
+    // If handleList falls back to createRuntime/openRuntime (the reverted bug),
+    // continueSession -> latestSession() -> createSession() materializes one
+    // empty session and this fails.
+    const store = new SessionStore(workspace);
+    try {
+      expect(store.listSessions().length).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("(h) resume-by-id: two sessions exist and the OLDER (not latest) one can be prompted by its id", async () => {
+    const workspace = tempDir("hz-server-resume-by-id-");
+
+    // First server process: create TWO sessions; run a turn on the first so it
+    // has a transcript. The SECOND created session becomes the latest.
+    let firstId: string;
+    let secondId: string;
+    {
+      const input = makeInput();
+      const out = makeOutput();
+      const server = createServer({ workspace, input: input.iterable, output: out.sink, mock: true });
+      const run = server.start();
+
+      input.push(JSON.stringify({ id: 1, method: "session.create" }));
+      firstId = resultOf(await out.waitFor(1)).sessionId as string;
+      input.push(JSON.stringify({ id: 2, method: "session.prompt", params: { sessionId: firstId, text: "older turn" } }));
+      await out.waitFor(2);
+
+      input.push(JSON.stringify({ id: 3, method: "session.create" }));
+      secondId = resultOf(await out.waitFor(3)).sessionId as string;
+      input.push(JSON.stringify({ id: 4, method: "session.prompt", params: { sessionId: secondId, text: "newer turn" } }));
+      await out.waitFor(4);
+
+      input.end();
+      await run;
+      await server.stop();
+    }
+    expect(firstId).not.toBe(secondId);
+
+    // A fresh server process over the SAME workspace. The latest session is the
+    // SECOND one, so a resume-by-latest would open secondId. Prompt the OLDER
+    // firstId by id and confirm we hit THAT session, not the latest.
+    const input = makeInput();
+    const out = makeOutput();
+    const server = createServer({ workspace, input: input.iterable, output: out.sink, mock: true });
+    const run = server.start();
+
+    input.push(JSON.stringify({ id: 1, method: "session.prompt", params: { sessionId: firstId, text: "resumed older" } }));
+    const resp = resultOf(await out.waitFor(1));
+    // THE revert check: resume-by-id lands on the requested (older) session. If
+    // runtimeFor reverted to continueSession (latest-only), it would either
+    // refuse firstId with INVALID_PARAMS or retarget to secondId — both fail.
+    expect(resp.sessionId).toBe(firstId);
+    expect(server.sessionIds()).toContain(firstId);
+
+    input.end();
+    await run;
+    await server.stop();
+
+    // The OLDER session's transcript carried forward and gained the resumed
+    // turn; the NEWER session's transcript was never touched by the resume.
+    const store = new SessionStore(workspace);
+    try {
+      const older = store.history(firstId).filter((m) => m.role === "user").map((m) => m.content);
+      expect(older).toContain("older turn");
+      expect(older).toContain("resumed older");
+      const newer = store.history(secondId).filter((m) => m.role === "user").map((m) => m.content);
+      expect(newer).toContain("newer turn");
+      expect(newer).not.toContain("resumed older");
+    } finally {
+      store.close();
+    }
+  });
+
   test("(f) an unknown method returns a JSON-RPC error, never silently ignored", async () => {
     const workspace = tempDir("hz-server-unknown-");
     const input = makeInput();
