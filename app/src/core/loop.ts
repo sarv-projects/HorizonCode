@@ -56,6 +56,20 @@ import { mcpAdmissionFor } from "./mcp/registry";
 // failure is a notice (see hooks.ts for the named differences from HookV1).
 import { loadHooks, runPostToolHooks, runPreToolHooks, type HooksConfig } from "./hooks";
 import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
+// Tier-3 speculative execution (docs/28 ruling 40): an OFF-BY-DEFAULT coordinator
+// that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
+// Its host `run` callback goes through the SAME guarded executeTool path, so a
+// speculated read is a guarded fs.read — the guard is never bypassed. When the
+// flag is off the loop never constructs a coordinator and turn semantics are
+// byte-identical to today's NF-072 batch run.
+import {
+  SpeculativeOperationCoordinator,
+  makeCandidate,
+  speculationEffectForToolCall,
+  type SpeculativeHost,
+  type SpeculativeRunResult,
+  type SpeculativeToolCandidate,
+} from "./speculation";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -879,7 +893,63 @@ export interface LoopDeps {
   planMode?: boolean;
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
+  /**
+   * Tier-3 speculative execution (docs/28 ruling 40): OFF BY DEFAULT. When
+   * absent or false, the loop runs the ordinary NF-072 batch (byte-identical
+   * turn semantics). When true, the loop MAY pre-run only provably
+   * side-effect-free calls (read/grep/glob/repo_map) in a segment ahead of
+   * commit through the SAME guarded executeTool path (a speculated read is a
+   * guarded fs.read); every other tool is never speculated. This is an additive
+   * opt-in field and does not change the guard or the admission mapping.
+   */
+  speculativeExecution?: boolean;
 }
+
+/**
+ * Build the speculation host for one turn: the `run` callback is the ONLY way a
+ * speculative effect physically happens, and it goes through the SAME guarded
+ * executeTool path (admissionFor -> gate.check -> tool.execute). A speculated
+ * read is therefore a guarded fs.read — the coordinator never touches fs and
+ * never bypasses the guard. Used only when `deps.speculativeExecution === true`.
+ */
+export function buildSpeculationHost(
+  deps: LoopDeps,
+  gate: GuardGate,
+  faults: RunFaults,
+  hooks: HooksConfig,
+): SpeculativeHost {
+  return {
+    async run(candidate: SpeculativeToolCandidate): Promise<SpeculativeRunResult> {
+      const call: ToolCall = { id: candidate.id, name: candidate.name, arguments: JSON.stringify(candidate.args) };
+      const parsed = parseArguments(call.arguments);
+      // Route through executeTool so admissionFor -> gate.check -> tool.execute
+      // happens exactly as it would for a non-speculative call.
+      const executed = await executeTool(deps, gate, call, parsed, faults, hooks);
+      return { ok: executed.result.ok, output: executed.result.output, error: executed.result.error };
+    },
+  };
+}
+
+/**
+ * The speculable candidates in a committed segment, in order, each with its
+ * normalized effect. A call whose tool is not provably side-effect-free
+ * (speculationEffectForToolCall returns undefined) is omitted — it is NEVER
+ * speculated. Used only when speculative execution is enabled.
+ */
+export function speculativeCandidatesFor(calls: ToolCall[], workspace: string): SpeculativeToolCandidate[] {
+  const out: SpeculativeToolCandidate[] = [];
+  for (const call of calls) {
+    const parsed = parseArguments(call.arguments);
+    if (parsed.error !== undefined) continue;
+    const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
+    if (effect === undefined) continue;
+    out.push(makeCandidate({ id: call.id, name: call.name, args: parsed.args, effect }));
+  }
+  return out;
+}
+
+/** The coordinator type re-exported for callers that enable speculation. */
+export { SpeculativeOperationCoordinator };
 
 interface AssistantTurn {
   text: string;
@@ -898,7 +968,7 @@ interface AssistantTurn {
  * `internal_error`, while the failure message names every count and its first
  * underlying error.
  */
-class RunFaults {
+export class RunFaults {
   private eventLogCount = 0;
   private eventLogFirst = "";
   private receiptCount = 0;
