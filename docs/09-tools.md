@@ -1,10 +1,10 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
-> **Permission modes (`docs/28` ruling 58).** `read-only` refuses every `fs.write` and `shell.exec` admission (so `write`, `edit`, `apply_patch`, `undo`, `shell`, `shell_session`, `preview`); `accept-edits` answers an in-workspace `fs.write` ask. Tool code is unchanged: the mode acts in the shared guard gate.
+> **Permission modes (`docs/28` ruling 58).** `read-only` refuses every `fs.write`, `shell.exec` and `mcp.invoke` admission (so `write`, `edit`, `apply_patch`, `undo`, `shell`, `shell_session`, `preview`); `accept-edits` answers an in-workspace `fs.write` ask. Tool code is unchanged: the mode acts in the shared guard gate.
 
 > **Print mode (`docs/28` ruling 57).** The print result counts distinct top-level tool calls (`toolCalls`) and lists files named by the turn diffs (`changedFiles`); no tool changes.
 
 
-> **Agent presets (stage 3, `docs/28` ruling 56).** The shipped `agent` tool takes an optional `profile`. A preset narrows the child's tool allow-list (read-only for explore, plan and review); the child still gets no parent leases (R-tools-32) and every effect re-enters guard and approval. `SubagentSpecV1` grants, fleets and `readOnlyProfile()` stay DESIGNED.
+> **Agent presets (stage 3, `docs/28` ruling 56).** The shipped `agent` tool takes an optional `profile`. A preset picks a subset of the parent's tools (read-only for explore, plan and review; `code` holds more than the generic child; ruling 61); the child still gets no parent leases (R-tools-32) and every effect re-enters guard and approval. `SubagentSpecV1` grants, fleets and `readOnlyProfile()` stay DESIGNED.
 >
 > Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/HorizonCode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >

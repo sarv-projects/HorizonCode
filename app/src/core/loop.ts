@@ -795,13 +795,6 @@ export class GuardGate {
   private async approveNow(req: ApprovalRequest, action?: GuardAction): Promise<boolean> {
     const waiting = action ?? this.pending ?? undefined;
     let ok = false;
-    // accept-edits answers an in-workspace fs.write ask. Reached only after the
-    // kernel said "ask" (a deny returns before approve is ever called).
-    if (modeAutoApproves(this.mode, waiting, this.workspace, pathInsideWorkspace)) {
-      this.remember(waiting as GuardAction, { leaseId: undefined });
-      if (this.pending !== null && this.pending === waiting) this.pending = null;
-      return true;
-    }
     // Advisory guardian (docs/28 ruling 60): runs only on an ASKED action. It
     // annotates the prompt; with HORIZON_GUARDIAN=enforce a deny refuses. It
     // can never grant, and a kernel deny never reaches here.
@@ -817,6 +810,14 @@ export class GuardGate {
       } catch {
         // advisory only: a guardian failure never changes the decision
       }
+    }
+    // accept-edits answers an in-workspace fs.write ask. Reached only after the
+    // kernel said "ask" and AFTER the guardian above, so HORIZON_GUARDIAN=enforce
+    // refuses here too (a deny returns before approve is ever called).
+    if (modeAutoApproves(this.mode, waiting, this.workspace, pathInsideWorkspace)) {
+      this.remember(waiting as GuardAction, { leaseId: undefined });
+      if (this.pending !== null && this.pending === waiting) this.pending = null;
+      return true;
     }
     try {
       // The handler sees the action so an "always" answer can be scoped to its

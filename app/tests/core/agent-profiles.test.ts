@@ -1,5 +1,5 @@
 /**
- * agent-profiles.test.ts — specialised agent presets (docs/15 §3.6, docs/30
+ * agent-profiles.test.ts: specialised agent presets (docs/15 §3.6, docs/30
  * §5.11). Revert check: removing the `profile` plumbing (tool arg, allow-list
  * filter, ceiling check, catalog, card name) fails the matching case below.
  */

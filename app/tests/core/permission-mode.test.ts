@@ -1,5 +1,5 @@
 /**
- * permission-mode.test.ts — the named permission modes at the loop and the
+ * permission-mode.test.ts: the named permission modes at the loop and the
  * pure policy functions. The load-bearing claims: accept-edits answers an
  * in-workspace write ASK without a human but never a shell ask or an outside
  * write; read-only refuses writes and shell even where the guard would allow;
@@ -10,12 +10,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { ApprovalRequest, Provider, ProviderEvent } from "../../src/contracts";
+import type { ApprovalHandler, ApprovalRequest, Provider, ProviderEvent } from "../../src/contracts";
 import { createRuntime } from "../../src/core/index";
 import { loadConfig } from "../../src/core/config";
 import { KernelClient } from "../../src/core/kernel";
 import type { LoopDeps } from "../../src/core/loop";
-import { pathInsideWorkspace, runTurn } from "../../src/core/loop";
+import { GuardGate, pathInsideWorkspace, runTurn } from "../../src/core/loop";
 import { workspaceStateDir } from "../../src/core/paths";
 import {
   isBypassName,
@@ -285,4 +285,58 @@ describe("runtime mode state", () => {
       await rt.close();
     }
   }, 30000);
+});
+
+describe("review fixes", () => {
+  const fsw = (target: string) => ({ kind: "fs.write" as const, target });
+
+  test("accept-edits does not auto-answer CI, hook, manifest or shell-rc files", () => {
+    const ws = workspace;
+    for (const rel of [
+      ".github/workflows/ci.yml", ".husky/pre-commit", ".envrc", "package.json", "packages/a/package.json", ".bashrc", ".zshrc",
+      ".gitlab-ci.yml", "Makefile", ".env.local", "Dockerfile", ".circleci/config.yml",
+    ]) {
+      expect(modeAutoApproves("accept-edits", fsw(path.join(ws, rel)), ws, pathInsideWorkspace)).toBe(false);
+    }
+    expect(modeAutoApproves("accept-edits", fsw(path.join(ws, "src", "a.ts")), ws, pathInsideWorkspace)).toBe(true);
+    expect(modeAutoApproves("accept-edits", fsw(path.join(ws, "docs", "package.json.md")), ws, pathInsideWorkspace)).toBe(true);
+  });
+
+  test("a sensitive file under accept-edits reaches the human", async () => {
+    const r = await run("accept-edits", oneCall("write", { path: "package.json", content: "{}" }), ASK_WORKSPACE_WRITES);
+    expect(r.asked.length).toBe(1);
+    expect(existsSync(path.join(workspace, "package.json"))).toBe(false);
+  });
+
+  describe("guardian enforce runs before the accept-edits auto-answer", () => {
+    const saved = process.env.HORIZON_GUARDIAN;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.HORIZON_GUARDIAN;
+      else process.env.HORIZON_GUARDIAN = saved;
+    });
+    const kernel = { checkGuard: async () => ({ decision: "ask", reason: "needs approval" }) } as unknown as KernelClient;
+    const ask = (): Promise<boolean> => {
+      const gate = new GuardGate(workspace, kernel, [], () => (async () => false) as unknown as ApprovalHandler, undefined, "accept-edits");
+      const target = path.join(workspace, ".ssh", "config");
+      return gate.approve({ title: "Write", detail: target, kind: "fs.write" }, fsw(target));
+    };
+    test("enforce refuses a guardian deny in accept-edits", async () => {
+      process.env.HORIZON_GUARDIAN = "enforce";
+      expect(await ask()).toBe(false);
+    });
+    test("advisory default still auto-answers it", async () => {
+      delete process.env.HORIZON_GUARDIAN;
+      expect(await ask()).toBe(true);
+    });
+  });
+
+  test("read-only refuses mcp.invoke too", () => {
+    expect(modeRefusal("read-only", { kind: "mcp.invoke", target: "srv:tool" })).toContain("mcp.invoke");
+    expect(modeRefusal("accept-edits", { kind: "mcp.invoke", target: "srv:tool" })).toBeUndefined();
+  });
+
+  test("plan mode: the agent tool is refused, so no child can be looser than the plan", async () => {
+    const r = await run("plan", oneCall("agent", { task: "write a file", profile: "code" }));
+    expect(r.toolOutput).toContain("subagents are not spawned while planning");
+  });
 });

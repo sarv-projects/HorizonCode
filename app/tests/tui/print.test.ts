@@ -1,5 +1,5 @@
 /**
- * print.test.ts — `hzcode -p` (headless print mode, FEAT-002).
+ * print.test.ts: `hzcode -p` (headless print mode, FEAT-002).
  * Spawns the real entry point with the offline mock provider.
  */
 

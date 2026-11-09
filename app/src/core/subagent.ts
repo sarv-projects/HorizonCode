@@ -98,8 +98,9 @@ export interface NestedRunOptions {
   task: string;
   maxSteps?: number;
   /**
-   * Optional preset name (agent-profiles.ts, docs/15 §3.6). It only narrows
-   * the child's tools; an unknown or widening preset fails the call.
+   * Optional preset name (agent-profiles.ts, docs/15 §3.6). Its tools
+   * are a subset of the parent's (never `agent`), not necessarily of the
+   * generic child's; an unknown or out-of-ceiling preset fails the call.
    */
   profile?: string;
   /** Test seam: the home directory user presets are read from. */
@@ -118,7 +119,11 @@ export interface NestedRunOptions {
   sessionLeases?: Lease[];
   /** The parent's instance approval handler; the process one when absent. */
   approve?: ApprovalHandler;
-  /** The parent's permission mode: a child is never looser than its parent. */
+  /**
+   * The parent's permission mode (default, accept-edits, read-only): a child is
+   * never looser than its parent. Plan mode needs no pass-through because the
+   * loop refuses the `agent` tool outright while planning (PLAN_MODE_REFUSED).
+   */
   permissionMode?: PermissionMode;
   /** NF-073: the parent run's ledger — the child gets its own step slice but shares the ceiling. */
   ledger?: BudgetLedger;
