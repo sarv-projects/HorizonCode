@@ -286,6 +286,8 @@ Recommendation: worth doing, as a small reduced form of `docs/15` §2.6 and not 
 
 7. **System prompt (stage 2):** base prompt is data under `app/src/core/prompt/`; environment block rendered per request from the real tool registry; child prompt inherits instruction files. See `docs/28` item 9 of the cognition notes.
 
+8. **Instruction files (stage 2):** AGENTS.md, CLAUDE.md, CLAUDE.local.md, GEMINI.md, CONVENTIONS.md, copilot-instructions.md, .cursorrules, alwaysApply .mdc rules and .windsurfrules load as peers (position-major precedence, dedup, caps, symlink refusal); nested AGENTS.md/CLAUDE.md inject lazily on the system rail when a tool touches a path below them; `/memory` (`/instructions`) and `/init` added to the TUI. See `docs/28` item 9a.
+
 ---
 
 *End of state document. If you are starting the next phase: begin at docs/27 (V2+) and `docs/28` §4 (gaps 10–12 carry the live queue) — or the competitive audit §7 roadmap. If you are auditing: everything claimed VERIFIED above has a copy-pasteable command in section 4 or in `docs/28`, and the 2026-11-08 reaudits are the template for how to try to break it.*
