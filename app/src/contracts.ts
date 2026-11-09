@@ -393,6 +393,8 @@ export interface ApprovalRequest {
   title: string;
   detail?: string;
   kind: GuardKind | "other";
+  /** Advisory guardian line (`· guardian: flag - reason`); additive, never changes the decision. */
+  guardian?: string;
 }
 export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
 

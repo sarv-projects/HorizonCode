@@ -1574,3 +1574,5 @@ Every capability below is **DESIGNED** except the two rows `28-implementation-st
 6. **Plugin UI panels are specified as renderer-isolated webviews** with a declared action surface; the concrete webview technology per platform is not decided here and MUST NOT be a path to unsandboxed code.
 
 > **Session fork (`docs/28` ruling 59).** `session.start`/`session.end` hooks fire for the child as for any resumed session; `session.fork` is a log event, not a hook point.
+
+> **Guardian surfacing (`docs/28` ruling 60).** The guardian is not a hook point; a host may supply a `GuardianModelCapability` to `createGuardianClassifier`, but the gate uses the deterministic classifier.

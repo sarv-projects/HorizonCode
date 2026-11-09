@@ -1572,3 +1572,5 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 ---
 
 > **Session fork (`docs/28` ruling 59).** Forking adds no tool and no admission kind: it is a user action (slash command or server method) that copies settled transcript rows. A fork's tool-call groups are never split; the copy starts at a safe boundary.
+
+> **Guardian surfacing (`docs/28` ruling 60).** No tool or admission kind is added; the guardian only annotates the approval of an already-asked action.

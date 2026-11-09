@@ -663,3 +663,5 @@ Known limitations this document MUST NOT paper over:
 3. Cross-platform sandbox residuals are typed, not absent: a surface MUST render the residual vector rather than imply confinement it does not have (`docs/02-decisions.md`, ADR-002 and P6).
 
 > **Session fork (`docs/28` ruling 59).** `session.fork {sessionId, at?}` returns `{sessionId, uri, forkedFrom{uri,sessionId,messageIndex,parentSeq}, model, providerName, kernelMode}`; the child is live and promptable. `session.list` rows carry `forkedFrom` only for forks. Bad `at` or an unknown session is INVALID_PARAMS.
+
+> **Guardian surfacing (`docs/28` ruling 60).** `ApprovalRequest` gains an optional `guardian` string (additive); `HORIZON_GUARDIAN=enforce` is the only env switch.
