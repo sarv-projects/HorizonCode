@@ -34,7 +34,7 @@ import type {
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
-import { getTool, toolSpecs } from "../tools";
+import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
@@ -295,7 +295,7 @@ export function taskHead(text: string, max = 120): string {
  * described in the mapping above; `undo` reads the session's own change journal
  * to find its target and guards that entry inside the tool.
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "tool_search"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };
@@ -1095,7 +1095,10 @@ async function collectAssistant(
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
   if (rails?.planLine !== undefined && rails.planLine !== "") railParts.push(rails.planLine);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
-  const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
+  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
+  // discovered via `tool_search` joins the specs; by default (no discovery) the
+  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
+  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
   // newest provider usage, plus the tail counted locally since that turn, or
   // the whole-prompt estimate before any usage has been seen.
@@ -1263,6 +1266,15 @@ async function executeTool(
   }
   const tool = getTool(call.name);
   if (!tool || (deps.toolFilter !== undefined && !deps.toolFilter(call.name))) {
+    return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
+  }
+  // Research §1.6 (defense in depth): a Hidden tool never appears in specs, and
+  // an undiscovered Deferred tool is not in this session's specs — so the model
+  // should never name one. If it does anyway, refuse at dispatch with the same
+  // shape as the unknown/filtered path. Dispatch for Direct and discovered
+  // Deferred tools is unchanged.
+  const exposure = exposureOf(tool);
+  if (exposure === "hidden" || (exposure === "deferred" && !isDiscovered(deps.sessionId, call.name)) || exposure === "code_mode_only") {
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
   }
 

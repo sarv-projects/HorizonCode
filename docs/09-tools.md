@@ -110,6 +110,19 @@ Numbering is stable: `R-tools-N` is never reused for a different statement. MUST
 
 **R-tools-27.** `tool_search` MUST filter against the session's **effective** tool set: it MUST NOT reveal, admit or describe a tool that policy, posture, allow-lists or the plugin trust decision has removed. Searching MUST NOT be a path to un-hiding authority.
 
+#### 2.4.1 Implementation note — exposure classes (FEAT-002, research §1.6)
+
+The shipped runtime realises a reduced form of R-tools-24…27 through one additive, optional field on the `Tool` interface (`app/src/contracts.ts`), `exposure`, with a companion optional `searchInfo: { keywords: string[] }`. Absent `exposure` means `"direct"` — exactly as an absent `concurrencyClass` means `"shared"` — so every shipped tool that sets nothing keeps today's behaviour (it appears in the default spec list and is callable). The four classes map to the codex `ToolExposure` reference:
+
+| Exposure | Meaning in this runtime |
+|---|---|
+| `direct` | In the initial spec list the model sees from turn one (the default). |
+| `deferred` | Absent from the default specs; discovered at runtime via `tool_search`, then visible + callable for the rest of that session. Carries `searchInfo.keywords` as the extra matching surface beyond its name and description. |
+| `code_mode_only` | Reserved: excluded from the default specs; its nested code-mode child-list wiring is not yet implemented (only Direct/Deferred/Hidden are fully wired). |
+| `hidden` | Never exposed in any spec list. |
+
+`tool_search` (`app/src/tools/tool-search.ts`) is itself a Direct tool. Its matching is **data-driven** over each Deferred candidate's `searchInfo` (name + description + keywords): the query is tokenised and a candidate matches when any query token meets any of its fields (case-insensitive, ≥3-char substring/token match so common stop-words never match) — there is no per-tool-id logic, so a new Deferred tool needs no change to the meta-tool. On a match it records the unlocked names in a per-session discovery registry and returns the matched tools' full specs so the model can call them immediately; a no-match query unlocks nothing. Discovery makes `toolSpecs(sessionId)` include the unlocked tool and `getTool` resolve it for that session only. The `preview` tool ships Deferred (a niche dev-server tool; keywords preview/dev server/serve/localhost/http/port); every other shipped tool stays Direct. The loop refuses a Hidden, undiscovered-Deferred or CodeModeOnly tool at dispatch as defense in depth. This is runtime-only: no kernel event is added (the reserved `hz.tool.discovered` name stays reserved).
+
 ### 2.5 The execution pipeline
 
 **R-tools-28.** Exactly one pipeline exists, and every invocation from every surface goes through it: `validate → permission decision → authorize → lease → execute → observe → settle → receipt`. The TUI, headless, server, web, desktop, IDE bridge, MCP server and SDKs drive it through the same Controller path; a front-end MUST NOT call a tool implementation directly.
@@ -1516,7 +1529,7 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 | `ToolDeclarationV1` anatomy and mandatory fields | DESIGNED | §2.1, §3.1, §11.1 |
 | Declaration generation from one source of truth + completeness gate | DESIGNED | §2.2, §11.1 |
 | Registry, namespace ranks, resolution algorithm | DESIGNED | §2.3, §3.2, §11.2 |
-| `tool_search` deferred discovery and admission | DESIGNED | §2.4, §3.3, §11.2 |
+| `tool_search` deferred discovery and admission | DESIGNED (reduced form TESTED — §2.4.1, FEAT-002: additive `Tool.exposure`/`searchInfo`, data-driven `tool_search`, per-session discovery; `preview` ships Deferred) | §2.4, §2.4.1, §3.3, §11.2; `docs/28` ruling 40 |
 | Execution pipeline + per-stage fail-closed rules | DESIGNED | §2.5, §3.4, §7.1, §11.3 |
 | Settlement, `UNKNOWN` and reconciliation hand-off | DESIGNED | §2.5 (R-tools-36/37), §7.1, §11.3 |
 | Origin typing (`SessionBatch` / `UserAction` / `ManagedRun` / `ManagedRoot`) | DESIGNED | §2.5 (R-tools-38), §9.5 |
