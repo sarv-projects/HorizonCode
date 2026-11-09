@@ -21,8 +21,13 @@
  * `ctx.approve({ title: "Run interactive command", ... }, action)` and refuses
  * on decline. No new GuardAction kind is introduced: a PTY session is still a
  * shell.exec effect (contracts.ts unchanged; additive surface: none).
- * `write`/`close` operate on an ALREADY-ADMITTED live session (admitted at
- * `start`), so they do NOT re-admit — and they never start a new process.
+ * Admission at `start` covers only the start command: a shell/REPL session
+ * runs whatever is typed next. So EVERY `write` is admitted again as a
+ * `shell.exec` effect whose target is the typed input line(s) (per line, the
+ * unterminated tail carried across writes); deny refuses, ask prompts (showing
+ * session command + input), decline writes nothing. An `always` answer mints
+ * the usual exact-target grant, i.e. exactly that input line. `close` only
+ * kills an admitted session and needs no admission.
  *
  * Concurrency: `concurrencyClass: "exclusive"` (R-tools-39) — a terminal
  * session is serial with shell and with other sessions. loop.ts needs no change
@@ -107,6 +112,12 @@ interface Session {
   /** Idle budget; the session is killed after this long with no read/write. */
   idleTimeoutMs: number;
   exited: boolean;
+  /**
+   * The unterminated tail of the input admitted so far (text written with no
+   * newline yet). The next write is admitted as `partial + chunk`, so splitting
+   * one command across writes cannot dodge the per-line guard.
+   */
+  partial: string;
   killTimer?: ReturnType<typeof setTimeout>;
   /** Per-session guard timer: fires on idle/overall timeout and kills the tree. */
   watchdog?: ReturnType<typeof setTimeout>;
@@ -403,6 +414,7 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
     overallTimeoutMs,
     idleTimeoutMs,
     exited: false,
+    partial: "",
   };
   sessions.set(session.id, session);
   startDraining(session);
@@ -423,6 +435,44 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
   return { ok: true, output: render(ctx, session, "running", body) };
 }
 
+/** Split typed text into lines on any newline form (\n, \r\n, \r). */
+function inputLines(text: string): string[] {
+  return text.split(/\r\n|\n|\r/);
+}
+
+/** The part of `text` after its last newline: the line still being typed. */
+function unterminatedTail(text: string): string {
+  const lines = inputLines(text);
+  return lines[lines.length - 1] ?? "";
+}
+
+/**
+ * Admit the input line(s) of one write. Each non-blank line (the carried-over
+ * unterminated tail joined to the new text) goes through the kernel guard as
+ * `shell.exec` with the line as target, so deny rules, allowlists, the ask
+ * prompt and exact-input `always` grants apply per typed command. Returns a
+ * refusal result, or undefined when every line is admitted. Nothing is written
+ * to stdin before this returns undefined.
+ */
+async function admitInput(session: Session, input: string, ctx: ToolContext): Promise<ToolResult | undefined> {
+  const lines = [...new Set(inputLines(session.partial + input).map((l) => l.trim()).filter((l) => l !== ""))];
+  for (const line of lines) {
+    const action: GuardAction = { kind: "shell.exec", target: line };
+    const decision = await ctx.guard(action);
+    if (decision.decision === "deny") {
+      return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
+    }
+    if (decision.decision === "ask") {
+      const approved = await ctx.approve(
+        { title: "Send input to interactive session", detail: `${session.command} <- ${line}`, kind: "shell.exec" },
+        action,
+      );
+      if (!approved) return fail("declined by user");
+    }
+  }
+  return undefined;
+}
+
 async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   if (ctx.signal.aborted) return fail("aborted");
   if (typeof args.sessionId !== "string" || args.sessionId === "") return fail("sessionId is required");
@@ -435,8 +485,13 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
     return { ok: true, output: out };
   }
   const input = typeof args.input === "string" ? args.input : "";
-  // write operates on an ALREADY-ADMITTED live session (admitted at start); it
-  // feeds stdin and never starts a new process, so no second guard admission.
+  // Fail-closed: admission at start covers ONLY the start command. A shell or
+  // REPL session executes whatever is typed next, so every write is admitted
+  // as a shell.exec effect whose target is the typed input line(s).
+  const admission = await admitInput(session, input, ctx);
+  if (admission !== undefined) return admission;
+  if (ctx.signal.aborted) return fail("aborted");
+  session.partial = unterminatedTail(session.partial + input);
   try {
     const writer = (session.proc.stdin as unknown as { write(chunk: string): void; flush?: () => void }) ?? undefined;
     if (writer === undefined || typeof writer.write !== "function") {
@@ -476,7 +531,7 @@ async function closeSession(args: Record<string, unknown>, _ctx: ToolContext): P
 export const interactiveExecTool: Tool = {
   name: "shell_session",
   description:
-    "Drive an interactive terminal session: start a command in a persistent PTY-backed session (mode:start), feed it stdin (mode:write), or terminate it (mode:close). Unlike the one-shot shell tool, this is the explicit opt-in for interactive programs. Every start is authorized as a shell.exec effect.",
+    "Drive an interactive terminal session: start a command in a persistent PTY-backed session (mode:start), feed it stdin (mode:write), or terminate it (mode:close). Unlike the one-shot shell tool, this is the explicit opt-in for interactive programs. Every start, and every input line written later, is authorized as its own shell.exec effect.",
   parameters: {
     type: "object",
     properties: {

@@ -235,6 +235,108 @@ describe("shell_session: guard admission", () => {
   });
 });
 
+describe("shell_session: write is admitted per input line (start approval does not cover input)", () => {
+  /** Start `cat` (a stdin reader) with an allowing start, then return its id. */
+  async function startCat(ctx: ReturnType<typeof mockToolContext>): Promise<string> {
+    const start = await interactiveExecTool.execute({ mode: "start", command: "cat" }, ctx);
+    expect(start.ok).toBe(true);
+    return (start.output.match(/Session: (\S+)/) as RegExpMatchArray)[1] as string;
+  }
+
+  test("approving the start does NOT authorize a later `rm -rf x`: a deny rule refuses and nothing is written", async () => {
+    await withNoPty(async () => {
+      const ws = makeWorkspace({ "x/keep.txt": "keep" });
+      const ctx = mockToolContext({
+        cwd: ws,
+        decision: (a) => (a.target.startsWith("rm ") ? { decision: "deny", reason: "rm is denied" } : { decision: "allow" }),
+      });
+      const sessionId = await startCat(ctx);
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf x\n" }, ctx);
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe("denied by policy: rm is denied");
+      expect(ctx.guardCalls.at(-1)).toEqual({ kind: "shell.exec", target: "rm -rf x" });
+      // Nothing reached stdin: cat has echoed nothing.
+      const probe = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
+      expect(probe.output).not.toContain("rm -rf");
+    });
+  });
+
+  test("an ask prompts with the session command + input; approve writes, decline writes nothing", async () => {
+    await withNoPty(async () => {
+      const askRm = (a: { target: string }) => (a.target.startsWith("rm ") ? ({ decision: "ask" } as const) : ({ decision: "allow" } as const));
+      const declineCtx = mockToolContext({ decision: askRm, approve: false });
+      const id1 = await startCat(declineCtx);
+      const declined = await interactiveExecTool.execute({ mode: "write", sessionId: id1, input: "rm -rf x\n" }, declineCtx);
+      expect(declined.ok).toBe(false);
+      expect(declined.error).toBe("declined by user");
+      expect(declineCtx.approveCalls.at(-1)).toEqual({
+        title: "Send input to interactive session",
+        detail: "cat <- rm -rf x",
+        kind: "shell.exec",
+      });
+      const probe = await interactiveExecTool.execute({ mode: "write", sessionId: id1, input: "" }, declineCtx);
+      expect(probe.output).not.toContain("rm -rf");
+
+      const okCtx = mockToolContext({ decision: askRm, approve: true });
+      const id2 = await startCat(okCtx);
+      const approved = await interactiveExecTool.execute({ mode: "write", sessionId: id2, input: "rm -rf x\n" }, okCtx);
+      expect(approved.ok).toBe(true);
+      expect(approved.output).toContain("rm -rf x"); // cat echoed it (never executed by a shell)
+      expect(okCtx.approveCalls.length).toBe(1);
+    });
+  });
+
+  test("every line of a multi-line write is admitted; one denied line refuses the whole write", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "bad" ? { decision: "deny" } : { decision: "allow" }) });
+      const sessionId = await startCat(ctx);
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "good\nbad\n" }, ctx);
+      expect(r.ok).toBe(false);
+      expect(ctx.guardCalls.map((a) => a.target)).toEqual(["cat", "good", "bad"]);
+      const probe = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
+      expect(probe.output).not.toContain("good");
+    });
+  });
+
+  test("a command split across writes is admitted as the joined line", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext({ decision: (a) => (a.target === "rm -rf x" ? { decision: "deny" } : { decision: "allow" }) });
+      const sessionId = await startCat(ctx);
+      expect((await interactiveExecTool.execute({ mode: "write", sessionId, input: "rm -rf" }, ctx)).ok).toBe(true);
+      const second = await interactiveExecTool.execute({ mode: "write", sessionId, input: " x\n" }, ctx);
+      expect(second.ok).toBe(false);
+      expect(ctx.guardCalls.at(-1)).toEqual({ kind: "shell.exec", target: "rm -rf x" });
+    });
+  });
+
+  test("the approval names the exact input as the action, so an always grant is exact-input only", async () => {
+    await withNoPty(async () => {
+      const seen: Array<{ target: string }> = [];
+      const ctx = mockToolContext({ decision: (a) => (a.target === "cat" ? { decision: "allow" } : { decision: "ask" }) });
+      const origApprove = ctx.approve.bind(ctx);
+      ctx.approve = async (req, action) => {
+        if (action !== undefined) seen.push(action);
+        return origApprove(req);
+      };
+      const sessionId = await startCat(ctx);
+      await interactiveExecTool.execute({ mode: "write", sessionId, input: "echo hi\n" }, ctx);
+      // The only action an `always` answer can be scoped to is this exact line.
+      expect(seen).toEqual([{ kind: "shell.exec", target: "echo hi" }]);
+    });
+  });
+
+  test("blank input (a bare Enter) needs no admission and still reaches a stdin reader", async () => {
+    await withNoPty(async () => {
+      const ctx = mockToolContext();
+      const sessionId = await startCat(ctx);
+      const before = ctx.guardCalls.length;
+      const r = await interactiveExecTool.execute({ mode: "write", sessionId, input: "\n" }, ctx);
+      expect(r.ok).toBe(true);
+      expect(ctx.guardCalls.length).toBe(before);
+    });
+  });
+});
+
 describe("canUseInteractivePty (pure helper) + argv selection", () => {
   test("true when a backend is available and HZ_NO_PTY is unset", () => {
     expect(canUseInteractivePty({ backendAvailable: true, noPtyEnv: undefined })).toBe(true);
