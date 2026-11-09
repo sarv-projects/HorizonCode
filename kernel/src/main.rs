@@ -8,11 +8,14 @@
 //! State dir defaults to $HZ_STATE_DIR, then ~/.hzcode/kernel.
 
 mod canon;
+mod egress;
 mod eventlog;
+mod execpolicy;
 mod guard;
 mod permm;
 mod protocol;
 mod receipts;
+mod sandbox;
 mod time;
 
 use std::io::{BufRead, BufWriter, Write};
@@ -378,6 +381,44 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         }
     }
 
+    // 8b. command allowlist (FEAT-002): with no allowlist file a shell command
+    // still asks; a runtime amend of a deny rule then denies the same command
+    // BEFORE the policy would ask. Uses its own hermetic state dir so the main
+    // selftest chains are untouched.
+    {
+        let allow_dir = scratch.join("selftest-allowlist");
+        let akernel = Kernel::new_with_anchor(&allow_dir, anchor.clone());
+        let before = call(
+            &akernel,
+            "guard.check",
+            json!({ "action": { "kind": "shell.exec", "target": "rm -rf /" }, "scope": "workspace" }),
+        );
+        checks.check(
+            "allowlist absent -> shell.exec asks",
+            matches!(&before, Ok(d) if d.get("decision").and_then(|v| v.as_str()) == Some("ask")),
+        );
+        let amended = call(
+            &akernel,
+            "guard.allowlist.amend",
+            json!({ "rule": { "program": "rm", "args": ["-rf"], "decision": "deny" } }),
+        );
+        checks.check(
+            "allowlist amend appends a deny rule",
+            matches!(&amended, Ok(d) if d.get("changed").and_then(|v| v.as_bool()) == Some(true)),
+        );
+        let after = call(
+            &akernel,
+            "guard.check",
+            json!({ "action": { "kind": "shell.exec", "target": "rm -rf /" }, "scope": "workspace" }),
+        );
+        checks.check(
+            "allowlist deny wins before policy for shell.exec",
+            matches!(&after, Ok(d)
+                if d.get("decision").and_then(|v| v.as_str()) == Some("deny")
+                    && d.get("reason").and_then(|v| v.as_str()).map(|r| r.contains("allowlist deny")).unwrap_or(false)),
+        );
+    }
+
     // 9. protocol robustness: unknown method and malformed request never crash
     let unknown = kernel.handle(&json!({ "id": 7, "method": "nope", "params": {} }));
     checks.check(
@@ -455,6 +496,74 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             }
             eprintln!("selftest: {}", e);
         }
+    }
+
+    // 11. sandbox-mode ladder (FEAT-004): the fail-closed SandboxMode report
+    // over `sandbox.report`. The kernel applies NO OS confinement mechanism on
+    // any host (a Landlock-capable one included), so on every host an
+    // FS-confined mode MUST fail closed:
+    // SANDBOX_UNAVAILABLE by default (never 'enforced' for FS), a partial report
+    // with a non-empty residual + explicit backend/'none' when partial is
+    // allowed, and danger-full-access reporting NO enforced dimension (S4).
+    {
+        // read-only demands FS confinement the kernel does not apply -> the
+        // typed SANDBOX_UNAVAILABLE outcome, proving we never run unconfined.
+        let unavailable = call(&kernel, "sandbox.report", json!({ "mode": "read-only" }));
+        checks.check(
+            "sandbox.report read-only -> SANDBOX_UNAVAILABLE (never enforced for FS)",
+            matches!(&unavailable, Ok(d)
+                if d.get("status").and_then(|v| v.as_str()) == Some("sandbox_unavailable")
+                    && d.get("reason").and_then(|v| v.as_str()).map(|r| r.contains("SANDBOX_UNAVAILABLE")).unwrap_or(false)),
+        );
+
+        // workspace-write with allowPartial -> a PARTIAL report whose FS
+        // dimension is 'unsupported' with a non-empty residual and backend
+        // 'none' (never a silent 'enforced').
+        let partial = call(
+            &kernel,
+            "sandbox.report",
+            json!({ "mode": "workspace-write", "allowPartial": true }),
+        );
+        let partial_ok = matches!(&partial, Ok(d)
+            if d.get("status").and_then(|v| v.as_str()) == Some("report")
+                && d.get("completeness").and_then(|v| v.as_str()) == Some("partial")
+                && d.get("dimensions").and_then(|v| v.as_array()).map(|dims| {
+                    dims.iter().any(|dim| {
+                        dim.get("dimension").and_then(|v| v.as_str()) == Some("filesystem")
+                            && dim.get("guarantee").and_then(|v| v.as_str()) == Some("unsupported")
+                            && dim.get("backend").and_then(|v| v.as_str()) == Some("none")
+                            && dim.get("residual").and_then(|v| v.as_str()).map(|r| !r.is_empty()).unwrap_or(false)
+                    }) && dims.iter().all(|dim| {
+                        // nothing is applied, so NO dimension may claim enforcement
+                        dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced")
+                    })
+                }).unwrap_or(false));
+        checks.check(
+            "sandbox.report workspace-write partial -> FS unsupported, residual non-empty, nothing enforced",
+            partial_ok,
+        );
+
+        // danger-full-access reports NO enforced dimension (S4).
+        let danger = call(&kernel, "sandbox.report", json!({ "mode": "danger-full-access" }));
+        checks.check(
+            "sandbox.report danger-full-access -> no enforced dimension (S4)",
+            matches!(&danger, Ok(d)
+                if d.get("status").and_then(|v| v.as_str()) == Some("report")
+                    && d.get("dimensions").and_then(|v| v.as_array()).map(|dims| {
+                        dims.iter().all(|dim| dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced"))
+                    }).unwrap_or(false)),
+        );
+
+        // escalation args are validated (paired + non-empty) before anything.
+        let bad_args = call(
+            &kernel,
+            "sandbox.report",
+            json!({ "mode": "read-only", "sandboxPermissions": "workspace-write" }),
+        );
+        checks.check(
+            "sandbox.report lone sandbox_permissions -> typed refusal",
+            matches!(&bad_args, Err(e) if e.contains("HZ_PRECONDITION_FAILED")),
+        );
     }
 
     let _ = std::fs::remove_dir_all(&scratch);

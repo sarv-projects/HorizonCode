@@ -213,7 +213,10 @@ describe("the shell tool applies both", () => {
 
   test("invisible reordering characters reach the model stripped, at tool level", async () => {
     const r = await shellTool.execute(
-      { command: "printf 'cleanred\\u202EdlroW olleh\\u200Btail\\n'" },
+      // Octal UTF-8 bytes, not printf's \u escape: \u output depends on the
+      // shell's locale (a C/POSIX locale prints it literally), so the test
+      // would pass or fail by host locale. U+202E = e2 80 ae, U+200B = e2 80 8b.
+      { command: "printf 'cleanred\\342\\200\\256dlroW olleh\\342\\200\\213tail\\n'" },
       mockToolContext(),
     );
     expect(r.ok).toBe(true);

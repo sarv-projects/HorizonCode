@@ -14,7 +14,16 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { DEFAULT_MODELS, defaultConfigPath, describeConfig, loadConfig, missingKey, readConfigFile } from "../../src/core/config";
+import {
+  DEFAULT_MODELS,
+  defaultConfigPath,
+  describeConfig,
+  loadConfig,
+  lspServersForFile,
+  missingKey,
+  parseLspConfig,
+  readConfigFile,
+} from "../../src/core/config";
 import { cleanupTemps, restoreEnv, setEnv, snapshotEnv, tempDir, type EnvSnapshot } from "./helpers";
 
 let envBackup: EnvSnapshot;
@@ -246,4 +255,85 @@ test("the mcp section lives in the user config only; malformed servers are skipp
   expect(loadConfig({}, wrongShape.file).mcp).toEqual({ servers: [], rejected: ["mcp.servers must be an array"] });
   const notAnObject = homeWithConfig(JSON.stringify({ mcp: [1, 2] }));
   expect(loadConfig({}, notAnObject.file).mcp?.rejected.length).toBe(1);
+});
+
+test("the lsp section is default-off and lives in the user config only", () => {
+  cleanEnv();
+  // No `lsp` key: default OFF, nothing configured, no invented servers.
+  expect(loadConfig({}, homeWithConfig().file).lsp).toBeUndefined();
+  // An lsp section with no servers is also undefined (nothing usable).
+  expect(parseLspConfig(undefined)).toBeUndefined();
+  expect(parseLspConfig({})).toBeUndefined();
+});
+
+test("parseLspConfig accepts well-formed servers and skips/names malformed ones", () => {
+  cleanEnv();
+  const { file } = homeWithConfig(
+    JSON.stringify({
+      lsp: {
+        servers: [
+          {
+            id: "ts",
+            command: "typescript-language-server",
+            args: ["--stdio"],
+            env: { NODE_ENV: "production" },
+            // Mixed case and a leading dot are normalized to dotless lowercase.
+            extensions: ["TS", ".tsx"],
+            rootMarkers: ["tsconfig.json"],
+          },
+          { id: "Bad Id", command: "x", extensions: ["go"] },
+          { id: "no-command", extensions: ["rs"] },
+          { id: "bad-args", command: "x", args: "nope", extensions: ["py"] },
+          { id: "bad-env", command: "x", env: { K: 1 }, extensions: ["py"] },
+          { id: "no-ext", command: "x" },
+          { id: "empty-ext", command: "x", extensions: [] },
+          { id: "ts", command: "x", extensions: ["ts"] },
+        ],
+      },
+    }),
+  );
+  const config = loadConfig({}, file);
+  expect(config.lsp?.servers).toEqual([
+    {
+      id: "ts",
+      command: "typescript-language-server",
+      args: ["--stdio"],
+      env: { NODE_ENV: "production" },
+      extensions: ["ts", "tsx"],
+      rootMarkers: ["tsconfig.json"],
+    },
+  ]);
+  expect(config.lsp?.rejected.length).toBe(7);
+  const rejected = config.lsp?.rejected.join("\n") ?? "";
+  expect(rejected).toContain("must match [a-z0-9-]");
+  expect(rejected).toContain("command must be a non-empty string");
+  expect(rejected).toContain("args must be an array of strings");
+  expect(rejected).toContain("env.K must be a string");
+  expect(rejected).toContain("extensions must be a non-empty array of strings");
+  expect(rejected).toContain("duplicates server id");
+
+  // A wrong-shaped section is a refusal list, never a crash.
+  const wrongShape = homeWithConfig(JSON.stringify({ lsp: { servers: "one" } }));
+  expect(loadConfig({}, wrongShape.file).lsp).toEqual({ servers: [], rejected: ["lsp.servers must be an array"] });
+  const notAnObject = homeWithConfig(JSON.stringify({ lsp: [1, 2] }));
+  expect(loadConfig({}, notAnObject.file).lsp?.rejected.length).toBe(1);
+});
+
+test("lspServersForFile selects by dotless lowercased extension", () => {
+  const config = parseLspConfig({
+    servers: [
+      { id: "ts", command: "tsserver", extensions: ["ts", "tsx"] },
+      { id: "rust", command: "rust-analyzer", extensions: ["rs"] },
+    ],
+  });
+  expect(config).toBeDefined();
+  expect(lspServersForFile(config, "/work/src/a.ts").map((s) => s.id)).toEqual(["ts"]);
+  // Case-insensitive on the file extension too.
+  expect(lspServersForFile(config, "/work/src/App.TSX").map((s) => s.id)).toEqual(["ts"]);
+  expect(lspServersForFile(config, "/work/lib.rs").map((s) => s.id)).toEqual(["rust"]);
+  // Unconfigured extension and no-extension files select nothing.
+  expect(lspServersForFile(config, "/work/README.md")).toEqual([]);
+  expect(lspServersForFile(config, "/work/Makefile")).toEqual([]);
+  // An undefined config (lsp off) selects nothing.
+  expect(lspServersForFile(undefined, "/work/src/a.ts")).toEqual([]);
 });

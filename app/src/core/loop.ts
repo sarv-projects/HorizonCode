@@ -34,7 +34,7 @@ import type {
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
-import { getTool, toolSpecs } from "../tools";
+import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
@@ -43,19 +43,55 @@ import { canonicalJson, sha256Hex } from "./canon";
 import { COMPACTION_EVENT, compactHistory } from "./compaction";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
-import { instructionPrompt, loadInstructionBlocks } from "./instructions";
+import { instructionPrompt, loadInstructionBlocks, resolveModelInstructions } from "./instructions";
+// The model->tool routing table (docs/28; research A.7): resolved ONCE per run
+// against the active model/provider and composed with deps.toolFilter, so a
+// routing-disabled tool is both hidden from toolSpecs() and refused at
+// execution. No scattered id.includes() lives in the loop or the tools.
+import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 // The plan-mode staging store (session-scoped): write/edit calls are staged
 // instead of applied while the user has plan mode on; the TUI reviews the
 // staged diffs with /changes and applies them with /apply (each apply passes
 // the ordinary guard/approval path).
 import { stageWrite, unifiedDiff } from "./plan";
+import { computeTurnDiff } from "./turn-diff";
+import { liveEntries } from "../tools/change-journal";
 // The MCP tool registry (docs/09 §4.7): mcp__ tools admit as `mcp.invoke`.
 import { mcpAdmissionFor } from "./mcp/registry";
 // Hooks v1 (docs/15 H2–H4 reduced form): pre/post tool middleware that can
 // only narrow — a pre deny sinks into the standard tool-result shape, a post
 // failure is a notice (see hooks.ts for the named differences from HookV1).
-import { loadHooks, runPostToolHooks, runPreToolHooks, type HooksConfig } from "./hooks";
+import {
+  loadHooks,
+  renderHookContextBlock,
+  runLifecycleHooks,
+  runPostToolHooks,
+  runPreToolHooks,
+  type HookContextFragment,
+  type HooksConfig,
+} from "./hooks";
 import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
+// SAFETY-RAILS (FEAT-002): three self-contained loop-level guards, wired here
+// minimally — loop-detection before dispatch, repeat-tool after execute, and
+// the mistake tracker on error. The modules are pure; the loop imports them,
+// never the reverse.
+import { LoopDetectionTracker } from "./guards/loop-detection";
+import { MistakeTracker } from "./guards/mistake-tracker";
+import { RepeatToolGuard } from "./guards/repeat-tool";
+// Tier-3 speculative execution (docs/28 ruling 47): an OFF-BY-DEFAULT coordinator
+// that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
+// Its host `run` callback goes through the SAME guarded executeTool path, so a
+// speculated read is a guarded fs.read — the guard is never bypassed. When the
+// flag is off the loop never constructs a coordinator and turn semantics are
+// byte-identical to today's NF-072 batch run.
+import {
+  SpeculativeOperationCoordinator,
+  makeCandidate,
+  speculationEffectForToolCall,
+  type SpeculativeHost,
+  type SpeculativeRunResult,
+  type SpeculativeToolCandidate,
+} from "./speculation";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -214,6 +250,25 @@ function argString(args: Record<string, unknown>, ...names: string[]): string | 
 }
 
 /**
+ * The first file path an `apply_patch` body names, for a stable coarse
+ * admission target (the tool re-guards every file itself). Reads only the
+ * freeform grammar's `*** Add/Update/Delete File:` headers; returns undefined
+ * when none is present (a malformed patch the parser will reject downstream).
+ */
+function firstApplyPatchPath(input: string): string | undefined {
+  for (const raw of input.split("\n")) {
+    const line = raw.trim();
+    for (const marker of ["*** Add File: ", "*** Update File: ", "*** Delete File: "]) {
+      if (line.startsWith(marker)) {
+        const p = line.slice(marker.length).trim();
+        if (p !== "") return p;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * The guard action a tool call implies, using the same path resolution the tools
  * themselves use. Every registered tool appears in the mapping table below or
  * in `SESSION_STATE_TOOLS`; a tool with neither is refused before execution
@@ -236,12 +291,37 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const root = argString(args, "path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
     }
+    case "ast_search": {
+      // Structural search reads under a root, exactly like grep. The external
+      // ast-grep backend, when present, is admitted a SECOND time as shell.exec
+      // inside the tool before any spawn (see tools/ast-search.ts).
+      const root = argString(args, "path", "dir", "cwd") ?? ".";
+      return { kind: "fs.read", target: resolved(root) };
+    }
     case "repo_map": {
       const root = argString(args, "path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
     }
     case "write":
     case "edit": {
+      const file = argString(args, "path", "file_path", "file");
+      return file ? { kind: "fs.write", target: resolved(file) } : undefined;
+    }
+    case "apply_patch": {
+      // The patch text carries one or more file operations; the tool issues a
+      // per-file `fs.write` guard for every one of them. The coarse loop-level
+      // admission is a single `fs.write` keyed to the first file the patch
+      // names (so the approval and the cache have a stable target), falling
+      // back to a digest of the patch when no path can be read out.
+      const input = typeof args.input === "string" ? args.input : "";
+      const first = firstApplyPatchPath(input);
+      return {
+        kind: "fs.write",
+        target: first !== undefined ? resolved(first) : `apply_patch ${sha256Hex(input).slice(0, 16)}`,
+      };
+    }
+    case "ast_edit": {
+      // A structural rewrite of one file: the same fs.write admission as edit.
       const file = argString(args, "path", "file_path", "file");
       return file ? { kind: "fs.write", target: resolved(file) } : undefined;
     }
@@ -267,6 +347,27 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const command = argString(args, "command");
       if (previewAction !== "start" || command === undefined) return undefined;
       return { kind: "shell.exec", target: command };
+    }
+    case "shell_session": {
+      // The interactive-exec tool, modelled exactly on preview's admission:
+      // `start` runs a command, so it is the same shell.exec admission the tool
+      // itself performs (one approval, not two). `write` and `close` only touch
+      // an already-admitted live session (admitted at its start), so they are
+      // session-state — never a second shell.exec for the same command.
+      const sessionMode = argString(args, "mode");
+      const sessionCommand = argString(args, "command");
+      if (sessionMode !== "start" || sessionCommand === undefined) return undefined;
+      return { kind: "shell.exec", target: sessionCommand };
+    }
+    case "lsp": {
+      // The `lsp` tool reads the named file before syncing it to a language
+      // server, so its loop-level admission is that file's fs.read (the same
+      // read a diagnostics pass performs). Starting a server is a SECOND,
+      // in-tool admission: a `spawn` the tool asks through ctx.guard when a
+      // server must actually start (core/lsp lspSpawnAction) — one read here,
+      // one spawn there, neither silent.
+      const file = argString(args, "path", "file");
+      return file ? { kind: "fs.read", target: resolved(file) } : undefined;
     }
     case "undo": {
       // The effect target is the journal's recorded change, which no argument
@@ -295,7 +396,7 @@ export function taskHead(text: string, max = 120): string {
  * described in the mapping above; `undo` reads the session's own change journal
  * to find its target and guards that entry inside the tool.
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session", "tool_search"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };
@@ -879,7 +980,71 @@ export interface LoopDeps {
   planMode?: boolean;
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
+  /**
+   * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
+   * YET READ by the turn path. The field and the `buildSpeculationHost` /
+   * `speculativeCandidatesFor` helpers are primitives for a future consumer;
+   * today the flag changes nothing. The ordinary NF-072 batch is unchanged.
+   */
+  speculativeExecution?: boolean;
 }
+
+/**
+ * Build the speculation host for one turn: the `run` callback is the ONLY way a
+ * speculative effect physically happens, and it goes through the SAME guarded
+ * executeTool path (admissionFor -> gate.check -> tool.execute). A speculated
+ * read is therefore a guarded fs.read — the coordinator never touches fs and
+ * never bypasses the guard. Used only when `deps.speculativeExecution === true`.
+ */
+export function buildSpeculationHost(
+  deps: LoopDeps,
+  gate: GuardGate,
+  faults: RunFaults,
+): SpeculativeHost {
+  // A speculative run must have no user-visible side effects ahead of commit:
+  // user hooks are skipped (`state: "none"`) and an `ask` decision is DECLINED
+  // without prompting (the gate's approve is replaced; every other gate method
+  // is the real, guarded one). The guard check itself is never skipped.
+  const hooks: HooksConfig = { state: "none" };
+  const speculativeGate = new Proxy(gate, {
+    get(target, prop) {
+      if (prop === "approve") return async (): Promise<boolean> => false;
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  return {
+    async run(candidate: SpeculativeToolCandidate): Promise<SpeculativeRunResult> {
+      const call: ToolCall = { id: candidate.id, name: candidate.name, arguments: JSON.stringify(candidate.args) };
+      const parsed = parseArguments(call.arguments);
+      // Route through executeTool so admissionFor -> gate.check -> tool.execute
+      // happens exactly as it would for a non-speculative call.
+      const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks);
+      return { ok: executed.result.ok, output: executed.result.output, error: executed.result.error };
+    },
+  };
+}
+
+/**
+ * The speculable candidates in a committed segment, in order, each with its
+ * normalized effect. A call whose tool is not provably side-effect-free
+ * (speculationEffectForToolCall returns undefined) is omitted — it is NEVER
+ * speculated. Used only when speculative execution is enabled.
+ */
+export function speculativeCandidatesFor(calls: ToolCall[], workspace: string): SpeculativeToolCandidate[] {
+  const out: SpeculativeToolCandidate[] = [];
+  for (const call of calls) {
+    const parsed = parseArguments(call.arguments);
+    if (parsed.error !== undefined) continue;
+    const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
+    if (effect === undefined) continue;
+    out.push(makeCandidate({ id: call.id, name: call.name, args: parsed.args, effect }));
+  }
+  return out;
+}
+
+/** The coordinator type re-exported for callers that enable speculation. */
+export { SpeculativeOperationCoordinator };
 
 interface AssistantTurn {
   text: string;
@@ -898,7 +1063,7 @@ interface AssistantTurn {
  * `internal_error`, while the failure message names every count and its first
  * underlying error.
  */
-class RunFaults {
+export class RunFaults {
   private eventLogCount = 0;
   private eventLogFirst = "";
   private receiptCount = 0;
@@ -1077,6 +1242,13 @@ async function collectAssistant(
     instructions?: string;
     /** The plan-mode rail line when the user has plan mode on. */
     planLine?: string;
+    /**
+     * H9 (docs/15 §2.4): the attributed, untrusted, bounded context block built
+     * from hook observation notes collected since the last dispatch. It rides
+     * the system rail as a fenced block the hook bytes cannot break out of — it
+     * is NEVER a forgeable user message.
+     */
+    hookContext?: string;
   },
 ): Promise<AssistantTurn> {
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
@@ -1094,8 +1266,15 @@ async function collectAssistant(
   if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
   if (rails?.planLine !== undefined && rails.planLine !== "") railParts.push(rails.planLine);
+  // H9: the attributed untrusted hook-context block rides the same system rail
+  // as the pinned task and the corrective note — in context on every step,
+  // never a history rewrite and never a forgeable user turn.
+  if (rails?.hookContext !== undefined && rails.hookContext !== "") railParts.push(rails.hookContext);
   const rail = railParts.length > 0 ? `\n\n${railParts.join("\n")}` : "";
-  const specs = toolSpecs().filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
+  // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
+  // discovered via `tool_search` joins the specs; by default (no discovery) the
+  // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
+  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
   // NF-074(a): fit the output cap to the remaining window — anchored on the
   // newest provider usage, plus the tail counted locally since that turn, or
   // the whole-prompt estimate before any usage has been seen.
@@ -1169,6 +1348,9 @@ async function collectAssistant(
  * unknown-tool refusal.
  */
 const PLAN_MODE_REFUSED: Record<string, string> = {
+  apply_patch: "plan mode: apply_patch is not staged (multi-file); use write or edit to stage a change, or exit plan mode",
+  ast_edit: "plan mode: ast_edit rewrites files and is not staged; use write or edit to stage a change, or exit plan mode",
+  shell_session: "plan mode: interactive sessions are not started while planning; exit plan mode to run one",
   shell: "plan mode: commands are not run while planning; the user applies the plan (or exits plan mode) to execute",
   undo: "plan mode: undo restores files and is not staged; exit plan mode to undo",
   preview: "plan mode: dev servers are not started; exit plan mode to run one",
@@ -1215,10 +1397,10 @@ function planModeOutcome(
   name: string,
   args: Record<string, unknown>,
   deps: LoopDeps,
-): { result: ToolResult; staged?: true; preview?: string } | undefined {
+): { result: ToolResult; staged?: true; preview?: string; expected?: true } | undefined {
   const refusal = PLAN_MODE_REFUSED[name];
   if (refusal !== undefined) {
-    return { result: { ok: false, output: refusal, error: refusal } };
+    return { result: { ok: false, output: refusal, error: refusal }, expected: true };
   }
   if (name !== "write" && name !== "edit") return undefined;
   const projected = projectChange(name, args, deps.workspace);
@@ -1255,7 +1437,7 @@ async function executeTool(
   parsed: { args: Record<string, unknown>; error?: string },
   faults: RunFaults,
   hooks: HooksConfig,
-): Promise<{ result: ToolResult; leaseId?: string; staged?: boolean; preview?: string }> {
+): Promise<{ result: ToolResult; leaseId?: string; staged?: boolean; preview?: string; expected?: boolean }> {
   if (parsed.error) {
     return {
       result: { ok: false, output: `Invalid arguments for ${call.name}: ${parsed.error}`, error: `invalid arguments: ${parsed.error}` },
@@ -1263,6 +1445,15 @@ async function executeTool(
   }
   const tool = getTool(call.name);
   if (!tool || (deps.toolFilter !== undefined && !deps.toolFilter(call.name))) {
+    return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
+  }
+  // Research §1.6 (defense in depth): a Hidden tool never appears in specs, and
+  // an undiscovered Deferred tool is not in this session's specs — so the model
+  // should never name one. If it does anyway, refuse at dispatch with the same
+  // shape as the unknown/filtered path. Dispatch for Direct and discovered
+  // Deferred tools is unchanged.
+  const exposure = exposureOf(tool);
+  if (exposure === "hidden" || (exposure === "deferred" && !isDiscovered(deps.sessionId, call.name)) || exposure === "code_mode_only") {
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
   }
 
@@ -1291,7 +1482,7 @@ async function executeTool(
     leaseId = decision.leaseId ?? gate.leaseFor(action);
     if (decision.decision === "deny") {
       const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
-      return { result: { ok: false, output: denied, error: denied } };
+      return { result: { ok: false, output: denied, error: denied }, expected: true };
     }
     if (decision.decision === "ask") {
       const request = approvalRequestFor(call.name, action, deps.workspace);
@@ -1321,7 +1512,7 @@ async function executeTool(
         { kind: "human", id: "user" },
       );
       if (!approved) {
-        return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" } };
+        return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" }, expected: true };
       }
       leaseId = gate.leaseFor(action);
     }
@@ -1341,7 +1532,7 @@ async function executeTool(
   });
   if (hookDecision.decision === "deny") {
     const denied = `DENIED by hook: ${hookDecision.reason}`;
-    return { result: { ok: false, output: denied, error: denied } };
+    return { result: { ok: false, output: denied, error: denied }, expected: true };
   }
 
   const context: ToolContext = {
@@ -1402,6 +1593,27 @@ async function issueToolReceipt(
   }
 }
 
+/**
+ * What one `runToolCall` reports back to the batch loop: the locally counted
+ * context cost, and the two facts the SAFETY-RAILS mistake tracker reads — the
+ * tool's ok flag and whether it was a plan-mode staged call (staged calls
+ * changed nothing, so they are never a `tool_execution_failed` mistake).
+ */
+interface ToolCallOutcome {
+  tokens: number;
+  ok: boolean;
+  staged: boolean;
+  /**
+   * An ok:false that is the system working as designed, not the model
+   * mistaking: a guard/hook denial, a user decline, a plan-mode refusal, an
+   * edit-ladder miss (the result carries reflection feedback), or an empty
+   * tool_search. Such a call neither counts as a mistake nor resets the tracker.
+   */
+  expected: boolean;
+}
+
+const EXPECTED_MISS_TOOLS: ReadonlySet<string> = new Set(["edit", "apply_patch", "ast_edit", "tool_search"]);
+
 async function runToolCall(
   deps: LoopDeps,
   gate: GuardGate,
@@ -1409,7 +1621,10 @@ async function runToolCall(
   faults: RunFaults,
   evidence: RunEvidence,
   hooks: HooksConfig,
-): Promise<number> {
+  // H9 (docs/15 §2.4): tool.post observation notes are collected here so the
+  // next provider request can carry them as an attributed untrusted block.
+  hookFragments: HookContextFragment[],
+): Promise<ToolCallOutcome> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
   emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
@@ -1437,9 +1652,10 @@ async function runToolCall(
   }
   const content = toolMessageContent(result, plan.text);
 
-  // hooks v1 post point: an observation hook sees the model-facing text; a
-  // failure here is a notice, never a blocked step (H4).
-  await runPostToolHooks(hooks, {
+  // hooks v1 post point (H1 tool.post): an observation hook sees the
+  // model-facing text; a failure here is a notice, never a blocked step (H4).
+  // Any H9 bounded/attributed context notes are collected for the next request.
+  const postFragments = await runPostToolHooks(hooks, {
     sessionId: deps.sessionId,
     workspace: deps.workspace,
     callId: call.id,
@@ -1451,6 +1667,7 @@ async function runToolCall(
     onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
     onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
   });
+  for (const fragment of postFragments) hookFragments.push(fragment);
 
   try {
     deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
@@ -1520,8 +1737,14 @@ async function runToolCall(
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
     ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
   });
-  // The locally counted context cost of this message (NF-074(a) tail).
-  return FRAMING_CHARGE_TOKENS + estimateTokens(content);
+  // The locally counted context cost of this message (NF-074(a) tail), plus
+  // the outcome the mistake-tracker rail needs: a tool that returned ok:false
+  // is a `tool_execution_failed` mistake, while a plan-mode staged call changed
+  // nothing and is not a failure.
+  return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok,
+    staged: executed.staged === true,
+    expected: executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name)),
+  };
 }
 
 /**
@@ -1539,6 +1762,13 @@ function classifyFailure(exit: RunExit): FailureClass {
     case "tokens":
     case "wall_clock":
       return "budget";
+    // SAFETY-RAILS: the two new terminal details map to the existing coarse
+    // `unknown` class. FailureClass (postmortem.ts) is a closed set this stream
+    // does not own, so no new class is introduced; the exit's terminal + detail
+    // already carry the precise outcome, which is all the growth loop needs.
+    case "tool_loop":
+    case "consecutive_mistakes":
+      return "unknown";
     default:
       return "unknown";
   }
@@ -1564,6 +1794,17 @@ export async function runTurn(
   let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
   try {
     const prompt = typeof userText === "string" ? userText.trim() : "";
+    // Model->tool routing (docs/28; research A.7): resolve the rule table ONCE
+    // for this run from the active model + provider and fold the decision into
+    // deps.toolFilter. The composed filter is consulted at BOTH toolFilter
+    // points (the toolSpecs() visibility filter in collectAssistant and the
+    // execution gate in executeTool), so a routing-disabled tool is hidden from
+    // the model AND refused if it is called anyway, while a subagent's prior
+    // tool restriction is preserved (routing only narrows, never widens). A
+    // subagent with a fixed systemOverride still routes — the editing dialect
+    // follows the model, not the prompt.
+    const routing = resolveToolRoutingConfig({ model: deps.model, provider: deps.provider.name });
+    deps = { ...deps, toolFilter: routing.toToolFilter(deps.toolFilter) };
     await beginUserTurn(deps, faults, prompt);
     // Read once per run, from the store: the task statement survives a trim and
     // a resume alike, and it is the FIRST user turn that is the task — not the
@@ -1586,7 +1827,24 @@ export async function runTurn(
         if (report.skipped.length > 0) parts.push(`skipped: ${report.skipped.join("; ")}`);
         emit(deps.callbacks, { type: "notice", message: parts.join(" \u2014 ") });
       }
-      return instructionPrompt(loaded.blocks, report);
+      const projectBlocks = instructionPrompt(loaded.blocks, report);
+      // Per-model prompt selection (docs §1.7; fail-soft): the active model's
+      // tailored block (e.g. the apply_patch grammar for the GPT/Codex family)
+      // rides every non-override dispatch, appended after the project-memory
+      // blocks. A miss returns "" and warns via console — it never throws, so a
+      // table defect degrades to the base prompt rather than failing the run.
+      // A plain miss is normal (most models have no tailored block) and must not
+      // write to stderr, which headless/pipe consumers treat as a clean channel;
+      // only a resolution FAILURE surfaces, as a runtime notice.
+      const perModel = resolveModelInstructions({
+        model: deps.model,
+        provider: deps.provider.name,
+        warn: (message) => {
+          if (!message.startsWith("no per-model instruction template")) emit(deps.callbacks, { type: "notice", message });
+        },
+      });
+      if (perModel === "") return projectBlocks;
+      return `${projectBlocks}\n\n${perModel}\n`;
     })();
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId);
@@ -1601,6 +1859,28 @@ export async function runTurn(
     // cost, zero spawns). A malformed config is a fail-closed refusal state
     // carried by the loader, not an exception here.
     const hooks = deps.hooks ?? loadHooks(deps.workspace);
+    // H9 (docs/15 §2.4): observation-hook context notes gathered this run,
+    // carried into the NEXT provider request as one attributed untrusted block
+    // (never a forgeable user turn). Fragments are consumed once rendered.
+    const hookFragments: HookContextFragment[] = [];
+    // One minimal emitter for the OBSERVATION lifecycle points this stream
+    // wires (H1: step.start/end via turn.start/end, compact.pre/post). A
+    // lifecycle hook may observe and may return an H9 note; it can never block
+    // (H4), so its only effect here is a notice/event and a collected fragment.
+    const emitLifecycle = async (point: "turnStart" | "turnEnd" | "compactPre" | "compactPost", detail?: Record<string, unknown>): Promise<void> => {
+      const fragments = await runLifecycleHooks(hooks, {
+        point,
+        sessionId: deps.sessionId,
+        workspace: deps.workspace,
+        detail,
+        onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+        onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+      });
+      for (const fragment of fragments) hookFragments.push(fragment);
+    };
+    // H1 step.start (turn.start): fire once per turn, after the user message is
+    // appended and before the dispatch loop. Observation-only (H4).
+    await emitLifecycle("turnStart");
     // NF-073: one ledger for the run tree (the main turn and every subagent it
     // spawns); a caller that passes its own ledger shares one ceiling.
     const ledger =
@@ -1617,12 +1897,24 @@ export async function runTurn(
     let calls = 0;
     let consecutiveFormatErrors = 0;
     let corrective: string | undefined;
+    // SAFETY-RAILS (rail 1): the loop-detection soft nudge, on its own channel
+    // so the format-error corrective reset cannot clear it. It rides the next
+    // step's system rail alongside `corrective`.
+    let loopNudge: string | undefined;
     // One report per run, not one per dispatch: the compaction numbers describe
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
+    // SAFETY-RAILS (FEAT-002): one instance of each guard per run. A runTurn
+    // call processes exactly one new user prompt, so a fresh guard set is itself
+    // the per-prompt clear the repeat-tool rail requires; clear() below is the
+    // explicit statement of that, so the semantics do not depend on scope alone.
+    const loopDetection = new LoopDetectionTracker();
+    const mistakes = new MistakeTracker();
+    const repeatTool = new RepeatToolGuard();
+    repeatTool.clear();
 
     for (;;) {
       // The single sentinel: budgets are checked before every dispatch, under
@@ -1661,6 +1953,12 @@ export async function runTurn(
         // The elision is reported, never silent: a notice for the human of this
         // run, and an audit-trail event with the counts for the log.
         compactionAnnounced = true;
+        // H1 compact.pre/compact.post: bound to the one-report-per-run
+        // compaction guard, so the pair fires exactly once — only when a
+        // compaction actually happened, never a per-dispatch storm.
+        // Observation-only (H4). compactHistory is synchronous, so the window
+        // is already computed; pre carries the pending counts, post the result.
+        await emitLifecycle("compactPre", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
         emit(deps.callbacks, { type: "notice", message: view.notice });
         await logEvent(
           deps,
@@ -1679,16 +1977,26 @@ export async function runTurn(
           },
           { kind: "system", id: "hz-loop" },
         );
+        // H1 compact.post: the compaction settled; fire the post half of the
+        // pair (observation-only, H4).
+        await emitLifecycle("compactPost", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
       }
       await logEvent(deps, faults, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
+      const combinedCorrective = [corrective, loopNudge].filter((part) => part !== undefined && part !== "").join("\n");
+      // H9: drain any hook context notes collected so far into one attributed
+      // untrusted block for THIS request; clearing them means each note is
+      // injected once, not re-sent on every dispatch.
+      const hookContext = renderHookContextBlock(hookFragments);
+      hookFragments.length = 0;
       const turn = await collectAssistant(deps, history, {
         pinned,
         budgetLine: budgetCountdownLine(ledger.countdown()),
-        corrective,
+        corrective: combinedCorrective === "" ? undefined : combinedCorrective,
         anchorBase,
         appendedTokens,
         instructions,
         planLine,
+        hookContext,
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
@@ -1721,7 +2029,19 @@ export async function runTurn(
       if (turn.error) {
         emit(deps.callbacks, { type: "error", message: turn.error });
         await logEvent(deps, faults, EventTypes.error, { message: turn.error });
-        exit = { terminal: "failed", detail: "provider_error" };
+        // SAFETY-RAILS: a provider error is an `api_error` mistake. The run
+        // always ends here on the FIRST provider error with the existing
+        // `provider_error` detail; the tracker only changes the detail once the
+        // consecutive-mistake limit is reached across turns of the same run.
+        const outcome = mistakes.record({ reason: "api_error", details: turn.error });
+        exit =
+          outcome.action === "stop"
+            ? { terminal: "failed", detail: "consecutive_mistakes" }
+            : { terminal: "failed", detail: "provider_error" };
+        if (outcome.action === "stop") {
+          emit(deps.callbacks, { type: "error", message: outcome.message });
+          await logEvent(deps, faults, EventTypes.error, { message: outcome.message });
+        }
         break;
       }
       if (deps.signal.aborted || turn.stopReason === "abort") {
@@ -1734,8 +2054,49 @@ export async function runTurn(
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) break;
 
+      // SAFETY-RAILS (rail 1): identical-tool-call loop detection, BEFORE the
+      // batch is dispatched. A soft verdict (the 3rd identical call) adds a
+      // nudge to the corrective that rides the next step's system rail, exactly
+      // like the format-error corrective; a hard verdict (the 5th) stops the
+      // run with `tool_loop` before anything is executed.
+      let loopHardStop = false;
+      // A fresh batch re-derives the nudge: it is cleared here and re-set only
+      // if a soft verdict fires for a call in THIS batch, so a non-repeated call
+      // (which the tracker's own state resets) does not leave a stale nudge.
+      loopNudge = undefined;
+      for (const call of turn.toolCalls) {
+        const verdict = loopDetection.inspect({ name: call.name, input: parseArguments(call.arguments).args });
+        if (verdict.kind === "hard") {
+          emit(deps.callbacks, { type: "error", message: verdict.message ?? "tool-call loop detected" });
+          await logEvent(deps, faults, EventTypes.error, { message: verdict.message, detail: "tool_loop" });
+          exit = { terminal: "failed", detail: "tool_loop" };
+          loopHardStop = true;
+          break;
+        }
+        if (verdict.kind === "soft" && verdict.message !== undefined) {
+          // The soft nudge rides the next step's system rail like the format
+          // corrective, but on its OWN channel so the format-error reset below
+          // (which clears `corrective` on a clean batch) cannot wipe it: a
+          // repeated CLEAN call is exactly when the nudge must survive.
+          loopNudge = verdict.message;
+          emit(deps.callbacks, { type: "notice", message: verdict.message });
+        }
+      }
+      if (loopHardStop) break;
+      // FEAT-003: capture the journal boundary just before the turn's tool
+      // batch runs. The entries this session can see now are the "before" set;
+      // anything appended while the batch runs is a change THIS turn made. Plan
+      // mode stages writes without recording to the journal, so a plan-mode
+      // turn produces no new entries and therefore no turn.diff.
+      const journalBoundary = new Set(liveEntries(deps.sessionId).map((e) => (e as { id?: string }).id));
+
       // NF-072: shared calls in a segment run concurrently; an exclusive call
       // is its own barrier. All-settled: one call's failure cancels no sibling.
+      // SAFETY-RAILS (rails 2/3): the per-call ok flag is captured here but the
+      // repeat-tool reminder and the `tool_execution_failed` mistake accounting
+      // run AFTER the batch settles, iterating turn.toolCalls in order, so the
+      // chain and the tracker stay deterministic regardless of concurrency.
+      const toolOk = new Map<string, boolean>();
       for (const segment of batchSegments(turn.toolCalls)) {
         if (deps.signal.aborted) {
           aborted = true;
@@ -1743,9 +2104,17 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks)
-              .then((tokens) => {
-                appendedTokens += tokens;
+            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments)
+              .then((outcome) => {
+                appendedTokens += outcome.tokens;
+                // A plan-mode staged call changed nothing: not a failure. A
+                // call whose arguments did not parse is a FORMAT error, counted
+                // by the format cap / `invalid_tool_call` axis below — not a
+                // `tool_execution_failed` mistake, so it is excluded here to
+                // avoid double-counting the same batch on both axes.
+                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseArguments(call.arguments).error === undefined) {
+                  toolOk.set(call.id, outcome.ok);
+                }
               })
               .catch((err) => {
                 if (err instanceof TranscriptAppendError) {
@@ -1763,11 +2132,70 @@ export async function runTurn(
         );
         if (fatal) break;
       }
+      // FEAT-003: the entries recorded during THIS turn are those appended
+      // since the boundary above. Aggregate them into one net diff per file and
+      // emit a single turn.diff event, independent of per-tool output. Only
+      // when at least one file actually changed (files > 0); a read-only turn,
+      // or a plan-mode turn that only staged, emits nothing. This is a UI/
+      // runtime facade event (see contracts.ts), not a durable kernel event.
+      try {
+        const turnEntries = liveEntries(deps.sessionId).filter((e) => !journalBoundary.has((e as { id?: string }).id));
+        if (turnEntries.length > 0) {
+          const { diff, files, truncated } = computeTurnDiff(turnEntries);
+          if (files > 0) {
+            emit(deps.callbacks, { type: "turn.diff", turn: calls, files, diff, truncated });
+          }
+        }
+      } catch {
+        // The turn diff is a best-effort observability surface: never let it
+        // break the run. A failure here just means no turn.diff for this turn.
+      }
+
       if (fatal) {
         exit = { terminal: "failed", detail: "internal_error" };
         break;
       }
       if (aborted) break;
+
+      // SAFETY-RAILS (rail 3): the repeat-tool reminder, POST-execute and in
+      // deterministic order, so a denied or failed call still advances the
+      // chain. The reminder is advisory — injected as a user message with a
+      // clear source marker, never a veto.
+      for (const call of turn.toolCalls) {
+        const reminder = repeatTool.observe(call.name, parseArguments(call.arguments).args);
+        if (reminder === undefined) continue;
+        const content = `[repeat-tool-reminder] ${reminder}`;
+        try {
+          deps.store.appendMessage(deps.sessionId, { role: "user", content });
+        } catch (err) {
+          faults.noteTranscript(call.name, err);
+        }
+        emit(deps.callbacks, { type: "notice", message: reminder });
+      }
+
+      // SAFETY-RAILS (rail 2): a tool that returned ok:false is a
+      // `tool_execution_failed` mistake; a batch with at least one clean,
+      // successful tool call resets the tracker. This axis is SEPARATE from the
+      // format cap below (invalid-JSON batches never reach here with a tool
+      // result). Recorded once per failing batch, in order.
+      let batchHadToolFailure = false;
+      let batchHadToolSuccess = false;
+      for (const call of turn.toolCalls) {
+        const ok = toolOk.get(call.id);
+        if (ok === false) batchHadToolFailure = true;
+        else if (ok === true) batchHadToolSuccess = true;
+      }
+      if (batchHadToolFailure) {
+        const outcome = mistakes.record({ reason: "tool_execution_failed" });
+        if (outcome.action === "stop") {
+          exit = { terminal: "failed", detail: "consecutive_mistakes" };
+          emit(deps.callbacks, { type: "error", message: outcome.message });
+          await logEvent(deps, faults, EventTypes.error, { message: outcome.message });
+          break;
+        }
+      } else if (batchHadToolSuccess) {
+        mistakes.reset();
+      }
 
       // NF-073(c): a batch in which no call carried parseable JSON is a
       // format-error step; any clean call resets the streak. The corrective
@@ -1786,6 +2214,14 @@ export async function runTurn(
           type: "notice",
           message: `the model sent invalid tool arguments (${consecutiveFormatErrors}/${MAX_CONSECUTIVE_FORMAT_ERRORS})`,
         });
+        // SAFETY-RAILS (rail 2): a pure-format-error batch is ALSO an
+        // `invalid_tool_call` mistake. This advances the mistake tracker in
+        // ADDITION to the format cap below — the two axes are independent and
+        // both still fire. The NF-073 format cap keeps priority for a
+        // pure-format run (its detail is `format_errors`), so it is checked
+        // first; the mistake-tracker stop only takes over when the format cap
+        // has not already stopped this run.
+        const mistakeOutcome = mistakes.record({ reason: "invalid_tool_call" });
         if (consecutiveFormatErrors >= MAX_CONSECUTIVE_FORMAT_ERRORS) {
           exit = { terminal: "failed", detail: "format_errors" };
           emit(deps.callbacks, {
@@ -1795,11 +2231,23 @@ export async function runTurn(
           await logEvent(deps, faults, EventTypes.error, { message: "format_error_cap", count: consecutiveFormatErrors });
           break;
         }
+        if (mistakeOutcome.action === "stop") {
+          exit = { terminal: "failed", detail: "consecutive_mistakes" };
+          emit(deps.callbacks, { type: "error", message: mistakeOutcome.message });
+          await logEvent(deps, faults, EventTypes.error, { message: mistakeOutcome.message });
+          break;
+        }
       } else if (cleanCalls > 0) {
         consecutiveFormatErrors = 0;
         corrective = undefined;
       }
     }
+    // H1 step.end (turn.end): the dispatch loop has left by its single exit
+    // path; fire once, before the turn.done emission below. Observation-only
+    // (H4) — it carries the terminal outcome for the point but never changes
+    // it. Any context note it returns cannot reach this turn (it is over), but
+    // is still recorded as an attributed fragment event.
+    await emitLifecycle("turnEnd", { terminal: exit.terminal, detail: exit.detail });
   } catch (err) {
     emit(deps.callbacks, { type: "error", message: `runtime error: ${errorMessage(err)}` });
     await logEvent(deps, faults, EventTypes.error, { message: errorMessage(err) });

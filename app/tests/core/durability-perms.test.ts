@@ -28,7 +28,7 @@ import { planToolOutputCap, writeSpillFile } from "../../src/core/output-budget"
 import { postmortemPath, postmortemsDir, recordPostmortem } from "../../src/core/postmortem";
 import { SessionStore } from "../../src/core/session";
 import { loadHistory, rememberHistory } from "../../src/tui/interactive";
-import { cleanupTemps, tempDir } from "./helpers";
+import { cleanupTemps, permissionBitsBind, tempDir } from "./helpers";
 
 afterAll(cleanupTemps);
 
@@ -270,7 +270,8 @@ function pidsWithCommandLine(command: string): number[] {
 // The failure-path kill walks /proc (Linux); elsewhere it degrades to the child only.
 const hasProc = existsSync("/proc/self/stat");
 
-describe.skipIf(!hasProc)("spawn failure kills non-detached descendants", () => {
+// The ledger-append failure is induced with a read-only state dir: needs binding permission bits.
+describe.skipIf(!hasProc || !permissionBitsBind)("spawn failure kills non-detached descendants", () => {
   test("a ledger-append failure kills the child AND its grandchildren, and still surfaces the error", async () => {
     const workspace = tempDir("hz-kill-tree-");
     const stateDir = kernelStateDir(workspace);
