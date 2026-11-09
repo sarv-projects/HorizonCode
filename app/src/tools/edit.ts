@@ -209,10 +209,79 @@ export function projectExactEdit(
   return { ok: true, after: all ? replaceAll(before, oldStr, newStr) : replaceFirst(before, oldStr, newStr) };
 }
 
+/* ----------------------------- Unicode folding ----------------------------- */
+
+/**
+ * normalizeForMatch (FEAT-002) — fold the EXACT codex code points so an old
+ * string whose only difference from the file is a smart quote, a typographic
+ * dash, or a non-breaking / wide space still matches. The set is lifted verbatim
+ * from codex's seek_sequence.rs (research/compare-codex-grok.md §1.5); opencode's
+ * normalizeForMatch is the TS reference for the regex shape. The code points are
+ * written as \u escapes per the repo's source convention for non-ASCII.
+ *
+ *   smart single quotes  \u2018 \u2019 \u201A \u201B            -> '
+ *   smart double quotes  \u201C \u201D \u201E \u201F            -> "
+ *   typographic dashes   \u2010 \u2011 \u2012 \u2013 \u2014 \u2015 \u2212 -> -
+ *   space family         \u00A0 \u2002..\u200A \u202F \u205F \u3000     -> (space)
+ *
+ * This is a BYTE-LEVEL normalisation: it never changes line structure, so the
+ * unicode-fold rung is a tight, high-confidence rung — it sits just below
+ * indent-normalised and above the looser trim/anchor rungs, and (like every
+ * fuzzy rung) applies only on a UNIQUE match under the read + reflection gate.
+ */
+function normalizeForMatch(value: string): string {
+  return value
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/[\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000]/g, " ");
+}
+
+/* --------------------------- oh-my-pi thresholds --------------------------- */
+
+/**
+ * Named fuzzy-ladder thresholds, lifted from oh-my-pi's 10-strategy matcher
+ * (research/compare-ohmypi-deepseek.md §1.7) and recorded here as a documented,
+ * future-stable PRIOR. HorizonCode's ladder is deliberately STRUCTURAL rather
+ * than score-based — a rung matches when its normalised windows are equal and
+ * UNIQUE, never on a similarity score — so the similarity/confidence constants
+ * below are not wired into a scoring path (doing so would change which matches
+ * apply and break the unique-match discipline). They name the prior so a future
+ * score-based rung has a tuned starting point instead of magic numbers.
+ *
+ * The feedback constants (MAX_RECORDED_MATCHES, OCCURRENCE_PREVIEW_CONTEXT,
+ * OCCURRENCE_PREVIEW_MAX_LEN) ARE wired, into the miss-feedback previews below.
+ */
+export const DEFAULT_FUZZY_THRESHOLD = 0.95;
+export const SEQUENCE_FUZZY_THRESHOLD = 0.92;
+export const FALLBACK_THRESHOLD = 0.8;
+export const CONTEXT_FUZZY_THRESHOLD = 0.8;
+export const CHARACTER_MATCH_THRESHOLD = 0.92;
+export const DOMINANT_FUZZY_MIN_CONFIDENCE = 0.97;
+export const DOMINANT_FUZZY_DELTA = 0.08;
+export const PARTIAL_MATCH_MIN_LENGTH = 6;
+export const PARTIAL_MATCH_MIN_RATIO = 0.3;
+
+/** Up to this many closest-candidate previews are rendered in miss feedback. */
+export const MAX_RECORDED_MATCHES = 5;
+/** Lines of context shown per candidate preview. */
+export const OCCURRENCE_PREVIEW_CONTEXT = 5;
+/** A preview line longer than this is truncated with an ellipsis. */
+export const OCCURRENCE_PREVIEW_MAX_LEN = 80;
+
 /* ------------------------- NF-069 / A-1…A-5 ladder ------------------------- */
 
-/** The escalation order, as reported in results and errors (byte-stable). */
-export const EDIT_LADDER = ["exact", "indent-normalised", "3-way merge", "line-patch"] as const;
+/**
+ * The escalation order, as reported in results and errors (byte-stable).
+ *
+ * "unicode-fold" (FEAT-002) sits between indent-normalised and the looser
+ * trim/anchor rungs: it is a tight, byte-level normalisation (smart quotes,
+ * typographic dashes, exotic spaces) that preserves line structure, so it is a
+ * higher-confidence rung than the trim merge or the anchor patch. An exact match
+ * still wins before it (exact beats fold); fold still wins before 3-way merge
+ * and line-patch (fold beats the looser rungs).
+ */
+export const EDIT_LADDER = ["exact", "indent-normalised", "unicode-fold", "3-way merge", "line-patch"] as const;
 export type EditRung = (typeof EDIT_LADDER)[number];
 
 /**
@@ -297,13 +366,24 @@ function candidatesIndent(fileLines: string[], oldLines: string[]): number[] {
   return windowsMatching(fileLines, oldLines.length, (w) => stripIndent(w, commonIndentPrefix(w)), oldNorm);
 }
 
-/** Rung 3: three-way merge — every line equal after trimming. */
+/**
+ * Rung 3 (unicode-fold): every line equal after folding the codex code points.
+ * A byte-level normalisation that preserves line count and structure, so it runs
+ * under the same windowsMatching unique-match machinery as the other rungs and
+ * refuses rather than guesses when more than one window folds to the target.
+ */
+function candidatesUnicode(fileLines: string[], oldLines: string[]): number[] {
+  const oldNorm = oldLines.map(normalizeForMatch);
+  return windowsMatching(fileLines, oldLines.length, (w) => w.map(normalizeForMatch), oldNorm);
+}
+
+/** Rung 4: three-way merge — every line equal after trimming. */
 function candidatesMerge(fileLines: string[], oldLines: string[]): number[] {
   const oldTrim = oldLines.map((l) => l.trim());
   return windowsMatching(fileLines, oldLines.length, (w) => w.map((l) => l.trim()), oldTrim);
 }
 
-/** Rung 4: line-level patch — first/last non-blank lines as anchors, unique pair. */
+/** Rung 5: line-level patch — first/last non-blank lines as anchors, unique pair. */
 function candidatesLinePatch(fileLines: string[], oldLines: string[]): number[] {
   const anchors: number[] = [];
   oldLines.forEach((line, i) => {
@@ -353,6 +433,48 @@ function closestBlock(fileLines: string[], oldLines: string[]): { text: string; 
   };
 }
 
+/** Truncate `line` to OCCURRENCE_PREVIEW_MAX_LEN chars, ending with an ellipsis. */
+function truncatePreviewLine(line: string): string {
+  if (line.length <= OCCURRENCE_PREVIEW_MAX_LEN) return line;
+  return line.slice(0, OCCURRENCE_PREVIEW_MAX_LEN - 1) + "\u2026";
+}
+
+/**
+ * FEAT-002 miss feedback: up to MAX_RECORDED_MATCHES=5 closest candidate
+ * windows, each rendered as OCCURRENCE_PREVIEW_CONTEXT=5 lines of the file with
+ * every line truncated to OCCURRENCE_PREVIEW_MAX_LEN=80 chars. Scored by the
+ * same trim-equal line overlap as closestBlock; windows with zero overlap are
+ * dropped. Reveals file contents, so the caller only renders it after the
+ * read-before-write gate (wasRead).
+ */
+function candidatePreviews(fileLines: string[], oldLines: string[]): string | null {
+  const len = Math.max(oldLines.length, 1);
+  const scored: Array<{ start: number; score: number }> = [];
+  for (let start = 0; start + oldLines.length <= fileLines.length; start += 1) {
+    let equal = 0;
+    for (let i = 0; i < oldLines.length; i += 1) {
+      if ((fileLines[start + i] as string).trim() === (oldLines[i] as string).trim()) equal += 1;
+    }
+    const score = equal / len;
+    if (score > 0) scored.push({ start, score });
+  }
+  if (scored.length === 0) return null;
+  // Highest overlap first; ties keep file order (stable by start).
+  scored.sort((a, b) => (b.score - a.score) || (a.start - b.start));
+  const top = scored.slice(0, MAX_RECORDED_MATCHES);
+  const blocks: string[] = [`closest candidates (up to ${MAX_RECORDED_MATCHES}, ${OCCURRENCE_PREVIEW_CONTEXT} lines each):`];
+  for (const cand of top) {
+    const windowEnd = Math.min(cand.start + OCCURRENCE_PREVIEW_CONTEXT, fileLines.length);
+    const pct = Math.round(cand.score * 100);
+    const body: string[] = [`  lines ${cand.start + 1}-${windowEnd} (${pct}% similar):`];
+    for (let k = cand.start; k < windowEnd; k += 1) {
+      body.push(`    ${truncatePreviewLine(fileLines[k] as string)}`);
+    }
+    blocks.push(body.join("\n"));
+  }
+  return blocks.join("\n");
+}
+
 /** Is the replacement already present? (A-3: "REPLACE lines already present") */
 function replaceAlreadyPresent(fileLines: string[], newLines: string[]): string | null {
   if (newLines.length === 0) return null;
@@ -372,7 +494,16 @@ function replaceAlreadyPresent(fileLines: string[], newLines: string[]): string 
 const FAILED_SEARCH_FUZZY = `searched: ${EDIT_LADDER.join(" \u2192 ")}; no unique match`;
 const FAILED_SEARCH_EXACT_ONLY = `searched: exact only (fuzzy matching disabled after the reflection limit)`;
 
-/** The full diff-shaped failure text; byte-stable from here (A-5). */
+/**
+ * The full diff-shaped failure text; byte-stable from here (A-5).
+ *
+ * `canShowContent` is the read-before-write gate (wasRead): the diff-shaped
+ * closest block, the FEAT-002 multi-candidate previews, and the already-applied
+ * branch all reveal file contents, so they are emitted ONLY when the session is
+ * allowed to read the file (mirroring opencode's read-permission gate on
+ * missHint). When it has not read the file, those lines are omitted and only the
+ * header + searched + reflection lines remain.
+ */
 function locateFailed(
   rel: string,
   fileLines: string[],
@@ -380,12 +511,17 @@ function locateFailed(
   newLines: string[],
   fuzzyDisabled: boolean,
   attempts: number,
+  canShowContent: boolean,
 ): string {
   const lines = [`old string not found in ${rel}`, fuzzyDisabled ? FAILED_SEARCH_EXACT_ONLY : FAILED_SEARCH_FUZZY];
-  const closest = closestBlock(fileLines, oldLines);
-  lines.push(closest === null ? "no similar lines found" : closest.text);
-  const present = replaceAlreadyPresent(fileLines, newLines);
-  if (present !== null) lines.push(present);
+  if (canShowContent) {
+    const closest = closestBlock(fileLines, oldLines);
+    lines.push(closest === null ? "no similar lines found" : closest.text);
+    const previews = candidatePreviews(fileLines, oldLines);
+    if (previews !== null) lines.push(previews);
+    const present = replaceAlreadyPresent(fileLines, newLines);
+    if (present !== null) lines.push(present);
+  }
   if (attempts > MAX_EDIT_REFLECTIONS) {
     lines.push(
       `reflection limit reached (max_reflections=${MAX_EDIT_REFLECTIONS}) \u2014 read the file again; fuzzy matching is disabled for this file until an edit succeeds`,
@@ -511,6 +647,7 @@ export const editTool: Tool = {
         if (!fuzzyDisabled) {
           const rungs: Array<{ rung: EditRung; starts: number[] }> = [
             { rung: "indent-normalised", starts: candidatesIndent(fileLines, oldLines) },
+            { rung: "unicode-fold", starts: candidatesUnicode(fileLines, oldLines) },
             { rung: "3-way merge", starts: candidatesMerge(fileLines, oldLines) },
             { rung: "line-patch", starts: candidatesLinePatch(fileLines, oldLines) },
           ];
@@ -525,7 +662,7 @@ export const editTool: Tool = {
           }
         }
         if (found === null) {
-          return fail(locateFailed(rel, fileLines, oldLines, newLines, fuzzyDisabled, attempts));
+          return fail(locateFailed(rel, fileLines, oldLines, newLines, fuzzyDisabled, attempts, wasRead(ctx, resolved)));
         }
 
         rung = found.rung;
