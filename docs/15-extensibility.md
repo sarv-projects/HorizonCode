@@ -1,6 +1,8 @@
 # 15 — Extensibility
 
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: hooks v1 broadened to the ratified H1 lifecycle points plus the H9 attributed context channel (tool.post notes ride the system rail as an untrusted block); a user provider registry (user config only, data not code); LSP servers as user config (default off). The H7 hooks trust gate is still open. NOT STARTED: plugins, the marketplace, the workflow engine, and agent profiles / subagent presets (§2.6, §3.6 `AgentProfileV1`; analysis in `30-steal-list.md` §5.11).
+> **Agent presets (stage 3, `docs/28` ruling 56).** The reduced form of `AgentProfileV1` (2.6, 3.6) ships as `app/src/core/agent-profiles.ts`: built-in explore/plan/code/review plus `agents/*.md` front-matter presets from the user config dir and workspace `.hz/` (name, description, tools, model, max_steps, body = prompt), narrow-only with the `profile_ceiling_widens` refusal. Result schemas, `requiresInputs`, `refusesWhen`, pinning and plugin profiles stay NOT STARTED.
+>
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: hooks v1 broadened to the ratified H1 lifecycle points plus the H9 attributed context channel (tool.post notes ride the system rail as an untrusted block); a user provider registry (user config only, data not code); LSP servers as user config (default off). The H7 hooks trust gate is still open. NOT STARTED: plugins, the marketplace, the workflow engine, and full `AgentProfileV1` pinning (§2.6, §3.6; the reduced preset form shipped, ruling 56).
 
 > Plugins, skills, commands, hooks, workflows, agent profiles, MCP, ACP and the IDE bridge — every way a user, a team or a third party adds behaviour to `hzcode`, and the authority arithmetic that keeps all of them inside the same constitution.
 

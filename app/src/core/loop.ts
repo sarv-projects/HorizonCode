@@ -36,6 +36,7 @@ import type {
 import { EventTypes, newId, nowIso } from "../contracts";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
+import { presetCatalog } from "./agent-profiles";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
 // and nowhere else (compaction.ts holds the pinning, the summary and the
@@ -1270,7 +1271,10 @@ async function collectAssistant(
   // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
   // discovered via `tool_search` joins the specs; by default (no discovery) the
   // list is exactly the Direct builtins + MCP, so default behavior is unchanged.
-  const specs = toolSpecs(deps.sessionId).filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name));
+  const specs = toolSpecs(deps.sessionId)
+    .filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name))
+    // docs/15 §3.6: the agent tool lists the presets (built-in and user) so the model knows they exist.
+    .map((spec) => (spec.name === "agent" ? { ...spec, description: `${spec.description}\n${presetCatalog(deps.workspace)}` } : spec));
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
   const kernelMode = (deps.kernel as { mode?: unknown } | undefined)?.mode;
   const basePrompt =
