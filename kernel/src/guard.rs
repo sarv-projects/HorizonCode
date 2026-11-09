@@ -308,8 +308,10 @@ impl Guard {
         // default-deny (N1): a decider Deny returns deny (reason naming the
         // origin + DenySource) BEFORE policy; an Allow admits; an Ask or an
         // observe-mode AllowAndRecord falls through to the existing net.fetch
-        // flow (AllowAndRecord additionally carries a content-free record note in
-        // the reason). An unparseable target is a DENY candidate (fail closed).
+        // flow (observe mode admits without blocking; the content-free record
+        // emission is deferred to the egress proxy per docs/28 ruling 41, so the
+        // would-be verdict is not surfaced in the reason today).
+        // An unparseable target is a DENY candidate (fail closed).
         // A malformed egress.json is a typed refusal (fail closed), never
         // silently ignored.
         //
@@ -346,11 +348,12 @@ impl Guard {
                     }
                     egress::EgressDecision::AllowAndRecord { would } => {
                         // observe mode: ADMIT at the decider, but do not short-
-                        // circuit policy; fall through carrying a content-free
-                        // record note (host+port+outcome only, NO path/headers/
-                        // body). The policy-layer answer (ask, by default) stands.
-                        // Recorded in the reason so the surface sees what enforce
-                        // mode would have done.
+                        // circuit policy; fall through to the existing net.fetch
+                        // flow so the policy-layer answer (ask, by default)
+                        // stands. The would-be verdict is intentionally NOT
+                        // surfaced here: content-free record emission is deferred
+                        // to the egress proxy (docs/28 ruling 41), so `would` is
+                        // dropped for now.
                         let _ = would;
                     }
                     // Ask: no decider admission — fall through to the existing
