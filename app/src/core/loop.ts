@@ -78,6 +78,20 @@ import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./pos
 import { LoopDetectionTracker } from "./guards/loop-detection";
 import { MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
+// Tier-3 speculative execution (docs/28 ruling 44): an OFF-BY-DEFAULT coordinator
+// that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
+// Its host `run` callback goes through the SAME guarded executeTool path, so a
+// speculated read is a guarded fs.read — the guard is never bypassed. When the
+// flag is off the loop never constructs a coordinator and turn semantics are
+// byte-identical to today's NF-072 batch run.
+import {
+  SpeculativeOperationCoordinator,
+  makeCandidate,
+  speculationEffectForToolCall,
+  type SpeculativeHost,
+  type SpeculativeRunResult,
+  type SpeculativeToolCandidate,
+} from "./speculation";
 import {
   estimatePromptTokens,
   estimateTokens,
@@ -954,7 +968,71 @@ export interface LoopDeps {
   planMode?: boolean;
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
+  /**
+   * Tier-3 speculative execution (docs/28 ruling 44): OFF BY DEFAULT and NOT
+   * YET READ by the turn path. The field and the `buildSpeculationHost` /
+   * `speculativeCandidatesFor` helpers are primitives for a future consumer;
+   * today the flag changes nothing. The ordinary NF-072 batch is unchanged.
+   */
+  speculativeExecution?: boolean;
 }
+
+/**
+ * Build the speculation host for one turn: the `run` callback is the ONLY way a
+ * speculative effect physically happens, and it goes through the SAME guarded
+ * executeTool path (admissionFor -> gate.check -> tool.execute). A speculated
+ * read is therefore a guarded fs.read — the coordinator never touches fs and
+ * never bypasses the guard. Used only when `deps.speculativeExecution === true`.
+ */
+export function buildSpeculationHost(
+  deps: LoopDeps,
+  gate: GuardGate,
+  faults: RunFaults,
+): SpeculativeHost {
+  // A speculative run must have no user-visible side effects ahead of commit:
+  // user hooks are skipped (`state: "none"`) and an `ask` decision is DECLINED
+  // without prompting (the gate's approve is replaced; every other gate method
+  // is the real, guarded one). The guard check itself is never skipped.
+  const hooks: HooksConfig = { state: "none" };
+  const speculativeGate = new Proxy(gate, {
+    get(target, prop) {
+      if (prop === "approve") return async (): Promise<boolean> => false;
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  return {
+    async run(candidate: SpeculativeToolCandidate): Promise<SpeculativeRunResult> {
+      const call: ToolCall = { id: candidate.id, name: candidate.name, arguments: JSON.stringify(candidate.args) };
+      const parsed = parseArguments(call.arguments);
+      // Route through executeTool so admissionFor -> gate.check -> tool.execute
+      // happens exactly as it would for a non-speculative call.
+      const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks);
+      return { ok: executed.result.ok, output: executed.result.output, error: executed.result.error };
+    },
+  };
+}
+
+/**
+ * The speculable candidates in a committed segment, in order, each with its
+ * normalized effect. A call whose tool is not provably side-effect-free
+ * (speculationEffectForToolCall returns undefined) is omitted — it is NEVER
+ * speculated. Used only when speculative execution is enabled.
+ */
+export function speculativeCandidatesFor(calls: ToolCall[], workspace: string): SpeculativeToolCandidate[] {
+  const out: SpeculativeToolCandidate[] = [];
+  for (const call of calls) {
+    const parsed = parseArguments(call.arguments);
+    if (parsed.error !== undefined) continue;
+    const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
+    if (effect === undefined) continue;
+    out.push(makeCandidate({ id: call.id, name: call.name, args: parsed.args, effect }));
+  }
+  return out;
+}
+
+/** The coordinator type re-exported for callers that enable speculation. */
+export { SpeculativeOperationCoordinator };
 
 interface AssistantTurn {
   text: string;
@@ -973,7 +1051,7 @@ interface AssistantTurn {
  * `internal_error`, while the failure message names every count and its first
  * underlying error.
  */
-class RunFaults {
+export class RunFaults {
   private eventLogCount = 0;
   private eventLogFirst = "";
   private receiptCount = 0;
