@@ -82,6 +82,11 @@ export function isDiscovered(sessionId: string | undefined, name: string): boole
   return discoveredBySession.get(sessionId)?.has(name) ?? false;
 }
 
+/** Drop a session's discovery state when the session ends (long-lived `serve`). */
+export function clearDiscoveredTools(sessionId: string): void {
+  discoveredBySession.delete(sessionId);
+}
+
 /** Test-only: clear the per-session discovery registry between cases. */
 export function __resetToolDiscoveryForTests(): void {
   discoveredBySession.clear();
