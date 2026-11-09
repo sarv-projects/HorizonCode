@@ -297,6 +297,24 @@ export interface SandboxDimensionReport {
   guarantee: SandboxGuarantee;
   backend: string; // explicit mechanism name or "none"
   residual: string; // non-empty when guarantee !== "enforced"
+  /**
+   * Whether the HOST offers the mechanism for this dimension (capability
+   * detection). Informational only: available NEVER implies "enforced". The
+   * kernel applies no OS confinement mechanism today (docs/28 ruling 44).
+   */
+  available?: boolean;
+}
+/**
+ * What the host OFFERS (detection only, not enforcement). Additive field on
+ * both sandbox.report outcomes; mirrors kernel Capabilities::to_json.
+ */
+export interface SandboxHostCapabilities {
+  landlockFs: boolean;
+  bwrapPresent: boolean;
+  userns: boolean;
+  seccomp: boolean;
+  rlimits: boolean;
+  netns: boolean;
 }
 /**
  * A per-call enforcement report for a requested mode (status "report"). backend
@@ -312,6 +330,7 @@ export interface EnforcementReport {
   backend: string;
   dimensions: SandboxDimensionReport[];
   unavailableReason?: string;
+  hostCapabilities?: SandboxHostCapabilities;
 }
 /**
  * The typed SANDBOX_UNAVAILABLE outcome (status "sandbox_unavailable"): a mode
@@ -322,6 +341,7 @@ export interface SandboxUnavailable {
   status: "sandbox_unavailable";
   mode: SandboxMode;
   reason: string; // typed SANDBOX_UNAVAILABLE reason
+  hostCapabilities?: SandboxHostCapabilities;
 }
 /** The sandbox.report outcome: either a report (possibly partial) or unavailable. */
 export type EnforcementOutcome = EnforcementReport | SandboxUnavailable;

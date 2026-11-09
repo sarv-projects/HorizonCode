@@ -499,13 +499,14 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     }
 
     // 11. sandbox-mode ladder (FEAT-004): the fail-closed SandboxMode report
-    // over `sandbox.report`. On this host (and the gVisor deployment class)
-    // there is NO active Landlock LSM, so an FS-confined mode MUST fail closed:
+    // over `sandbox.report`. The kernel applies NO OS confinement mechanism on
+    // any host (a Landlock-capable one included), so on every host an
+    // FS-confined mode MUST fail closed:
     // SANDBOX_UNAVAILABLE by default (never 'enforced' for FS), a partial report
     // with a non-empty residual + explicit backend/'none' when partial is
     // allowed, and danger-full-access reporting NO enforced dimension (S4).
     {
-        // read-only demands FS confinement that is unavailable here -> the
+        // read-only demands FS confinement the kernel does not apply -> the
         // typed SANDBOX_UNAVAILABLE outcome, proving we never run unconfined.
         let unavailable = call(&kernel, "sandbox.report", json!({ "mode": "read-only" }));
         checks.check(
@@ -533,12 +534,12 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
                             && dim.get("backend").and_then(|v| v.as_str()) == Some("none")
                             && dim.get("residual").and_then(|v| v.as_str()).map(|r| !r.is_empty()).unwrap_or(false)
                     }) && dims.iter().all(|dim| {
+                        // nothing is applied, so NO dimension may claim enforcement
                         dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced")
-                            || dim.get("dimension").and_then(|v| v.as_str()) != Some("filesystem")
                     })
                 }).unwrap_or(false));
         checks.check(
-            "sandbox.report workspace-write partial -> FS unsupported, residual non-empty",
+            "sandbox.report workspace-write partial -> FS unsupported, residual non-empty, nothing enforced",
             partial_ok,
         );
 

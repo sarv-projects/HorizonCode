@@ -260,7 +260,8 @@ impl Kernel {
                 let demand_full = mode.requires_fs_confinement() && !allow_partial;
 
                 let caps = sandbox::capabilities();
-                let outcome = sandbox::enforce(mode, caps, demand_full);
+                let outcome =
+                    sandbox::enforce(mode, caps, &sandbox::kernel_applied_mechanisms(), demand_full);
                 Ok(outcome.to_json())
             }
 

@@ -2921,9 +2921,10 @@ fn malformed_egress_policy_is_a_typed_refusal() {
 /* --------------------------- 9. sandbox-mode ladder --------------------------- */
 
 // FEAT-004: the fail-closed SandboxMode ladder is reachable over the additive
-// NDJSON method `sandbox.report`. On this host (and the gVisor deployment class)
-// there is NO active Landlock LSM, so FS-confined modes (read-only /
-// workspace-write) must FAIL CLOSED: a SANDBOX_UNAVAILABLE outcome by default,
+// NDJSON method `sandbox.report`. The kernel applies NO OS confinement
+// mechanism on any host, so these assertions are HOST-INDEPENDENT (identical on
+// a Landlock-capable runner and on a host without Landlock): FS-confined modes
+// (read-only / workspace-write) must FAIL CLOSED: a SANDBOX_UNAVAILABLE outcome by default,
 // or a completeness=partial report with a non-empty residual + explicit backend
 // when the caller opts into a partial boundary — NEVER a silent 'enforced',
 // NEVER silently unconfined. danger-full-access reports no enforced dimension
@@ -2952,6 +2953,7 @@ fn sandbox_report_fs_mode_is_unavailable_not_silently_enforced() {
             result
         );
         assert!(!reason.is_empty(), "the reason must be non-empty: {}", result);
+        assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
     }
 }
 
@@ -2979,6 +2981,18 @@ fn sandbox_report_partial_has_nonempty_residual_and_explicit_backend() {
     assert_eq!(fs["guarantee"], json!("unsupported"), "FS must not be enforced: {}", result);
     assert_ne!(fs["guarantee"], json!("enforced"));
     assert_eq!(fs["backend"], json!("none"), "{}", result);
+    // Detection is never enforcement: no dimension is enforced on ANY host, and
+    // the host capabilities are reported separately (additive field).
+    assert!(
+        result["dimensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["guarantee"] != json!("enforced") && d["backend"] == json!("none")),
+        "{}",
+        result
+    );
+    assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
     assert!(
         !fs["residual"].as_str().unwrap_or("").is_empty(),
         "FS residual must be non-empty (docs/11 S2): {}",

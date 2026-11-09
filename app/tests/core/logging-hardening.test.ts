@@ -30,6 +30,7 @@ import type { LoopDeps } from "../../src/core/loop";
 import { runTurn } from "../../src/core/loop";
 import { kernelStateDir } from "../../src/core/paths";
 import { SessionStore } from "../../src/core/session";
+import { permissionBitsBind } from "./helpers";
 
 const onUnix = process.platform !== "win32";
 const dirs: string[] = [];
@@ -161,7 +162,7 @@ describe("a run whose stores are writable", () => {
 
 /* ---------------- a read-only kernel state dir (the finding) ---------------- */
 
-describe.skipIf(!onUnix)("a read-only kernel state dir", () => {
+describe.skipIf(!onUnix || !permissionBitsBind)("a read-only kernel state dir", () => {
   test("completes the turn, notices the first append failure once, and never exits succeeded", async () => {
     const workspace = scratchDir("hz-log-ro-");
     const stateDir = kernelStateDir(workspace);
@@ -206,7 +207,7 @@ describe.skipIf(!onUnix)("a read-only kernel state dir", () => {
 
 /* -------------------- an unwritable receipts path -------------------- */
 
-describe.skipIf(!onUnix)("an unwritable receipts file", () => {
+describe.skipIf(!onUnix || !permissionBitsBind)("an unwritable receipts file", () => {
   test("keeps its notice and never exits succeeded", async () => {
     const workspace = scratchDir("hz-log-receipt-");
     const stateDir = kernelStateDir(workspace);
