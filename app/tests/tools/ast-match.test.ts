@@ -1,7 +1,7 @@
 /** ast-match — the pure, bounded structural matcher (tokenize/match/rewrite). */
 
 import { describe, expect, test } from "bun:test";
-import { MAX_MATCHES, MAX_SOURCE_BYTES, matchPattern, rewriteMatches, scanPattern, tokenize } from "../../src/tools/ast-match";
+import { MAX_MATCHES, matchBudget, MAX_SOURCE_BYTES, matchPattern, rewriteMatches, scanPattern, tokenize } from "../../src/tools/ast-match";
 
 describe("ast-match tokenizer", () => {
   test("splits source into structural tokens, not raw substrings", () => {
@@ -197,5 +197,26 @@ describe("ast-match end positions (review issue 8)", () => {
   test("single-line end column is one past the last character", () => {
     const [m] = matchPattern("foo($A)", "  foo(bar)");
     expect(m?.endColumn).toBe(11);
+  });
+
+  test("work budget: a multi-variadic non-matching pattern returns promptly as skipped 'budget'", () => {
+    const src = "a b c d e f g h ".repeat(300); // ~2400 tokens, no 'zzz'
+    const t0 = Date.now();
+    const scan = scanPattern("$$$A $$$B zzz", src);
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(scan.skipped).toBe("budget");
+    expect(scan.matches).toEqual([]);
+  });
+
+  test("work budget: shrinking maxSteps trips 'budget' and restoring it matches normally", () => {
+    const saved = matchBudget.maxSteps;
+    try {
+      matchBudget.maxSteps = 5;
+      expect(scanPattern("foo($$$A)", "foo(a, b, c); foo(d);").skipped).toBe("budget");
+      expect(rewriteMatches("foo(a);", "foo($A)", "bar($A)").skipped).toBe("budget");
+    } finally {
+      matchBudget.maxSteps = saved;
+    }
+    expect(scanPattern("foo($$$A)", "foo(a, b, c);").skipped).toBeNull();
   });
 });

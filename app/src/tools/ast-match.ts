@@ -37,6 +37,7 @@
  *   - MAX_TOKENS caps the token count of source and pattern alike.
  *   - MAX_MATCHES caps how many matches are returned.
  *   - a variadic `$$$` is bounded by MAX_VARIADIC_SPAN tokens per binding.
+ *   - a whole scan is bounded by matchBudget.maxSteps matcher steps.
  *
  * NO I/O, NO guard, NO spawn: pure logic. The tools layer the guard, the read
  * ledger, the atomic write and the spawn admission on top of this.
@@ -50,6 +51,13 @@ export const MAX_TOKENS = 200_000;
 export const MAX_MATCHES = 1000;
 /** Largest token run a single `$$$NAME` variadic capture may absorb. */
 export const MAX_VARIADIC_SPAN = 4096;
+/**
+ * Work budget for ONE scan: matcher steps (pattern-part visits and variadic
+ * span growth) summed over every start position. Exhaustion stops the scan with
+ * `skipped: "budget"` instead of freezing the process (multi-variadic patterns
+ * such as `$$$A $$$B zzz` are super-polynomial). Mutable so tests can shrink it.
+ */
+export const matchBudget = { maxSteps: 10_000_000 };
 
 /** One lexical token of the source or the pattern. */
 export interface Token {
@@ -89,7 +97,7 @@ export interface Match {
 }
 
 /** Why a source could not be scanned at all (never "no match"). */
-export type SkipReason = "too-large" | "too-many-tokens" | "pattern-too-large";
+export type SkipReason = "too-large" | "too-many-tokens" | "pattern-too-large" | "budget";
 
 /** Result of rewriteMatches: the transformed text, the match count and ranges. */
 export interface RewriteResult {
@@ -385,6 +393,9 @@ function spanText(src: string, tokens: Token[], from: number, to: number): strin
   return src.slice(first.idxStart, last.idxEnd);
 }
 
+/** Thrown inside matchAt when the scan's step budget runs out; caught by scanPattern. */
+class BudgetExhausted extends Error {}
+
 const OPENERS = "([{";
 const CLOSERS = ")]}";
 
@@ -399,6 +410,7 @@ function matchAt(
   tokens: Token[],
   parts: PatternPart[],
   start: number,
+  budget: { steps: number },
 ): { end: number; bindings: Record<string, string> } | null {
   const bindings: Record<string, string> = {};
 
@@ -407,6 +419,8 @@ function matchAt(
   // bracket-BALANCED spans, so `foo($$$A)` ends at the call's own `)` and never
   // runs across sibling calls or out of an enclosing group.
   function go(pi: number, si: number): number | null {
+    budget.steps += 1;
+    if (budget.steps > matchBudget.maxSteps) throw new BudgetExhausted();
     if (pi === parts.length) return si;
     const part = parts[pi] as PatternPart;
 
@@ -435,6 +449,8 @@ function matchAt(
       const maxSpan = Math.min(MAX_VARIADIC_SPAN, tokens.length - si);
       let depth = 0;
       for (let span = 0; span <= maxSpan; span += 1) {
+        budget.steps += 1;
+        if (budget.steps > matchBudget.maxSteps) throw new BudgetExhausted();
         if (span > 0) {
           const t = tokens[si + span - 1] as Token;
           if (t.kind === "punct") {
@@ -506,8 +522,19 @@ export function scanPattern(pattern: string, source: string, opts: LexOptions = 
   if (tokens.length === 0) return out;
 
   let si = 0;
+  const budget = { steps: 0 };
   while (si < tokens.length) {
-    const hit = matchAt(source, tokens, parts, si);
+    let hit: ReturnType<typeof matchAt>;
+    try {
+      hit = matchAt(source, tokens, parts, si, budget);
+    } catch (e) {
+      if (!(e instanceof BudgetExhausted)) throw e;
+      // Loud, not silent: partial matches are discarded and the scan is "skipped".
+      out.matches = [];
+      out.truncated = false;
+      out.skipped = "budget";
+      return out;
+    }
     if (hit === null) {
       si += 1;
       continue;

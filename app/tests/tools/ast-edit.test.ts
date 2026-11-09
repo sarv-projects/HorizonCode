@@ -185,4 +185,21 @@ describe("ast_edit tool", () => {
     expect(r.error).toBe("denied by policy: outside workspace");
     expect(readFixture(outside, "o.ts")).toBe("foo(a);\n");
   });
+
+  test("budget exhaustion fails and writes nothing", async () => {
+    const src = "a b c d e f g h ".repeat(300);
+    const ws = makeWorkspace({ "f.ts": src });
+    const ctx = mockToolContext({ cwd: ws });
+    await readFirst(ctx, "f.ts");
+    const r = await astEditTool.execute({ path: "f.ts", pat: "$$$A $$$B zzz", out: "x" }, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("work budget");
+    expect(readFixture(ws, "f.ts")).toBe(src);
+  });
+
+  test("lang descriptions mention the lexer family", () => {
+    const d = (astEditTool.parameters as any).properties.lang.description as string;
+    expect(d).toContain("lexer family");
+    expect(d).not.toContain("language-agnostic");
+  });
 });
