@@ -210,7 +210,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Multi-dialect tool sets (per-model tool shapes beyond `apply_patch`) | PARTIAL | routing table exists; only the `apply_patch` dialect ships |
 | Hashline (line-hash anchored edits) | NOT STARTED | in `docs/30` steal list |
 | Cross-process locking (sessions, checkpoints, journal) | NOT STARTED | single-process assumptions; kernel allowlist amend is file-locked only |
-| Permission modes (plan / accept-edits / bypass presets) | PARTIAL | plan mode ships; no named mode switcher |
+| Permission modes (plan / accept-edits / bypass presets) | TESTED, WIRED (no bypass, by decision) | `--permission-mode`, `/mode`, user-config `permissionMode`: default / plan / accept-edits / read-only as a layer above the kernel guard (a kernel deny always wins); prompt badge; a bypass/yolo mode is deliberately not built; ruling 58 |
 | Headless `-p` with JSON output | TESTED, WIRED | `hzcode -p [text] --output-format text\|json\|stream-json`; prompt from stdin when `-p` has no text; exit via `exitCodeFor`; approvals fail closed; the line-per-message mode is unchanged; ruling 57 |
 | Subagent presets (planner, coder, reviewer, explorer) | TESTED, WIRED (reduced form) | `agent` takes `profile`: built-in explore/plan/code/review plus user `.md` presets, narrow-only (`profile_ceiling_widens`); ruling 56. `AgentProfileV1` schema pinning, result schemas and kernel validation stay DESIGNED (`docs/15` §2.6, §3.6). See 5.0.1 |
 | Memory tiers / background "dream" consolidation | NOT STARTED | project memory files (AGENTS.md hierarchy) ship; episodic/semantic tiers and dream are DESIGNED |

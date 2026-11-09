@@ -592,6 +592,13 @@ export interface RuntimeOptions {
   mock?: boolean;
   /** NF-073 run budget overrides (0 or absent per dimension = unlimited). */
   budget?: RunBudget;
+  /**
+   * Starting permission mode (ADDITIVE, docs/28): default | plan | accept-edits
+   * | read-only. A policy layer above the kernel guard that can only narrow or
+   * auto-answer an ask; there is no bypass value. Absent = the user config's
+   * `permissionMode`, else `default`.
+   */
+  permissionMode?: "default" | "plan" | "accept-edits" | "read-only";
 }
 
 export interface Runtime {

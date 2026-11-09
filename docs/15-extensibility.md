@@ -1,4 +1,6 @@
 # 15 — Extensibility
+> **Permission modes (`docs/28` ruling 58).** User config key `permissionMode` sets the starting mode (user file only; a bad or bypass value is ignored with a notice). Subagents inherit the parent's mode; a preset can still only narrow tools.
+
 > **Print mode (`docs/28` ruling 57).** The headless result object is a stable machine surface for scripts and wrappers; it adds no extension point.
 
 

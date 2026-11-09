@@ -1,4 +1,6 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
+> **Permission modes (`docs/28` ruling 58).** `read-only` refuses every `fs.write` and `shell.exec` admission (so `write`, `edit`, `apply_patch`, `undo`, `shell`, `shell_session`, `preview`); `accept-edits` answers an in-workspace `fs.write` ask. Tool code is unchanged: the mode acts in the shared guard gate.
+
 > **Print mode (`docs/28` ruling 57).** The print result counts distinct top-level tool calls (`toolCalls`) and lists files named by the turn diffs (`changedFiles`); no tool changes.
 
 

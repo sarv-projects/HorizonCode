@@ -1,4 +1,6 @@
 # 12 — Sessions, State, Persistence & Time Travel
+> **Permission modes (`docs/28` ruling 58).** The mode is session-process state: it is not stored on the session row and `--continue` starts from the flag or user config, not from the previous run.
+
 > **Print mode (`docs/28` ruling 57).** `hzcode -p` runs one turn in a normal session (`--continue` applies) and reports its `sessionId` in the result object.
 
 

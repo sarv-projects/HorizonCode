@@ -79,6 +79,8 @@ import {
   rewindPlan,
   type CheckpointView,
 } from "./checkpoints";
+import type { PermissionMode } from "./permission-mode";
+import { isPermissionMode, permissionModeError } from "./permission-mode";
 import { consumeChange, reloadFromDisk } from "../tools/change-journal";
 import { isRefused, writeAtomic } from "../tools/atomic-write";
 
@@ -104,6 +106,12 @@ export interface HzRuntime extends Runtime {
    */
   setPlanMode(on: boolean): void;
   planMode(): boolean;
+  /**
+   * The named permission mode (permission-mode.ts): `plan` while plan mode is
+   * on, else the non-plan mode. Session-only; never written to disk.
+   */
+  permissionMode(): PermissionMode;
+  setPermissionMode(mode: PermissionMode): void;
   /** The session's staged changes, oldest first (plan mode's review surface). */
   stagedChanges(): readonly StagedChange[];
   /** Apply every staged change through the ordinary guard path; summary line. */
@@ -153,6 +161,8 @@ class HzRuntimeImpl implements HzRuntime {
   private readonly budget: RunBudget;
   /** Plan mode's per-session toggle (the TUI's /plan); off by default. */
   private planOn = false;
+  /** The non-plan permission mode (default | accept-edits | read-only). */
+  private mode: Exclude<PermissionMode, "plan"> = "default";
   /** The MCP manager this runtime owns, started by createRuntime, stopped by close(). */
   private mcp: McpManager | undefined;
 
@@ -165,7 +175,10 @@ class HzRuntimeImpl implements HzRuntime {
     session: SessionInfo;
     kernel: KernelClient;
     budget: RunBudget;
+    permissionMode?: PermissionMode;
   }) {
+    if (args.permissionMode === "plan") this.planOn = true;
+    else if (args.permissionMode !== undefined) this.mode = args.permissionMode;
     this.workspace = args.workspace;
     this.config = args.config;
     this.currentModel = args.model;
@@ -244,6 +257,20 @@ class HzRuntimeImpl implements HzRuntime {
 
   planMode(): boolean {
     return this.planOn;
+  }
+
+  permissionMode(): PermissionMode {
+    return this.planOn ? "plan" : this.mode;
+  }
+
+  setPermissionMode(mode: PermissionMode): void {
+    if (!isPermissionMode(mode)) throw new Error(permissionModeError(mode));
+    if (mode === "plan") {
+      this.planOn = true;
+      return;
+    }
+    this.planOn = false;
+    this.mode = mode;
   }
 
   stagedChanges(): readonly StagedChange[] {
@@ -708,6 +735,7 @@ class HzRuntimeImpl implements HzRuntime {
           // Plan mode rides this run's deps: staging/refusals happen inside
           // executeTool, and the model is told via the plan rail line.
           planMode: this.planOn,
+          permissionMode: this.mode,
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
@@ -724,6 +752,7 @@ class HzRuntimeImpl implements HzRuntime {
               signal: controller.signal,
               sessionLeases: this.leases,
               approve: this.instanceApproval ?? getApprovalHandler(),
+              permissionMode: this.mode,
               ledger,
               onEvent: (ev) => emit(cb, ev),
             }),
@@ -851,6 +880,7 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     store,
     session,
     kernel,
+    permissionMode: opts?.permissionMode ?? config.permissionMode,
     // NF-073: steps stay capped at MAX_PROVIDER_CALLS unless the environment or
     // the caller set a budget; 0 (explicit) = unlimited, per dimension.
     budget: {
@@ -860,6 +890,9 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     },
   });
   await impl.logSessionStart();
+  if (config.permissionModeRejected !== undefined) {
+    impl.note(`config permissionMode ignored: ${config.permissionModeRejected}`);
+  }
   if (impl.kernelMode === "untrusted") {
     // Ruling 33: the mode is first-class. Coming up without the Rust kernel
     // gets exactly ONE notice, delivered on the first turn (note() queues it
