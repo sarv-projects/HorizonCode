@@ -122,7 +122,7 @@ describe("project instruction hierarchy", () => {
     file(root, "AGENTS.md", thirtyK);
     file(ws, "AGENTS.md", thirtyK);
     file(ws, ".hz/AGENTS.md", thirtyK);
-    file(root, "ZH.md", thirtyK); // the fifth 30 KB file exceeds the total
+    file(root, "ZH.md", `zh-distinct\n${thirtyK}`); // the fifth 30 KB file exceeds the total (distinct text: identical text under another kind is deduplicated)
 
     const { blocks, report } = loadInstructionBlocks(ws, { home });
     expect(report.totalCapped).toBe(true);

@@ -44,7 +44,14 @@ import { COMPACTION_EVENT, compactHistory } from "./compaction";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
 import { buildSystemPrompt, type PromptEnvironmentOverrides } from "./prompt";
-import { instructionPrompt, loadInstructionBlocks, resolveModelInstructions } from "./instructions";
+import {
+  instructionPrompt,
+  LazyInstructions,
+  loadInstructionBlocks,
+  renderLazyInstructionBlock,
+  resolveModelInstructions,
+  touchedPaths,
+} from "./instructions";
 // The model->tool routing table (docs/28; research A.7): resolved ONCE per run
 // against the active model/provider and composed with deps.toolFilter, so a
 // routing-disabled tool is both hidden from toolSpecs() and refused at
@@ -1245,6 +1252,12 @@ async function collectAssistant(
      * is NEVER a forgeable user message.
      */
     hookContext?: string;
+    /**
+     * Lazily discovered nested AGENTS.md/CLAUDE.md fragments (attributed,
+     * untrusted, bounded). Append-only across the run and first on the rail so
+     * the stable prefix is never rewritten; never a user message.
+     */
+    nestedInstructions?: string;
   },
 ): Promise<AssistantTurn> {
   // Research §1.6: toolSpecs is session-aware — a Deferred tool this session has
@@ -1267,6 +1280,7 @@ async function collectAssistant(
   // statement rides it too, for the same reason: a history rewrite cannot keep
   // it, because the window only ever keeps the newest messages.
   const railParts: string[] = [];
+  if (rails?.nestedInstructions !== undefined && rails.nestedInstructions !== "") railParts.push(rails.nestedInstructions);
   if (rails?.pinned !== undefined && rails.pinned !== "") railParts.push(rails.pinned);
   if (rails?.budgetLine !== undefined && rails.budgetLine !== "") railParts.push(rails.budgetLine);
   if (rails?.corrective !== undefined && rails.corrective !== "") railParts.push(rails.corrective);
@@ -1613,6 +1627,9 @@ interface ToolCallOutcome {
   expected: boolean;
 }
 
+/** Tools whose success means the model has seen or changed a path (nested instruction trigger). */
+const LAZY_TRIGGER_TOOLS: ReadonlySet<string> = new Set(["read", "write", "edit", "apply_patch", "ast_edit"]);
+
 const EXPECTED_MISS_TOOLS: ReadonlySet<string> = new Set(["edit", "apply_patch", "ast_edit", "tool_search"]);
 
 async function runToolCall(
@@ -1625,6 +1642,9 @@ async function runToolCall(
   // H9 (docs/15 §2.4): tool.post observation notes are collected here so the
   // next provider request can carry them as an attributed untrusted block.
   hookFragments: HookContextFragment[],
+  // Lazy nested-instruction discovery (docs/10): a successful path-touching
+  // tool registers the AGENTS.md/CLAUDE.md files above that path.
+  lazy?: LazyInstructions,
 ): Promise<ToolCallOutcome> {
   const parsed = parseArguments(call.arguments);
   const started = Date.now();
@@ -1652,6 +1672,13 @@ async function runToolCall(
     if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
   }
   const content = toolMessageContent(result, plan.text);
+  if (lazy !== undefined && result.ok && LAZY_TRIGGER_TOOLS.has(call.name)) {
+    for (const touched of touchedPaths(call.name, parsed.args)) {
+      for (const fragment of lazy.discover(touched)) {
+        emit(deps.callbacks, { type: "notice", message: `nested instructions loaded: ${fragment.rel}` });
+      }
+    }
+  }
 
   // hooks v1 post point (H1 tool.post): an observation hook sees the
   // model-facing text; a failure here is a notice, never a blocked step (H4).
@@ -1816,12 +1843,14 @@ export async function runTurn(
     // once per run so every dispatch carries the same bytes. A subagent's fixed
     // prompt is deliberately not modified (`systemOverride` wins). Truncation,
     // skips and AGENTS/ZH conflicts are reported, never silent.
+    let lazy: LazyInstructions | undefined;
     const instructions = ((): string => {
       // A subagent (systemOverride) inherits the same project memory but stays
       // quiet: the parent already reported truncation and skips.
       const isChild = deps.systemOverride !== undefined && deps.systemOverride !== "";
       const loaded = loadInstructionBlocks(deps.workspace);
       const { report } = loaded;
+      lazy = new LazyInstructions(deps.workspace, loaded.blocks);
       if (!isChild && (report.truncated > 0 || report.totalCapped || report.skipped.length > 0 || report.conflicts > 0)) {
         const parts = [`project instructions: ${report.files} file(s), ${report.totalBytes} bytes`];
         if (report.conflicts > 0) parts.push(`${report.conflicts} AGENTS/ZH conflict(s)`);
@@ -2000,6 +2029,7 @@ export async function runTurn(
         instructions,
         planLine,
         hookContext,
+        nestedInstructions: lazy === undefined ? undefined : renderLazyInstructionBlock(lazy.all()),
       });
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
@@ -2107,7 +2137,7 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments)
+            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy)
               .then((outcome) => {
                 appendedTokens += outcome.tokens;
                 // A plan-mode staged call changed nothing: not a failure. A
