@@ -23,10 +23,10 @@ import type { KernelClient } from "./kernel";
 import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
+import { buildChildPrompt, staticChildPrompt } from "./prompt";
 
 /** The child prompt is fixed: a subagent reports, it does not converse. */
-export const SUBAGENT_SYSTEM_PROMPT =
-  "You are a focused subagent. Complete the task, then report concisely. Do not ask questions.";
+export const SUBAGENT_SYSTEM_PROMPT = staticChildPrompt();
 
 export const DEFAULT_SUBAGENT_STEPS = 12;
 export const MAX_SUBAGENT_STEPS = 20;
@@ -160,7 +160,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // either: the child re-enters approval in both transports.
     sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
-    systemOverride: SUBAGENT_SYSTEM_PROMPT,
+    systemOverride: buildChildPrompt(opts.workspace, new Date(), { tools: BASE_TOOL_NAMES, kernelMode: typeof opts.kernel?.mode === "string" ? opts.kernel.mode : "untrusted" }),
     // Base seven only: a subagent delegates to no one and drives no previews.
     toolFilter: (name) => (BASE_TOOL_NAMES as readonly string[]).includes(name),
     maxProviderCalls: clampSteps(opts.maxSteps),
