@@ -356,7 +356,7 @@ Two durable stores exist, and they never duplicate each other's facts:
 * the **session log** (this database) records what happened in a session;
 * the **OwnerLog** (kernel) records authority-bearing transactions: effect preparation, dispatch, settlement, reconciliation, worktree leases, schedule occurrences, secret use.
 
-The OwnerLog is a per-owner, hash-chained segment log with an authoritative committed prefix (`committed_seq`, `committed_event_digest`, `active_segment_id`, `committed_offset`, `head_digest`) and a durability profile per owner (`interactive_only` for a live turn, `run_durable` for a managed run) — see `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified). Segment data is fsynced before the head is updated, so a torn write is detectable from the head alone.
+The OwnerLog is a per-owner, hash-chained segment log with an authoritative committed prefix (`committed_seq`, `committed_event_digest`, `active_segment_id`, `committed_offset`, `head_digest`) and a durability profile per owner (`interactive_only` for a live turn, `run_durable` for a managed run) - see `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified). Segment data is fsynced before the head is updated, so a torn write is detectable from the head alone.
 
 The session log references OwnerLog records by digest (`receipt_digest`, `journal_record_digest`). It never copies them as facts, and it never presents a receipt it did not receive from the kernel.
 
@@ -456,7 +456,7 @@ Three clarifications that the table cannot express:
 
 > **NOT IMPLEMENTED.** Workspaces on a network mount are out of scope today (`file-lock.ts`). Deferral F9.
 
-SQLite's WAL mode keeps its index in an mmap'd `-shm` file and depends on coherent shared memory plus reliable POSIX locks — guarantees that network filesystems do not provide. A peer host truncating or rebuilding the `-shm` file during recovery or close can pull the mapping out from under the process, and the next index read dies with `SIGBUS`. This is SQLite's own documented limitation, and the reference implementation responds to it by selecting the journal mode from the filesystem and by giving each host its own database file ([`grok-build/crates/codegen/xai-sqlite-journal/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-sqlite-journal/src/lib.rs)). HorizonCode adopts both.
+SQLite's WAL mode keeps its index in an mmap'd `-shm` file and depends on coherent shared memory plus reliable POSIX locks - guarantees that network filesystems do not provide. A peer host truncating or rebuilding the `-shm` file during recovery or close can pull the mapping out from under the process, and the next index read dies with `SIGBUS`. This is SQLite's own documented limitation, and the reference implementation responds to it by selecting the journal mode from the filesystem and by giving each host its own database file ([`grok-build/crates/codegen/xai-sqlite-journal/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-sqlite-journal/src/lib.rs)). HorizonCode adopts both.
 
 | Mount class | Detection | Journal mode | Database path | Multi-host |
 |---|---|---|---|---|

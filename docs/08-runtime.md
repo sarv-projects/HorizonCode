@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-This document decides the behaviour of **plane 2 (Orchestration)** in `_conventions.md` §2 — the one `Controller`, the session engine, the step engine, the agent-loop state machine, interruption / steering / queueing, retry and fallback policy, the dual-model Planner/Executor routing table, plan mode, todos and goals, the subagent fleet and teams, the scheduler, the self-improvement loop, budgets and leases, and long-horizon operation.
+This document decides the behaviour of **plane 2 (Orchestration)** in `_conventions.md` §2 - the one `Controller`, the session engine, the step engine, the agent-loop state machine, interruption / steering / queueing, retry and fallback policy, the dual-model Planner/Executor routing table, plan mode, todos and goals, the subagent fleet and teams, the scheduler, the self-improvement loop, budgets and leases, and long-horizon operation.
 
 Out of scope, owned elsewhere:
 
@@ -407,7 +407,7 @@ Every event above MUST carry `{event_id, session_id, run_id (root), parent_agent
 
 ## 4. Data
 
-Schemas are defined in `05-domain-and-schemas.md` and follow the `<Name>V<major>` convention of `_conventions.md` §7. This subsystem **reads** and **writes** the following. The five names marked ✓ are already registered and defined in `05-domain-and-schemas.md`; every other name is reconciled to a registered shape in `05-domain-and-schemas.md` §4.18 — the owner of all `*V1` schemas — and a name listed in neither place MUST NOT be used normatively (reconciled 2026-11-07, reaudit stage 2, RC-15).
+Schemas are defined in `05-domain-and-schemas.md` and follow the `<Name>V<major>` convention of `_conventions.md` §7. This subsystem **reads** and **writes** the following. The five names marked ✓ are already registered and defined in `05-domain-and-schemas.md`; every other name is reconciled to a registered shape in `05-domain-and-schemas.md` §4.18 - the owner of all `*V1` schemas - and a name listed in neither place MUST NOT be used normatively (reconciled 2026-11-07, reaudit stage 2, RC-15).
 
 | Schema | R/W | Used for |
 |---|---|---|

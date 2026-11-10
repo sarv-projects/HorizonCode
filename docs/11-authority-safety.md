@@ -33,7 +33,7 @@ Design-only except the v0.1 slice enumerated in §10: the Guard decision path, i
 
 | In scope | Out of scope (owned elsewhere) |
 |---|---|
-| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics — `12-sessions-state.md`, with event meaning and ordering in `06-events-and-flows.md`; TUI presentation — `13-tui.md`; provider wire codecs — `10-cognition.md`; tool argument schemas — `09-tools.md` |
+| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics - `12-sessions-state.md`, with event meaning and ordering in `06-events-and-flows.md`; TUI presentation - `13-tui.md`; provider wire codecs - `10-cognition.md`; tool argument schemas - `09-tools.md` |
 | The kernel (`hzk`) boundary and its protocol | The native capability crates' internals (`hz_shell`, `hz_edit`, `hz_diff`, …) beyond what they must guarantee to Guard |
 | Config **authority** semantics (who may widen) | Config **surface** (flags, env, file names) beyond the authority-relevant fields |
 
@@ -452,7 +452,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 3.4 Events owned by this document
 
-`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class — `plugin`, `mcp`, `sandbox`, … — and `code` carries the closed reason code; payload shape owned by `06-events-and-flows.md` row 40, RC-2).
+`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class - `plugin`, `mcp`, `sandbox`, … - and `code` carries the closed reason code; payload shape owned by `06-events-and-flows.md` row 40, RC-2).
 
 ### 3.5 Types owned by this document
 
@@ -975,7 +975,7 @@ The example list is validated at load time; the rule matches with severity `forb
 
 **Step 11 — counterfactual B: the kernel dies after dispatch.** The `executions` row is `DISPATCHING` with no settled observation. On reopen, the row is reconciled to `UNKNOWN`, `hz.effect.unknown` is emitted, the resolved resource is frozen, and **no second `rm` is ever issued** (E7). A probe reads the process table and the cgroup: no descendant survives, and the target path's identity is unchanged from the preimage ⇒ a follow-up reconciliation mints `FAILED` with `reason=not_executed`, the freeze lifts, and a fresh Guard request may be made. If the probe cannot decide, the run stops and a human reconciles.
 
-**Step 12 — counterfactual C: the workspace were trusted and had declared a hook.** The hook is still a separate receipted `terminal.run` effect under its own hook profile (read-only unless it declared `files.write`), with a cleared environment and no network. A repo cannot gain an unconfined process by shipping a hook (C5; hook sandboxing is specified in `15-extensibility.md` §7.4).
+**Step 12 - counterfactual C: the workspace were trusted and had declared a hook.** The hook is still a separate receipted `terminal.run` effect under its own hook profile (read-only unless it declared `files.write`), with a cleared environment and no network. A repo cannot gain an unconfined process by shipping a hook (C5; hook sandboxing is specified in `15-extensibility.md` §7.4).
 
 ---
 

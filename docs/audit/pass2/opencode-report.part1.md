@@ -1,4 +1,4 @@
-# OpenCode Repository Tour — `dev` branch ([`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0))
+# OpenCode Repository Tour - `dev` branch ([`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0))
 
 A deep, exhaustive code-organization tour. Read-only research: nothing in the repo was modified.
 
@@ -20,7 +20,7 @@ Worktrees:
 | License | MIT |
 | Default branch | `dev` |
 
-`README.md` markets the CLI (`@opencode/cli`, installed to `$HOME/.opencode/bin`), a **Desktop App (BETA)** (Electron: `.dmg` / `.exe` / `.deb`), two built-in agents — `build` (default) and `plan` (read-only) — and a `general` subagent. The repo is not the classic single-package layout: it is a **~40-package Bun workspace** organized around an **Effect-based, event-sourced core**, split so contracts flow one direction. `AGENTS.md` states the rule ([`opencode/AGENTS.md`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/AGENTS.md#L1-L4)):
+`README.md` markets the CLI (`@opencode/cli`, installed to `$HOME/.opencode/bin`), a **Desktop App (BETA)** (Electron: `.dmg` / `.exe` / `.deb`), two built-in agents - `build` (default) and `plan` (read-only) - and a `general` subagent. The repo is not the classic single-package layout: it is a **~40-package Bun workspace** organized around an **Effect-based, event-sourced core**, split so contracts flow one direction. `AGENTS.md` states the rule ([`opencode/AGENTS.md`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/AGENTS.md#L1-L4)):
 
 ```md
 - After changing the public Protocol or Server `HttpApi`, run `bun run generate` from `packages/client`. Do not edit generated client files directly.

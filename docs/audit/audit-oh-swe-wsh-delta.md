@@ -218,7 +218,7 @@ the schema; (b) task ids derived from content make dedup/replay free.
 
 #### 1.A.9 Templates are validated and warned about, and the pipeline tolerates empty ones
 
-`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified) — every `*_template`
+`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified) - every `*_template`
 field is passed through `_warn_probably_wrong_jinja_syntax`, and a missing `system_template` warns
 with a doc link instead of raising. There is a separate `strategy_template` appended after the
 instance template, and `put_demos_in_history` marks each demo entry `is_demo: True` so later
@@ -299,7 +299,7 @@ tools:
       Replace the currently displayed lines with <text>.
 ```
 
-`SWE-agent/tools/windowed_edit_rewrite/config.yaml` (repo not cloned, path not verified) — i.e. *"replace the
+`SWE-agent/tools/windowed_edit_rewrite/config.yaml` (repo not cloned, path not verified) - i.e. *"replace the
 window, wholesale"*, with the same lint-gate/revert semantics (`bin/edit` in that bundle is a
 near-copy of the replace variant with the same `_LINT_ERROR_TEMPLATE`). The windowed family is therefore
 a 2×2 matrix: {search/replace-in-window, replace-window-wholesale} × {linting, non-linting} plus the
@@ -357,7 +357,7 @@ It gates both the "🎉 Submission successful 🎉" message and **applying the p
 
 #### 1.A.17 The PR hook: preconditions before an irreversible external side effect
 
-`SWE-agent/sweagent/run/hooks/open_pr.py` (repo not cloned, path not verified) — six gates, in order:
+`SWE-agent/sweagent/run/hooks/open_pr.py` (repo not cloned, path not verified) - six gates, in order:
 no submission → not `exit_status == submitted` → not a GitHub issue → **issue not open** →
 **issue already assigned ("Be nice :)")** → issue locked → already-associated commits (configurable via
 `skip_if_commits_reference_issue`). Then the PR is created as a **draft**, and the trajectory is embedded
@@ -392,7 +392,7 @@ state, (2) refuse when someone else is already on it, (3) default to the reversi
 
 #### 1.A.19 Parsing: 11 parsers, not 6
 
-`SWE-agent/sweagent/tools/parsing.py` (repo not cloned, path not verified) — the union is
+`SWE-agent/sweagent/tools/parsing.py` (repo not cloned, path not verified) - the union is
 `ActionParser | ThoughtActionParser | ActionOnlyParser | XMLThoughtActionParser | XMLFunctionCallingParser |
 FunctionCallingParser | EditFormat | Identity | JsonParser | BashCodeBlockParser | SingleBashCodeBlockParser`.
 New to the catalogue: `EditFormat` (window-replacement), `Identity` (no parsing), `JsonParser`

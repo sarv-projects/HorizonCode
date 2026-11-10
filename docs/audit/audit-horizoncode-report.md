@@ -2,7 +2,7 @@
 
 Reference clone: the ancestor project (not cloned, path not verified)
 Audit date: 2026-11-06
-Mode: **report-only** — nothing in the repo was modified; `HorizonCode` was not touched.
+Mode: **report-only** - nothing in the repo was modified; `HorizonCode` was not touched.
 
 > All paths below are relative to the repo root the ancestor project (not cloned, path not verified) unless stated otherwise.
 

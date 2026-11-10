@@ -25,7 +25,7 @@ This document decides:
 7. The diff viewer and approval prompts, including the *show the exact effect* rule and apply-through-kernel semantics.
 8. Transcript features, theming, accessibility, performance budgets, session-management UI, status surfaces, error/`UNKNOWN` display, notifications and the non-interactive output modes that share this renderer's data model.
 
-Design-only except the v0.1 slice enumerated in §10: the chat TUI (chat bar, streaming, tool cards, y/n/a approvals, history, slash sugar) and headless mode are implemented and tested (child tool cards nest under the `agent` card behind a dim bar, at most 30 lines per child; the per-turn diff renders as `· changed N file(s)` plus a diff capped at 40 lines; headless prints only the changed summary, on stderr, keeping stdout a clean transcript; `docs/28` ruling 54) — `bun test tests/tui` in `app/` currently runs 300 tests across 25 files, all passing, per `docs/28-implementation-status.md`. Every other claim here is a design claim.
+Design-only except the v0.1 slice enumerated in §10: the chat TUI (chat bar, streaming, tool cards, y/n/a approvals, history, slash sugar) and headless mode are implemented and tested (child tool cards nest under the `agent` card behind a dim bar, at most 30 lines per child; the per-turn diff renders as `· changed N file(s)` plus a diff capped at 40 lines; headless prints only the changed summary, on stderr, keeping stdout a clean transcript; `docs/28` ruling 54) - `bun test tests/tui` in `app/` currently runs 300 tests across 25 files, all passing, per `docs/28-implementation-status.md`. Every other claim here is a design claim.
 
 Sources this document is derived from:
 

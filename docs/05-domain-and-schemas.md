@@ -142,15 +142,15 @@ Named surfaces that own or consume the schemas. Anything not present in the pinn
 | `defineSchema()`, `defineMigration()` `[planned]` | `@horizoncode/protocol` | Single-authority schema + log-compatible migration declaration |
 | `Projector<State>` `[planned]` | `@horizoncode/core` | Pure fold `(State, Event) → State`; no I/O; deterministic |
 | `EventStore.append(events[])` `[planned]` | `@horizoncode/core` | One SQLite transaction: append events **and** apply projections atomically |
-| `guard::authorize()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified) — produces `GuardDecisionV1`; MUST stay pure and recomputable |
+| `guard::authorize()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified) - produces `GuardDecisionV1`; MUST stay pure and recomputable |
 | `guard::intent_digest()`, `guard::argument_digest()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified) |
-| `EffectHost::handle_request()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified) — dispatches the dotted kernel operations of `07-apis-and-contracts.md` §4.2 |
-| `EffectHost::reconcile_effect()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified) — produces `ReconciliationRecordV1` |
+| `EffectHost::handle_request()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified) - dispatches the dotted kernel operations of `07-apis-and-contracts.md` §4.2 |
+| `EffectHost::reconcile_effect()` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified) - produces `ReconciliationRecordV1` |
 | `ConfigLoader.resolve(scopes, workspaceRoot)` `[planned]` | `@horizoncode/cli` + `hz_policy` | Lattice merge per §4.16; returns effective config + diagnostics + digest |
 | `TrustStore.decide(path, digest, scope)` `[planned]` | `@horizoncode/cli` | User-level trust decisions (D31); read by `hzcode doctor` |
 | `ResourceResolver.resolve("hz://…")` `[planned]` | `@horizoncode/core` | `hz://` URI → typed object or typed error (D-from `_conventions.md` §1) |
 | `ArtifactStore.put/get/verify` `CODE_PRESENT (ancestor)` | `hz_kernel` | CAS with digest verification on read |
-| `OwnerLog` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified) — append-only, cursored, hash-chained order of host facts |
+| `OwnerLog` `CODE_PRESENT (ancestor)` | `hz_kernel` | source: `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified) - append-only, cursored, hash-chained order of host facts |
 | `SessionStore.get/list`, `SessionExecution.resume(sessionID)` `DESIGNED` | `@horizoncode/core` | Ancestor names from source: `specs/v2/session.md` of the ancestor project (not cloned, path not verified); HorizonCode keeps the admission/claim discipline |
 
 ---
@@ -1007,8 +1007,8 @@ Purpose: one scoped spending envelope with consumption and reservation accountin
 | `ownerId` | `Id` | session/team/run that owns it |
 | `limits` | `{maxInputTokens: u64, maxOutputTokens: u64, maxSteps: u32, maxToolCalls: u32, maxWallMs: u64, maxUsdMicros: MoneyMicros, maxWebSearches: u32, maxTriageChecks: u32, maxChildren: u32, maxParallelChildren: u32}` | any field may be `0` = unlimited-but-audited |
 | `consumed` | same shape as `limits` | monotone |
-| `reserved` | same shape as `limits` | in-flight reservations | |
-| `renewPolicy` | `{mode: OneOf{none, on_progress}, minProgressEvents: u32, graceFactor: f64, maxRenewals: u32}` | adaptive progress lease (`08-runtime.md` R-runtime-106) | |
+| `reserved` | same shape as `limits` | in-flight reservations |
+| `renewPolicy` | `{mode: OneOf{none, on_progress}, minProgressEvents: u32, graceFactor: f64, maxRenewals: u32}` | adaptive progress lease (`08-runtime.md` R-runtime-106) |
 | `hardStop` | `OneOf{fail, cancel, ask}` | |
 | `inheritedFrom` | `Id?` | parent budget |
 | `renewals` | `u32` | |
@@ -1036,8 +1036,8 @@ Purpose: a point-in-time explanation of budget consumption across a session tree
 | `topConsumers` | `[]{sessionId: Id, profileId: Id, outputTokens: u64, usdMicros: MoneyMicros}` | |
 | `childrenRollup` | `[]{sessionId: Id, steps: u32, usdMicros: MoneyMicros}` | |
 | `trend` | `[]{stepIndex: u64, outputTokens: u64, usdMicros: MoneyMicros}` | last N steps |
-| `recommendations` | `[]string` | advisory text only | |
-| `artifactRef` | `Sha256Ref?` | full report when large | |
+| `recommendations` | `[]string` | advisory text only |
+| `artifactRef` | `Sha256Ref?` | full report when large |
 
 Invariants: numbers MUST be derived from the log/usage rows, not recomputed from provider estimates; `remaining` MUST be `null`-safe when `limits` are `0` (unlimited) and MUST say `unlimited` rather than `0`; a `topConsumers` entry MUST name a real session id in the tree.
 Versioning: additive.
@@ -1045,7 +1045,7 @@ Persisted: `hz.db::budget_reports`.
 
 **`RateLimitPolicyV1`** — `rlp_<ulid>`
 
-Purpose: the entitlement model behind `HZ_RATE_LIMITED` — how many requests, tokens, tool calls and concurrent calls a principal, provider or budget may consume, and what happens on exhaustion. One shape, one owner: this document owns it; `07-apis-and-contracts.md` §4.3.2 maps it to the REST `429` and MUST NOT define a limiter of its own.
+Purpose: the entitlement model behind `HZ_RATE_LIMITED` - how many requests, tokens, tool calls and concurrent calls a principal, provider or budget may consume, and what happens on exhaustion. One shape, one owner: this document owns it; `07-apis-and-contracts.md` §4.3.2 maps it to the REST `429` and MUST NOT define a limiter of its own.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -1088,7 +1088,7 @@ Purpose: the atomic, per-call record of resource consumption.
 | `requests`, `toolCalls`, `webSearches`, `retries` | `u32` | |
 | `latencyMs` | `u64` | |
 | `tsMs` | `Ms` | |
-| `priceTableRevision` | `Digest` | append-only local price table revision | |
+| `priceTableRevision` | `Digest` | append-only local price table revision |
 
 Invariants: exactly one `UsageV1` per provider response and per billable tool effect; an estimate MUST be marked `estimated` and MUST be superseded by a `reconciled` row rather than mutated; usage for an attempt that was cancelled is still recorded — there is no separate credit event, and `stepId` points at the cancelled step, which carries `retryOfStepId` (RC-4); `cacheReadTokens + cacheWriteTokens` MUST NOT exceed `inputTokens + outputTokens` in a way that hides double counting — the validator rejects impossible triples.
 Versioning: additive.
@@ -1108,7 +1108,7 @@ Purpose: the priced interpretation of usage, with explicit uncertainty.
 | `priceTableRevision` | `Digest` | (D27) |
 | `pricedAtMs` | `Ms` | |
 | `source` | `OneOf{priced, provider_reported, estimated}` | |
-| `adjustments` | `[]{reason: OneOf{repricing, discount, correction}, deltaMicros: MoneyMicros, note: string, atMs: Ms}` | append-only | |
+| `adjustments` | `[]{reason: OneOf{repricing, discount, correction}, deltaMicros: MoneyMicros, note: string, atMs: Ms}` | append-only |
 | `lineage` | `{parentCostId: Id?, rollupScope: string?}` | |
 | `uncertainty` | `OneOf{exact, estimated, unknown}` | (D25) |
 
@@ -1166,8 +1166,8 @@ Purpose: a declared, invocable workflow — the horizon equivalent of the ancest
 | `allowedToolPatterns`, `requestedPermissions` | `[]string`, `[]ToolPermissionV1` | MUST be ⊆ the session ceiling |
 | `inputSchema`, `outputSchema` | `string?` (artifact ref) | |
 | `resources` | `[]{path: string, kind: OneOf{script, template, data}, maxBytes: u64, digest: Digest}` | |
-| `bodyRef`, `maxBodyTokens` | `Sha256Ref`, `u64` | Markdown body lives in the CAS | |
-| `frontmatter` | `JsonValue` | the parsed front matter, retained verbatim | |
+| `bodyRef`, `maxBodyTokens` | `Sha256Ref`, `u64` | Markdown body lives in the CAS |
+| `frontmatter` | `JsonValue` | the parsed front matter, retained verbatim |
 | `provenance` | `OneOf{bundled, user, workspace, plugin, marketplace, synthesized}` | |
 | `integrity` | `{digest: Digest, signatureRef: Sha256Ref?, lockRef: Sha256Ref?}` | |
 | `sourceUrl`, `deprecated` | `Uri?`, `bool` | |
@@ -1194,7 +1194,7 @@ Purpose: a user-facing slash command, possibly a prompt template, a local action
 | `capabilityRequests` | `[]CapabilityId` | advisory only; MUST NOT grant |
 | `scope` | `OneOf{builtin, user, workspace, plugin, mcp}` | |
 | `requiresTrust`, `hidden` | `bool` | workspace commands default to `requiresTrust` (D31) |
-| `bodyRef` | `Sha256Ref?` | for large templates | |
+| `bodyRef` | `Sha256Ref?` | for large templates |
 | `digest` | `Digest` | |
 
 Invariants: `kind=prompt` MUST render through the ordinary prompt admission path (a command invocation is an admitted `PromptV1` with `kind=user_command`, never a bypass); `capabilityRequests` is a *request* that MUST be resolved through the normal policy path; a `local_jsx` command MUST run in the plugin sandbox when it comes from an untrusted scope.
@@ -1995,10 +1995,10 @@ The tests that prove the rules in this document. Gate = a CI gate that MUST fail
 | `ReconciliationRecordV1` | `DESIGNED`; reconciliation entrypoint `CODE_PRESENT (ancestor)` | source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified) (`reconcile_effect`) |
 | `TrustedHostStateV1` | `DESIGNED` | this document; concept derived from the reasonix leaderboard lesson in `01-vision-and-superset.md` §2.5 |
 | Event-sourced session schemas (`SessionV1`, `MessageV1`, `PartV1`, `StepV1`) | `DESIGNED`; admission/claim/one-stream-per-step semantics specified in the ancestor | source: `specs/v2/session.md` of the ancestor project (not cloned, path not verified) |
-| `InputAdmissionV1`, `ExecutionClaimV1` | `DESIGNED` — HorizonCode renames the ancestor's `PromptAdmitted` inbox and busy-claim concepts and adds the fence token; NOT implemented | this document; source: `specs/v2/session.md` of the ancestor project (not cloned, path not verified) |
+| `InputAdmissionV1`, `ExecutionClaimV1` | `DESIGNED` - HorizonCode renames the ancestor's `PromptAdmitted` inbox and busy-claim concepts and adds the fence token; NOT implemented | this document; source: `specs/v2/session.md` of the ancestor project (not cloned, path not verified) |
 | `ToolDeclarationV1`, `ToolPermissionV1` | `DESIGNED` — no generator exists | ADR-015 |
 | Budget/usage/cost schemas | `DESIGNED` | this document |
-| Rate-limit / entitlement model (`RateLimitPolicyV1`) | `DESIGNED` — no limiter exists; this document owns the shape behind `HZ_RATE_LIMITED`, referenced by `07-apis-and-contracts.md` §4.3.2 | §4.9, D39 |
+| Rate-limit / entitlement model (`RateLimitPolicyV1`) | `DESIGNED` - no limiter exists; this document owns the shape behind `HZ_RATE_LIMITED`, referenced by `07-apis-and-contracts.md` §4.3.2 | §4.9, D39 |
 | Memory/learning schemas | `DESIGNED` — no extraction, distillation or proposal store exists | this document |
 | Config schema and merge lattice | `DESIGNED` — no loader implements the lattice yet | ADR-008, §4.16 |
 | Persistence map and `hz.db` projections | `DESIGNED` — the v0.1 runtime ships SQLite sessions, but none of the `hz.db` projections or tables below exist | §4.4, §4.5 |

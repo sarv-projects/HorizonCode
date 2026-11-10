@@ -38,7 +38,7 @@ This set overlaps by design (RC-14 assigns each document a class). The audit fou
 
 `docs/24-feature-catalog.md:76` — **STALE** — §3.3's lead-in still says "Not registered by this change (see §1)", which is the pre-RC-11 state §13 :1348 has already corrected to "Both lists are now registered as **Reserved**". — **Fix:** "Registered as Reserved in `_conventions.md` §5 (RC-11); promoted to canonical in the change that first implements each feature."
 
-`docs/24-feature-catalog.md:292` — **STALE / DEAD REF** — A.6's source line says forgecode has "no separate report; every path below was read from the tree", but a full first-pass report exists at `docs/audit/audit-forgecode-report.md` (348 lines) and `29` §A.1 declares the "NO REPORT" gap closed. — **Fix:** "source: [`tailcallhq/forgecode`](https://github.com/tailcallhq/forgecode/tree/a22b49288856d5b3f3ca57e8532683d54a662c8c); full first-pass report `docs/audit/audit-forgecode-report.md` (`29-final-audit.md` §A.1 cluster 1)."
+`docs/24-feature-catalog.md:292` - **STALE / DEAD REF** - A.6's source line says forgecode has "no separate report; every path below was read from the tree", but a full first-pass report exists at `docs/audit/audit-forgecode-report.md` (348 lines) and `29` §A.1 declares the "NO REPORT" gap closed. - **Fix:** "source: [`tailcallhq/forgecode`](https://github.com/tailcallhq/forgecode/tree/a22b49288856d5b3f3ca57e8532683d54a662c8c); full first-pass report `docs/audit/audit-forgecode-report.md` (`29-final-audit.md` §A.1 cluster 1)."
 
 `docs/24-feature-catalog.md:166,189,219,244,268` — **DEAD REF (latent)** — A.1–A.5 cite `/tmp/opencode-report.part1.md`…`part3.md`, `/tmp/codex-report.md`, `/tmp/grok-build-report.md`, `/tmp/DeepSeek-Reasonix-report.md`, `/tmp/oh-my-pi-report.md`. `/tmp` is non-durable (the same set already lost `opencode-report.part4.md`'s content and `29` :28/:56 records the migration). — **Fix:** cite the in-repo copies: `docs/audit/pass2/<same-name>.md` (all five verified present).
 
@@ -78,7 +78,7 @@ This set overlaps by design (RC-14 assigns each document a class). The audit fou
 
 `docs/25-roadmap-and-glossary.md:908` — **STALE** — §9's status row: "Feature index (`NF-001`…`NF-050`) | `DESIGNED` | §4.2". The index now runs to NF-075 across §4.2 + §4.2a. — **Fix:** "Feature index (`NF-001`…`NF-075`) | `DESIGNED` | §4.2 + §4.2a; definitions owned by `24` §5".
 
-`docs/25-roadmap-and-glossary.md:929` — **STALE** — §10's related-docs row describes doc 24 as "new features (Section B, `NF-001`–`NF-050`)". — **Fix:** "`NF-001`–`NF-075`". (The same table also has no row for `30-steal-list.md` although 28/29 are listed — add "`30-steal-list.md` | the adoption queue RC-15(d) makes live".)
+`docs/25-roadmap-and-glossary.md:929` - **STALE** - §10's related-docs row describes doc 24 as "new features (Section B, `NF-001`–`NF-050`)". - **Fix:** "`NF-001`–`NF-075`". (The same table also has no row for `30-steal-list.md` although 28/29 are listed - add "`30-steal-list.md` | the adoption queue RC-15(d) makes live".)
 
 `docs/25-roadmap-and-glossary.md:940` — **STALE** — the derivation line cites "`_conventions.md` (names, status ladder, **RC-1…RC-8**)". — **Fix:** "RC-1…RC-15 (RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here)".
 
@@ -118,7 +118,7 @@ This set overlaps by design (RC-14 assigns each document a class). The audit fou
 
 `docs/27-implementation-plan.md:34` — **DEAD REF** — IP-8 says "see §12 doc-update ledger in `docs/26-learning-synthesis-2.md`". Doc 26 has no §12; its doc-update ledger is **§5** (:156). Doc 27's own §12 is the open-questions/ADR table. — **Fix:** "see the doc-update ledger in `docs/26-learning-synthesis-2.md` §5".
 
-`docs/27-implementation-plan.md:207` — **STALE (arithmetic + count)** — "all **ten** reference clones completed (eight earlier + OpenHands, SWE-agent, wshobson/agents, opencode-v2)" lists **12** repositories and calls them ten; the `repo-tour/` directory held **15** (the twelve of doc 29 §0 plus aider, mini-swe-agent, hermes-agent from the pass-3 dives). — **Fix:** "all fifteen reference clones completed (the eight of the first tour + OpenHands, SWE-agent, wshobson/agents, opencode-v2 + aider, mini-swe-agent, hermes-agent)".
+`docs/27-implementation-plan.md:207` - **STALE (arithmetic + count)** - "all **ten** reference clones completed (eight earlier + OpenHands, SWE-agent, wshobson/agents, opencode-v2)" lists **12** repositories and calls them ten; the `repo-tour/` directory held **15** (the twelve of doc 29 §0 plus aider, mini-swe-agent, hermes-agent from the pass-3 dives). - **Fix:** "all fifteen reference clones completed (the eight of the first tour + OpenHands, SWE-agent, wshobson/agents, opencode-v2 + aider, mini-swe-agent, hermes-agent)".
 
 `docs/27-implementation-plan.md:407` — **STALE** — §13 row: "Source availability of all **ten** reference repositories | **VERIFIED**". — **Fix:** "all fifteen reference repositories (see §6.2)".
 

@@ -268,9 +268,9 @@ Scale: `xai-grok-pager` alone is 551k lines / 667 files (`app/` 254k, `views/` 1
 | PTY-driven virtual-screen test harness with frame timing | TAKE later (T-G8) | HorizonCode has real PTY scenarios (`tests/tui/pty.test.ts` via `/usr/bin/script`). Adding a tiny VT screen model for assertions is M-L in zero-dep TS; do after markdown | M-L |
 | Hunk tracker: attribute each hunk to agent vs external editor, LOC sinks | DEFER (T-G9) | Conceptually valuable for receipts ("which lines were the agent's"), but 11k lines in Grok. Keep as a design note; HorizonCode's change journal + turn diff cover the practical need | L |
 | Fullscreen alt-screen scrollback pane, mouse selection, drag, scrollbars, vim mode | SKIP for now | Largest cost, least differentiating; docs/13 already schedules it behind the inline mode | L+ |
-| Mermaid, LaTeX, inline images/video (ffmpeg), voice, dashboard of sessions, marketplace modal, feedback form, announcements, tips engine, `/imagine` | SKIP | Not core; each is a separate product surface |
-| `/loop` recurring prompts, scheduler | SKIP now | Scheduler is designed (docs 15/16); do not build in the TUI first |
-| `unified_log.jsonl`, `grok inspect` | TAKE subset | covered by T-20/T-10 |
+| Mermaid, LaTeX, inline images/video (ffmpeg), voice, dashboard of sessions, marketplace modal, feedback form, announcements, tips engine, `/imagine` | SKIP | Not core; each is a separate product surface | |
+| `/loop` recurring prompts, scheduler | SKIP now | Scheduler is designed (docs 15/16); do not build in the TUI first | |
+| `unified_log.jsonl`, `grok inspect` | TAKE subset | covered by T-20/T-10 | |
 
 ## 5. forgecode README analysed as a product README
 

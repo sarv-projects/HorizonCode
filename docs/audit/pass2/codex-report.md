@@ -10,7 +10,7 @@ All paths below are ABSOLUTE under [`openai/codex`](https://github.com/openai/co
 
 Codex CLI is OpenAI's open-source coding agent that runs locally in the terminal. It is a **polyglot monorepo**:
 
-- **Rust** is the heart — a Cargo workspace of ~130 member crates under `codex-rs/` ([`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml)).
+- **Rust** is the heart - a Cargo workspace of ~130 member crates under `codex-rs/` ([`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml)).
 - **TypeScript/Node** thin wrapper + SDK: `codex-cli/` (npm package `@openai/codex`) and `sdk/typescript/`.
 - **Python** SDK + runtime: `sdk/python/`, `sdk/python-runtime/`.
 - **Bazel** build alongside Cargo: root `BUILD.bazel`, `MODULE.bazel`, `defs.bzl`, `bazel/`, `.bazelrc`.
@@ -169,9 +169,9 @@ macOS/Windows allocator & desktop app: `main.rs#L205-L215` selects `tikv_jemallo
 [`codex/codex-cli/package.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/package.json) is package `@openai/codex` with `bin.codex = bin/codex.js`. [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) detects platform/arch, maps to a `PLATFORM_PACKAGE_BY_TARGET` npm sub-package (e.g. `@openai/codex-linux-x64`), and `spawn`s the native binary.
 
 ### Other workspace binaries (`[[bin]]`)
-- `codex-tui` (interactive TUI) and `md-events` — [`codex/codex-rs/tui/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/Cargo.toml)
-- `codex-exec` — [`codex/codex-rs/exec/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/Cargo.toml)
-- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` — [`codex/codex-rs/app-server/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/Cargo.toml)
+- `codex-tui` (interactive TUI) and `md-events` - [`codex/codex-rs/tui/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/Cargo.toml)
+- `codex-exec` - [`codex/codex-rs/exec/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/Cargo.toml)
+- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` - [`codex/codex-rs/app-server/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/Cargo.toml)
 - `codex-exec-server` (exec-server-cli), `codex-file-search`, `codex-responses-api-proxy`, `codex-network-proxy`
 - `apply_patch` (standalone), `codex-linux-sandbox` + `bwrap` (linux-sandbox), `codex-windows-sandbox-setup` / `codex-command-runner` / `codex-windows-managed-deny-probe`, `codex-windows-sandbox-service`
 - `codex-code-mode-host`, `codex-voice-host`, `codex-message-board-mcp`, `codex-stdio-to-uds`, `codex-plugin-test-helper`, `codex-write-config-schema`
@@ -224,9 +224,9 @@ macOS/Windows allocator & desktop app: `main.rs#L205-L215` selects `tikv_jemallo
 [`codex/codex-cli/package.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/package.json) is package `@openai/codex` with `bin.codex = bin/codex.js`. [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) detects platform/arch, maps to a `PLATFORM_PACKAGE_BY_TARGET` npm sub-package (e.g. `@openai/codex-linux-x64`), and `spawn`s the native binary.
 
 ### Other workspace binaries (`[[bin]]`)
-- `codex-tui` (interactive TUI) and `md-events` — [`codex/codex-rs/tui/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/Cargo.toml)
-- `codex-exec` — [`codex/codex-rs/exec/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/Cargo.toml)
-- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` — [`codex/codex-rs/app-server/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/Cargo.toml)
+- `codex-tui` (interactive TUI) and `md-events` - [`codex/codex-rs/tui/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/Cargo.toml)
+- `codex-exec` - [`codex/codex-rs/exec/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/Cargo.toml)
+- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` - [`codex/codex-rs/app-server/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/Cargo.toml)
 - `codex-exec-server` (exec-server-cli), `codex-file-search`, `codex-responses-api-proxy`, `codex-network-proxy`
 - `apply_patch` (standalone), `codex-linux-sandbox` + `bwrap` (linux-sandbox), `codex-windows-sandbox-setup` / `codex-command-runner` / `codex-windows-managed-deny-probe`, `codex-windows-sandbox-service`
 - `codex-code-mode-host`, `codex-voice-host`, `codex-message-board-mcp`, `codex-stdio-to-uds`, `codex-plugin-test-helper`, `codex-write-config-schema`
@@ -255,7 +255,7 @@ Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/
 
 ### Tool dispatch + built-in tools
 - Registry/router: `tools/mod.rs`, `tools/registry.rs`, `tools/router.rs`, `tools/orchestrator.rs`, `tools/parallel.rs`, `tools/lifecycle.rs`, `tools/hosted_spec.rs`, `tools/spec_plan.rs`, `tools/tool_namespaces_info.rs`.
-- Handler implementations: [`codex/codex-rs/core/src/tools/handlers/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/handlers) — `apply_patch.rs`, `plan.rs` (update_plan), `view_image.rs`, `request_user_input.rs`, `request_permissions.rs`, `tool_search.rs`, `multi_agents.rs` / `multi_agents_v2.rs`, `mcp.rs` + `mcp_resource.rs`, `unified_exec.rs`, `sleep.rs`, `current_time.rs`, `get_context_remaining.rs`, `new_context_window.rs`, `extension_tools.rs`, `dynamic.rs`, `list_available_plugins_to_install.rs`, `request_plugin_install.rs`, `send_message_to_user_async.rs`, `wait_for_environment.rs`, `test_sync.rs`.
+- Handler implementations: [`codex/codex-rs/core/src/tools/handlers/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/handlers) - `apply_patch.rs`, `plan.rs` (update_plan), `view_image.rs`, `request_user_input.rs`, `request_permissions.rs`, `tool_search.rs`, `multi_agents.rs` / `multi_agents_v2.rs`, `mcp.rs` + `mcp_resource.rs`, `unified_exec.rs`, `sleep.rs`, `current_time.rs`, `get_context_remaining.rs`, `new_context_window.rs`, `extension_tools.rs`, `dynamic.rs`, `list_available_plugins_to_install.rs`, `request_plugin_install.rs`, `send_message_to_user_async.rs`, `wait_for_environment.rs`, `test_sync.rs`.
 - Runtime executors: `tools/runtimes/apply_patch.rs`, `tools/runtimes/unified_exec.rs`.
 - Tool metadata/JSON schema types live in `codex-tools` ([`codex/codex-rs/tools/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tools/src)): `tool_definition.rs`, `tool_spec.rs`, `json_schema.rs`, `function_call_error.rs`, `tool_executor.rs`, `responses_api.rs`, `output_schema.rs`, `code_mode.rs`.
 
@@ -269,7 +269,7 @@ Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/
 - **request_user_input / permissions / MCP tools / multi-agent tools / code-mode** — as listed above.
 
 ### Prompt construction
-- Prompts crate: [`codex/codex-rs/prompts/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/src) — `model_instructions.rs` (renders base instructions from model metadata), `compact.rs`, `guardian_instructions.rs`, `multi_agent_instructions.rs`, `permissions_instructions.rs`, `realtime.rs`, `review_exit.rs`, `review_request.rs`, `update_plan_instructions.rs`, `model_messages/`.
+- Prompts crate: [`codex/codex-rs/prompts/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/src) - `model_instructions.rs` (renders base instructions from model metadata), `compact.rs`, `guardian_instructions.rs`, `multi_agent_instructions.rs`, `permissions_instructions.rs`, `realtime.rs`, `review_exit.rs`, `review_request.rs`, `update_plan_instructions.rs`, `model_messages/`.
 - Conversation/context assembly: `core/src/context/`, `core/src/context_manager/` (`history.rs`, `normalize.rs`, `sampling.rs`, `updates.rs`, `image_availability.rs`), `core/src/agents_md.rs` + `agents_md_manager.rs` (AGENTS.md ingestion).
 
 ### Session/state + rollout persistence
@@ -375,23 +375,23 @@ A formal extension API (`ext/extension-api`) with ~18 built-in extensions (`ext/
 ## 9. Most important absolute paths
 
 Build/workspace:
-- [`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml) — workspace manifest (member list + deps)
-- [`codex/justfile`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/justfile) — dev task runner
+- [`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml) - workspace manifest (member list + deps)
+- [`codex/justfile`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/justfile) - dev task runner
 - [`codex/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/README.md), [`codex/MODULE.bazel`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/MODULE.bazel), [`codex/BUILD.bazel`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/BUILD.bazel), [`codex/defs.bzl`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/defs.bzl)
 - [`codex/package.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/package.json), [`codex/pnpm-workspace.yaml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/pnpm-workspace.yaml)
 
 Entry points:
-- [`codex/codex-rs/cli/src/main.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src/main.rs) — CLI router
-- [`codex/codex-rs/cli/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/Cargo.toml) — `codex` + `logs_client` bins
-- [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) — npm launcher
+- [`codex/codex-rs/cli/src/main.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src/main.rs) - CLI router
+- [`codex/codex-rs/cli/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/Cargo.toml) - `codex` + `logs_client` bins
+- [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) - npm launcher
 
 Core engine:
 - [`codex/codex-rs/core/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/lib.rs)
-- [`codex/codex-rs/core/src/client.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/client.rs) — model client / Responses API
-- [`codex/codex-rs/core/src/session/session.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/session.rs) — session
-- [`codex/codex-rs/core/src/session/turn.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/turn.rs) — turn loop
-- [`codex/codex-rs/core/src/tools/router.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/router.rs) — tool dispatch
-- [`codex/codex-rs/core/src/exec.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/exec.rs) — sandboxed exec
+- [`codex/codex-rs/core/src/client.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/client.rs) - model client / Responses API
+- [`codex/codex-rs/core/src/session/session.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/session.rs) - session
+- [`codex/codex-rs/core/src/session/turn.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/turn.rs) - turn loop
+- [`codex/codex-rs/core/src/tools/router.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/router.rs) - tool dispatch
+- [`codex/codex-rs/core/src/exec.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/exec.rs) - sandboxed exec
 - [`codex/codex-rs/core/src/tools/handlers/apply_patch.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/handlers/apply_patch.rs), `.../plan.rs`, `.../view_image.rs`, `.../unified_exec.rs`
 
 Subsystems:
