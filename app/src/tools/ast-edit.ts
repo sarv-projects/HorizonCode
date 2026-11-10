@@ -24,6 +24,8 @@ import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { MAX_MATCHES, MAX_SOURCE_BYTES, langFromPath, rewriteMatches } from "./ast-match";
 import { isRefused, writeAtomic } from "./atomic-write";
+import { withFileLock, targetLockPath } from "../core/file-lock";
+import { realpathish } from "../core/paths";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { noteRead, wasRead } from "./read-ledger";
@@ -141,35 +143,43 @@ export const astEditTool: Tool = {
         if (!approved) return fail("declined by user");
       }
 
-      // Preimage check immediately before the write: a file changed during the
-      // guard/approval window is a conflict, and nothing is written (docs/09 §8.2).
-      let actualSha256: string;
-      try {
-        actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
-      } catch {
-        actualSha256 = "unreadable";
-      }
-      if (actualSha256 !== preimageSha256) {
-        return fail(
-          `HZ_PRECONDITION_FAILED: ast_edit refused: preimage changed: ${rel} ` +
-            `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
-        );
-      }
+      // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
+      // section per target file, taken AFTER approval. A second process that changed
+      // the file first is caught by the check below, never clobbered.
+      const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+        // Preimage check immediately before the write: a file changed during the
+        // guard/approval window is a conflict, and nothing is written (docs/09 §8.2).
+        let actualSha256: string;
+        try {
+          actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+        } catch {
+          actualSha256 = "unreadable";
+        }
+        if (actualSha256 !== preimageSha256) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: ast_edit refused: preimage changed: ${rel} ` +
+              `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
+          );
+        }
 
-      const outcome = await writeAtomic(resolved, after, ctx);
-      if (isRefused(outcome)) return fail(outcome.refusal);
-      const verified = (await readFile(resolved)).toString("utf8") === after;
-      if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
+        const outcome = await writeAtomic(resolved, after, ctx);
+        if (isRefused(outcome)) return fail(outcome.refusal);
+        const verified = (await readFile(resolved)).toString("utf8") === after;
+        if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
-      recordChange(ctx.sessionId, {
-        path: resolved,
-        rel,
-        before,
-        afterSha256: sha256Hex(after),
-        at: Date.now(),
-        tool: "edit",
-      });
-      noteRead(ctx, resolved);
+        recordChange(ctx.sessionId, {
+          path: resolved,
+          rel,
+          before,
+          afterSha256: sha256Hex(after),
+          at: Date.now(),
+          tool: "edit",
+        });
+        noteRead(ctx, resolved);
+
+        return undefined;
+      }).catch((e: unknown) => fail(msg(e)));
+      if (locked !== undefined) return locked;
 
       return { ok: true, output: `Replaced ${rewrite.count} structural match(es) in ${rel}` };
     } catch (e) {

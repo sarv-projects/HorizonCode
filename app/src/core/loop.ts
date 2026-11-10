@@ -115,6 +115,7 @@ import type { KernelClient } from "./kernel";
 import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import type { PermissionMode } from "./permission-mode";
 import { modeAutoApproves, modeRefusal } from "./permission-mode";
+import { invisibleUnicodeError } from "../tools/helpers";
 import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
@@ -808,7 +809,13 @@ export class GuardGate {
         const line = guardianLine(review);
         if (line !== undefined) req = { ...req, guardian: line };
       } catch {
-        // advisory only: a guardian failure never changes the decision
+        // Advisory mode is fail-open: a guardian failure never changes the
+        // decision. ENFORCE mode is fail-CLOSED (ruling 66(b)): the guardian
+        // could not judge the action, so the ask is refused, not waved on.
+        if (guardianModeFromEnv() === "enforce") {
+          if (this.pending !== null && this.pending === waiting) this.pending = null;
+          return false;
+        }
       }
     }
     // accept-edits answers an in-workspace fs.write ask. Reached only after the
@@ -1036,7 +1043,8 @@ export interface LoopDeps {
    * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
    * YET READ by the turn path. The field and the `buildSpeculationHost` /
    * `speculativeCandidatesFor` helpers are primitives for a future consumer;
-   * today the flag changes nothing. The ordinary NF-072 batch is unchanged.
+   * today the flag changes nothing (ruling 65 records why it stays unwired).
+   * The ordinary NF-072 batch is unchanged.
    */
   speculativeExecution?: boolean;
 }
@@ -1446,6 +1454,9 @@ function projectChange(
     return { ok: true, resolved, rel, before, after: args.content };
   }
   if (before === null) return { ok: false, error: `edit: file not found: ${rel}` };
+  if (args.start_anchor !== undefined) {
+    return { ok: false, error: "edit: an anchored edit cannot be staged; use write with the full intended content, or exit plan mode" };
+  }
   if (typeof args.old !== "string" || args.old === "" || typeof args.new !== "string") {
     return { ok: false, error: "edit requires old and new strings" };
   }
@@ -1531,6 +1542,14 @@ async function executeTool(
   if (deps.planMode === true) {
     const planned = planModeOutcome(call.name, parsed.args, deps);
     if (planned !== undefined) return planned;
+  }
+
+  // Ruling 66(a): the one-shot shell refuses invisible Unicode in its command
+  // BEFORE admission, so no guard ask or approval prompt is raised for a
+  // command the tool will refuse anyway. The tool keeps its own check too.
+  if (call.name === "shell" && typeof parsed.args.command === "string") {
+    const invisible = invisibleUnicodeError(parsed.args.command, "a shell command");
+    if (invisible !== undefined) return { result: { ok: false, output: invisible, error: invisible }, expected: true };
   }
 
   const admission = admissionFor(call.name, parsed.args, deps.workspace);

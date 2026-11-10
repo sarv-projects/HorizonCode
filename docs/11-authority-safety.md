@@ -1,5 +1,5 @@
 # 11 — Authority, Safety & Trust
-> **Permission modes (`docs/28` ruling 58).** `default | plan | accept-edits | read-only` is a policy layer above the kernel guard: it narrows or answers an ask and can never turn a kernel `deny` into an allow. `accept-edits` answers only in-workspace `fs.write` asks (not `.git`/`.hz`, CI/hook directories, manifests, shell rc or env files, not shell, net, spawn, MCP or outside writes; the guardian, including `HORIZON_GUARDIAN=enforce`, runs first). `read-only` also refuses `mcp.invoke`. There is NO bypass/yolo mode: it would also answer exfiltration and shell asks with only the fixed kernel deny list left, so `yolo`/`bypass` are refused. The mode is opt-in per run (`--permission-mode`, `/mode`), shown as a prompt badge, never persisted by the app, and only the USER config may set a default (no workspace file is read for it).
+> **Permission modes (`docs/28` ruling 58).** `default | plan | accept-edits | read-only` is a policy layer above the kernel guard: it narrows or answers an ask and can never turn a kernel `deny` into an allow. `accept-edits` answers only in-workspace `fs.write` asks (not `.git`/`.hz`, CI/hook directories, manifests, shell rc or env files, `.cargo`, `rust-toolchain*`, `.tool-versions`, `pyproject.toml`, `tox.ini`, `noxfile.py`, `Rakefile`, `Gemfile` (ruling 66), not shell, net, spawn, MCP or outside writes; the guardian, including `HORIZON_GUARDIAN=enforce`, runs first; in enforce mode a guardian that cannot judge refuses, advisory mode fails open). `read-only` also refuses `mcp.invoke`. There is NO bypass/yolo mode: it would also answer exfiltration and shell asks with only the fixed kernel deny list left, so `yolo`/`bypass` are refused. The mode is opt-in per run (`--permission-mode`, `/mode`), shown as a prompt badge, never persisted by the app, and only the USER config may set a default (no workspace file is read for it).
 
 > **Print mode approvals (`docs/28` ruling 57).** `hzcode -p` is non-interactive: the approval UI is built non-interactive, so any action that needs a human is denied (fail closed). `-p --permission-mode accept-edits` answers only in-workspace write asks (ruling 58); everything else stays denied.
 
@@ -978,6 +978,8 @@ The example list is validated at load time; the rule matches with severity `forb
 ---
 
 ## 7. Security & authority
+
+> **Shared-state locking (as shipped, ruling 63 in `docs/28`).** Writes to shared state (kernel event/receipt appends in the TS kernel, change journal, checkpoints, session migration) and the verify-then-write window of file mutations are guarded by advisory lockfiles with pid-liveness stale detection. The lock is not an authority boundary: a non-cooperating writer is still caught by the sha256 preimage check, and a lock that cannot be created fails open to the caller's own honest error. Lock files live in the owner-only state tree.
 
 ### 7.1 The authority model in one picture
 

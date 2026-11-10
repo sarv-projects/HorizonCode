@@ -28,6 +28,7 @@ import { chmodSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs"
 import * as path from "node:path";
 import type { ChatMsg, ToolCall } from "../contracts";
 import { newId, nowIso } from "../contracts";
+import { withFileLockSync } from "./file-lock";
 import { sessionDbPath } from "./paths";
 
 export interface SessionInfo {
@@ -366,15 +367,20 @@ export class SessionStore {
     } catch {
       /* pragma support is best-effort */
     }
-    this.db.exec(SCHEMA);
-    // Fork lineage columns: additive, nullable, migration-safe (an older
-    // database gains them in place; a session that is not a fork keeps NULLs).
-    const have = new Set(
-      (this.db.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((c) => c.name),
-    );
-    if (!have.has("forked_from")) this.db.exec("ALTER TABLE sessions ADD COLUMN forked_from TEXT");
-    if (!have.has("fork_index")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_index INTEGER");
-    if (!have.has("fork_seq")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_seq INTEGER");
+    // Cross-process: two hzcode processes opening one fresh/old database must not
+    // race the schema + ALTER TABLE migration (file-lock.ts). SQLite serializes
+    // individual statements; this serializes the check-then-ALTER sequence.
+    withFileLockSync(`${this.dbPath}.migrate.lock`, () => {
+      this.db.exec(SCHEMA);
+      // Fork lineage columns: additive, nullable, migration-safe (an older
+      // database gains them in place; a session that is not a fork keeps NULLs).
+      const have = new Set(
+        (this.db.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      if (!have.has("forked_from")) this.db.exec("ALTER TABLE sessions ADD COLUMN forked_from TEXT");
+      if (!have.has("fork_index")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_index INTEGER");
+      if (!have.has("fork_seq")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_seq INTEGER");
+    });
 
     // Owner-only state, applied after the schema and WAL pragmas so the file
     // and any sidecar they created are covered. Re-applied on every open, so a

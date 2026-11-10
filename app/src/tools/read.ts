@@ -3,6 +3,7 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { anchorAt } from "./hashline";
 import { noteRead } from "./read-ledger";
 
 const MAX_LINES = 2000;
@@ -41,6 +42,10 @@ export const readTool: Tool = {
       path: { type: "string", description: "File path to read." },
       offset: { type: "number", description: "1-based line number to start at (default 1)." },
       limit: { type: "number", description: `Maximum lines to return (default and cap ${MAX_LINES}).` },
+      anchors: {
+        type: "boolean",
+        description: "Prefix each line with a LINE:abc:def anchor usable by edit start_anchor/end_anchor (default false).",
+      },
     },
     required: ["path"],
   },
@@ -97,13 +102,19 @@ export const readTool: Tool = {
         return { ok: true, output: `(no lines at offset ${start + 1}; file has ${all.length} lines) ${rel}` };
       }
 
+      // Opt-in hashline anchors (ruling 64). Off by default: the default rendering
+      // below is byte-identical to before so the prompt cache is unchanged.
+      const withAnchors = args.anchors === true;
+      const anchorLines = withAnchors ? all.map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l)) : null;
       const out: string[] = [];
       let bytes = 0;
       let cutMid = false;
       let byteLimited = false;
       for (let i = start; i < all.length && out.length < limit; i++) {
         const line = all[i].endsWith("\r") ? all[i].slice(0, -1) : all[i];
-        const rendered = `${String(i + 1).padStart(6, " ")}| ${line}`;
+        const rendered = withAnchors
+          ? `${anchorAt(anchorLines as string[], i)}| ${line}`
+          : `${String(i + 1).padStart(6, " ")}| ${line}`;
         const size = Buffer.byteLength(rendered, "utf8") + 1;
         const remaining = MAX_BYTES - bytes;
         if (size > remaining) {
