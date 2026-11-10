@@ -295,3 +295,6 @@ Implemented (stage 3, ruling 56): the reduced form above shipped as `app/src/cor
 ---
 
 *End of state document. If you are starting the next phase: begin at docs/27 (V2+) and `docs/28` §4 (gaps 10–12 carry the live queue) — or the competitive audit §7 roadmap. If you are auditing: everything claimed VERIFIED above has a copy-pasteable command in section 4 or in `docs/28`, and the 2026-11-08 reaudits are the template for how to try to break it.*
+
+## TUI polish part 1 (feat/tui-polish)
+Status line printed once above the prompt, single in-place spinner line during a turn (erased before every transcript write), shaded user block, turn footer, rich banner with tip. Verified in a real PTY (replayed through an emulator: no duplicated status lines, input not glued). Part 2 (tool/subagent activity rendering, bordered input) not started.

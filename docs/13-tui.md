@@ -789,3 +789,12 @@ Known inherited limitation that this document MUST NOT paper over: the ancestor 
 > **Session fork (`docs/28` ruling 59).** `/fork` branches the chat into a new session and switches to it (the notice names both ids); `/fork n` cuts at checkpoint n from `/rewind`; `/sessions` lists recent sessions, marks the current one with `*` and shows `(fork of <id> at message <k>)`. Both need an idle chat.
 
 > **Guardian surfacing (`docs/28` ruling 60).** An approval prompt shows `· guardian: flag - <reason>` (or `deny`) on its own line when the guardian objects; allow shows nothing.
+
+## Part 1 polish: status line, spinner, shaded user block (v0.1)
+
+TTY-only (colour on, not `TERM=dumb`, no `NO_COLOR`); pipes, `-p`, headless and tests keep the exact old transcript. Design (`app/src/tui/live.ts`), consistent with R5 (readline owns the prompt line, nothing is drawn below it):
+
+- **Idle:** a dim status line `mode · model · provider · ◑ ctx% · path · ⑂ branch` is printed once, as a normal transcript line, above the prompt. It is skipped when nothing was written since the last copy and it is unchanged. Width-aware: path, provider, branch, ctx are dropped in that order.
+- **Turn running:** exactly one live line at the cursor, `⠋ Thinking… 4s · esc to cancel`, redrawn in place (`\r\x1b[2K`, one write per frame, one ~90ms timer stopped when idle and on exit). The verb follows the running tool (`Reading math.js`). It is erased before every transcript write (renderer `beforeWrite`) and steps aside while text streams, an approval is open or the human is typing. ASCII frames in non-UTF-8 locales.
+- The user's message becomes a shaded block with a right-aligned `HH:MM`; each turn ends with a dim footer `· 12.4s · 3 tools · ↑1.2k tok`. The banner is compact with a rotating tip. `/help` lists `/mode`, `/fork`, `/memory`, `/init`.
+- Esc cancels a running turn where raw keypress events exist (TTY stdin); Ctrl+C always does.
