@@ -302,6 +302,24 @@ describe("review fixes", () => {
     expect(modeAutoApproves("accept-edits", fsw(path.join(ws, "docs", "package.json.md")), ws, pathInsideWorkspace)).toBe(true);
   });
 
+  test("v3: an in-workspace symlink to a sensitive dir or file is judged by its real target", async () => {
+    const { symlinkSync } = await import("node:fs");
+    mkdirSync(path.join(workspace, ".git", "hooks"), { recursive: true });
+    writeFileSync(path.join(workspace, "package.json"), "{}");
+    symlinkSync(path.join(workspace, ".git"), path.join(workspace, "gitlink"));
+    symlinkSync(path.join(workspace, "package.json"), path.join(workspace, "notes.md"));
+    for (const rel of ["gitlink/hooks/pre-commit", "gitlink/config", "notes.md"]) {
+      expect(modeAutoApproves("accept-edits", fsw(path.join(workspace, rel)), workspace, pathInsideWorkspace)).toBe(false);
+    }
+  });
+
+  test("v3: sensitive directory names match case-insensitively (case-insensitive filesystems)", () => {
+    const ws = workspace;
+    for (const rel of [".GIT/hooks/pre-commit", ".Hz/x", ".GitHub/workflows/ci.yml", "sub/.HUSKY/pre-commit"]) {
+      expect(modeAutoApproves("accept-edits", fsw(path.join(ws, rel)), ws, pathInsideWorkspace)).toBe(false);
+    }
+  });
+
   test("a sensitive file under accept-edits reaches the human", async () => {
     const r = await run("accept-edits", oneCall("write", { path: "package.json", content: "{}" }), ASK_WORKSPACE_WRITES);
     expect(r.asked.length).toBe(1);
