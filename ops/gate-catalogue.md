@@ -31,14 +31,14 @@
 
 ## 2. What `ops/gates.sh` runs today
 
-Eight gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Measured 2026-11-09 on `integration/superset` (as root): `rust-kernel-suite`, `kernel-selftest` and `ts-typecheck` ok; `ts-suite` fails on the 11 known root/uid-0 permission tests (ruling 39), so the e2e steps were skipped by fail-fast. Run by hand they all pass: exit 0 with receipts, exit 5, exit 2.
+Eight gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Measured 2026-11-10 on branch `docs/handoff` (as root, `bash ops/gates.sh`): all eight gates passed, none skipped (`rust-kernel-suite` about 4 s, `kernel-selftest` 36 ms, `ts-typecheck` 0.3 s, `ts-suite` about 67 s, the three e2e steps about 0.1 to 0.2 s each, `startup-latency` 1.6 s). On 2026-11-09 the run stopped at `ts-suite` as root on 11 permission tests that cannot bind for uid 0; those tests now skip themselves by a behavioural probe (rulings 39 and 51), so the earlier fail-fast stop no longer occurs.
 
 | Step | What it proves | Existing evidence for it |
 |---|---|---|
-| `rust-kernel-suite` | `cargo test --locked` in `kernel/` (49 + 50 tests on 2026-11-09) | docs/28 §1, Rust trust kernel: `VERIFIED` |
-| `kernel-selftest` | `hz-kernel --selftest --state-dir <fresh tmpdir>` exits 0 with `SELFTEST OK` (release-built first when absent) | docs/28 §1: `SELFTEST OK (25 checks)` (2026-11-09) |
+| `rust-kernel-suite` | `cargo test --locked` in `kernel/` (49 unit + 50 integration tests, re-measured 2026-11-10) | docs/28 §1, Rust trust kernel: `VERIFIED` |
+| `kernel-selftest` | `hz-kernel --selftest --state-dir <fresh tmpdir>` exits 0 with `SELFTEST OK` (release-built first when absent) | docs/28 §1: `SELFTEST OK (25 checks)` (re-measured 2026-11-10) |
 | `ts-typecheck` | `bun run typecheck` (`tsc --noEmit`) in `app/` reports 0 errors; on a clean checkout the gate first runs `bun install` in `app/` (dev type definitions only, the app has no runtime dependencies) and fails with a clear message if that install fails | docs/28 ruling 39 |
-| `ts-suite` | `bun test` in `app/` (1267 tests across 107 files on 2026-11-09; 8 permission tests skip as root) | docs/28 §1, runtime/tools/TUI rows: `TESTED + VERIFIED` |
+| `ts-suite` | `bun test` in `app/` (1800 tests across 148 files on 2026-11-10: 1792 pass, 8 permission tests skip as root, 0 fail) | docs/28 §1, runtime/tools/TUI rows: `TESTED + VERIFIED` |
 | `e2e-headless-smoke` | fresh workspace, `printf 'list files' \| ./bin/hzcode --workspace <tmp>` exits 0, the mock's tool exchange appears in the output, and a non-empty `receipts.jsonl` is left behind | docs/28 §1 e2e rows |
 | `e2e-budget-rail` | the same with `HZ_MAX_STEPS=1` exits 5 with the budget notice | docs/28 §3 ruling 15 |
 | `e2e-usage-error` | `./bin/hzcode --max-steps nope` exits 2 with the diagnostic naming the flag | docs/28 §3 ruling 15; docs/14 §3.2 (exit table) |
