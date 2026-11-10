@@ -61,7 +61,15 @@ export const MAX_TASK_STATEMENT_CHARS = 2_000;
 export const MAX_CONSTRAINT_LINES = 24;
 export const MAX_CONSTRAINT_LINE_CHARS = 300;
 export const MAX_SUMMARY_ECHO_CHARS = 160;
-export const MAX_SUMMARY_PATHS = 8;
+/** Structured-summary caps (T-7): newest entries win, older ones are counted, not listed. */
+export const MAX_SUMMARY_FILES = 20;
+export const MAX_SUMMARY_COMMANDS = 8;
+export const MAX_SUMMARY_SEARCHES = 6;
+export const MAX_SUMMARY_TODO_ITEMS = 5;
+export const MAX_SUMMARY_COMMAND_CHARS = 120;
+export const MAX_SUMMARY_PATH_CHARS = 80;
+/** Hard ceiling on the whole summary block, so compaction cannot balloon the window. */
+export const MAX_SUMMARY_CHARS = 2_500;
 
 /**
  * Words that mark a line as a standing instruction rather than a passing
@@ -177,22 +185,174 @@ function echo(text: string): string {
   return flat.length > MAX_SUMMARY_ECHO_CHARS ? `${flat.slice(0, MAX_SUMMARY_ECHO_CHARS)}…` : flat;
 }
 
-/** Best-effort path extraction from one tool call's raw arguments. */
-function pathsInArguments(raw: unknown): string[] {
-  if (typeof raw !== "string" || raw.trim() === "") return [];
-  let parsed: unknown;
+/** One tool call's raw arguments as an object; malformed JSON yields {} (never throws). */
+function argsOf(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || raw.trim() === "") return {};
   try {
-    parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
   } catch {
-    return [];
+    return {};
   }
-  if (parsed === null || typeof parsed !== "object") return [];
+}
+
+function str(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Best-effort path extraction from one tool call's parsed arguments. */
+function pathsInArguments(args: Record<string, unknown>): string[] {
   const out: string[] = [];
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(args)) {
     if (!/^(?:path|file|file_path|filepath|target|dir|directory)$/i.test(key)) continue;
     if (typeof value === "string" && value.trim() !== "") out.push(value.trim());
   }
   return out;
+}
+
+/** What a builtin tool does, for the summary. Anything else is reported by its own name. */
+export type SummaryOp = "read" | "edit" | "write" | "delete" | "search" | "shell" | "todo" | "patch" | "undo" | "other";
+
+/** Pure tool-name classifier over the builtin tool names in app/src/tools/. */
+export function classifyTool(name: string): SummaryOp {
+  switch (name) {
+    case "read":
+      return "read";
+    case "edit":
+    case "ast_edit":
+      return "edit";
+    case "write":
+      return "write";
+    case "apply_patch":
+      return "patch";
+    case "undo":
+      return "undo";
+    case "grep":
+    case "glob":
+    case "ast_search":
+      return "search";
+    case "shell":
+    case "shell_session":
+      return "shell";
+    case "todo":
+      return "todo";
+    default:
+      return "other";
+  }
+}
+
+/** Per-file ops named by an apply_patch envelope's headers (no body parsing). */
+function patchOps(input: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  let current = "";
+  for (const line of input.split(/\r?\n/)) {
+    const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
+    if (header) {
+      current = (header[2] as string).trim();
+      const op = header[1] === "Add" ? "write" : header[1] === "Delete" ? "delete" : "edit";
+      if (current !== "") out.push([current, op]);
+      continue;
+    }
+    const move = /^\*\*\* Move to: (.+)$/.exec(line);
+    if (move && current !== "") {
+      const to = (move[1] as string).trim();
+      out.push([current, `moved to ${to}`]);
+      if (to !== "") out.push([to, "edit"]);
+    }
+  }
+  return out;
+}
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/** Long paths keep their tail (the file name is the useful end). */
+function clipPath(path: string): string {
+  return path.length > MAX_SUMMARY_PATH_CHARS ? `…${path.slice(path.length - MAX_SUMMARY_PATH_CHARS)}` : path;
+}
+
+/** The newest `max` entries, with a count of the older ones left out. */
+function newest<T>(items: readonly T[], max: number): { shown: T[]; omitted: number } {
+  return items.length > max ? { shown: items.slice(items.length - max), omitted: items.length - max } : { shown: [...items], omitted: 0 };
+}
+
+interface ElidedActivity {
+  tools: string[];
+  /** path -> last op, iteration order = order of last touch */
+  files: Map<string, string>;
+  commands: string[];
+  searches: string[];
+  todoAdded: string[];
+  todoDone: string[];
+}
+
+/** Walk the elided tool calls in order. Pure and total: odd rows are skipped. */
+function elidedActivity(elided: readonly ChatMsg[]): ElidedActivity {
+  const tools = new Set<string>();
+  const files = new Map<string, string>();
+  const touch = (path: string, op: string): void => {
+    files.delete(path);
+    files.set(path, op);
+  };
+  const commands: string[] = [];
+  const searches: string[] = [];
+  const todoAdded: string[] = [];
+  const todoDone: string[] = [];
+
+  for (const message of elided) {
+    if (typeof message?.toolName === "string" && message.toolName !== "") tools.add(message.toolName);
+    for (const call of message?.toolCalls ?? []) {
+      const name = typeof call?.name === "string" ? call.name : "";
+      if (name === "") continue;
+      tools.add(name);
+      const args = argsOf(call?.arguments);
+      const op = classifyTool(name);
+      switch (op) {
+        case "read":
+        case "edit":
+        case "write":
+        case "undo":
+          for (const path of pathsInArguments(args)) touch(path, op);
+          break;
+        case "patch":
+          for (const [path, patchOp] of patchOps(str(args.input))) touch(path, patchOp);
+          break;
+        case "search": {
+          const pattern = str(args.pattern) || str(args.pat);
+          if (pattern === "") break;
+          const where = str(args.path);
+          const glob = str(args.glob);
+          searches.push(
+            `${name} "${clip(pattern, MAX_SUMMARY_COMMAND_CHARS)}"${where !== "" ? ` in ${where}` : ""}${glob !== "" && name !== "glob" ? ` (${glob})` : ""}`,
+          );
+          break;
+        }
+        case "shell": {
+          // shell_session `write` feeds stdin; only a started command is a command run.
+          const command = name === "shell_session" && str(args.mode) !== "start" ? "" : str(args.command);
+          if (command !== "") commands.push(clip(command, MAX_SUMMARY_COMMAND_CHARS));
+          break;
+        }
+        case "todo": {
+          const action = str(args.action);
+          const text = str(args.text);
+          if (action === "add" && text !== "") todoAdded.push(clip(text, 60));
+          else if (action === "done" && text !== "") todoDone.push(clip(text, 60));
+          break;
+        }
+        default:
+          for (const path of pathsInArguments(args)) touch(path, name);
+      }
+    }
+  }
+  return { tools: [...tools], files, commands, searches, todoAdded, todoDone };
+}
+
+function quotedList(items: readonly string[], max: number): string {
+  const { shown, omitted } = newest(items, max);
+  return shown.map((item) => `"${item}"`).join(", ") + (omitted > 0 ? ` (+${omitted} earlier)` : "");
 }
 
 /**
@@ -281,7 +441,14 @@ function tokensIn(messages: readonly ChatMsg[]): number {
   return total;
 }
 
-/** The labelled summary of what left the window. */
+/**
+ * The labelled summary of what left the window: role counts, first and last
+ * request, and what the elided tool calls DID (each file's last op, commands
+ * run, searches, todo changes). Derived only from the elided rows' tool-call
+ * arguments, so it is a pure function of (elided, total, limit), and it never
+ * exceeds MAX_SUMMARY_CHARS. Tool results are not parsed: a failed call is
+ * reported as attempted, since result text carries no reliable error marker.
+ */
 export function summariseElided(elided: readonly ChatMsg[], total: number, limit: number): string {
   const byRole = countByRole(elided);
   const firstUser = elided.find((message) => message?.role === "user" && (message.content ?? "").trim() !== "");
@@ -294,30 +461,58 @@ export function summariseElided(elided: readonly ChatMsg[], total: number, limit
     }
   }
 
-  const tools = new Set<string>();
-  const paths = new Set<string>();
-  for (const message of elided) {
-    if (typeof message?.toolName === "string" && message.toolName !== "") tools.add(message.toolName);
-    for (const call of message?.toolCalls ?? []) {
-      if (typeof call?.name === "string" && call.name !== "") tools.add(call.name);
-      for (const candidate of pathsInArguments(call?.arguments)) {
-        if (paths.size >= MAX_SUMMARY_PATHS) break;
-        paths.add(candidate);
-      }
-    }
-  }
+  const activity = elidedActivity(elided);
 
-  const lines = [
+  const head = [
     SUMMARY_HEADING,
     "",
     `${elided.length} of ${total} messages left the ${limit}-message window (~${tokensIn(elided)} tokens).`,
     `- roles elided: ${formatByRole(byRole) || "none"}`,
   ];
-  if (firstUser) lines.push(`- first elided request: "${echo(firstUser.content)}"`);
-  if (lastUser && lastUser !== firstUser) lines.push(`- last elided request: "${echo(lastUser.content)}"`);
-  if (tools.size > 0) lines.push(`- tools called in the elided turns: ${[...tools].join(", ")}`);
-  if (paths.size > 0) lines.push(`- paths seen in the elided turns: ${[...paths].join(", ")}`);
-  lines.push("- the full transcript is unchanged in the session store; this block is a view, not a deletion.");
+  // Body lines are optional detail: each section is omitted when empty, and the
+  // whole block is cut at MAX_SUMMARY_CHARS line by line (never mid-line).
+  const body: string[] = [];
+  if (firstUser) body.push(`- first elided request: "${echo(firstUser.content)}"`);
+  if (lastUser && lastUser !== firstUser) body.push(`- last elided request: "${echo(lastUser.content)}"`);
+  if (activity.tools.length > 0) body.push(`- tools called in the elided turns: ${activity.tools.join(", ")}`);
+  if (activity.files.size > 0) {
+    const { shown, omitted } = newest([...activity.files], MAX_SUMMARY_FILES);
+    body.push(
+      `- files touched (last op, oldest first): ${shown.map(([path, op]) => `${clipPath(path)} (${op})`).join(", ")}` +
+        (omitted > 0 ? ` (+${omitted} earlier)` : ""),
+    );
+  }
+  if (activity.commands.length > 0) {
+    const { shown, omitted } = newest(activity.commands, MAX_SUMMARY_COMMANDS);
+    body.push(`- commands run (oldest first${omitted > 0 ? `, ${omitted} earlier omitted` : ""}):`);
+    for (const command of shown) body.push(`  - \`${command}\``);
+  }
+  if (activity.searches.length > 0) {
+    const { shown, omitted } = newest(activity.searches, MAX_SUMMARY_SEARCHES);
+    body.push(`- searches: ${shown.join("; ")}${omitted > 0 ? ` (+${omitted} earlier)` : ""}`);
+  }
+  if (activity.todoAdded.length > 0 || activity.todoDone.length > 0) {
+    const parts: string[] = [];
+    if (activity.todoAdded.length > 0) parts.push(`added ${activity.todoAdded.length}: ${quotedList(activity.todoAdded, MAX_SUMMARY_TODO_ITEMS)}`);
+    if (activity.todoDone.length > 0) parts.push(`done ${activity.todoDone.length}: ${quotedList(activity.todoDone, MAX_SUMMARY_TODO_ITEMS)}`);
+    body.push(`- todo changes: ${parts.join("; ")}`);
+  }
+  const footer = "- the full transcript is unchanged in the session store; this block is a view, not a deletion.";
+  const cutNote = `- (further summary lines omitted at the ${MAX_SUMMARY_CHARS}-char cap)`;
+
+  const lines = [...head];
+  let size = head.join("\n").length + 1 + footer.length;
+  for (let i = 0; i < body.length; i += 1) {
+    const line = body[i] as string;
+    const reserve = i < body.length - 1 ? 1 + cutNote.length : 0;
+    if (size + 1 + line.length + reserve > MAX_SUMMARY_CHARS) {
+      lines.push(cutNote);
+      break;
+    }
+    lines.push(line);
+    size += 1 + line.length;
+  }
+  lines.push(footer);
   return lines.join("\n");
 }
 

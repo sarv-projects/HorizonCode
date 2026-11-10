@@ -11,6 +11,11 @@
  *   ---
  *   Body: free-form instructions the model reads when the skill is active.
  *
+ * A folder skill is `skills/<name>/SKILL.md`; the other files in the folder are
+ * listed as resources when it is active. `~/.agents/skills`, `~/.claude/skills`
+ * and `<workspace>/.claude/skills` are read-only sources. Precedence: project >
+ * global (horizon dirs beat foreign ones at the same level).
+ *
  * The workspace copy shadows a home skill with the same name. The human
  * activates a skill by starting a message with `/<name>`; `resolveSkillForMessage`
  * splits that into the skill plus the stripped action, and the loop injects the
@@ -31,6 +36,10 @@ export interface Skill {
   body: string;
   /** The file the skill was read from. */
   source: string;
+  /** Folder skills only: the skill folder; other files in it are resources. */
+  dir?: string;
+  /** Folder skills only: resource files, relative to `dir` (capped). */
+  resources?: string[];
 }
 
 /** Skills listed in the system-prompt directory. */
@@ -73,11 +82,11 @@ function splitFrontmatter(raw: string): { meta: Frontmatter; body: string } {
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 
 /** One skill file, or undefined when it cannot be read or is malformed. */
-function readSkillFile(file: string): Skill | undefined {
+function readSkillFile(file: string, fallbackName?: string): Skill | undefined {
   try {
     const raw = readFileSync(file, "utf8");
     const { meta, body } = splitFrontmatter(raw);
-    const name = (meta.name ?? path.basename(file, path.extname(file))).trim();
+    const name = (meta.name ?? fallbackName ?? path.basename(file, path.extname(file))).trim();
     if (name === "" || name.startsWith(".") || !SAFE_NAME.test(name)) return undefined;
     return {
       name,
@@ -90,17 +99,54 @@ function readSkillFile(file: string): Skill | undefined {
   }
 }
 
-/** Home first, then the workspace, so a workspace skill shadows a global one. */
+/**
+ * Lowest precedence first, so a later directory shadows an earlier one:
+ * foreign global (~/.agents, ~/.claude, read-only), horizon global, foreign
+ * project (.claude/skills, read-only), horizon project.
+ */
 function skillDirs(workspace: string): string[] {
   const dirs: string[] = [];
   try {
     const home = os.homedir();
-    if (home !== "") dirs.push(userSkillsDir(home));
+    if (home !== "") {
+      dirs.push(path.join(home, ".agents", "skills"), path.join(home, ".claude", "skills"), userSkillsDir(home));
+    }
   } catch {
     /* no home directory: workspace skills only */
   }
-  dirs.push(resolveWorkspaceSkillsDir(workspace));
+  dirs.push(path.join(workspace, ".claude", "skills"), resolveWorkspaceSkillsDir(workspace));
   return dirs;
+}
+
+const RESOURCE_CAP = 40;
+
+/** Files under a skill folder other than SKILL.md, relative, bounded depth and count. */
+function folderResources(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (current: string, rel: string, depth: number): void => {
+    let names: string[];
+    try {
+      names = readdirSync(current).sort();
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      if (out.length >= RESOURCE_CAP) return;
+      if (n.startsWith(".")) continue;
+      const full = path.join(current, n);
+      const r = rel === "" ? n : rel + "/" + n;
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) {
+          if (depth < 3) walk(full, r, depth + 1);
+        } else if (st.isFile() && r !== "SKILL.md") out.push(r);
+      } catch {
+        /* unreadable entry */
+      }
+    }
+  };
+  walk(dir, "", 0);
+  return out;
 }
 
 /** Every skill visible from a workspace, workspace copy winning by name. */
@@ -114,10 +160,17 @@ export function listSkills(workspace: string): Skill[] {
       continue; // no skills directory here
     }
     for (const entry of entries) {
-      if (!entry.endsWith(".md") || entry.startsWith(".")) continue;
+      if (entry.startsWith(".")) continue;
       const file = path.join(dir, entry);
       try {
-        if (!statSync(file).isFile()) continue;
+        const st = statSync(file);
+        if (st.isDirectory()) {
+          // skills/<name>/SKILL.md, with the rest of the folder as resources
+          const skill = readSkillFile(path.join(file, "SKILL.md"), entry);
+          if (skill) byName.set(skill.name, { ...skill, dir: file, resources: folderResources(file) });
+          continue;
+        }
+        if (!entry.endsWith(".md") || !st.isFile()) continue;
       } catch {
         continue;
       }
@@ -173,5 +226,8 @@ export function activeSkillSection(skill: Skill): string {
   const body = typeof skill?.body === "string" ? skill.body : "";
   const capped =
     body.length > ACTIVE_SKILL_BODY_CAP ? body.slice(0, ACTIVE_SKILL_BODY_CAP) + "\n[skill truncated]" : body;
-  return `## Active skill: ${skill.name}\n\n${capped}`;
+  const res = skill.dir && skill.resources && skill.resources.length > 0
+    ? `\n\nSkill folder: ${skill.dir}\nResources (read on demand):\n${skill.resources.map((r) => "- " + r).join("\n")}`
+    : "";
+  return `## Active skill: ${skill.name}\n\n${capped}${res}`;
 }

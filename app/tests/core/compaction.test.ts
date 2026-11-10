@@ -21,9 +21,13 @@ import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, RuntimeEvent } 
 import {
   COMPACTION_EVENT,
   PINNED_HEADING,
+  MAX_SUMMARY_CHARS,
+  MAX_SUMMARY_COMMANDS,
   SUMMARY_HEADING,
+  classifyTool,
   compactHistory,
   looksLikeConstraint,
+  summariseElided,
 } from "../../src/core/compaction";
 import { KernelClient } from "../../src/core/kernel";
 import type { LoopDeps } from "../../src/core/loop";
@@ -189,6 +193,104 @@ describe("the constraint detector", () => {
     expect(looksLikeConstraint("Can you make the flag optional?")).toBe(false);
     expect(looksLikeConstraint("ok")).toBe(false);
     expect(looksLikeConstraint("the build took 4 seconds")).toBe(false);
+  });
+});
+
+/* ------------- structured summary of the elided tool calls (T-7) ------------- */
+
+let callSeq = 0;
+/** One assistant row carrying a tool call plus its tool result row. */
+function toolTurn(name: string, args: Record<string, unknown>, result = "ok"): ChatMsg[] {
+  callSeq += 1;
+  const id = `c${callSeq}`;
+  return [
+    chat("assistant", "", { toolCalls: [{ id, name, arguments: JSON.stringify(args) }] }),
+    chat("tool", result, { toolCallId: id, toolName: name }),
+  ];
+}
+
+describe("the structured compaction summary", () => {
+  const elided: ChatMsg[] = [
+    chat("user", TASK),
+    ...toolTurn("read", { path: "src/a.ts" }),
+    ...toolTurn("read", { path: "src/b.ts" }),
+    ...toolTurn("edit", { path: "src/a.ts", old: "x", new: "y" }),
+    ...toolTurn("grep", { pattern: "dryRun", path: "src", glob: "*.ts" }),
+    ...toolTurn("shell", { command: "bun test tests/a.test.ts" }),
+    ...toolTurn("apply_patch", { input: "*** Begin Patch\n*** Add File: src/c.ts\n+hi\n*** Delete File: src/old.ts\n*** End Patch" }),
+    ...toolTurn("todo", { action: "add", text: "wire the flag" }),
+    ...toolTurn("todo", { action: "add", text: "write tests" }),
+    ...toolTurn("todo", { action: "done", text: "t1" }),
+    ...toolTurn("shell_session", { mode: "write", input: "secret\n" }),
+    ...toolTurn("shell", { command: "bun run typecheck" }),
+  ];
+  const summary = summariseElided(elided, elided.length + 10, 10);
+
+  test("each file carries its LAST op, in order of last touch", () => {
+    expect(summary).toContain("- files touched (last op, oldest first): src/b.ts (read), src/a.ts (edit), src/c.ts (write), src/old.ts (delete)");
+  });
+
+  test("commands are listed oldest first; stdin writes to a shell session are not commands", () => {
+    const at = summary.indexOf("- commands run (oldest first):");
+    expect(at).toBeGreaterThan(-1);
+    expect(summary.slice(at)).toContain("  - `bun test tests/a.test.ts`\n  - `bun run typecheck`\n");
+    expect(summary).not.toContain("secret");
+  });
+
+  test("searches and todo changes are named", () => {
+    expect(summary).toContain('- searches: grep "dryRun" in src (*.ts)');
+    expect(summary).toContain('- todo changes: added 2: "wire the flag", "write tests"; done 1: "t1"');
+  });
+
+  test("the pinned contract lines survive: heading first, view-not-deletion last", () => {
+    expect(summary.startsWith(SUMMARY_HEADING)).toBe(true);
+    expect(summary.endsWith("this block is a view, not a deletion.")).toBe(true);
+  });
+
+  test("deterministic: the same input yields the identical string", () => {
+    expect(summariseElided(elided, elided.length + 10, 10)).toBe(summary);
+  });
+
+  test("empty sections are omitted", () => {
+    const plain = summariseElided([chat("user", "hello there"), chat("assistant", "hi")], 12, 10);
+    for (const section of ["files touched", "commands run", "searches:", "todo changes", "tools called"]) {
+      expect(plain).not.toContain(section);
+    }
+  });
+
+  test("commands keep the newest N and count the rest", () => {
+    const many: ChatMsg[] = [];
+    for (let i = 0; i < MAX_SUMMARY_COMMANDS + 3; i += 1) many.push(...toolTurn("shell", { command: `echo ${i}` }));
+    const text = summariseElided(many, many.length, 1);
+    expect(text).toContain("- commands run (oldest first, 3 earlier omitted):");
+    expect(text).not.toContain("`echo 2`");
+    expect(text).toContain("`echo 3`");
+    expect(text).toContain(`\`echo ${MAX_SUMMARY_COMMANDS + 2}\``);
+  });
+
+  test("the whole block is bounded by MAX_SUMMARY_CHARS and says when it was cut", () => {
+    const huge: ChatMsg[] = [];
+    for (let i = 0; i < 200; i += 1) {
+      const long = `${"segment".repeat(20)}/${i}`;
+      huge.push(...toolTurn("write", { path: `${long}/file-${i}.ts`, content: "x" }));
+      huge.push(...toolTurn("shell", { command: `${"x".repeat(300)} ${i}` }));
+      huge.push(...toolTurn("grep", { pattern: `${"p".repeat(300)}${i}`, path: long }));
+      huge.push(...toolTurn("todo", { action: "add", text: "t".repeat(200) }));
+    }
+    const text = summariseElided(huge, huge.length, 1);
+    expect(text.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS);
+    expect(text).toContain(`omitted at the ${MAX_SUMMARY_CHARS}-char cap`);
+    expect(text.endsWith("this block is a view, not a deletion.")).toBe(true);
+  });
+
+  test("classifyTool maps the builtin tool names", () => {
+    expect(classifyTool("read")).toBe("read");
+    expect(classifyTool("ast_edit")).toBe("edit");
+    expect(classifyTool("apply_patch")).toBe("patch");
+    expect(classifyTool("ast_search")).toBe("search");
+    expect(classifyTool("shell_session")).toBe("shell");
+    expect(classifyTool("todo")).toBe("todo");
+    expect(classifyTool("lsp")).toBe("other");
   });
 });
 
