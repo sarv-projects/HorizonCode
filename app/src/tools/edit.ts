@@ -15,6 +15,7 @@ import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
+import { resolveAnchor } from "./hashline";
 import { detectLineEnding } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
 
@@ -172,10 +173,12 @@ function fuzzyModel(source: string, view: string): FuzzyModel {
  * preserved on the replacement's last line (it may be "" at an unterminated
  * EOF), matching the old join-on-"\n" shape for a pure-LF file.
  */
-function spliceWithEndings(model: FuzzyModel, start: number, end: number, replacement: string[]): string {
+function spliceWithEndings(model: FuzzyModel, start: number, end: number, replacement: string[], includeLastBreak = false): string {
   // Detect over the matched region's break bytes (joined with a non-break filler
   // so detectLineEnding only sees the endings themselves).
-  const regionEnding = detectLineEnding(model.endings.slice(start, end).join("x"));
+  // Anchored edits replace whole lines, so a single-line region still has a native
+  // ending to inherit: includeLastBreak counts the break after the region's last line.
+  const regionEnding = detectLineEnding(model.endings.slice(start, includeLastBreak ? end + 1 : end).join("x"));
   const tailBoundaryEnding = model.endings[end] as string;
   let out = "";
   for (let k = 0; k < start; k += 1) out += (model.fileLines[k] as string) + (model.endings[k] as string);
@@ -553,19 +556,120 @@ function occurrenceLines(hay: string, needle: string): number[] {
   return out;
 }
 
+/**
+ * Anchored mode (docs/28 ruling 64): replace the line range start_anchor..end_anchor
+ * (end defaults to start) with `new`. Anchors come from `read` with anchors:true; each is
+ * validated Valid / Stale / OutOfRange against the current file, a small shift within
+ * +-15 lines is recovered when unique, and a truncated, malformed, ambiguous or
+ * unrecoverable anchor refuses with nothing written. `new` replaces whole lines; an empty
+ * `new` deletes them. Same guard -> approve -> lock -> preimage sha256 -> atomic write ->
+ * journal discipline as the string mode, and the anchors are resolved against the exact
+ * bytes whose sha256 is later re-checked, so a concurrent change is a Conflict, not a guess.
+ */
+async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  if (typeof args.path !== "string" || args.path === "") return fail("path is required");
+  if (typeof args.start_anchor !== "string") return fail("start_anchor must be a string");
+  if (args.end_anchor !== undefined && typeof args.end_anchor !== "string") return fail("end_anchor must be a string");
+  if (args.old !== undefined) return fail("start_anchor and old are mutually exclusive: use one addressing mode");
+  if (args.all !== undefined) return fail("all does not apply to an anchored edit");
+  if (typeof args.new !== "string") return fail("new is required");
+
+  const resolved = resolvePath(ctx.cwd, args.path);
+  const rel = relPath(ctx.cwd, resolved);
+  const action: GuardAction = { kind: "fs.write", target: resolved };
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
+  }
+
+  let before: string;
+  let preimageSha256: string;
+  try {
+    const buf = await readFile(resolved);
+    if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
+    before = buf.toString("utf8");
+    preimageSha256 = sha256Hex(before);
+  } catch {
+    return fail(`file not found: ${rel}`);
+  }
+
+  const lf = toLfView(before);
+  const model = fuzzyModel(before, lf.view);
+  // The same line list `read` numbers: no phantom last line from a trailing newline.
+  const lines = before === "" ? [] : model.fileLines.slice();
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+
+  const first = resolveAnchor(args.start_anchor, lines);
+  if (first.ok === false) return fail(`${first.error} (${rel}; no edit applied)`);
+  const endText = args.end_anchor;
+  const last = typeof endText === "string" ? resolveAnchor(endText, lines) : first;
+  if (last.ok === false) return fail(`${last.error} (${rel}; no edit applied)`);
+  if (last.line < first.line) {
+    return fail(`end_anchor (line ${last.line}) is before start_anchor (line ${first.line}) in ${rel}; no edit applied`);
+  }
+
+  const newLf = args.new.replaceAll(CRLF, "\n");
+  const replacement = newLf === "" ? [] : newLf.endsWith("\n") ? newLf.slice(0, -1).split("\n") : newLf.split("\n");
+  const after = spliceWithEndings(model, first.line - 1, last.line - 1, replacement, true);
+  const span = last.line - first.line + 1;
+  const shifts = [first, last]
+    .filter((r, i, a) => r.shiftedFrom !== undefined && (i === 0 || r !== a[0]))
+    .map((r) => `${r.shiftedFrom} -> ${r.line}`);
+
+  if (decision.decision === "ask") {
+    const approved = await ctx.approve(
+      { title: `Edit ${rel}`, detail: `lines ${first.line}-${last.line} (anchored)`, kind: "fs.write" },
+      action,
+    );
+    if (!approved) return fail("declined by user");
+  }
+
+  const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+    let actualSha256: string;
+    try {
+      actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+    } catch {
+      actualSha256 = "unreadable";
+    }
+    if (actualSha256 !== preimageSha256) {
+      return fail(
+        `HZ_PRECONDITION_FAILED: edit refused: preimage changed: ${rel} ` +
+          `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
+      );
+    }
+    const outcome = await writeAtomic(resolved, after, ctx);
+    if (isRefused(outcome)) return fail(outcome.refusal);
+    if ((await readFile(resolved)).toString("utf8") !== after) {
+      return fail(`verification failed: ${rel} does not match the intended content`);
+    }
+    recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
+    return undefined;
+  }).catch((e: unknown) => fail(msg(e)));
+  if (locked !== undefined) return locked;
+
+  noteRead(ctx, resolved);
+  const suffix = shifts.length > 0 ? ` (anchors shifted: ${shifts.join(", ")})` : "";
+  return { ok: true, output: `Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}` };
+}
+
 export const editTool: Tool = {
   name: "edit",
   description:
-    "Replace a string in a file: exact match, then relative-indent, three-way-merge and line-patch repair rungs (each only when unambiguous). All occurrences or the first only.",
+    "Replace a string in a file: exact match, then relative-indent, three-way-merge and line-patch repair rungs (each only when unambiguous). All occurrences or the first only. Alternatively, address whole lines by the anchors read returns with anchors:true (start_anchor, optional end_anchor) instead of old.",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path to edit." },
-      old: { type: "string", description: "String to replace (must not be empty)." },
+      old: { type: "string", description: "String to replace (must not be empty). Omit when using start_anchor." },
       new: { type: "string", description: "Replacement string." },
       all: { type: "boolean", description: "Replace every occurrence (default false)." },
+      start_anchor: {
+        type: "string",
+        description: "Anchored mode: first line to replace, LINE:abc:def from read anchors:true. Replaces old; the whole line range becomes new (empty new deletes).",
+      },
+      end_anchor: { type: "string", description: "Anchored mode: last line to replace (default start_anchor)." },
     },
-    required: ["path", "old", "new"],
+    required: ["path", "new"],
   },
 
   // NF-072: a mutating tool — an exclusive call is its own barrier in a batch.
@@ -573,6 +677,7 @@ export const editTool: Tool = {
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
+      if (args.start_anchor !== undefined) return await executeAnchored(args, ctx);
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
       if (typeof args.old !== "string") return fail("old is required");
       if (args.old === "") return fail("old must not be empty");
