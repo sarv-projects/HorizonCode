@@ -182,11 +182,34 @@ export function listSkills(workspace: string): Skill[] {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Skills shipped with the binary (T-19). They are not listed in the system
+ * prompt (the prompt budget is fixed); they answer to `/<name>` and `getSkill`,
+ * and a user or workspace skill of the same name shadows them.
+ */
+export const BUILTIN_SKILLS: readonly Skill[] = [
+  {
+    name: "execute-plan",
+    description: "Carry out a plan file from .hz/plans/ task by task, checking each one off",
+    source: "builtin:execute-plan",
+    body: [
+      "Execute a plan file. The argument is a path, a name under .hz/plans/, or empty (use the newest file in .hz/plans/).",
+      "",
+      "1. Read the plan. Tasks are `- [ ]` lines; verification criteria sit under a `## Verification` heading.",
+      "2. Take the first unchecked task. Do only that task, with the normal tools (every write and command still goes through the guard).",
+      "3. When the task is done, edit the plan file and change that line to `- [x]`.",
+      "4. Repeat until no `- [ ]` is left, or stop and say why if a task is blocked or the plan is wrong.",
+      "5. Run each verification criterion and report which passed. Never tick a task you did not do or a criterion you did not run.",
+      "6. Finish with a short summary: tasks done, tasks left, verification results.",
+    ].join("\n"),
+  },
+];
+
 /** The skill with this exact name, if any. */
 export function getSkill(workspace: string, name: string): Skill | undefined {
   const wanted = typeof name === "string" ? name.trim() : "";
   if (wanted === "") return undefined;
-  return listSkills(workspace).find((skill) => skill.name === wanted);
+  return listSkills(workspace).find((skill) => skill.name === wanted) ?? BUILTIN_SKILLS.find((skill) => skill.name === wanted);
 }
 
 /**

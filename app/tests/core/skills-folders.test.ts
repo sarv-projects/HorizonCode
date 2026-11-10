@@ -55,3 +55,10 @@ test("symlinked skill files and folders are refused", () => {
   symlinkSync(outside, path.join(dir, "linked"));
   expect(listSkills(ws).map((s) => s.name)).toEqual([]);
 });
+
+test("the built-in execute-plan skill resolves but is not listed, and a workspace skill shadows it", () => {
+  expect(getSkill(ws, "execute-plan")?.source).toBe("builtin:execute-plan");
+  expect(listSkills(ws).map((s) => s.name)).not.toContain("execute-plan");
+  put(path.join(ws, ".hz", "state", "skills", "execute-plan.md"), "---\ndescription: mine\n---\nmine");
+  expect(getSkill(ws, "execute-plan")?.body).toBe("mine");
+});
