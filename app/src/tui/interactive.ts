@@ -13,6 +13,7 @@ import * as path from "node:path";
 import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
 import { loadCommands, resolveCommandForMessage } from "../core/commands";
 import { getSkill } from "../core/skills";
+import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, osc52, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
@@ -664,7 +665,8 @@ export async function runConvoCommand(
         const dir = path.join(stateRoot(workspace), "exports");
         mkdirSync(dir, { recursive: true });
         const file = path.join(dir, `${runtime.sessionId.replace(/[^A-Za-z0-9._-]/g, "_")}.${format}`);
-        writeFileSync(file, format === "json" ? renderExportJson(h, meta) : renderExportHtml(h, meta), { mode: 0o600 });
+        // The export leaves the guarded state tree as a shareable file: mask secret-like values.
+        writeFileSync(file, maskSecrets(format === "json" ? renderExportJson(h, meta) : renderExportHtml(h, meta)), { mode: 0o600 });
         renderer.notice(`exported ${h.length} message(s) to ${shortenPath(file)} (${chainLine(chain)})`);
         return true;
       }
