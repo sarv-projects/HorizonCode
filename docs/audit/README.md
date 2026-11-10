@@ -4,7 +4,7 @@
 
 ## What is here
 
-Six delta audits over all twelve reference clones under `/data/home/forge/repo-tour/`, dispatched and delivered during the final audit. Each report states its own coverage stats (directories walked, files opened, explicit NOT-READ list) and every claim is tied to a file path in the clone.
+Six delta audits over all twelve reference clones in the original author's `repo-tour/` directory (pins and clone status: `../research/upstream-pins.md`), dispatched and delivered during the final audit. Each report states its own coverage stats (directories walked, files opened, explicit NOT-READ list) and every claim is tied to a file path in the clone.
 
 | Report | Repos | Finding count | Highlights |
 |---|---|---|---|

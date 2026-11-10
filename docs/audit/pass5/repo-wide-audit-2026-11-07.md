@@ -14,7 +14,7 @@
 
 1. **`7c528db` — trust hardening** (code + tests + `docs/28` in the same commit; all findings reproduced live before the fix and re-run after): chain anchors `<file>.head` (truncation and rewritten/corrupt anchors detected; appends refuse a mismatched tail; residual recorded as docs/28 §4 gap 7); kernel refusals are final (`KernelRefusal` — no fallback on application-level errors, mode stays `trusted`); symlink-resolved workspace scopes (`realpathish`); lease-pattern parity with `guard.rs` (exact or trailing `*`, empty pattern refused, deny > lease > allow > ask); canonical-JSON UTF-8 byte key order in TypeScript (astral/PUA keys now hash identically to Rust); `code_mode` child env scrubbed, console output on a tagged channel (log forgery regression), inner tool calls aborted with the runner, `leaseId` on inner receipts; state dirs 0700 / files 0600 on unix. Suites after: **297 TS pass / 0 fail / 28 files; 20 Rust green**; the five original bug demos all behave correctly.
 2. **`91192f3` — six live docs defects**: doc 14 §3.5 registration claim made true; `AgentProfileV1`'s five contract fields registered in schema-owner doc 05 §4.9; RC-5 pointer → §3.2 (plus the two consumers that repeated the stale pointer); NF-074 and docs/30 item 4 aligned to R-tools-42's caps; `CURRENT_RUN.md` wave list and pointer corrected; doc 27 `relay` roster row uses `kind=act`; doc 24 §11 `PB-n` renamed `FB-n` (collision with doc 03's declared ID space); README's `hzcode session verify` claim marked designed.
-3. **Path sweep** — every `/data/home/forge/hzcode` reference in the corpus now reads `/data/home/forge/HorizonCode` (30 files, 403 lines; the repo relocation had been reflected only in the status docs).
+3. **Path sweep** — every reference to the old `hzcode` checkout location in the corpus now reads `HorizonCode` (30 files, 403 lines; the repo relocation had been reflected only in the status docs).
 
 ## 3. Findings recorded, not fixed (each names the ruling it needs)
 
@@ -28,6 +28,6 @@
 ## 4. Honesty notes
 
 - Agent reports were evidence candidates only; every claim promoted into a commit was re-run first-hand (the five original falsification demos were re-run after the fixes and all now behave correctly). One agent died with an empty response and was resumed; one asked a process question and was answered "report only".
-- The reference clones under `/data/home/forge/repo-tour/` are not present in this container, so every upstream `source:` citation remains unverified here.
+- The reference clones in the original author's `repo-tour/` directory are not present in this container, so every upstream `source:` citation remains unverified here.
 - Performance numbers in the corpus are targets, not measurements; no budget row was measured in this pass.
 - `pass2/opencode-report.part4.md` remains the historical empty file and the two truncated originals remain truncated; this pass did not reconstruct them.

@@ -1,6 +1,6 @@
 # 29 — Final Audit: twelve-repo completeness, optimization analysis, and the docs-staleness reconciliation
 
-> **What this document is.** The audit of record (RC-13) for the twelve reference clones under `/data/home/forge/repo-tour/`, plus the final pass over the spec set itself: every doc checked for stale claims, the sixteen insertions queued by `26-learning-synthesis-2.md` §5 carried **in full** in Part D, and a cross-analysis of where to optimise further (speed, capabilities, accuracy).
+> **What this document is.** The audit of record (RC-13) for the twelve reference clones in the original author's `repo-tour/` directory (pins and clone status: `research/upstream-pins.md`), plus the final pass over the spec set itself: every doc checked for stale claims, the sixteen insertions queued by `26-learning-synthesis-2.md` §5 carried **in full** in Part D, and a cross-analysis of where to optimise further (speed, capabilities, accuracy).
 >
 > **Status rules.** Parts A–C record facts read from the clones and analysis derived from them — no implementation claim is made here; implementation levels live in `28-implementation-status.md` (RC-13). Part D records the queued insertions in full; they were folded into their owner documents by the 2026-11-07 adoption revision (RC-15). Part E lists the staleness fixes applied in this audit. Nothing in this audit touched implementation code.
 

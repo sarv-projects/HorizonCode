@@ -2,18 +2,18 @@
 
 > **Scope.** This document decides the *shape* of HorizonCode: which planes exist, which processes run, which components own which behaviour, what the interfaces between them are, how the whole thing is deployed, and what happens when each piece dies. It does not decide schemas, function bodies or tool semantics — those live in [`04-lld.md`](./04-lld.md) and the topical documents.
 >
-> Nothing in this document is a claim of working code for the capabilities it designs. `/data/home/forge/HorizonCode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` — the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
+> Nothing in this document is a claim of working code for the capabilities it designs. `HorizonCode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` — the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
 
-**Derived from** (all paths absolute; repos live under `/data/home/forge/repo-tour/`):
+**Derived from** (cloned repositories link to GitHub at the pinned SHA, see [`research/upstream-pins.md`](research/upstream-pins.md); repositories that were not cloned in the current sandbox are marked `not cloned, path not verified`):
 
-- `source: /data/home/forge/repo-tour/horizoncode` — the execution constitution this design inherits: kernel process, Guard, origin-typed effects, one-use leases, receipts, OwnerLog, managed domain, sandbox with typed residuals.
-- `source: /data/home/forge/repo-tour/opencode` — event-sourced core, admission inbox, write-ahead claim, one `llm.stream` per step, contract-separated monorepo.
-- `source: /data/home/forge/repo-tour/codex` — per-OS sandbox depth, Starlark `execpolicy`, generated JSON-RPC across CLI/app-server/SDK, rollout replay.
-- `source: /data/home/forge/repo-tour/grok-build` — fullscreen mouse TUI, leader process with client-side replay, in-process startup sandbox, workspace daemon, occurrence-journaled scheduler.
-- `source: /data/home/forge/repo-tour/DeepSeek-Reasonix` — one transport-agnostic Controller behind every front-end, layering law enforced by `repolint`, cache-guard in CI, content-addressed Trusted Host State, evidence adjudication that can only lower a claim.
-- `source: /data/home/forge/repo-tour/oh-my-pi` — one compiled native addon exposing the whole native capability stack, bidirectional ACP, deep LSP/DAP.
-- `source: /data/home/forge/repo-tour/forgecode` — clean-architecture crate stack, compile-time tool descriptions, tolerant decoding and JSON repair for truncated tool arguments.
-- `source: /data/home/forge/repo-tour/claude-code` — the declarative tool contract, wildcard rule ergonomics, skills, task system, coordinator.
+- source: the ancestor project (not cloned, path not verified) — the execution constitution this design inherits: kernel process, Guard, origin-typed effects, one-use leases, receipts, OwnerLog, managed domain, sandbox with typed residuals.
+- source: [`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0) — event-sourced core, admission inbox, write-ahead claim, one `llm.stream` per step, contract-separated monorepo.
+- source: [`openai/codex`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053) — per-OS sandbox depth, Starlark `execpolicy`, generated JSON-RPC across CLI/app-server/SDK, rollout replay.
+- source: [`xai-org/grok-build`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8) — fullscreen mouse TUI, leader process with client-side replay, in-process startup sandbox, workspace daemon, occurrence-journaled scheduler.
+- source: `DeepSeek-Reasonix` (repo not cloned, path not verified) — one transport-agnostic Controller behind every front-end, layering law enforced by `repolint`, cache-guard in CI, content-addressed Trusted Host State, evidence adjudication that can only lower a claim.
+- source: [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296) — one compiled native addon exposing the whole native capability stack, bidirectional ACP, deep LSP/DAP.
+- source: [`tailcallhq/forgecode`](https://github.com/tailcallhq/forgecode/tree/a22b49288856d5b3f3ca57e8532683d54a662c8c) — clean-architecture crate stack, compile-time tool descriptions, tolerant decoding and JSON repair for truncated tool arguments.
+- source: [`anthropics/claude-code`](https://github.com/anthropics/claude-code/tree/0ed94698aa0aeee471465fc9c867c2e8434c4d68) — the declarative tool contract, wildcard rule ergonomics, skills, task system, coordinator.
 
 ---
 
@@ -182,7 +182,7 @@ Seven process *roles*. One OS image may host several of them; the roles are what
 | P6 | **Plugin sandbox host** | P2 (one per plugin generation) | one plugin generation | plugin code, its declared tools/commands | P2, plugin fault, capability revocation |
 | P7 | **Remote sandbox / workspace daemon** | operator or `remote.exec` | as configured | a kernel + supervisor pair on another machine | network, operator |
 
-**Supervision tree.** P1 supervises P2. P2 supervises P6 and *connects to* P3 but does not supervise it — the kernel is deliberately outside the agent's control (ADR-003): killing the agent MUST NOT kill the receipt chain, and restarting the agent MUST re-attach to the same kernel instance and the same OwnerLog head. A single-supervisor lease with a monotonically increasing owner epoch prevents two supervisors from claiming one workspace (the ancestor's `supervisor_lease` discipline — `source: /data/home/forge/repo-tour/horizoncode/kernel/src/supervisor_lease.rs`).
+**Supervision tree.** P1 supervises P2. P2 supervises P6 and *connects to* P3 but does not supervise it — the kernel is deliberately outside the agent's control (ADR-003): killing the agent MUST NOT kill the receipt chain, and restarting the agent MUST re-attach to the same kernel instance and the same OwnerLog head. A single-supervisor lease with a monotonically increasing owner epoch prevents two supervisors from claiming one workspace (the ancestor's `supervisor_lease` discipline — source: `kernel/src/supervisor_lease.rs` of the ancestor project (not cloned, path not verified)).
 
 **Why the plugin host is a role and not a library.** A plugin that runs inside P2 can patch `@horizoncode/core`, replace a tool implementation, or read the session's credentials. Running it in P6 with a capability grant and no kernel file descriptor makes the plugin's authority a *fact about the system* rather than a promise in a manifest (H-18).
 
@@ -208,7 +208,7 @@ Components are code units with one responsibility and one owner. "May depend on"
 
 ### 3.5 Dependency direction
 
-One law (adapted from the Reasonix layering rule, `source: /data/home/forge/repo-tour/DeepSeek-Reasonix/tools/repolint/layers.go`): **a component's directory is its rank, and a component may only import components of strictly lower rank.**
+One law (adapted from the Reasonix layering rule, source: `DeepSeek-Reasonix/tools/repolint/layers.go` (repo not cloned, path not verified)): **a component's directory is its rank, and a component may only import components of strictly lower rank.**
 
 | Rank | Components / packages | Rationale |
 |---|---|---|
@@ -303,7 +303,7 @@ The system is carried by ~30 interfaces. Each has one owner, one direction of au
 | Truth | Owner | Medium | Recovery |
 |---|---|---|---|
 | **Session truth** — what was asked, reasoned, attempted and observed | C5 (`SessionEngine`) | append-only `DurableEventV1` rows in SQLite WAL, one transaction per fact (ADR-004) | replay the log; projections are disposable (`hzcode session reindex`) |
-| **Authority truth** — what was permitted, executed, observed and settled | C9 (`hzk`) | OwnerLog: committed-head, segment-sealed, hash-chained records + the receipt ledger (see `source: /data/home/forge/repo-tour/horizoncode/kernel/src/owner_log.rs`) | replay the OwnerLog; the committed head is the sole commit authority |
+| **Authority truth** — what was permitted, executed, observed and settled | C9 (`hzk`) | OwnerLog: committed-head, segment-sealed, hash-chained records + the receipt ledger (see source: `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified)) | replay the OwnerLog; the committed head is the sole commit authority |
 
 The two truths join on three ids carried by both: `sessionId`, `effectId`, `receiptId`. `hzcode session verify <id>` joins them and reports whether the work is *proven* or merely *claimed*.
 
@@ -345,7 +345,7 @@ For each domain: what is lost, what survives, what the user sees, and what is re
 | **Plugin sandbox host (P6)** | That plugin generation's tools and commands fail; its grants are revoked | Everything else; other generations are unaffected | The specific tool reports `plugin_unavailable`; the session continues | Plugin-served capability until the host restarts. |
 | **Server process (P5)** | Client connections drop | Session log, kernel, receipts; a restarted server re-attaches to the same kernel | Clients reconnect and replay from their cursor (I-02) | Nothing durable: a dropped connection is never a dropped turn. |
 | **Confinement backend dimension** | The effect class that dimension protects is refused with a typed residual | Every other dimension still holds | An explicit refusal naming the missing dimension and the protected effect class | Only that effect class (H-20): e.g. no Landlock ⇒ no unconfined `terminal.run`, even in full-access posture. |
-| **cgroup v2 delegation absent** | Resource accounting and hard ceilings unavailable | Effects still run, but unaccounted and unnumbered | Startup warning; budgets reported as *unknown*, never as zero | Hard resource-ceiling guarantees; profiles that REQUIRE verified limits (e.g. `codemode.execute`) hard-fail (mirrors `source: /data/home/forge/repo-tour/horizoncode/kernel/src/cgroup_v2.rs`). |
+| **cgroup v2 delegation absent** | Resource accounting and hard ceilings unavailable | Effects still run, but unaccounted and unnumbered | Startup warning; budgets reported as *unknown*, never as zero | Hard resource-ceiling guarantees; profiles that REQUIRE verified limits (e.g. `codemode.execute`) hard-fail (mirrors source: `kernel/src/cgroup_v2.rs` of the ancestor project (not cloned, path not verified)). |
 | **Native addon (`hz_native`)** | Native capability returns `native_unavailable`; the runtime MUST NOT emulate it by shelling out | Session, kernel, receipts; the CLI keeps running | Tools report the ABI mismatch by name | Anything that would need an unguarded shell to emulate the native path (H-1). |
 | **Storage (volume full / log corrupt)** | Appends fail with a typed storage error; the turn stops at the last durable event | Everything already appended; the kernel still holds its own truth | `storage_full` / `log_corrupt` with recovery steps in `hzcode doctor` | New turns. An intent that cannot be recorded MUST NOT be executed (H-3, H-11). |
 | **Event-log / OwnerLog divergence** | `hzcode session verify` reports a gap | Both truths are intact; only the *join* is missing | Verification reports `incomplete` with the missing ids | Claiming completion — the verdict can only be lowered (H-37, P2). |
@@ -520,7 +520,7 @@ Budgets exist because four of our differentiators are *latency-sensitive*: cache
 
 **How these are kept honest.**
 
-- Every number has a *measurement point* and a harness in `@horizoncode/testing`; a number without one is marketing (mirrors the "a metric is its definition" discipline, `source: /data/home/forge/repo-tour/DeepSeek-Reasonix/docs/DOCS_STANDARD.md`).
+- Every number has a *measurement point* and a harness in `@horizoncode/testing`; a number without one is marketing (mirrors the "a metric is its definition" discipline, source: `DeepSeek-Reasonix/docs/DOCS_STANDARD.md` (repo not cloned, path not verified)).
 - PB-3 and PB-4 are the two budgets that a naive implementation destroys first, because both live inside the user-visible loop.
 - **Anti-goal:** we do not budget provider latency, model throughput, or build times. Those belong to the model and the user's machine.
 - A perf regression on PB-1…PB-5, PB-9 or PB-15 fails CI; the rest are nightly with alerting.
@@ -589,11 +589,11 @@ A harness in `@horizoncode/testing` measures PB-1…PB-15 on pinned hardware pro
 
 > **Implementation status (final audit, 2026-11-06).** The paragraph below was written when this set was design-only. It is superseded where the implementation exists: the built subset (trust kernel, runtime core, base tools, chat TUI, skills, subagents, code mode, preview) carries evidence-backed levels in `docs/28-implementation-status.md`, which is the single source of truth for implementation status. Read the sentence "Nothing in this repository is built" as historical.
 
-Nothing in this repository is built. `/data/home/forge/HorizonCode` contains `README.md` and `docs/` only; therefore every capability below is **`DESIGNED`**, and the *Evidence* column says so. The *Ancestor* column records what the ancestor repository (`sarv-projects/horizoncode`, `source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) measured for the corresponding capability, so the reader can see which parts are inherited work in progress and which are new and unproven. Those ancestor statuses are **not** this project's status.
+Nothing in this repository is built. `HorizonCode` contains `README.md` and `docs/` only; therefore every capability below is **`DESIGNED`**, and the *Evidence* column says so. The *Ancestor* column records what the ancestor repository (`sarv-projects/horizoncode`, source: `HANDOFF.md` of the ancestor project (not cloned, path not verified)) measured for the corresponding capability, so the reader can see which parts are inherited work in progress and which are new and unproven. Those ancestor statuses are **not** this project's status.
 
 | Capability | Level here | Evidence | Ancestor (measured) |
 |---|---|---|---|
-| Six-plane split, process topology, component boundaries | `DESIGNED` | §3 of this document | `hzk` exists as a supervised process (`source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs`), status `code_present` |
+| Six-plane split, process topology, component boundaries | `DESIGNED` | §3 of this document | `hzk` exists as a supervised process (source: `kernel/src/host_kernel.rs` of the ancestor project (not cloned, path not verified)), status `code_present` |
 | Kernel ABI envelope + `KernelClient` | `DESIGNED` | §4 I-03/I-04/I-05 | protocol + framing exist (`kernel/src/protocol_framing.rs`, `kernel/src/rpc_handshake.rs`), status `code_present` |
 | Guard, policy, leases, EffectHost, receipts | `DESIGNED` | §7.1 steps 15–24 | `guard.rs`, `effect_host.rs` present; `files.write` parent-chain fix proven 5/5 (`kernel/tests/effect_direct_write.rs`) |
 | `UNKNOWN` + reconciliation | `DESIGNED` | §7.2 | modelled kernel-side (`mark_*_unknown`, `reconcile_*`) |

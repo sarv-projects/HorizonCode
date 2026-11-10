@@ -1,10 +1,10 @@
-# OpenCode Repository Tour — `dev` branch (`/data/home/forge/repo-tour/opencode`)
+# OpenCode Repository Tour — `dev` branch ([`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0))
 
 A deep, exhaustive code-organization tour. Read-only research: nothing in the repo was modified.
 
 Worktrees:
-- `dev` branch: `/data/home/forge/repo-tour/opencode`
-- `2.0` branch ("2.0 exploration", single commit `7a6ce05`, worktree branch `v2branch`): `/data/home/forge/repo-tour/opencode-v2`
+- `dev` branch: [`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0)
+- `2.0` branch ("2.0 exploration", single commit `7a6ce05`, worktree branch `v2branch`): `opencode-v2` (repo not cloned, path not verified)
 
 ---
 
@@ -20,7 +20,7 @@ Worktrees:
 | License | MIT |
 | Default branch | `dev` |
 
-`README.md` markets the CLI (`@opencode/cli`, installed to `$HOME/.opencode/bin`), a **Desktop App (BETA)** (Electron: `.dmg` / `.exe` / `.deb`), two built-in agents — `build` (default) and `plan` (read-only) — and a `general` subagent. The repo is not the classic single-package layout: it is a **~40-package Bun workspace** organized around an **Effect-based, event-sourced core**, split so contracts flow one direction. `AGENTS.md` states the rule (`file:///data/home/forge/repo-tour/opencode/AGENTS.md#L1-L4`):
+`README.md` markets the CLI (`@opencode/cli`, installed to `$HOME/.opencode/bin`), a **Desktop App (BETA)** (Electron: `.dmg` / `.exe` / `.deb`), two built-in agents — `build` (default) and `plan` (read-only) — and a `general` subagent. The repo is not the classic single-package layout: it is a **~40-package Bun workspace** organized around an **Effect-based, event-sourced core**, split so contracts flow one direction. `AGENTS.md` states the rule ([`opencode/AGENTS.md`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/AGENTS.md#L1-L4)):
 
 ```md
 - After changing the public Protocol or Server `HttpApi`, run `bun run generate` from `packages/client`. Do not edit generated client files directly.
@@ -29,7 +29,7 @@ Worktrees:
 - The default branch is `dev`.
 ```
 
-The repo enforces a strong engineering doctrine (`AGENTS.md`, 216 lines): a **"Session Core"** section that reads like a spec, an **experimental-API** convention, **feature flags** in `packages/schema/src/config/flag.ts`, and a style guide (no `else`, no aliased/star imports, `const` over `let`, snake_case Drizzle columns). See the closing section `file:///data/home/forge/repo-tour/opencode/AGENTS.md#L205-L216`:
+The repo enforces a strong engineering doctrine (`AGENTS.md`, 216 lines): a **"Session Core"** section that reads like a spec, an **experimental-API** convention, **feature flags** in `packages/schema/src/config/flag.ts`, and a style guide (no `else`, no aliased/star imports, `const` over `let`, snake_case Drizzle columns). See the closing section [`opencode/AGENTS.md`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/AGENTS.md#L205-L216):
 
 ```md
 ## Session Core
@@ -46,7 +46,7 @@ The repo enforces a strong engineering doctrine (`AGENTS.md`, 216 lines): a **"S
 ## 2. Top-level map
 
 ```
-/data/home/forge/repo-tour/opencode
+[`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0)
 ├── packages/            ~40 workspaces (the product)
 ├── services/            site, files, update, changelog (Cloudflare Workers)
 ├── sdks/vscode          VS Code extension (the only SDK dir on dev)
@@ -60,7 +60,7 @@ The repo enforces a strong engineering doctrine (`AGENTS.md`, 216 lines): a **"S
 └── AGENTS.md README*.md CONTRIBUTING.md CHANGELOG.md package.json turbo.json bunfig.toml
 ```
 
-Root `package.json` workspace globs (`file:///data/home/forge/repo-tour/opencode/package.json#L38-L45`):
+Root `package.json` workspace globs ([`opencode/package.json`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/package.json#L38-L45)):
 
 ```json
 "workspaces": {
@@ -71,7 +71,7 @@ Root `package.json` workspace globs (`file:///data/home/forge/repo-tour/opencode
 }
 ```
 
-`bunfig.toml` pins `minimumReleaseAge = 259200` (3 days) with a long `minimumReleaseAgeExcludes` allowlist, and guards root tests (`file:///data/home/forge/repo-tour/opencode/bunfig.toml#L1-L8`):
+`bunfig.toml` pins `minimumReleaseAge = 259200` (3 days) with a long `minimumReleaseAgeExcludes` allowlist, and guards root tests ([`opencode/bunfig.toml`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/bunfig.toml#L1-L8)):
 
 ```toml
 [install]
@@ -84,7 +84,7 @@ minimumReleaseAgeExcludes = [ ... ]
 root = "./do-not-run-tests-from-root"
 ```
 
-`turbo.json` defines a `transit` task whose only job is to fold every workspace dependency into the cache hash, so `typecheck`/`test` re-run when a dependency changes (`file:///data/home/forge/repo-tour/opencode/turbo.json#L49-L59`):
+`turbo.json` defines a `transit` task whose only job is to fold every workspace dependency into the cache hash, so `typecheck`/`test` re-run when a dependency changes ([`opencode/turbo.json`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/turbo.json#L49-L59)):
 
 ```json
 // Workspace packages export their sources, so tests never wait for a dependency's build...
@@ -96,7 +96,7 @@ root = "./do-not-run-tests-from-root"
 
 `.github/workflows/` includes `release.yml`, `release-dry-run.yml`, `release-process-daemon.yml`, `check-test.yml`, `check.yml`, `check-nix.yml`, `check-process-daemon.yml`, `nightly-beta.yml`, `deploy-{changelog,files,site,update}.yml`, `deploy.yml`, `bot-*.yml`, and `triage-*.yml`.
 
-`specs/v2/` holds `README.md`, `session.md`, `tools.md` (current contracts), decision records `event-stream-architecture.md`, `provider-policy.md`, `claude-agent-provider.md`, and historical `catalog-config-plugin-lifecycle.md`. `specs/v2/README.md` fixes the authority order (`file:///data/home/forge/repo-tour/opencode/specs/v2/README.md#L9-L14`):
+`specs/v2/` holds `README.md`, `session.md`, `tools.md` (current contracts), decision records `event-stream-architecture.md`, `provider-policy.md`, `claude-agent-provider.md`, and historical `catalog-config-plugin-lifecycle.md`. `specs/v2/README.md` fixes the authority order ([`opencode/specs/v2/README.md`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/specs/v2/README.md#L9-L14)):
 
 ```md
 | Concern | Owner |
@@ -106,7 +106,7 @@ root = "./do-not-run-tests-from-root"
 | Contributor-critical regression guardrails | Root AGENTS.md |
 ```
 
-`infra/` files (`app.ts`, `console.ts`, `share.ts`, `stage.ts`, `stats.ts`, `webapp.ts`) are orchestrated by `sst.config.ts`, deploying Cloudflare + AWS + Stripe + PlanetScale across stages `beta`/`dev`/`production` (`file:///data/home/forge/repo-tour/opencode/sst.config.ts#L33-L49`):
+`infra/` files (`app.ts`, `console.ts`, `share.ts`, `stage.ts`, `stats.ts`, `webapp.ts`) are orchestrated by `sst.config.ts`, deploying Cloudflare + AWS + Stripe + PlanetScale across stages `beta`/`dev`/`production` ([`opencode/sst.config.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/sst.config.ts#L33-L49)):
 
 ```ts
 async run() {
