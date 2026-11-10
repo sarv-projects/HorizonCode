@@ -33,7 +33,7 @@ import type {
   ToolResult,
   Usage,
 } from "../contracts";
-import { EventTypes, newId, nowIso } from "../contracts";
+import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { presetCatalog } from "./agent-profiles";
@@ -1842,6 +1842,7 @@ async function runToolCall(
     status: result.ok ? "ok" : "error",
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
     ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
+    detail: cardDetail(call.name, result, Date.now() - started),
   });
   // The locally counted context cost of this message (NF-074(a) tail), plus
   // the outcome the mistake-tracker rail needs: a tool that returned ok:false
@@ -1851,6 +1852,36 @@ async function runToolCall(
     staged: executed.staged === true,
     expected: executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name)),
   };
+}
+
+/** Most characters of shell output a finished tool card carries (head and tail kept). */
+const CARD_OUTPUT_CAP = 16_000;
+
+/**
+ * The UI-facing evidence for a finished card (C1): the duration for every tool,
+ * plus the bounded output and exit code for shell tools. Display only; the
+ * model-facing result and the receipts are untouched.
+ */
+function cardDetail(name: string, result: { output?: unknown }, durationMs: number): ToolCardDetail {
+  const detail: ToolCardDetail = { durationMs };
+  if ((name === "read" || name === "grep" || name === "glob") && typeof result.output === "string") {
+    const lines = result.output.split("\n").filter((l) => l !== "" && !/^\[(truncated|incomplete)/.test(l));
+    const none = lines.length === 1 && /^(No matches\.|No files matched\.|\(empty file\)|\(no lines at offset)/.test(lines[0] ?? "");
+    detail.count = none ? 0 : lines.length;
+  }
+  if ((name === "shell" || name === "shell_session") && typeof result.output === "string") {
+    let text = result.output.replace(/\n+$/, "");
+    const m = /(?:^|\n)exit (\d+|null)(?: \(signal [^)]*\))?$/.exec(text);
+    if (m) {
+      if (m[1] !== "null") detail.exitCode = Number(m[1]);
+      text = text.slice(0, m.index);
+    }
+    if (text.length > CARD_OUTPUT_CAP) {
+      text = text.slice(0, 4000) + "\n[output clipped]\n" + text.slice(text.length - (CARD_OUTPUT_CAP - 4000));
+    }
+    detail.output = text;
+  }
+  return detail;
 }
 
 /**

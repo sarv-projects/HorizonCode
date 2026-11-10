@@ -82,9 +82,22 @@ export function visibleWidth(s: unknown): number {
 }
 
 /** Shorten to `max` columns, marking the cut with a single ellipsis. */
-export function truncate(s: unknown, max: number): string {
+export function truncate(s: unknown, max: number, ellipsis = "\u2026"): string {
   const text = String(s ?? "");
   if (max <= 0) return "";
+  if (ellipsis !== "\u2026") {
+    if (visibleWidth(text) <= max) return text;
+    const keep = Math.max(0, max - visibleWidth(ellipsis));
+    let out = "";
+    let w = 0;
+    for (const ch of text) {
+      const cw = charWidth(ch.codePointAt(0) ?? 0);
+      if (w + cw > keep) break;
+      out += ch;
+      w += cw;
+    }
+    return out + ellipsis;
+  }
   // Fast path: plain narrow text is measured by length.
   if (/^[\u0020-\u02ff]*$/.test(text)) {
     if (text.length <= max) return text;
