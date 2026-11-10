@@ -12,6 +12,7 @@ import {
   FOLD_MIN, HEADER_FIRST_TOOLS, READ_ONLY_TOOLS, foldLine, resultLine, shellFooter, shellHeader, shellOutputLines,
   subagentGroupLines, subagentLine, toolCardLines, type CardStyle, type GroupRow,
 } from "./cards";
+import { createMarkdownStream, type MarkdownStream } from "./markdown";
 import { pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
 import {
   bold, colorLevel, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
@@ -201,6 +202,37 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
   }
   const subs: Sub[] = [];
 
+  /* Streaming markdown for assistant text: one stream per message, finished by any other event. */
+  let md: MarkdownStream | undefined;
+  let mdTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearMdTimer = (): void => {
+    if (mdTimer !== undefined) {
+      clearTimeout(mdTimer);
+      mdTimer = undefined;
+    }
+  };
+  /** Release the plain head of a slow line so prose never stalls waiting for its newline. */
+  const releasePartial = (): void => {
+    mdTimer = undefined;
+    const text = md?.flushPartial() ?? "";
+    if (text !== "") write(text);
+  };
+  const mdPush = (text: string): void => {
+    clearMdTimer();
+    if (!md) md = createMarkdownStream({ width: Math.max(20, terminalWidth() - 1), level: opts.level ?? colorLevel(), unicode: opts.unicode ?? unicodeLocale() });
+    const out = md.push(text);
+    if (out !== "") write(out);
+    mdTimer = setTimeout(releasePartial, 150);
+    (mdTimer as { unref?: () => void }).unref?.();
+  };
+  const mdFinish = (): void => {
+    clearMdTimer();
+    if (!md) return;
+    const out = md.end();
+    md = undefined;
+    if (out !== "") write(out);
+  };
+
   const writeLines = (lines: string[]): void => {
     if (lines.length === 0) return;
     ensureLineStart();
@@ -217,6 +249,11 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       return;
     }
     for (const it of items) writeLines(it.lines);
+  };
+
+  const settle = (): void => {
+    mdFinish();
+    flushFold();
   };
 
   const subLabel = (sub: Sub): string => sub.task || sub.profile || "subagent";
@@ -370,6 +407,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
 
   const handle = (ev: RuntimeEvent): void => {
     if (!ev || typeof ev !== "object") return;
+    if (rich && ev.type !== "assistant.delta" && ev.type !== "context.usage") mdFinish();
     if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "context.usage") flushFold();
     switch (ev.type) {
       case "subagent.event":
@@ -393,12 +431,18 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       }
       case "assistant.delta": {
         sawDelta = true;
-        write(sanitizeText(ev.text));
+        if (rich) mdPush(sanitizeText(ev.text));
+        else write(sanitizeText(ev.text));
         break;
       }
       case "assistant.done": {
         // Some runtimes only emit the finished text: never swallow it.
-        if (!sawDelta && typeof ev.text === "string" && ev.text.trim() !== "") write(sanitizeText(ev.text));
+        if (!sawDelta && typeof ev.text === "string" && ev.text.trim() !== "") {
+          if (rich) {
+            mdPush(sanitizeText(ev.text));
+            mdFinish();
+          } else write(sanitizeText(ev.text));
+        }
         sawDelta = false;
         ensureLineStart();
         break;
@@ -450,23 +494,23 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
   return {
     handle,
     write: (chunk: string) => {
-      flushFold();
+      settle();
       write(chunk);
     },
     ensureLineStart: () => {
-      flushFold();
+      settle();
       ensureLineStart();
     },
     line: (text: string) => {
-      flushFold();
+      settle();
       emit(text);
     },
     notice: (message: string) => {
-      flushFold();
+      settle();
       emit(dim("\u00b7 " + sanitizeText(message)), dim);
     },
     error: (message: string) => {
-      flushFold();
+      settle();
       emit(red("\u26a0 " + sanitizeText(message)), red);
     },
     atLineStart: () => atStart,

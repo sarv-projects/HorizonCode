@@ -238,6 +238,31 @@ describe("renderer", () => {
     expect(a.r.liveLines?.(0, 80)).toEqual([]);
   });
 
+  test("rich assistant text is rendered as markdown and finished by the next event", () => {
+    const a = rich(() => 0);
+    a.r.handle({ type: "assistant.delta", text: "Here is **bold** and `code`.\n- one\n" });
+    a.r.handle({ type: "assistant.delta", text: "- tw" });
+    expect(a.text()).toBe("Here is bold and code.\n  \u2022 one\n");
+    a.r.handle({ type: "assistant.delta", text: "o" });
+    a.r.handle({ type: "tool.card", callId: "g", name: "glob", args: { pattern: "*" }, status: "running" });
+    expect(a.text()).toBe("Here is bold and code.\n  \u2022 one\n  \u2022 two\n");
+    a.r.handle({ type: "assistant.done", text: "ignored" });
+    expect(a.text().endsWith("two\n")).toBe(true);
+  });
+
+  test("done-only text is rendered too, and a slow plain line is released after 150 ms", async () => {
+    const a = rich(() => 0);
+    a.r.handle({ type: "assistant.done", text: "# Hi\nbody" });
+    expect(a.text()).toBe("Hi\nbody\n");
+    const b = rich(() => 0);
+    b.r.handle({ type: "assistant.delta", text: "slow streaming words here" });
+    expect(b.text()).toBe("");
+    await new Promise((r) => setTimeout(r, 250));
+    expect(b.text()).toBe("slow streaming words ");
+    b.r.handle({ type: "assistant.done", text: "" });
+    expect(b.text()).toBe("slow streaming words here\n");
+  });
+
   test("the rich renderer exposes liveLines only when rich", () => {
     expect(createRenderer({ out: () => {} }).liveLines).toBeUndefined();
   });
