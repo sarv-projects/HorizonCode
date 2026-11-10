@@ -717,3 +717,95 @@ export function missingKey(config: HzConfig): string | null {
   if (config.apiKey) return null;
   return config.provider === "anthropic" ? "ANTHROPIC_API_KEY" : config.provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY";
 }
+
+/* ----------------------------- config check ----------------------------- */
+
+export interface ConfigCheck {
+  file: string;
+  exists: boolean;
+  /** Keys the config does not know; they are ignored. */
+  unknown: string[];
+  /** Entries or values a validator refused; they are skipped. */
+  rejected: string[];
+}
+
+const TOP_KEYS = ["provider", "model", "baseUrl", "apiKey", "mcp", "lsp", "providers", "permissionMode"];
+const ENTRY_KEYS: Record<string, readonly string[]> = {
+  "mcp.servers": ["id", "command", "args", "env", "cwd"],
+  "lsp.servers": ["id", "command", "args", "env", "extensions", "rootMarkers"],
+  providers: ["id", "baseUrl", "protocol", "envKey", "apiKey", "models"],
+};
+
+function unknownEntryKeys(list: unknown, label: string, out: string[]): void {
+  if (!Array.isArray(list)) return;
+  const known = ENTRY_KEYS[label];
+  list.forEach((item, index) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return;
+    for (const key of Object.keys(item as Record<string, unknown>)) {
+      if (!known.includes(key)) out.push(`${label}[${index}].${key}`);
+    }
+  });
+}
+
+/**
+ * Report what a config file silently ignores: unknown keys (top level and
+ * inside registry entries) and values the validators reject. Read-only; never
+ * prints a secret value.
+ */
+export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck {
+  const result: ConfigCheck = { file, exists: false, unknown: [], rejected: [] };
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return result;
+  }
+  result.exists = true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    result.rejected.push("the file is not valid JSON; all of it is ignored");
+    return result;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    result.rejected.push("the top level must be a JSON object; all of it is ignored");
+    return result;
+  }
+  const cfg = parsed as Record<string, unknown>;
+  for (const key of Object.keys(cfg)) if (!TOP_KEYS.includes(key)) result.unknown.push(key);
+  for (const key of ["provider", "model", "baseUrl", "apiKey", "permissionMode"]) {
+    if (cfg[key] !== undefined && typeof cfg[key] !== "string") result.rejected.push(`${key} must be a string`);
+  }
+  if (typeof cfg.provider === "string" && cfg.provider.trim() !== "") {
+    const id = cfg.provider.trim().toLowerCase();
+    const registered = Array.isArray(cfg.providers) && cfg.providers.some((e) => (e as { id?: unknown })?.id === id);
+    if (normalizeProvider(id) === undefined && !registered) result.rejected.push(`provider ${JSON.stringify(cfg.provider)} is not a built-in or a registered provider`);
+  }
+  const mode = str(cfg.permissionMode);
+  if (mode !== undefined && parsePermissionMode(mode) === undefined) result.rejected.push(permissionModeError(mode));
+  const mcpServers = (cfg.mcp as { servers?: unknown } | undefined)?.servers;
+  const lspServers = (cfg.lsp as { servers?: unknown } | undefined)?.servers;
+  unknownEntryKeys(mcpServers, "mcp.servers", result.unknown);
+  unknownEntryKeys(lspServers, "lsp.servers", result.unknown);
+  unknownEntryKeys(cfg.providers, "providers", result.unknown);
+  if (cfg.mcp !== null && typeof cfg.mcp === "object" && !Array.isArray(cfg.mcp)) {
+    for (const key of Object.keys(cfg.mcp as object)) if (key !== "servers") result.unknown.push(`mcp.${key}`);
+  }
+  if (cfg.lsp !== null && typeof cfg.lsp === "object" && !Array.isArray(cfg.lsp)) {
+    for (const key of Object.keys(cfg.lsp as object)) if (key !== "servers") result.unknown.push(`lsp.${key}`);
+  }
+  result.rejected.push(...(parseMcpConfig(cfg.mcp)?.rejected ?? []));
+  result.rejected.push(...(parseLspConfig(cfg.lsp)?.rejected ?? []));
+  result.rejected.push(...(parseProviderRegistry(cfg.providers)?.rejected ?? []));
+  return result;
+}
+
+export function renderConfigCheck(check: ConfigCheck): string {
+  if (!check.exists) return `no config file at ${check.file}; defaults and environment apply`;
+  const lines = [`config: ${check.file}`];
+  for (const key of check.unknown) lines.push(`  unknown key (ignored): ${key}`);
+  for (const why of check.rejected) lines.push(`  rejected: ${why}`);
+  if (check.unknown.length === 0 && check.rejected.length === 0) lines.push("  ok: every key is known and every value was accepted");
+  return lines.join("\n");
+}
