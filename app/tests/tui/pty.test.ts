@@ -220,3 +220,23 @@ if (!SCRIPT) {
     PTY_TIMEOUT_MS + 5_000,
   );
 }
+
+if (SCRIPT) {
+  test(
+    "a bracketed multi-line paste is one input shown as [pasted N lines]",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws);
+      expect(await waitFor(proc, "\u276f")).toBe(true);
+
+      proc.write("\u001b[200~first line\nsecond line\nthird line\u001b[201~\n");
+      expect(await waitFor(proc, "[pasted 3 lines]")).toBe(true);
+      expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
+
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+}
