@@ -491,6 +491,10 @@ export interface Usage {
 }
 export type ProviderEvent =
   | { type: "text"; text: string }
+  // ADDITIVE (TUI part 3, C3): streamed reasoning (openai-compatible
+  // `reasoning_content`, anthropic `thinking_delta`). Display-only: the loop
+  // never stores it in history. Providers without reasoning never emit it.
+  | { type: "thinking"; text: string }
   | { type: "tool_call"; id: string; name: string; arguments: string }
   | { type: "notice"; message: string }
   | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage }
@@ -554,6 +558,10 @@ export interface ToolCardDetail {
 export type RuntimeEvent =
   | { type: "assistant.delta"; text: string }
   | { type: "assistant.done"; text: string }
+  // ADDITIVE (TUI part 3, C3): streamed reasoning for display only. Optional:
+  // consumers that do not know it ignore it, and a provider that never streams
+  // reasoning never emits it (the UI then shows only its `Thinking…` label).
+  | { type: "assistant.thinking"; text: string }
   | {
       type: "tool.card";
       callId: string;

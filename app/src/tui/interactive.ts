@@ -184,6 +184,7 @@ function printHelp(r: Renderer, workspace?: string): void {
     ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
     ["/rename <title>", "retitle this session"],
     ["/retry", "drop the last reply and ask the same question again"],
+    ["/think", "show the last reasoning block (rich mode)"],
     ["/stats", "message, tool call and token counts for this chat"],
     ["/export [json|html]", "write the chat to .hz/exports (html shows the receipt chain status)"],
     ["/copy", "copy the last answer to the clipboard (terminal OSC 52)"],
@@ -1190,6 +1191,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           break;
         }
         await runForkCommand(name, arg, runtime, renderer);
+        break;
+      }
+      case "think": {
+        const text = renderer.lastThinking?.() ?? "";
+        if (text.trim() === "") {
+          renderer.notice("no reasoning block yet \u2014 only models that stream their thinking have one");
+          break;
+        }
+        for (const l of sanitizeText(text).trimEnd().split("\n")) renderer.line(dim("\u2503 " + l));
         break;
       }
       case "rename":

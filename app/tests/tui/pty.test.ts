@@ -270,5 +270,22 @@ if (SCRIPT) {
     },
     PTY_TIMEOUT_MS + 5_000,
   );
+
+  test(
+    "rich mode: streamed reasoning collapses to a Thought line and /think expands it",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+      proc.write("think hard about this\n");
+      expect(await waitFor(proc, "Thought for")).toBe(true);
+      expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
+      proc.write("/think\n");
+      expect(await waitFor(proc, "I can simply greet them.")).toBe(true);
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
 }
 
