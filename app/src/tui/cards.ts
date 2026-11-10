@@ -87,6 +87,17 @@ function lineCount(text: string): number {
   return text.replace(/\n$/, "").split("\n").length;
 }
 
+/** Added/removed lines of a replacement, ignoring the lines both sides share at the ends. */
+export function lineDelta(oldText: string, newText: string): { add: number; del: number } {
+  const a = oldText === "" ? [] : oldText.replace(/\n$/, "").split("\n");
+  const b = newText === "" ? [] : newText.replace(/\n$/, "").split("\n");
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return { add: b.length - head - tail, del: a.length - head - tail };
+}
+
 /** Added/removed line totals and file count of an apply_patch style body. */
 export function patchStats(patch: string): { add: number; del: number; files: number } {
   let add = 0;
@@ -154,9 +165,7 @@ export function describeTool(name: string, args: unknown, detail?: ToolCardDetai
     case "repo_map":
       return { verb: "Map", object: pathArg || "repo", objectRole: "path", extra: "" };
     case "edit": {
-      const add = lineCount(str(rec.new));
-      const del = lineCount(str(rec.old));
-      return { verb: "Edit", object: pathArg, objectRole: "path", extra: "", ...(str(rec.new) !== "" || str(rec.old) !== "" ? { delta: { add, del } } : {}) };
+      return { verb: "Edit", object: pathArg, objectRole: "path", extra: "", ...(str(rec.new) !== "" || str(rec.old) !== "" ? { delta: lineDelta(str(rec.old), str(rec.new)) } : {}) };
     }
     case "write":
       return { verb: "Write", object: pathArg, objectRole: "path", extra: "", delta: { add: lineCount(str(rec.content)), del: 0 } };
@@ -244,7 +253,7 @@ function toolCardLinesRaw(input: CardInput, style: CardStyle): string[] {
         " " +
         bld(d.verb, level) +
         (obj !== "" ? " " + colored : "") +
-        (d.delta ? " " + deltaText(d.delta, level) : "") +
+        (d.delta && input.status !== "running" ? " " + deltaText(d.delta, level) : "") +
         (d.extra !== "" ? " " + dimmed(d.extra, level) : "")
       );
     },

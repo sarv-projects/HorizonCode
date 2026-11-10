@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  cardDuration, describeTool, foldLabel, foldLine, patchStats, resultLine, shellFooter, shellHeader, shellOutputLines,
+  cardDuration, describeTool, lineDelta, foldLabel, foldLine, patchStats, resultLine, shellFooter, shellHeader, shellOutputLines,
   shortPath, subagentGroupLines, subagentLine, toolCardLines, type CardStyle,
 } from "../../src/tui/cards";
 import { createRenderer } from "../../src/tui/render";
@@ -43,6 +43,8 @@ describe("tool descriptions never invent numbers", () => {
     expect(describeTool("grep", { pattern: "TODO", path: "src/" }, { count: 14 })).toMatchObject({ object: '"TODO" in src/', extra: "(14 matches)" });
     expect(describeTool("glob", { pattern: "**/*.ts" }, { count: 1 }).extra).toBe("(1 file)");
     expect(describeTool("edit", { path: "a", old: "x\ny", new: "z" }).delta).toEqual({ add: 1, del: 2 });
+    expect(describeTool("edit", { path: "a", old: "a\nb\n", new: "a\nb\n\nc\n" }).delta).toEqual({ add: 2, del: 0 });
+    expect(lineDelta("same", "same")).toEqual({ add: 0, del: 0 });
     expect(describeTool("write", { path: "a", content: "1\n2\n3\n" }).delta).toEqual({ add: 3, del: 0 });
   });
 });
