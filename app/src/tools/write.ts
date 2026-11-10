@@ -27,6 +27,7 @@ import type { Stats } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
+import { withFileLock, targetLockPath } from "../core/file-lock";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
@@ -142,90 +143,100 @@ export const writeTool: Tool = {
       const refused = await protectedTargetRefusal(resolved, realpathish(resolved), ctx);
       if (refused !== undefined) return fail(refused);
 
-      // Staleness across the window in which the user was deciding (docs/09 §8.2's
-      // rule, extended to `write`): a concurrent change is a Conflict, not a
-      // silent overwrite with "success".
-      const afterApproval = await snapshot(resolved);
-      if (
-        beforeGuard.exists !== afterApproval.exists ||
-        beforeGuard.ino !== afterApproval.ino ||
-        beforeGuard.size !== afterApproval.size ||
-        beforeGuard.mtimeMs !== afterApproval.mtimeMs
-      ) {
-        return fail(
-          `HZ_PRECONDITION_FAILED: write refused: preimage changed: ${rel} ` +
-            `(${describeChange(beforeGuard, afterApproval)}; re-read the file and retry)`,
-        );
-      }
-
-      // Read-before-write (audit finding 2): a file that already exists is only
-      // replaced when this session has read it. `write` keeps no preimage of its
-      // own, so without this the model can destroy content it never saw.
-      if (beforeGuard.exists && !force && !wasRead(ctx, resolved)) {
-        return fail(
-          `HZ_PRECONDITION_FAILED: write refused: ${rel} already exists and this session has not read it; ` +
-            `read it first, or pass force:true to replace it wholesale`,
-        );
-      }
-
-      // What the overwrite would destroy, and what undo would restore. Only the
-      // pre-existing content matters; the create path has nothing to lose.
-      let preimageText: string | null = null;
-      let preimageUnreadable = false;
-      if (beforeGuard.exists) {
-        let preimage: Buffer | undefined;
-        try {
-          preimage = await readFile(resolved);
-        } catch {
-          preimage = undefined; // unreadable (a directory, a device, permissions)
+      // Cross-process (core/file-lock.ts): snapshot check -> write -> journal is one
+      // critical section per target file, taken AFTER approval. A second process that
+      // changed the file first is reported by the snapshot check, never clobbered.
+      let outLines = 0;
+      let outBytes = 0;
+      const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+        // Staleness across the window in which the user was deciding (docs/09 §8.2's
+        // rule, extended to `write`): a concurrent change is a Conflict, not a
+        // silent overwrite with "success".
+        const afterApproval = await snapshot(resolved);
+        if (
+          beforeGuard.exists !== afterApproval.exists ||
+          beforeGuard.ino !== afterApproval.ino ||
+          beforeGuard.size !== afterApproval.size ||
+          beforeGuard.mtimeMs !== afterApproval.mtimeMs
+        ) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: write refused: preimage changed: ${rel} ` +
+              `(${describeChange(beforeGuard, afterApproval)}; re-read the file and retry)`,
+          );
         }
-        if (preimage !== undefined) {
-          const binary = isBinary(preimage);
-          if (binary || !isUtf8(preimage)) {
-            if (!force) {
-              return fail(
-                binary
-                  ? `binary file (contains a NUL byte): ${rel}; pass force:true to overwrite it`
-                  : `not valid UTF-8: ${rel}; overwriting would corrupt the encoding — pass force:true to proceed`,
-              );
-            }
-            preimageUnreadable = true;
-          } else {
-            preimageText = preimage.toString("utf8");
+
+        // Read-before-write (audit finding 2): a file that already exists is only
+        // replaced when this session has read it. `write` keeps no preimage of its
+        // own, so without this the model can destroy content it never saw.
+        if (beforeGuard.exists && !force && !wasRead(ctx, resolved)) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: write refused: ${rel} already exists and this session has not read it; ` +
+              `read it first, or pass force:true to replace it wholesale`,
+          );
+        }
+
+        // What the overwrite would destroy, and what undo would restore. Only the
+        // pre-existing content matters; the create path has nothing to lose.
+        let preimageText: string | null = null;
+        let preimageUnreadable = false;
+        if (beforeGuard.exists) {
+          let preimage: Buffer | undefined;
+          try {
+            preimage = await readFile(resolved);
+          } catch {
+            preimage = undefined; // unreadable (a directory, a device, permissions)
           }
-        } else {
-          // Unreadable (a directory, a device, permissions): the checks never ran
-          // here, the write proceeds, and undo records that bytes cannot come back.
-          preimageUnreadable = true;
+          if (preimage !== undefined) {
+            const binary = isBinary(preimage);
+            if (binary || !isUtf8(preimage)) {
+              if (!force) {
+                return fail(
+                  binary
+                    ? `binary file (contains a NUL byte): ${rel}; pass force:true to overwrite it`
+                    : `not valid UTF-8: ${rel}; overwriting would corrupt the encoding — pass force:true to proceed`,
+                );
+              }
+              preimageUnreadable = true;
+            } else {
+              preimageText = preimage.toString("utf8");
+            }
+          } else {
+            // Unreadable (a directory, a device, permissions): the checks never ran
+            // here, the write proceeds, and undo records that bytes cannot come back.
+            preimageUnreadable = true;
+          }
         }
-      }
 
-      // Line-ending normalisation (FEAT-001), additive and byte-identical to
-      // today for pure-LF content (the common case). The content's own detected
-      // ending wins; only when OVERWRITING a file whose readable preimage is
-      // CRLF and the new content did not itself choose CRLF do we keep CRLF, so
-      // a round-trip of model-emitted LF text does not flip an existing CRLF
-      // file to LF wholesale. New files take the content's own ending (LF by
-      // default) -- HorizonCode does not gate on os.EOL.
-      const contentEnding = detectLineEnding(content);
-      const eol = contentEnding === "\n" && preimageText !== null && detectLineEnding(preimageText) === "\r\n" ? "\r\n" : contentEnding;
-      const toWrite = normalizeLineEndings(content, eol);
-      const outLines = countLines(toWrite);
-      const outBytes = Buffer.byteLength(toWrite, "utf8");
+        // Line-ending normalisation (FEAT-001), additive and byte-identical to
+        // today for pure-LF content (the common case). The content's own detected
+        // ending wins; only when OVERWRITING a file whose readable preimage is
+        // CRLF and the new content did not itself choose CRLF do we keep CRLF, so
+        // a round-trip of model-emitted LF text does not flip an existing CRLF
+        // file to LF wholesale. New files take the content's own ending (LF by
+        // default) -- HorizonCode does not gate on os.EOL.
+        const contentEnding = detectLineEnding(content);
+        const eol = contentEnding === "\n" && preimageText !== null && detectLineEnding(preimageText) === "\r\n" ? "\r\n" : contentEnding;
+        const toWrite = normalizeLineEndings(content, eol);
+        outLines = countLines(toWrite);
+        outBytes = Buffer.byteLength(toWrite, "utf8");
 
-      await mkdir(path.dirname(resolved), { recursive: true });
-      const outcome = await writeAtomic(resolved, toWrite, ctx);
-      if (isRefused(outcome)) return fail(outcome.refusal);
+        await mkdir(path.dirname(resolved), { recursive: true });
+        const outcome = await writeAtomic(resolved, toWrite, ctx);
+        if (isRefused(outcome)) return fail(outcome.refusal);
 
-      recordChange(ctx.sessionId, {
-        path: resolved,
-        rel,
-        before: preimageText,
-        ...(preimageUnreadable ? { beforeUnreadable: true } : {}),
-        afterSha256: sha256Hex(toWrite),
-        at: Date.now(),
-        tool: "write",
-      });
+        recordChange(ctx.sessionId, {
+          path: resolved,
+          rel,
+          before: preimageText,
+          ...(preimageUnreadable ? { beforeUnreadable: true } : {}),
+          afterSha256: sha256Hex(toWrite),
+          at: Date.now(),
+          tool: "write",
+        });
+
+        return undefined;
+      }).catch((e: unknown) => fail(msg(e)));
+      if (locked !== undefined) return locked;
 
       // The session authored (and verified, by re-reading) this content, so the
       // path counts as known: overwriting your own work is not the "never saw

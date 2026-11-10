@@ -979,6 +979,8 @@ The example list is validated at load time; the rule matches with severity `forb
 
 ## 7. Security & authority
 
+> **Shared-state locking (as shipped, ruling 63 in `docs/28`).** Writes to shared state (kernel event/receipt appends in the TS kernel, change journal, checkpoints, session migration) and the verify-then-write window of file mutations are guarded by advisory lockfiles with pid-liveness stale detection. The lock is not an authority boundary: a non-cooperating writer is still caught by the sha256 preimage check, and a lock that cannot be created fails open to the caller's own honest error. Lock files live in the owner-only state tree.
+
 ### 7.1 The authority model in one picture
 
 ```

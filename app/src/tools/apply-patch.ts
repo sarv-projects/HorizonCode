@@ -50,6 +50,7 @@ import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
+import { acquireLock, targetLockPath } from "../core/file-lock";
 import { recordChange } from "./change-journal";
 import { canonicalize, parse, type FileOp, type PatchChunk } from "./apply-patch-parser";
 import { isBinary, relPath, resolvePath } from "./helpers";
@@ -268,6 +269,7 @@ async function guardAndPreimage(
   verb: string,
   needsPreimage: boolean,
   ctx: ToolContext,
+  held: Array<() => void>,
 ): Promise<{ ok: true; before: string | null } | { ok: false; error: string }> {
   const action: GuardAction = { kind: "fs.write", target: resolved };
 
@@ -298,6 +300,15 @@ async function guardAndPreimage(
   const refused = await protectedTargetRefusal(resolved, realpathish(resolved), ctx);
   if (refused !== undefined) return { ok: false, error: refused };
 
+  // Cross-process (core/file-lock.ts): take the per-file lock AFTER approval (never
+  // hold it across a human decision) and keep it until applyOp's effect is done,
+  // so verify -> write is one critical section. The caller releases `held`.
+  try {
+    held.push(await acquireLock(targetLockPath(ctx.workspace, realpathish(resolved))));
+  } catch (e) {
+    return { ok: false, error: `apply_patch: ${msg(e)} (${rel})` };
+  }
+
   // Re-read immediately before the effect: a change in the window is a conflict.
   if (needsPreimage) {
     let actual = "absent";
@@ -325,6 +336,21 @@ async function applyOp(
   summary: { added: string[]; updated: string[]; deleted: string[]; moved: string[] },
   warnings: PatchWarning[],
 ): Promise<{ ok: true; fuzz: number } | { ok: false; error: string }> {
+  const held: Array<() => void> = [];
+  try {
+    return await applyOpLocked(op, ctx, summary, warnings, held);
+  } finally {
+    for (const release of held.reverse()) release();
+  }
+}
+
+async function applyOpLocked(
+  op: FileOp,
+  ctx: ToolContext,
+  summary: { added: string[]; updated: string[]; deleted: string[]; moved: string[] },
+  warnings: PatchWarning[],
+  held: Array<() => void>,
+): Promise<{ ok: true; fuzz: number } | { ok: false; error: string }> {
   if (op.kind === "add") {
     const resolved = resolvePath(ctx.cwd, op.path);
     const rel = relPath(ctx.cwd, resolved);
@@ -339,7 +365,7 @@ async function applyOp(
         error: `apply_patch: Add File refused: ${rel} already exists (Add File creates a new file; use '*** Update File:' to modify it)`,
       };
     }
-    const guarded = await guardAndPreimage(resolved, rel, "Add", false, ctx);
+    const guarded = await guardAndPreimage(resolved, rel, "Add", false, ctx, held);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
     const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
     const outcome = await writeAtomic(resolved, content, ctx);
@@ -354,7 +380,7 @@ async function applyOp(
     const resolved = resolvePath(ctx.cwd, op.path);
     const rel = relPath(ctx.cwd, resolved);
     if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
-    const guarded = await guardAndPreimage(resolved, rel, "Delete", true, ctx);
+    const guarded = await guardAndPreimage(resolved, rel, "Delete", true, ctx, held);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
     // The removal only runs after the full guard + approval + protectedTarget +
     // preimage checks above; the preimage is journaled so the delete can undo.
@@ -373,7 +399,7 @@ async function applyOp(
   const rel = relPath(ctx.cwd, resolved);
   if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
 
-  const guarded = await guardAndPreimage(resolved, rel, op.movePath === undefined ? "Update" : "Move", true, ctx);
+  const guarded = await guardAndPreimage(resolved, rel, op.movePath === undefined ? "Update" : "Move", true, ctx, held);
   if (guarded.ok !== true) return { ok: false, error: guarded.error };
   const before = guarded.before ?? "";
 
@@ -400,7 +426,7 @@ async function applyOp(
   // guardAndPreimage returns that preimage) so undo can restore what the move
   // clobbered. A brand-new destination returns `before: null` as before.
   const destExists = await pathExists(destResolved);
-  const destGuarded = await guardAndPreimage(destResolved, destRel, "Create", destExists, ctx);
+  const destGuarded = await guardAndPreimage(destResolved, destRel, "Create", destExists, ctx, held);
   if (destGuarded.ok !== true) return { ok: false, error: destGuarded.error };
   const destBefore = destGuarded.before; // the clobbered file's real preimage, or null for a new file
   const outcome = await writeAtomic(destResolved, after, ctx);

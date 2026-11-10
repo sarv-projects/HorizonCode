@@ -53,6 +53,7 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { withFileLockSync } from "../core/file-lock";
 import {
   appendFileSync,
   chmodSync,
@@ -291,8 +292,11 @@ function ensureStateDir(dir: string): void {
 /** One whole `record\n` append; owner-only mode applied after it. */
 function appendRecordToDisk(file: string, record: unknown): void {
   ensureStateDir(path.dirname(file));
-  appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
-  setOwnerOnly(file, 0o600);
+  // Cross-process: serialized against another process's append/compaction (core/file-lock.ts).
+  withFileLockSync(`${file}.lock`, () => {
+    appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+    setOwnerOnly(file, 0o600);
+  });
 }
 
 /** The persisted shape and key order of one change record. */
@@ -460,7 +464,18 @@ function maybeCompact(state: JournalState): void {
   } catch {
     return; // no file yet (or unreadable): nothing to compact
   }
-  if (size > JOURNAL_COMPACT_BYTES) compactNow(state);
+  if (size <= JOURNAL_COMPACT_BYTES) return;
+  try {
+    withFileLockSync(`${state.file}.lock`, () => {
+      // Another process may have appended (or compacted) since our last read: fold
+      // what is on disk, not our stale view, or its records would be rewritten away.
+      if (statSync(state.file).size <= JOURNAL_COMPACT_BYTES) return;
+      loadIntoState(state);
+      compactNow(state);
+    });
+  } catch {
+    /* lock timeout or vanished file: compaction is an optimisation, skip it */
+  }
 }
 
 /* ------------------------------ the journal ------------------------------ */
