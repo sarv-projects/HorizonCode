@@ -1,8 +1,10 @@
 # 06 — Events & Flows
 
+> **Implementation reality (read first).** The kernel event log is real (hash-chained JSONL per stream, VERIFIED) and the runtime writes 20 durable event types to it, **but none of them is one of the 44 `hz.*` names of section 4.2**. The catalogue, the ten-field envelope of section 3.1, claims and epochs, projectors, upcasters, rebuild and retention are **DESIGN ONLY: NOT IMPLEMENTED**. The Provenance section at the end of this document is the authoritative description of the v0.1 log: a table of the events actually emitted (with the closest catalogue row for each), the ephemeral `RuntimeEvent` facade events, a per-flow status table, exact upstream URLs at pinned commits, and detailed deferral notes (J1 to J7).
+
 > The event log is the state of record, and every flow in the product is a sequence of events. This document fixes the envelope, the sequence and writer rules, the append transaction, the projector contract, the retention policy, the complete canonical event catalogue, and twenty-four end-to-end flows.
 
-**Reading note.** This document has two parts. **Part A** is the event system (§2–§5). **Part B** is the flow catalogue (§6). Every flow names its actors, its numbered steps, the events emitted per step, and its failure branches. **Implementation status (RC-13):** the kernel event log and the v0.1 session stream implement the *shape* of the catalogue below; levels are in `28-implementation-status.md`, and nothing in §6's flow catalogue executes anywhere yet.
+**Reading note.** This document has two parts. **Part A** is the event system (§2–§5). **Part B** is the flow catalogue (§6). Every flow names its actors, its numbered steps, the events emitted per step, and its failure branches. **Implementation status (RC-13):** the kernel event log and the v0.1 session stream implement a reduced SUBSET of the shape of the catalogue below under different event names (see the Provenance section); levels are in `28-implementation-status.md`. Several flows of §6 run today in a reduced form (the per-flow table in the Provenance section says which); the rest are design only.
 
 ---
 
@@ -14,7 +16,7 @@ This document decides seven things:
 2. **Who may write one** — the single-writer rule, per aggregate, with lease and epoch fencing.
 3. **How one becomes true** — the append transaction that commits an event together with its projections.
 4. **How the log survives time** — versioning, upcasting, `min_reader_version`, retention, snapshots and rebuild.
-5. **What every canonical event means** — payload fields, emitter, consumers, durability, client visibility (all 44 names from `file:///data/home/forge/HorizonCode/docs/_conventions.md` §6).
+5. **What every canonical event means** — payload fields, emitter, consumers, durability, client visibility (all 44 names from `_conventions.md` §6).
 6. **How the product behaves end to end** — 24 flows, each with failure branches.
 7. **What is claimed** — per capability, a status level that may not exceed its evidence.
 
@@ -32,7 +34,7 @@ Rules are numbered `E-*` (event system) and `F-*` (flows). Each is a MUST unless
 |---|---|
 | E-1 | Every durable fact is exactly one log record with the envelope defined in §3.1. State that is not in the log is a projection and is disposable. |
 | E-2 | `event.id` is an `evt_<ulid>`: globally unique, monotonic at its creation site, and never reused — including across import, fork, replay and re-index. |
-| E-3 | `event.type` is one of the canonical names in `file:///data/home/forge/HorizonCode/docs/_conventions.md` §6. A component that needs a new name MUST add it to that file in the same change; this document lists the gaps it found in §4.6 instead of inventing names. |
+| E-3 | `event.type` is one of the canonical names in `_conventions.md` §6. A component that needs a new name MUST add it to that file in the same change; this document lists the gaps it found in §4.6 instead of inventing names. |
 | E-4 | `event.payload` validates against the schema registered for `(type, typeVersion)`. An unvalidated payload MUST NOT be appended. |
 | E-5 | Durability is a property of the type, not of the call site: a `durable`-typed event MUST reach the log before its effect is observable to a caller; an `ephemeral`-typed event MUST NOT be written to the log even if a caller asks. |
 | E-6 | `causationId` names the immediate cause (another event id, or an effect id for effects). `correlationId` names the run, and is inherited by every child session, subagent and background job, so one trajectory can be assembled from the log. A record with a `causationId` that is absent from the log and absent from the imported archive is `LOG_DANGLING_CAUSE` (warn; refuse in `--strict`). |
@@ -56,7 +58,7 @@ Rules are numbered `E-*` (event system) and `F-*` (flows). Each is a MUST unless
 |---|---|
 | E-15 | Exactly one writer exists per aggregate at a time: the process that holds that aggregate's lease for the current owner epoch. For sessions the writer is the Controller's session actor; for kernel-owned state it is the `hzk` owner thread holding the owner lock. |
 | E-16 | The session log is append-only. `UPDATE` and `DELETE` on log tables are forbidden and are enforced by database triggers in addition to the boundary test. |
-| E-17 | Front-ends (TUI, print, server, web, desktop, IDE bridge, MCP server, SDKs) and plugins MUST NOT write the log. They send commands to the owner and observe events. This is what makes eight surfaces one agent rather than eight (ADR-005, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L130-L140`). |
+| E-17 | Front-ends (TUI, print, server, web, desktop, IDE bridge, MCP server, SDKs) and plugins MUST NOT write the log. They send commands to the owner and observe events. This is what makes eight surfaces one agent rather than eight (ADR-005, `02-decisions.md#L130-L140`). |
 | E-18 | A second process that wants to write acquires the lease from `session_claim` and, on failure, MUST downgrade to a read-only observer with an explicit diagnostic (`SESSION_LEASE_HELD`). There is no “last writer wins”. |
 | E-19 | Every write carries the owner epoch. The append transaction compares the epoch against `session_claim.owner_epoch` and rejects a stale writer (`SESSION_EPOCH_STALE`) — fencing, not advisory locking. |
 | E-20 | Emitter authority is fixed per event type (§4.2, “emitted by”). An event emitted by a component other than its declared writer fails the boundary test (`packages/testing`, `EVENT_EMITTER_DRIFT`). |
@@ -121,7 +123,7 @@ Every projection has a `ProjectorSpec { name, owner, consumes[], tables[], appli
 | # | Rule |
 |---|---|
 | F-1 | Every flow in §6 is replayable: given the log of a run, `hzcode session replay` reproduces the same projections, the same Guard decisions and the same effect terminals. A flow that cannot be replayed is a design defect, not a UI gap. |
-| F-2 | Every effect reaches exactly one terminal: `SUCCEEDED`, `FAILED`, `DENIED`, or `UNKNOWN` (ADR-012, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L203-L210`). An effect with no terminal at restart becomes `UNKNOWN` by recovery, never by assumption. |
+| F-2 | Every effect reaches exactly one terminal: `SUCCEEDED`, `FAILED`, `DENIED`, or `UNKNOWN` (ADR-012, `02-decisions.md#L203-L210`). An effect with no terminal at restart becomes `UNKNOWN` by recovery, never by assumption. |
 | F-3 | `UNKNOWN` is never automatically retried. Flow 8 and flow 13 are the only flows that may clear it, and both do so by *observation*, recorded as `hz.effect.reconciled`. |
 | F-4 | Approval is an authorization boundary: no flow may proceed past an `ask` decision without a recorded `hz.permission.answered` from a `UserAction` origin. Timeouts resolve to deny. |
 | F-5 | Every flow that can lose a human (unattended, scheduled, CI, subagent) MUST be explicit about what happens to `ask`: the answer is deny unless a bounded `DirectSessionGrant` pre-authorised that exact intent digest. |
@@ -167,7 +169,7 @@ export interface DurableEventV1<TPayload = unknown> {
 }
 ```
 
-`AuthorityPinsV1` is `{ originKind: 'SessionBatch'|'UserAction'|'ManagedRun'|'ManagedRoot'; intentDigest: string; policyRevision: string; postureDigest: string; grantId?: string }`. `originKind` is fixed by the canonical operation, never supplied by a request body (`file:///data/home/forge/HorizonCode/docs/01-vision-and-superset.md#L54-L56`).
+`AuthorityPinsV1` is `{ originKind: 'SessionBatch'|'UserAction'|'ManagedRun'|'ManagedRoot'; intentDigest: string; policyRevision: string; postureDigest: string; grantId?: string }`. `originKind` is fixed by the canonical operation, never supplied by a request body (`01-vision-and-superset.md#L54-L56`).
 
 `chain.digest` is `sha256(canonicalJson(envelopeWithoutChain) || prevDigest)`. It gives the log tamper evidence that is independent of the kernel's OwnerLog hash chain, which covers kernel-side records. This envelope is the **wire envelope** on every surface: a transported event (JSON-RPC, SSE, NDJSON) parses to `DurableEventV1`; a transport MAY wrap it (cursors, watermark frames) but MUST NOT flatten, rename or re-nest its fields (`07` C12; RC-16(g)).
 
@@ -194,9 +196,9 @@ Kernel-owned facts live in the kernel's own hash-chained OwnerLog, not in the se
 
 | Interface | Purpose |
 |---|---|
-| `OwnerLogV2::append(owner, events[], DurabilityProfile)` | Append to a per-owner hash-chained segment log; profile is `interactive_only` or `run_durable` (`file:///data/home/forge/repo-tour/horizoncode/kernel/src/owner_log.rs#L352-L364`). |
+| `OwnerLogV2::append(owner, events[], DurabilityProfile)` | Append to a per-owner hash-chained segment log; profile is `interactive_only` or `run_durable` (`kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified)). |
 | `OwnerHeadV2 { committedSeq, committedEventDigest, activeSegmentId, committedOffset, headDigest }` | The authoritative committed prefix; the head digest excludes its own field. |
-| `HostKernel::open()` → reconcile | Reconciles every unresolved `PREPARED`/`RUNNING`/`DISPATCHING` row to `UNKNOWN` before the kernel reports ready (`file:///data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L2507-L2527`). |
+| `HostKernel::open()` → reconcile | Reconciles every unresolved `PREPARED`/`RUNNING`/`DISPATCHING` row to `UNKNOWN` before the kernel reports ready (`kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified)). |
 
 Durability profiles are translated into the flow semantics of §6.8: an `interactive_only` effect that has no terminal becomes `UNKNOWN`; a `run_durable` effect is reconciled before the run is allowed to report a verdict.
 
@@ -245,7 +247,9 @@ Triggers `event_no_update` and `event_no_delete` raise on any attempted mutation
 
 ### 4.2 The canonical event catalogue
 
-All 44 names from `file:///data/home/forge/HorizonCode/docs/_conventions.md` §6 (41 at first writing, plus `hz.session.moved` ratified as RC-1, plus `hz.memory.expired` and `hz.provider.account.rotated` ratified as RC-10). Nothing is omitted and nothing is added.
+> **DESIGN ONLY: NOT ONE of these names is emitted.** The shipped log uses 20 other dotted names (`session.start`, `message.end`, `tool.call`, `tool.result`, `approval.request`, `receipt.issued`, `rewind.apply`, ...). The Provenance section at the end of this document maps each shipped type to its closest row here and lists the differences. The kernel does not enforce this catalogue.
+
+All 44 names from `_conventions.md` §6 (41 at first writing, plus `hz.session.moved` ratified as RC-1, plus `hz.memory.expired` and `hz.provider.account.rotated` ratified as RC-10). Nothing is omitted and nothing is added.
 
 > **Runtime/UI facade events are NOT in this catalogue.** The harness-side `RuntimeEvent` union in `app/src/contracts.ts` carries a few *computed* events the loop emits for the TUI — `context.usage` (the per-dispatch `/context` meter), `turn.done`, (TUI part 3, additive C3) `assistant.thinking` (streamed reasoning, display only, never stored in history or the transcript), (TUI part 3, additive C2) `subagent.start`/`subagent.end` (explicit subagent boundaries emitted by `runNested`), and (FEAT-003) `turn.diff` (the per-turn aggregated file diff, one net unified diff across every file the turn changed). These are ephemeral UI surfaces, not durable kernel events: they are never written to the session log, never projected, and carry no seq/hash chain. Adding one is an ADDITIVE `RuntimeEvent` variant and leaves this closed 44-name kernel catalogue unchanged. `turn.diff` in particular is explicitly **not** a new canonical event (the reserved kernel name for change discovery, `hz.tool.discovered`, is unrelated and stays reserved).
 
@@ -309,10 +313,10 @@ The catalogue is a set of meanings; several of them carry an explicit strength. 
 | `hz.effect.settled` | Carries an observation produced by the host (hash, exit code, byte count, stat), not by the model. This is the only shape of evidence the verifier accepts as independent. |
 | `hz.effect.unknown` | Terminal for the attempt and sticky: it is not cleared by time, restart or retry. Only `hz.effect.reconciled` may follow it, and only with new evidence. |
 | `hz.permission.answered` | The only admissible proof of human authority. It is rejected at append if `originKind != UserAction`, regardless of what any request body claims. |
-| `hz.learn.proposal.created` | `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would widen authority is refused at creation (ADR-010, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L183-L189`). |
+| `hz.learn.proposal.created` | `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would widen authority is refused at creation (ADR-010, `02-decisions.md#L183-L189`). |
 | `hz.session.rewound` | Declares that projections moved. It does not delete history and it does not make the workspace match the log unless `scope` includes `workspace` and a restore receipt exists. |
 
-**Terminal vocabulary, reconciled with the authority documents.** `EffectReceiptV1.terminal` is exactly one of `SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`, assigned once per effect and monotone (`file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` D18). The log represents that same set with a split: `SUCCEEDED`, `FAILED` and `DENIED` arrive as `hz.effect.settled.terminal` (`denied` is a terminal of the effect, not only of the decision), while `UNKNOWN` arrives as its own event, `hz.effect.unknown`, because it is sticky and requires reconciliation rather than being a value that happened to settle. The mapping is one-to-one and lossless; a reader that needs the receipt's spelling maps `hz.effect.unknown` to `UNKNOWN`. Step and tool statuses use the lowercase set from §4.2 (`succeeded`, `failed`, `denied`, `cancelled`, `unknown`) because they describe a step's outcome, not a receipt terminal — the two vocabularies are deliberately distinct and MUST NOT be used interchangeably in code.
+**Terminal vocabulary, reconciled with the authority documents.** `EffectReceiptV1.terminal` is exactly one of `SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`, assigned once per effect and monotone (`05-domain-and-schemas.md` D18). The log represents that same set with a split: `SUCCEEDED`, `FAILED` and `DENIED` arrive as `hz.effect.settled.terminal` (`denied` is a terminal of the effect, not only of the decision), while `UNKNOWN` arrives as its own event, `hz.effect.unknown`, because it is sticky and requires reconciliation rather than being a value that happened to settle. The mapping is one-to-one and lossless; a reader that needs the receipt's spelling maps `hz.effect.unknown` to `UNKNOWN`. Step and tool statuses use the lowercase set from §4.2 (`succeeded`, `failed`, `denied`, `cancelled`, `unknown`) because they describe a step's outcome, not a receipt terminal — the two vocabularies are deliberately distinct and MUST NOT be used interchangeably in code.
 
 ### 4.4 Inbox kinds and the records they become
 
@@ -371,7 +375,7 @@ These were real gaps found while writing this document. The owner of `_conventio
 | `PROJECTION_TABLE_OWNERSHIP` | Two projectors declare the same table | Build failure; at open, refuse to start projections | yes |
 | `LOG_PINS_MISSING` | An effect-class record lacks `policyRevision`/`postureDigest` | Refuse; effects may not be recorded without pins | yes |
 | `LOG_DANGLING_CAUSE` | `causationId` resolves to nothing local | Warn by default; refuse in `--strict` and in `session verify` | no (default) |
-| `LOG_READ_ONLY_MODE` | Kernel absent, older than `HZ_ABI`, or log opened by a newer binary | Whole session is read-only with a named diagnostic (ADR-003, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L103-L106`) | yes |
+| `LOG_READ_ONLY_MODE` | Kernel absent, older than `HZ_ABI`, or log opened by a newer binary | Whole session is read-only with a named diagnostic (ADR-003, `02-decisions.md#L103-L106`) | yes |
 | `LOG_BLOB_MISSING` | An event references a blob absent from the store | Render the record with an explicit missing-payload marker; refuse `session verify` success | yes |
 | `INGEST_REJECTED` | Import/restore of an archive with a broken digest chain or an unsupported version | Nothing is applied; the target aggregate is untouched | yes |
 
@@ -389,7 +393,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 **Actors.** FE, CTL, CTX, PROV, KRN.
 
-1. `hzcode` resolves the workspace root and the config lattice: user config at `$XDG_CONFIG_HOME/horizon/config.jsonc`, then workspace `<ws>/.hz/config.jsonc` **narrowed onto** it (lattice meet; workspace may only restrict — ADR-008, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L163-L170`). Programs named by the workspace (hooks, LSP servers, MCP servers) are unloaded until trusted (`trust_decision`).
+1. `hzcode` resolves the workspace root and the config lattice: user config at `$XDG_CONFIG_HOME/horizon/config.jsonc`, then workspace `<ws>/.hz/config.jsonc` **narrowed onto** it (lattice meet; workspace may only restrict — ADR-008, `02-decisions.md#L163-L170`). Programs named by the workspace (hooks, LSP servers, MCP servers) are unloaded until trusted (`trust_decision`).
 2. Kernel handshake: `hzk` starts (or is attached), the asset digest is checked against the pinned manifest, `HZ_ABI=1` and `HZ_PROTO=1` are negotiated, and `Sandbox::probe()` runs. A missing, older or crashed kernel puts the process in `LOG_READ_ONLY_MODE`: the TUI opens, explains, and **cannot execute** (ADR-003).
 3. Storage opens: schema version checked; migrations applied only if log-compatible; WAL and pragmas set (§4.3 of `12-sessions-state.md`). The recovery scan runs: orphan claims and unresolved counsel records are found *before* the first prompt is accepted.
 4. Recovery decisions: each orphaned claim either resumes (`hz.session.claim.acquired{resumed:true}`) or is released (`hz.session.claim.released`); each unresolved effect becomes `hz.effect.unknown`.
@@ -450,7 +454,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 **Events.** `hz.step.tool.requested`, `hz.effect.decision.made`, `hz.permission.asked`, `hz.permission.answered`, `hz.effect.lease.issued`, `hz.effect.settled`, `hz.step.tool.completed`, `hz.part.created`, `hz.step.llm.completed`, `hz.usage.recorded`.
 
 **Failure branches.**
-- User denies ⇒ `hz.permission.answered{decision:'deny'}`; no lease; `hz.step.tool.completed{status:'denied'}`; the model sees a denial as a *user decision*, and the step count is not charged against the model's retry budget (openers: a denial must never be laundered into model output — the reference implementation tunnels declines as defects to keep them out of blanket error mapping, `file:///data/home/forge/repo-tour/opencode/packages/core/src/permission.ts#L256-L288`).
+- User denies ⇒ `hz.permission.answered{decision:'deny'}`; no lease; `hz.step.tool.completed{status:'denied'}`; the model sees a denial as a *user decision*, and the step count is not charged against the model's retry budget (openers: a denial must never be laundered into model output — the reference implementation tunnels declines as defects to keep them out of blanket error mapping, [`opencode/packages/core/src/permission.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/permission.ts#L256-L288)).
 - Ask times out (default `deny`) or the front-end detaches ⇒ fail-closed deny, `hz.error.raised{class:policy, code:'ASK_EXPIRED'}`.
 - Lease reused ⇒ the kernel refuses redemption (`oneUse`), `hz.effect.settled{terminal:'failed', observation{kind:'refused'}}`; a second attempt is a security event.
 - Observation mismatch (post-image hash ≠ the hash of the bytes the lease authorised) ⇒ `terminal:'failed'` with the mismatch recorded; the receipt is the evidence, and the verifier will lower any claim that the write succeeded.
@@ -504,7 +508,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 2. **Steer delivery.** The in-flight step finishes its stream (or is cancelled at a cancellation point). At the next **safe step boundary** the steer is folded in: the user part is created (`hz.part.created{metadata.inboxId}`) and the *next* step's context includes it. A steer never truncates a partially streamed assistant part.
 3. **Interrupt.** The user presses the interrupt key: FE issues `session.interrupt`. CTL cancels the provider stream; the cancelled step terminates honestly — `hz.step.llm.completed{finishReason:'cancelled'}` with the usage actually incurred (a cancelled stream still costs tokens and is still recorded; G-3).
 4. Outstanding work at the boundary: requested-but-not-admitted effects are cancelled (`hz.step.tool.completed{status:'cancelled'}`); effects **already executing** are never force-killed mid-write. They run to a terminal and settle (`hz.effect.settled`), or, if the process cannot observe them, they become `UNKNOWN` (flow 8).
-5. Claim handling: an interrupt by the user releases the claim (`hz.session.claim.released{reason:'interrupted'}`) and the session leaves busy (`hz.session.busy.left{outcome:'interrupted'}`). A shutdown interrupt **preserves** the claim so the next start resumes (see `file:///data/home/forge/repo-tour/opencode/packages/core/src/session/execution.ts#L73-L83`, whose comment is the design rule: recovery is a property of the database, never of a shutdown hook that may not run).
+5. Claim handling: an interrupt by the user releases the claim (`hz.session.claim.released{reason:'interrupted'}`) and the session leaves busy (`hz.session.busy.left{outcome:'interrupted'}`). A shutdown interrupt **preserves** the claim so the next start resumes (see [`opencode/packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts#L73-L83), whose comment is the design rule: recovery is a property of the database, never of a shutdown hook that may not run).
 6. After the interrupt the session is idle-but-claimed-continuable: pending steer input is promoted and a new drain starts. Queued next-turn prompts stay parked.
 
 **Events.** `hz.session.prompt.admitted`, `hz.part.created`, `hz.step.llm.completed{finishReason:cancelled}`, `hz.step.tool.completed{cancelled}`, `hz.usage.recorded`, `hz.session.claim.released`, `hz.session.busy.left`.
@@ -531,7 +535,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 **Failure branches.**
 - Inbox bound exceeded (default 1 024 pending items per session; configurable) ⇒ the admission is **refused** with a clear error rather than silently dropping input.
-- Duplicate submission (same `messageId`) ⇒ reconciling admission returns the existing item instead of enqueuing twice (the reference does exactly this: reconciliation before admit, `file:///data/home/forge/repo-tour/opencode/packages/core/src/session/session.ts#L155-L191`).
+- Duplicate submission (same `messageId`) ⇒ reconciling admission returns the existing item instead of enqueuing twice (the reference does exactly this: reconciliation before admit, [`opencode/packages/core/src/session/session.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/session.ts#L155-L191)).
 - Crash between promotion and part creation ⇒ the inbox row is `delivered` but no part exists; recovery re-opens the item to `pending` because the durable fact (the part) is missing. Trust the log, not the projection.
 - The session is archived while items are queued ⇒ queued items are preserved with the archive and listed on resume; they are not executed while archived.
 
@@ -541,7 +545,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 1. A mutating effect is prepared durably (kernel journal) and leased; the tool begins execution (`hz.effect.lease.issued` is in the log; the kernel's own row is `RUNNING`).
 2. The process is killed — SIGKILL, power loss, OOM, or supervisor eviction. No shutdown hook runs. Nothing is written after the kill.
-3. Next start: `hzk` opens its durable state and reconciles every unresolved row **before** reporting ready: `PREPARED`/`RUNNING`/`DISPATCHING`/`RESERVED` rows and any in-flight wave become `UNKNOWN` (`file:///data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L2507-L2527`; the status columns are constrained to include `UNKNOWN`, e.g. `file:///data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L1771`).
+3. Next start: `hzk` opens its durable state and reconciles every unresolved row **before** reporting ready: `PREPARED`/`RUNNING`/`DISPATCHING`/`RESERVED` rows and any in-flight wave become `UNKNOWN` (`kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified); the status columns are constrained to include `UNKNOWN`, e.g. `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified)).
 4. The session log receives `hz.effect.unknown` per unresolved effect with `reason:'no_terminal_at_restart'` and the evidence the kernel still holds (intent digest, lease id, last observation if any). This is a **loud** record: it is rendered as a banner and it blocks `session verify` from returning success.
 5. The session claim is recovered: `hz.session.claim.acquired{resumed:true, resumeAttempt}`. If the crashed turn had already streamed a partial assistant part, that part is marked incomplete (`hz.part.updated{complete:false}`) and is **not** continued by the model — a new step supersedes it (an incomplete assistant projection is never resumed).
 6. Reconciliation begins with observation, not with action: for each `UNKNOWN` effect the reconciler uses only read capabilities (`files.read`, `vcs.read`, `terminal.run` with a read-only argv allow-list) to establish the post-state. Nothing is re-executed during a read-only probe.
@@ -583,7 +587,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 **Actors.** FE, CTL, KRN, checkpoint engine.
 
-1. A checkpoint is created at each turn boundary when enabled (bounded: 32 per session, 64 MiB per snapshot, 512 MiB per session, 2 048 paths — the bounds are design constants, mirroring the reference `file:///data/home/forge/repo-tour/horizoncode/kernel/src/checkpoint.rs#L36-L58`): `hz.session.checkpoint.created{turnIndex, atSeq, atMessageId, workspace{revision, dirty[], untracked[], artifactRef, bytes}, kind:'turn', retention:'keep_last_n'}`.
+1. A checkpoint is created at each turn boundary when enabled (bounded: 32 per session, 64 MiB per snapshot, 512 MiB per session, 2 048 paths — the bounds are design constants, mirroring the reference `kernel/src/checkpoint.rs` of the ancestor project (not cloned, path not verified)): `hz.session.checkpoint.created{turnIndex, atSeq, atMessageId, workspace{revision, dirty[], untracked[], artifactRef, bytes}, kind:'turn', retention:'keep_last_n'}`.
 2. Capture is an **artifact effect**: it goes through Guard with `capabilityId:'artifact.write'`, and its snapshot bytes land in the content-addressed artifact store. A capture that cannot complete is not recorded as a checkpoint.
 3. Later, the user asks to go back: `hzcode rewind --turn N`. The request is a user action; rewind is never model-initiated, and the append of `hz.session.rewound` is refused for any other origin kind.
 4. Guard decides `files.write` scope for the workspace restore (if `scope` includes `workspace`) and for the projection move.
@@ -606,7 +610,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 **Actors.** FE, CTL, fork engine.
 
 1. `hzcode session fork --at <messageId|turn>` (or the equivalent command from any front-end): `hz.session.forked{parentSessionId, sessionId(new), boundary{messageId, type:'before'|'after'}, copiedThroughSeq, postureChildDigest, costReset:true}`.
-2. The fork projector copies **settled history only**: rows whose assistant/shell/compaction state is complete (mirroring the reference predicate, `file:///data/home/forge/repo-tour/opencode/packages/core/src/session/projector.ts#L206-L215`). A half-streamed assistant message never enters a fork.
+2. The fork projector copies **settled history only**: rows whose assistant/shell/compaction state is complete (mirroring the reference predicate, [`opencode/packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts#L206-L215)). A half-streamed assistant message never enters a fork.
 3. Message and part ids are remapped deterministically from the fork event id (`<eventId>_<seq>`), and the mapping digest is recorded so an import can verify the same mapping.
 4. Media referenced by the copied history is externalised into the child's own refs; the child's rows reference the **same blob hashes** (dedup), and the parent's rows are never rewritten.
 5. Instruction entries and instruction state are copied at the boundary; the child starts with fresh cost counters (`costReset`) but keeps provenance: `hz.agent.spawned`-style accounting does not apply here — a fork is a sibling session, not a delegated child, and that distinction is preserved in the session tree.
@@ -628,7 +632,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 
 1. The model calls `task` (or `read_only_task`): `hz.step.tool.requested{toolName:'task', capabilityId:'agent.spawn'}`.
 2. The **one spawn primitive** validates and applies, in this order: depth limit, children-per-parent ceiling, global concurrency ceiling, capability narrowing (child caps ⊆ parent caps), budget derivation (child budget ⊆ remaining parent budget), context capsule construction, and correlation inheritance. Any failed check refuses the spawn; it does not “try anyway”.
-3. `hz.agent.spawned{agentId, childSessionId, parentStepId, spawnKind:'task', profileId, grant{caps[], budget{}, depth, maxChildren, postureDigest}, capsuleDigest}` — a child is always traceable to a parent receipt and a budget (ADR-016, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L243-L249`).
+3. `hz.agent.spawned{agentId, childSessionId, parentStepId, spawnKind:'task', profileId, grant{caps[], budget{}, depth, maxChildren, postureDigest}, capsuleDigest}` — a child is always traceable to a parent receipt and a budget (ADR-016, `02-decisions.md#L243-L249`).
 4. The child session runs its own flows (6.1–6.11) under its narrowed posture. Its events carry the same `correlationId`, so a trajectory assembles across the tree.
 5. The parent does not burn steps while waiting: the `task` tool result is pending, the parent step is open, and the parent's claim is held. A `wait`/`yield` on a long child is *not* a busy-loop — the parent's step is suspended, and progress is driven by the child's completion signal.
 6. Child terminal: `hz.agent.completed{agentId, status, resultDigest, usage, receiptsDigest}`; then the parent's tool result lands: `hz.step.tool.completed{status:'succeeded', outputDigest}` and `hz.part.created{tool}` carrying the capsule summary (bounded size; the child's full transcript is a ref, not inlined).
@@ -774,7 +778,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 **Actors.** SCH, CTL, KRN, FE, LRN.
 
 1. A schedule is created (by a human, or by a model request that a human approves): recurrence, target session or template, prompt, posture, budget, and an optional bounded pre-authorisation. All of it is recorded before the schedule can fire.
-2. Each **occurrence** is durably journaled before dispatch (occurrence identity, due time, target, attempt state), so a restart neither double-fires nor silently drops a tick. The pattern is the reference's occurrence journal, `file:///data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/scheduler/occurrence_journal.rs`.
+2. Each **occurrence** is durably journaled before dispatch (occurrence identity, due time, target, attempt state), so a restart neither double-fires nor silently drops a tick. The pattern is the reference's occurrence journal, [`grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/scheduler/occurrence_journal.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations/grok_build/scheduler/occurrence_journal.rs).
 3. On fire, the prompt enters the target session's inbox (`hz.session.prompt.admitted`) — the same admission path as human input, before any work.
 4. Unattended semantics: the posture is the schedule's posture, and every `ask` resolves to **deny** unless the occurrence's exact `intentDigest` is covered by a pre-authorisation (F-5). There is nobody to ask.
 5. The run executes headless through the same Controller; output is captured as artifacts and summarized into a notification.
@@ -800,7 +804,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 3. The client renders the session from replayed events only. The bridge is a projection source; the client holds no hidden state that the log does not have.
 4. **Leader crash.** The controller process dies. The client keeps its cursor and its subscription intent; it does not clear the session view and does not report “unknown session”.
 5. A new leader starts, runs recovery (flow 6.8), acquires the session lease (`hz.session.claim.acquired{resumed:true}`), and re-registers the session.
-6. The bridge reconnects and **replays the cached client state**: the original initialize/session-attach handshake is replayed, responses to the replayed requests are swallowed, and the missed events are delivered from the cursor. The client sees a `leaderReconnected` notification and a continuous transcript — the technique is the reference's `replay_acp_state_after_reconnect`, `file:///data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs#L1117`.
+6. The bridge reconnects and **replays the cached client state**: the original initialize/session-attach handshake is replayed, responses to the replayed requests are swallowed, and the missed events are delivered from the cursor. The client sees a `leaderReconnected` notification and a continuous transcript — the technique is the reference's `replay_acp_state_after_reconnect`, [`grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs#L1117).
 7. If the crashed leader held a claim, the new leader does **not** assume the turn finished: it reconciles effects (flow 6.8) and tells the client what is `UNKNOWN` before streaming anything new.
 
 **Events.** Attach and replay are protocol frames, not log records (E-11). Recovered work produces `hz.session.claim.acquired{resumed:true}`, `hz.effect.unknown` and `hz.effect.reconciled`.
@@ -841,7 +845,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 3. An eval replays the trajectory hermetically: recorded provider responses, a sandboxed workspace copy, the same tool results. Scoring is deterministic, and the suite version, baseline and delta are recorded in `hz.learn.eval.completed`.
 4. A regression against the baseline is an automatic rejection: the ratchet forbids accepting a change that lowers a gated score.
 5. Candidates (memory facts, skill bundles, prompt variants, routing heuristics, doc patches) are recorded as `hz.learn.proposal.created` with a diff reference, the evidence trajectory ids, the eval id, the expected effect and a risk class.
-6. `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would add or widen a capability, edit policy, or touch the kernel is **refused at creation** (ADR-010, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L183-L189`). This is the hard line, enforced by the record shape rather than by review diligence.
+6. `authorityImpact` MUST be `none` or `narrowing_only`. A proposal that would add or widen a capability, edit policy, or touch the kernel is **refused at creation** (ADR-010, `02-decisions.md#L183-L189`). This is the hard line, enforced by the record shape rather than by review diligence.
 7. A human reviews. Accept applies the change with its own receipt and a revert path; reject records `status:'rejected'` with a reason, which is itself signal for the next proposal.
 8. Memory distillation is the same loop with a narrower change type: episodic observations are promoted to semantic facts only with provenance and review (`hz.memory.retained{reviewed:true}`).
 
@@ -883,7 +887,7 @@ Every flow is written so that F-1 to F-8 hold; the failure branches say which of
 2. The digest is compared with the pinned expectation for the tuple `(provider, model, config revision, tool catalog version, posture digest)`.
 3. **Match** ⇒ the step proceeds; `hz.step.started.context.prefixDigest` equals the previous step's for the same tuple, and cache hits are visible in `hz.step.llm.completed.usage.cacheRead`.
 4. **Mismatch at runtime** ⇒ `hz.error.raised{class:'cache', code:'CACHE_PREFIX_DRIFT', severity:'warn', failClosed:false}`, or `fatal` and fail-closed under `--strict-cache`, which CI uses. The drift is recorded with the per-section digest table so the diff is attributable to a section rather than to “the prompt”.
-5. **Mismatch in CI** ⇒ the build fails. The cache-guard is a gate, not a suggestion (ADR-009, `file:///data/home/forge/HorizonCode/docs/02-decisions.md#L173-L179`).
+5. **Mismatch in CI** ⇒ the build fails. The cache-guard is a gate, not a suggestion (ADR-009, `02-decisions.md#L173-L179`).
 6. Attribution names the offending contributor: a reordered tool list, a timestamp that leaked into the prefix, unstable JSON key order, a posture change (from flow 6.5 or 6.15), or a deliberate tool catalog version bump.
 7. Remediation is one of exactly three moves: (a) move the volatile content to the tail; (b) version the section so the change is intentional, and update the pin with a recorded reason; (c) fix the instability — sort the list, canonicalise the JSON. Editing the pinned digest with no recorded reason is not a remediation.
 8. Two adjacent cases are **not** drift and are not failures: a **cache namespace change** (different credential or provider, flow 6.23) and a **legitimate epoch change** (a posture change the user explicitly made). Both are recorded with a reason and reset the expectation instead of failing it.
@@ -989,7 +993,7 @@ A budget breach is instrumentation output, not a failure mode: a run does not ab
 
 ## 10. Status
 
-**Every row is `DESIGNED`** *as a specification claim.* **Implementation status (final audit, 2026-11-06):** the built subset (`docs/28-implementation-status.md` — kernel event log/receipt chain/guard + the v0.1 session stream, which implement the shape of `hz.session.created`, `hz.part.*`, `hz.step.tool.*`, `hz.effect.settled`, `hz.permission.*` and `hz.error.raised` only) carries real levels there; everything else in this document is design. The HorizonCode repository's reference repositories cited in this document are *design inputs*, and their contents are not evidence about HorizonCode. Where a reference records an unfinished lane of its own, this document says so rather than inheriting a claim.
+**Every row is `DESIGNED`** *as a specification claim.* **Implementation status (final audit, 2026-11-06):** the built subset (`docs/28-implementation-status.md`: kernel event log, receipt chain and guard, plus the v0.1 session stream) emits 20 durable types whose closest catalogue rows are `hz.session.created`, `hz.step.*`, `hz.step.tool.*`, `hz.session.compacted`, `hz.session.rewound`, `hz.session.forked`, `hz.permission.*` and `hz.error.raised`, under different names and with fewer fields (the mapping is in the Provenance section); `hz.part.*` and `hz.effect.*` are not emitted at all, the effect terminal being carried by the receipt chain. Everything else in this document is design. The HorizonCode repository's reference repositories cited in this document are *design inputs*, and their contents are not evidence about HorizonCode. Where a reference records an unfinished lane of its own, this document says so rather than inheriting a claim.
 
 | Artifact | Capability ID(s) | Level | Evidence |
 |---|---|---|---|
@@ -997,13 +1001,13 @@ A budget breach is instrumentation output, not a failure mode: a run does not ab
 | Versioning and upcasting | `session.manage`, `context.manage` | DESIGNED | §2.5; E-31…E-37. No upcaster exists; the fixture-driven test is specified, not written. |
 | Projector contract and rebuild | `session.manage` | DESIGNED | §2.6–§2.7; E-38…E-53. |
 | Canonical event catalogue (44 events) | all | DESIGNED | §4.2; parity gate specified. Gaps G-1…G-5 all ruled in §4.6 (`_conventions.md` §11 RC-1…RC-4, RC-10). |
-| Effect lifecycle events (`decision.made`, `lease.issued`, `settled`, `unknown`, `reconciled`) | `files.write`, `terminal.run`, `net.fetch`, `plugins.invoke`, `mcp.invoke` | DESIGNED | §4.2 rows 18–22 and flow 6.8. Inherited caveat: the reference kernel implements effect journals and restart reconciliation in Rust with tests, but the wiring from its recovery scan into session-log events is **not written** here, and the reference's own handoff records dead lanes (subagent dispatch gated off, no completion gate, interactive approval not wired end to end) — see `file:///data/home/forge/repo-tour/horizoncode/HANDOFF.md`. |
+| Effect lifecycle events (`decision.made`, `lease.issued`, `settled`, `unknown`, `reconciled`) | `files.write`, `terminal.run`, `net.fetch`, `plugins.invoke`, `mcp.invoke` | DESIGNED | §4.2 rows 18–22 and flow 6.8. Inherited caveat: the reference kernel implements effect journals and restart reconciliation in Rust with tests, but the wiring from its recovery scan into session-log events is **not written** here, and the reference's own handoff records dead lanes (subagent dispatch gated off, no completion gate, interactive approval not wired end to end) — see `HANDOFF.md` of the ancestor project (not cloned, path not verified). |
 | Flow catalogue (24 flows) | all | DESIGNED | §6. Every failure branch is specified; none executes anywhere yet. |
 | Cache-guard gate | `context.manage`, `providers.infer` | DESIGNED | Flow 6.24; ADR-009. A live cache-guard in a reference implementation is the design input; HorizonCode's gate test is specified, not written. |
 | Evidence gate | `session.manage` | DESIGNED | Flows 6.8, 6.21, 6.22. Explicit unknown: whether the independent-evidence gate can be wired into the direct session lane is an inherited open work item. |
 | Self-improvement record shapes | `memory.write`, `context.manage` | DESIGNED | Flow 6.22. Not implemented; the `authorityImpact` refusal is a design rule with no code behind it yet. |
 | Attach and replay after a leader crash | `session.manage` | DESIGNED | Flow 6.20. A reference implements client-side replay with tests; HorizonCode specifies the equivalent over its own protocol and does not claim those tests. |
-| Input admission, claims and busy periods | `session.manage` | DESIGNED | Flows 6.1, 6.6, 6.7, 6.8; the write-ahead claim rule in §2.4. Inheritance note: the claim-before-work pattern and its preserved-on-shutdown nuance come from a reference implementation (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/execution.ts#L73-L83`); HorizonCode has not built it. |
+| Input admission, claims and busy periods | `session.manage` | DESIGNED | Flows 6.1, 6.6, 6.7, 6.8; the write-ahead claim rule in §2.4. Inheritance note: the claim-before-work pattern and its preserved-on-shutdown nuance come from a reference implementation ([`opencode/packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts#L73-L83)); HorizonCode has not built it. |
 
 ### 10.1 Open items this document creates
 
@@ -1015,3 +1019,192 @@ A budget breach is instrumentation output, not a failure mode: a run does not ab
 6. **Denial semantics**: **ratified** (RC-6) — a policy `deny` never emits `hz.permission.asked` (flow 6.5 step 2 stands); denies are not presented as overridable.
 7. **Terminal-state vocabulary**: **ratified** (RC-7) — one enum in `@horizoncode/protocol`: `succeeded | failed | denied | cancelled | unknown | budget_exhausted | timeout | interrupted`.
 
+---
+
+## Provenance (events and flows: what the code emits, what is design only, where it came from)
+
+This section compares the event catalogue and the flows of this document with what the code actually emits (checked against `app/src/contracts.ts`, `app/src/core/loop.ts`, `app/src/core/index.ts`, `app/src/core/hooks.ts` and `kernel/src/eventlog.rs` / `kernel/src/protocol.rs`), records which designs came from other repositories with exact GitHub URLs at the commit that was read, and gives a detailed deferral note for every gap. It changes no status level; `docs/28-implementation-status.md` is the only place that may claim a level above DESIGNED.
+
+Reading the tables:
+
+- URLs point at a file at the full 40 character SHA from [`research/upstream-pins.md`](research/upstream-pins.md). Each path was checked with `git ls-files` in the read-only clone before it was written. Anything not checkable is written `path not verified`.
+- **Relation**: **copied verbatim**, **ported**, **adapted**, or **idea only**, as defined in the Provenance section of [`08-runtime.md`](08-runtime.md). In this document nothing is copied verbatim and nothing is ported.
+- The ancestor project (`horizoncode` / `repo-tour`: `owner_log.rs`, `effect_host.rs`, `HANDOFF.md`) is an earlier private codebase that is not available here; its paths cannot be verified and stay as text. The opencode links in the body of this document (permission, execution, session, projector) keep their line anchors, verified to exist at the pin.
+- Licences: opencode MIT; codex Apache-2.0; grok-build carries its own `LICENSE`. The worktree has no `LICENSE` or `NOTICE`; since nothing is copied, nothing is owed today.
+- Not cloned: aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix, opencode-v2 (see [`research/upstream-pins.md`](research/upstream-pins.md)).
+
+### The event catalogue versus what the code emits (read this first)
+
+**The 44-name `hz.*` catalogue of section 4.2 is DESIGN ONLY. No event with an `hz.` name is ever written.** The shipped log carries 20 differently-named dotted types, listed below. The kernel (`kernel/src/eventlog.rs`) accepts any non-empty `type`, so nothing enforces either vocabulary today. The two sets are related only by the 'closest catalogue row' column. This table is the authoritative description of the v0.1 log.
+
+The kernel protocol itself matches `contracts.ts`: `KERNEL_METHODS` lists 11 methods (`ping`, `log.append`, `log.read`, `log.verify`, `receipt.issue`, `receipt.verify`, `guard.check`, `guard.lease`, `guard.grant`, `guard.allowlist.amend`, `sandbox.report`) and `kernel/src/protocol.rs` has exactly 11 match arms. (Older text elsewhere that says 'the 8-method kernel protocol' is out of date; docs/07 is refreshed in the same pass.)
+
+#### Durable events actually written to the kernel log
+
+| Type | Emitted by | Actor | Payload | Closest catalogue row and the difference |
+|---|---|---|---|---|
+| `session.start` | `app/src/core/index.ts` `logSessionStart` | system `hzcode` | `{sessionId, workspace, provider, model, kernelMode}` (`kernelMode` is `trusted\|untrusted`, ruling 33) | `hz.session.created` (row 1), partial: no project, posture, policy revision, agent profile or slug |
+| `session.end` | `index.ts` `logSessionEnd` | system `hzcode` | `{sessionId}` | none (the catalogue has no session-end name; closest is `hz.session.busy.left`) |
+| `session.fork` | `index.ts` fork path (`EventTypes.sessionFork`) | system `hzcode` | `SessionForkPayload {parentSessionId, parentStream, parentSeq, messageIndex}`; first event of the CHILD stream | `hz.session.forked` (row 26), different shape and name |
+| `message.start`, `message.end` (role `user`) | `app/src/core/loop.ts` `beginUserTurn` | human `user` | `{role:"user"}` then `{role:"user", text}` | `hz.session.prompt.admitted` (row 2), partial: no inbox id, delivery or payload digest; the text is stored in the clear |
+| `message.start`, `message.end` (role `assistant`) | `loop.ts` per provider call | agent `hzcode` | start `{role, model, turn}`; end `{role, stopReason, text, toolCalls[{id,name}], usage}` | `hz.step.started` and `hz.step.llm.completed` (rows 7, 10), merged and without context digests or budget fields |
+| `message.delta` | defined in `EventTypes` (`contracts.ts`), NEVER emitted | none | none | `hz.step.llm.delta` (row 9) is ephemeral by design; nothing streams to the log |
+| `tool.call` | `loop.ts` `executeToolCall` | tool `<name>` | `{callId, name, args, repaired?, repairs?}` | `hz.step.tool.requested` (row 11), without intent digest or capability id |
+| `tool.result` | `loop.ts` (two sites: normal and transcript-write failure) | tool `<name>` | `{callId, name, ok, output (<=4000 chars), error?, ms, leaseId?}` | `hz.step.tool.completed` (row 12); the effect terminal (`hz.effect.settled`, row 20) is carried by the RECEIPT, not by this event |
+| `approval.request` | `loop.ts` before `gate.approve` | system `hz-guard` | `{callId, tool, kind, target, title}` | `hz.permission.asked` (row 37), partial |
+| `approval.decision` | `loop.ts` after the answer | human `user` | `{callId, tool, kind, decision: "approved"\|"declined"}` | `hz.permission.answered` (row 38), partial: values are `approved\|declined`, not allow/deny scopes; no grant, no TTL |
+| `receipt.issued` | `loop.ts` `issueReceipt` | system `hz-kernel` | `{receiptId, seq, tool, callId}` | no catalogue name; the receipt itself lives in `receipts.jsonl`, a SEPARATE hash chain (`receipt.issue`, `receipt.verify`) |
+| `error` | `loop.ts` (7 sites) | agent `hzcode` | `{message, detail?: "tool_loop", count?}` | `hz.error.raised` (row 40), partial: no typed error code or retry class |
+| `session.compaction` | `app/src/core/compaction.ts` (`COMPACTION_EVENT`), emitted by `loop.ts` | agent `hzcode` | `{window, dropped, kept, elidedTokens, droppedByRole, scannedMessages, pinnedConstraints, constraintsDropped, taskStatementPinned, ...}` | `hz.session.compacted` (row 23), different name |
+| `hook.decision`, `hook.failure` | `app/src/core/hooks.ts` `emitEvent` via `loop.ts` `onEvent` | system `hz-hook` | decision `{tool, hook, decision, reason?}`; failure `{tool, hook, error}` | none (hooks are not in the catalogue; docs/15 H6 wants a receipted `terminal.run`) |
+| `run.pending_todos_reminder` | `loop.ts` (`PENDING_TODOS_EVENT`) | system `hz-loop` | `{open}` | none (`hz.todo.updated`, row 16, is a different thing: a list change) |
+| `run.unverified_completion` | `loop.ts` (`UNVERIFIED_COMPLETION_EVENT`) | system `hz-loop` | `{files, claimed}` | none (closest is the evidence gate of flow 6.8 and 6.22, not built) |
+| `rewind.plan`, `rewind.apply`, `rewind.conversation` | `index.ts` rewind paths | system `hzcode` | plan `{checkpoint, restored, refused, skipped}`; apply the same; conversation `{checkpoint, messageIndex, removed, adjustedTo}` | `hz.session.rewound` (row 25), three events instead of one |
+| `plan.apply` | `index.ts` plan-mode apply | system `hzcode` | `{applied, kept, remaining}` | `hz.plan.updated` (row 15) is unrelated; this is staged-write application |
+
+
+All are durable and hash-chained in `<state>/events/session__<id>.jsonl`, appended through `Kernel.appendEvent`. An append failure never stops the chat but is noticed once and the run stops reporting success (`logEvent` in `loop.ts`). Some are written by `logEvent` with a per-event actor; the rewind, plan and session-boundary events are written by `Runtime.append` with the fixed actor `{kind:"system", id:"hzcode"}`.
+
+
+#### Ephemeral UI facade events (`RuntimeEvent`, never written to the log)
+
+| Event | Class | Notes |
+|---|---|---|
+| `assistant.delta`, `assistant.done` | ephemeral | text streaming; `assistant.done` carries the full text |
+| `assistant.thinking` | ephemeral, additive (TUI part 3, C3) | reasoning for display only; never stored |
+| `tool.card` | ephemeral | `running\|ok\|error`; optional `repaired`, `summary`, `detail` (C1: `durationMs`, `output`, `exitCode`, `count`) |
+| `notice`, `error` | ephemeral | human-readable messages; the durable `error` event is separate |
+| `context.usage` | ephemeral | the `/context` meter (`ContextUsage`) |
+| `turn.diff` | ephemeral, additive (FEAT-003) | one aggregated unified diff per turn that changed a file |
+| `subagent.event`, `subagent.start`, `subagent.end` | ephemeral, additive (S1 P2, C2) | bounded child-run events; `profile` optional |
+| `turn.done` | ephemeral | end of a turn |
+
+
+None of these is a catalogue event; adding one is an additive `RuntimeEvent` variant in `contracts.ts` (additive-only rule, see [`07-apis-and-contracts.md`](07-apis-and-contracts.md)).
+
+
+### What shipped, and where it came from
+
+| # | HorizonCode file(s) | Upstream exact URL(s) at the pinned SHA | Relation | Notes |
+|---|---|---|---|---|
+| 1 | `app/src/contracts.ts` (`EventEnvelope`, `EventTypes`, `EventSeed`), `kernel/src/eventlog.rs`, `kernel/src/protocol.rs` (`log.append`, `log.read`, `log.verify`) | [`packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts)<br>[`packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts)<br>[`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>ancestor `kernel/src/owner_log.rs`, `effect_host.rs`: not cloned, path not verified | idea only (hash-chained append-only log with a single writer); original Rust and TypeScript | Kernel event log, VERIFIED (docs/28 section 1). One JSONL file per stream under `<state>/events/` (`session:abc` becomes `session__abc.jsonl`), nine fields `{id, seq, ts, stream, type, actor, payload, prevHash, hash}`, `seq` 1-based and monotonic per stream, hash = sha256 of canonical JSON of every field except `hash` (`contracts.ts`, `canon.rs`, kept byte-identical by the interop suites), a file lock per stream, tail anchor check, torn-line and corruption quarantine. **The kernel accepts ANY non-empty `type` string: the 44-name catalogue is not enforced anywhere** (`gate:event-catalogue-parity` is design only). The envelope has NO `correlationId`, `causationId`, `schemaVersion`, `epoch` or `authority` fields, so most of section 3.1 is design only. |
+| 2 | `app/src/contracts.ts` (`RuntimeEvent`), `app/src/core/loop.ts`, `app/src/tui/interactive.ts` | [`crates/codegen/xai-grok-pager/src/app/acp_handler/subagent_lifecycle.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app/acp_handler/subagent_lifecycle.rs)<br>[`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol) | idea only; original | The UI facade stream (`assistant.delta\|done\|thinking`, `tool.card`, `notice`, `error`, `context.usage`, `turn.diff`, `subagent.event\|start\|end`, `turn.done`) is ephemeral and never written to the log; additive variants never touch the kernel catalogue (comment blocks in `contracts.ts`, rulings 54 and 88). Details in the second table below. |
+| 3 | `app/src/core/server.ts`, `app/src/contracts.ts` (`ServerNotification`, `SESSION_EVENT_METHOD`) | [`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md) | idea only | Subscribe is `session.subscribe`; events are relayed as `session.event` notifications carrying a `RuntimeEvent`. There is no cursor, no `hz.subscribe`, no resnapshot: the single-attach server replays nothing. |
+| 4 | `app/src/core/session.ts` (`SessionStore.repairDanglingToolCalls`), `app/src/core/admission.ts` (`recoverInterrupted`) | [`packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts)<br>[`packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts)<br>ancestor `effect_host.rs` reconcile: not cloned, path not verified | idea only (reconcile on open; settled-history fork predicate) | Flow 6.8 (crash, recovery, reconciliation to `UNKNOWN`) exists in a REDUCED form: on open, an unanswered assistant tool call is paired with a synthetic UNKNOWN tool result and a `running` admission row is settled to `unknown`/`interrupted`. It writes NO `hz.effect.unknown` or `hz.effect.reconciled` events. |
+
+
+### Flow status (section 6)
+
+The reading note at the top of this document said nothing in section 6 executes anywhere yet. That is no longer true; the table states, per flow, what runs today. 'SHIPPED (reduced)' means a real code path exists with fewer events and fewer fields than the flow specifies, and is TESTED where docs/28 says so.
+
+| Flow | Today | Notes |
+|---|---|---|
+| 6.1 Cold start to first token | PARTIAL | `createRuntime`, kernel start, `session.start`; no config lattice event, no cache-guard |
+| 6.2 Simple prompt turn with one read | SHIPPED (reduced) | `message.*`, `tool.call`, `tool.result`, `receipt.issued`; event names differ |
+| 6.3 Mutating turn with approval ask | SHIPPED (reduced) | `approval.request`/`approval.decision`; no intent-digest binding of the answer, no lease event |
+| 6.4 Parallel tool batch | SHIPPED (reduced) | batch scheduling NF-072 (docs/09); events are per call |
+| 6.5 Denial and user override | PARTIAL | a guard deny is a tool error result; no override flow |
+| 6.6 Steering or interrupt mid-turn | PARTIAL | abort via `Runtime.abort()`; no claim release event, no steer queue |
+| 6.7 Queueing while busy | PARTIAL | `app/src/core/admission.ts` FIFO exists; the loop does not dispatch input through it yet |
+| 6.8 Crash, recovery, reconcile to UNKNOWN | PARTIAL | reduced reconcile on open (see the table above); no effect events |
+| 6.9 Compaction | SHIPPED (reduced) | `session.compaction` event; structured summary (ruling 76) |
+| 6.10 Checkpoint and rewind | SHIPPED (reduced) | `rewind.*` events; checkpoints in `checkpoints.jsonl` |
+| 6.11 Session fork | SHIPPED (reduced) | `session.fork` first event of the child stream (ruling 59) |
+| 6.12 Subagent spawn, await, failure | SHIPPED (reduced) | `agent` tool, `subagent.*` UI events; no `hz.agent.*` durable events |
+| 6.13 `parallel_tasks` graph | NOT IMPLEMENTED |  |
+| 6.14 Team multi-agent bus | NOT IMPLEMENTED |  |
+| 6.15 Plan mode | SHIPPED (reduced) | staged writes, `plan.apply`; plan mode is a permission mode (ruling 58) |
+| 6.16 MCP discovery and invocation | SHIPPED (reduced) | stdio tools only; no connect or discovery events (RC-2 rules these are not events) |
+| 6.17 Plugin loading | NOT IMPLEMENTED | no plugins |
+| 6.18 Skill invocation | PARTIAL | `/skill` injects the body into the prompt for the turn; no `hz.skill.invoked` event, no `runAs: subagent` |
+| 6.19 Scheduled or background run | NOT IMPLEMENTED |  |
+| 6.20 IDE bridge attach and replay | NOT IMPLEMENTED | see docs/14 G5 |
+| 6.21 Headless CI run with JSONL output | SHIPPED (reduced) | `hzcode -p --output-format stream-json`: one `RuntimeEvent` per line, not log events |
+| 6.22 Self-improvement | PARTIAL | post-mortems and eval scaffolding exist (`core/postmortem.ts`, `core/evals.ts`, `src/grow.ts`); no `authorityImpact` proposal records |
+| 6.23 Model fallback on provider error | PARTIAL | `app/tests/core/fallback.test.ts`; provider retry/backoff in `providers/retry.ts` |
+| 6.24 Cache-guard failure | NOT IMPLEMENTED | `gate:cache-guard` is a declared gap |
+
+
+### Where each design family came from (all DESIGN ONLY unless marked)
+
+| Family | Upstream exact URL(s) at the pinned SHA | Status | Notes |
+|---|---|---|---|
+| Envelope, identity, causation and correlation (2.1, 3.1) | [`packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts)<br>[`packages/core/src/session/session.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/session.ts)<br>ancestor `owner_log.rs`: not cloned, path not verified | PARTIAL: id, seq, ts, stream, type, actor, payload, prevHash, hash ship | See J1. |
+| Single writer, append transaction, epochs and fencing (2.3, 2.4) | [`packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts)<br>ancestor `owner_log.rs#L352-L364` (`OwnerLogV2::append`): not cloned, path not verified | PARTIAL: one writer per stream by file lock; no epochs, no claim records, no transaction with projectors | See J2. |
+| Versioning, upcasting, projectors, rebuild, retention (2.5 to 2.7) | [`packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts) | NOT IMPLEMENTED; the SQLite `messages` table is written directly by the loop, not projected from the log | See J3. |
+| The canonical 44-name catalogue (4.2) and its parity gate | idea only: no upstream catalogue | NOT IMPLEMENTED as names; the code uses its own 20 dotted names (first table above) | See J4. |
+| Graded guarantees, inbox kinds, emitter authority (4.3 to 4.5) | [`packages/core/src/permission.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/permission.ts) | NOT IMPLEMENTED | See J5. |
+| Flows 6.1 to 6.24 | [`packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts)<br>[`packages/core/src/session/session.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/session.ts)<br>[`packages/core/src/permission.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/permission.ts)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs) | PARTIAL per flow: see the flow status table below | See J6. |
+
+
+### Sources that could not be linked
+
+The ancestor project's `owner_log.rs` (line 352 to 364, `OwnerLogV2::append`), `effect_host.rs` (lines 2507 to 2527, reconcile on open), `HANDOFF.md` (the dead lanes caveat in section 10) and `specs/v2/session.md` belong to an earlier private codebase that is not cloned. Everything the document says about them is design input, not evidence about HorizonCode.
+
+
+### Deferred or not started: detailed notes for the next agent
+
+Each note gives: what is deferred, why, the upstream reference, whether to adopt as is or adapt, a suggested design, and the files to touch. No note changes a status level. Paths are from the repository root.
+
+#### J1. Full envelope: correlation, causation, schema version, authority pins, epochs
+
+- **What is deferred.** The ten-field `DurableEventV1` of section 3.1 with `correlationId`, `causationId`, `schemaVersion`, `AuthorityPinsV1` and the owner epoch. The shipped envelope has nine fields and no versioning at all.
+- **Why.** `canon.rs` and `contracts.ts` hash all envelope fields, so adding a field changes the hash input for new events; old chains must keep verifying. The change must be additive and gated on presence (like the interop suites assume).
+- **Upstream reference.** [`packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts)<br>[`packages/core/src/session/session.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/session.ts)<br>ancestor `owner_log.rs`: not cloned, path not verified
+- **Adopt as is or adapt.** ADAPT. Do not copy: the references are Effect-based TypeScript with different identity rules.
+- **Suggested design.** Add OPTIONAL fields to `EventSeed` (`correlationId`, `causationId`, `schemaVersion`), include them in the hash input only when present (canonical JSON already omits undefined), mirror in `kernel/src/eventlog.rs`, add vectors to the interop tests in BOTH languages before anything emits them. `canon.rs` must stay unchanged: the serialization is already generic.
+- **Files to touch.** `app/src/contracts.ts` (additive), `kernel/src/eventlog.rs`, `app/tests/core/interop.test.ts`, `kernel` tests; docs/05 section 4.2.
+
+#### J2. Claims, busy periods, epochs and fencing (hz.session.claim.*, busy.*)
+
+- **What is deferred.** Write-ahead claim records, heartbeat and TTL, owner epochs and stale-epoch rejection, busy entered/left events.
+- **Why.** Single-process, single-attach use does not need them; they become necessary with the multi-client server (docs/14 G4) and the admission queue being the real input path (J6, flow 6.7).
+- **Upstream reference.** [`packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts)<br>ancestor `owner_log.rs#L352-L364`, `effect_host.rs`: not cloned, path not verified
+- **Adopt as is or adapt.** ADAPT the claim-before-work pattern and the 'shutdown preserves the claim' nuance recorded at docs/06 section 10.
+- **Suggested design.** First route `Runtime.send` through `AdmissionQueue` (the table and recovery exist), then add `session.claim` events at admission and release, an epoch integer in the claim row, and a test that a second process cannot append with a stale epoch.
+- **Files to touch.** `app/src/core/admission.ts`, `app/src/core/loop.ts`, `app/src/core/index.ts`, `app/tests/core/admission.test.ts`.
+
+#### J3. Projectors, upcasters, rebuild and retention
+
+- **What is deferred.** The log is the state of record and all tables are projections that can be rebuilt. Today the SQLite `sessions`/`messages` tables are written directly by the loop and the log is an AUDIT trail beside them (the comment in `loop.ts` `logEvent` says exactly this).
+- **Why.** Inverting the dependency is a rewrite of `SessionStore` and is not required for the shipped guarantees. A failed log append already stops the run from reporting success.
+- **Upstream reference.** [`packages/core/src/session/projector.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/projector.ts)
+- **Adopt as is or adapt.** ADAPT, as a long-term option only.
+- **Suggested design.** Cheap partial win: a `hzcode session verify <id>` that replays the event stream and checks it against the `messages` table (counts of user and assistant messages, tool call ids). It needs no inversion and would surface divergence.
+- **Files to touch.** new `app/src/core/session-verify.ts`, `app/src/main.ts`, `app/tests/core/session-verify.test.ts`.
+
+#### J4. Reconciling the event names with the catalogue (or the catalogue with the code)
+
+- **What is deferred.** The code emits 20 dotted names (first table) while the document specifies 44 `hz.*` names. Either rename the emitted types or amend `_conventions.md` section 6 to record the shipped names as the v0.1 vocabulary with a mapping.
+- **Why.** Renaming breaks every existing log (they verify, but a new reader would see mixed names) and needs an upcaster; changing the conventions is a ruling for the human owner.
+- **Upstream reference.** idea only. No upstream catalogue to copy.
+- **Adopt as is or adapt.** Original. Recommended: keep the shipped names, record the mapping table of this section in `_conventions.md` as a ratified RC, and make `gate:event-catalogue-parity` check that every emitted `type` is in the (updated) catalogue.
+- **Suggested design.** Implement the gate as a test that greps `EventTypes` plus the string literals passed to `logEvent` and `append` in `app/src/core/*.ts` and compares them with a list in `docs/_conventions.md`.
+- **Files to touch.** `docs/_conventions.md`, new `app/tests/core/event-catalogue.test.ts`, `ops/gate-catalogue.md`.
+
+#### J5. Graded guarantees, inbox kinds, emitter authority
+
+- **What is deferred.** Per-event durability grades, inbox kinds, and the rule that only named actors may emit named events (section 4.5). Today any code that holds the kernel client can append any type; the only authority control is that the TS runtime is the sole writer of its streams.
+- **Why.** The kernel is type-agnostic by design (it is a log, not a schema). Enforcing emitter authority would need the kernel to know the catalogue.
+- **Upstream reference.** [`packages/core/src/permission.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/permission.ts)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** A kernel-side allow-list of event types per `actor.kind` read from `policy.json`, defaulting to allow-all so existing logs and tests are unaffected, then tighten. Mirror the TS fallback.
+- **Files to touch.** `kernel/src/eventlog.rs`, `kernel/src/protocol.rs`, `app/src/core/kernel.ts` (TS fallback), tests in both.
+
+#### J6. Flow gaps: admission as the input path, steering, denial override, parallel tasks, team bus, scheduler, cache guard
+
+- **What is deferred.** See the flow status table. The biggest behavioural gap is that user input does not pass through the durable admission queue, so there is no queueing while busy (6.7) and no steering (6.6).
+- **Why.** The TUI is a synchronous chat loop; queueing needs a UI affordance (docs/13 D5/D6) and the server needs approval routing (docs/14 G4, G11).
+- **Upstream reference.** [`packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts)<br>[`packages/core/src/session/session.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/session.ts)<br>[`packages/core/src/permission.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/permission.ts)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** Order: (1) route input through the admission queue and show a queue indicator in the status line; (2) steer = abort current step at the next boundary and prepend the user message; (3) denial override only for `ask` decisions, never for kernel `deny`.
+- **Files to touch.** `app/src/core/admission.ts`, `app/src/core/loop.ts`, `app/src/tui/interactive.ts`, `app/tests/core/admission.test.ts`.
+
+#### J7. Durable subagent, memory, learn and usage events
+
+- **What is deferred.** `hz.agent.spawned|completed|message.sent`, `hz.memory.*`, `hz.learn.*`, `hz.usage.recorded`, `hz.todo.updated`, `hz.session.moved` are not emitted. Subagent boundaries and usage are UI events only; the todo list is a per-session tool state.
+- **Why.** No consumer needs them yet; usage accounting is derived from provider usage and budgets in memory.
+- **Upstream reference.** idea only.
+- **Adopt as is or adapt.** Original.
+- **Suggested design.** When a consumer exists: emit `usage.recorded` once per provider call from `loop.ts` with the `Usage` object (a one-line addition next to `message.end`), `subagent.start|end` durable copies at the `runNested` boundary, and `todo.updated` from `tools/todo.ts`.
+- **Files to touch.** `app/src/core/loop.ts`, `app/src/core/subagent.ts`, `app/src/tools/todo.ts`.
