@@ -1,6 +1,6 @@
 # 25 — Roadmap and Glossary
 
-> **Status of every phase in this document: `DESIGNED` as a plan.** **Implementation status (final audit, 2026-11-06):** code now exists for slices of M0/M1/M2 territory (kernel, runtime loop, tools, chat TUI, skills/subagents, code mode, preview) without the phase protocols below having been run — levels and evidence live in `28-implementation-status.md`, the single source of truth; phase *exit criteria* in §3 are unmet and unchanged.
+> **Status of every phase in this document: `DESIGNED` as a plan.** **Implementation status (final audit, 2026-11-06):** code now exists for slices of M0/M1/M2 territory (kernel, runtime loop, tools, chat TUI, skills/subagents, code mode, preview) without the phase protocols below having been run - levels and evidence live in `28-implementation-status.md`, the single source of truth; phase *exit criteria* in §3 are unmet and unchanged. **Refreshed 2026-11-10:** the slices that now exist per phase, with what is not built, are in section 3.0a; the final-audit date above is the original and the phase exit criteria remain unmet.
 
 ---
 
@@ -78,6 +78,22 @@ Risk registers below name a *role*, not a person, because this set is a specific
 | M7 · Enterprise | Deployable and auditable in an organisation | Ecosystem | Signed managed policy narrowing a user config; an air-gapped run; a remote host returning its guarantee vector |
 | M8 · Self-improvement | Learning that never widens authority; long-horizon unattended work | All surfaces | An unattended run certified by receipts and an adversarial test pass |
 
+### 3.0a What shipped against M0 to M8 (reality check, 2026-11-10)
+
+The phases above are a PLAN and none has formally exited (no phase demo protocol of section 6.1 was run). The code was built outside that protocol, in waves and pull requests #1 to #28. This table says how much of each phase's territory has a reduced form in the tree; levels and evidence are in `28-implementation-status.md`, details of what is deferred are in `33-handoff.md` section 5.
+
+| Phase | Shipped (reduced form, TESTED unless noted) | Not built |
+|---|---|---|
+| M0 Foundation | `app/src/contracts.ts` (hand written, additive only) matched by `kernel/src/protocol.rs`; `ops/gates.sh` with 8 runnable gates; `ops/gate-catalogue.md` marking all 18 catalog gates `declared-gap` | generated wire types (`hz_abi`, `@horizoncode/protocol`, SDKs), the gate registry, `gate:wire-parity` and the other design gates |
+| M1 Loop | agent loop, 18 tools, scrollback chat TUI (readline, not fullscreen), headless pipe mode, `-p` print mode, sessions in SQLite, compaction, budgets and rails, 26 slash command names | fullscreen and inline renderer split, mouse, keymap registry, command palette (`docs/13`: DESIGN ONLY) |
+| M2 Authority | Rust kernel: hash-chained event log, receipt chain, guard with leases and R1 precedence, keyed anchors, allowlist and egress decider, `sandbox.report` that never claims enforcement | OS confinement backends (Landlock, seccomp, bwrap, Seatbelt; NF-016), reconciled `UNKNOWN` effects beyond the admission FIFO, signed receipts |
+| M3 Surfaces | `hzcode serve` (single attach, NDJSON JSON-RPC, 7 methods), print mode | IDE, SDKs, other transports (UDS, TCP, HTTP), auth, multi-client |
+| M4 Intelligence | model catalog seam with a curated snapshot, context meter, auto-compaction, project memory files, `repo_map`, per-model prompts and tool routing | cache-guard, memory tiers and consolidation, live models.dev fetch, OAuth |
+| M5 Scale | subagents with bounded presets, shared budget ledger | fleets, plan graphs, worktree pools, speculation wiring |
+| M6 Ecosystem | MCP client v1 (stdio), hooks lifecycle, skills (folders, foreign sources), custom commands, LSP loop | plugins and marketplace, signing, HTTP and OAuth MCP, hook trust gate, DAP |
+| M7 Enterprise | nothing | managed policy, air-gapped mode, remote hosts |
+| M8 Self-improvement | growth-loop CLI (`bun run grow`), eval runner (`bun run eval`), post-mortems | unattended runs, scheduler, library consumption of applied proposals |
+
 **Rule R25.3.** A phase may not start work owned by a later phase. Work discovered to belong to an earlier phase is a *regression* and is fixed there (see §6.3).
 
 ### 3.1 M0 · Foundation
@@ -101,7 +117,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 **Exit criteria — gate checklist.** All of these must be green:
 
 - `gate:wire-parity` — every protocol type has exactly one generated owner.
-- `gate:doc-status` — no document claims a level above its evidence; every `NF-###` in `24-feature-catalog.md` §5 is indexed in §4.2 of this document.
+- `gate:doc-status` - no document claims a level above its evidence; every `NF-###` in `24-feature-catalog.md` §5 is indexed in §4.2 of this document.
 - `gate:layering` — the dependency ranks are declared and the check runs (it may pass vacuously at M0).
 - `gate:repolint-debt` — the ratchet baseline exists and may only decrease.
 - `gate:kernel-pin` — a manifest exists and pins the (not yet built) kernel asset format.
@@ -200,7 +216,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 - `gate:sensitive-path-coverage` — every path declared `sensitive:` is covered by a test that proves it.
 - `gate:boundary-test` — effect submission has exactly one primitive with exactly one caller per effect class.
 - `gate:cross-plane-abi` — kernel-client fails closed on a missing or older ABI.
-- `gate:doc-status` — `11-authority-safety.md` and `12-sessions-state.md` statuses match their evidence.
+- `gate:doc-status` - `11-authority-safety.md` and `12-sessions-state.md` statuses match their evidence.
 - `gate:parity-ratchet` — no disposition regression while the policy engine is replaced (wildcards → Starlark).
 
 **Demonstrable artifact at exit.** Recorded runs on Linux, macOS and Windows where the same intent produces: a policy decision, an approval prompt, a one-use lease, a receipt, and — for a deliberately killed effect — an `UNKNOWN` that is later reconciled with the observation that decided it. The TUI receipt inspector shows the chain; a guarantee assessment reports a typed residual rather than assuming enforcement.
@@ -243,7 +259,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 - `gate:parity-ratchet` — no Section A disposition regresses; every capability edge on a declared surface has a row.
 - `gate:layering` — no front-end imports a non-contract package.
 - `gate:wire-parity` — the SDKs are generated, never hand-edited.
-- `gate:doc-status` — `14-surfaces.md` status lines match evidence.
+- `gate:doc-status` - `14-surfaces.md` status lines match evidence.
 - `gate:receipt-coverage` — a session started in one surface and continued in another yields one continuous receipt chain.
 
 **Demonstrable artifact at exit.** One session started in the TUI, attached to from the server, mirrored into an IDE through ACP, and read through the generated TS SDK — with the same events, the same receipts and the same exit codes.
@@ -269,7 +285,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 | # | Deliverable | Specified by |
 |---|---|---|
 | M4-D1 | Provider layer, native wire codecs, `models.dev`-style catalog snapshot decoder; endpoints as configuration, not code (NF-044) | `10-cognition.md` |
-| M4-D2 | Context compiler: exactly two regions — byte-stable prefix and projected turn tail (NF-005) | `10-cognition.md` |
+| M4-D2 | Context compiler: exactly two regions - byte-stable prefix and projected turn tail (NF-005) | `10-cognition.md` |
 | M4-D3 | Cache guard + golden prefix pins per prompt family (`packages/context/test/golden/prefix/<family>.sha256`, RC-8) | `_conventions.md` §11 (RC-8); `10-cognition.md` |
 | M4-D4 | Four-tier memory with provenance; tools `memory_retain`, `memory_recall`, `memory_edit`, `memory_reflect` (NF-008) | `10-cognition.md` |
 | M4-D5 | Retrieval: lexical + symbol + reference index, local-first (NF-042 partial) | `10-cognition.md` |
@@ -322,7 +338,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 | M5-D6 | Plan, Goal and Todo state machines with an approved-plan window; tools `todo`, `update_goal` (NF-045) | `08-runtime.md`, `09-tools.md` |
 | M5-D7 | Goals, attempts and the run/attempt model; `hzcode session tree` reconstructs authority and cost | `08-runtime.md`, `12-sessions-state.md` |
 | M5-D8 | Deterministic planner/executor routing: `executor-only` / `light` / `full` / `plan-for-approval` / `plan-only` chosen from raw user text by policy (NF-004) | `08-runtime.md` |
-| M5-D9 | Worktree pool primitives for child isolation (NF-019, partial — see risk register) | `12-sessions-state.md`, `11-authority-safety.md` |
+| M5-D9 | Worktree pool primitives for child isolation (NF-019, partial - see risk register) | `12-sessions-state.md`, `11-authority-safety.md` |
 | M5-D10 | Rhai workflow engine bindings; tool `workflow` (NF-012) | `15-extensibility.md` |
 | M5-D11 | Notification and watchdog system: stalls, budget thresholds, held leases, unreconciled `UNKNOWN`s (NF-028) | `08-runtime.md`, `16-operations.md` |
 
@@ -440,10 +456,10 @@ Risk registers below name a *role*, not a person, because this set is a specific
 |---|---|---|
 | M8-D1 | Trajectories, evals, distillation, `skillify` and gated proposals; authority impact always `none` (NF-010, NF-033 complete, NF-034, NF-035) | `08-runtime.md`, `15-extensibility.md` |
 | M8-D2 | Managed coding domain: Goal / SpecVersion / Run / Task / Attempt / WorkerExecution / Evidence / Verification, OwnerLog, task DAG, verifier, worktree pool completion, resource budget (NF-018, NF-019 complete, NF-017 complete) | `11-authority-safety.md`, `12-sessions-state.md` |
-| M8-D3 | Long-horizon unattended runs: checkpoint/rewind/resume, retention, reconciled `UNKNOWN`s, no human in the loop — under unchanged postures | `08-runtime.md`, `12-sessions-state.md` |
+| M8-D3 | Long-horizon unattended runs: checkpoint/rewind/resume, retention, reconciled `UNKNOWN`s, no human in the loop - under unchanged postures | `08-runtime.md`, `12-sessions-state.md` |
 | M8-D4 | Prompt tuning under cache discipline: variants evaluated as whole prefixes with paired evals; promotion is a proposal (NF-034) | `10-cognition.md` |
 | M8-D5 | Trajectory dataset export with outbound redaction and scoping (NF-035) | `08-runtime.md`, `16-operations.md` |
-| M8-D6 | Adversarial certification suite: prompt injection, authority confusion, path escape, egress abuse, classifier-free routing attacks — with recorded evidence bundles | `22-threat-model-certification.md` [planned] |
+| M8-D6 | Adversarial certification suite: prompt injection, authority confusion, path escape, egress abuse, classifier-free routing attacks - with recorded evidence bundles | `22-threat-model-certification.md` [planned] |
 | M8-D7 | `RELEASED` march: every capability raised level by level with named evidence; `gate:doc-status` green on the whole set | `_conventions.md` §8 |
 
 **Exit criteria — gate checklist.** All of these must be green:
@@ -508,7 +524,7 @@ Risk registers below name a *role*, not a person, because this set is a specific
 
 ### 4.2 Feature index — `NF-001`…`NF-050`
 
-Every id below has a definition section in `24-feature-catalog.md` §5 (anchor `NF-<id>`); the owning document is the assignment from §4.1. Where a phase column shows two phases, the first is the partial claim and the second the completion (the partial scope must be named in the status line — see §8.2 OQ-R3).
+Every id below has a definition section in `24-feature-catalog.md` §5 (anchor `NF-<id>`); the owning document is the assignment from §4.1. Where a phase column shows two phases, the first is the partial claim and the second the completion (the partial scope must be named in the status line - see §8.2 OQ-R3).
 
 | Id | Name | Owning doc | Phase |
 |---|---|---|---|
@@ -692,7 +708,7 @@ Alphabetical. One sentence per term, then the document that **owns** the definit
 | **fail-closed** | The default when a guarantee cannot be proven: refuse or report `UNKNOWN` — never proceed and never report success. | 11, 16 |
 | **fleet** | A set of subagents with an explicit dependency graph (`id`/`depends_on`), upstream results, `adopt_ref`, and `fail_fast`. | 08 |
 | **front-end / surface** | A client of the Controller — TUI, print/headless, server, web, desktop, IDE/ACP, MCP server, SDKs; it renders and collects input only. | 14 |
-| **gate / ratchet** | A CI check named in `24-feature-catalog.md` §3.5; a *ratchet* may only tighten — its baseline may decrease, never increase. | `24-feature-catalog.md` §3.5 |
+| **gate / ratchet** | A CI check named in `24-feature-catalog.md` §3.5; a *ratchet* may only tighten - its baseline may decrease, never increase. | `24-feature-catalog.md` §3.5 |
 | **goal** | The durable statement of what the user is trying to achieve, updated by events (`hz.goal.updated`) and preserved across compaction. | 08; tool `update_goal` |
 | **Guard** | The kernel decision point: every effect resolves to a `GuardDecisionV1` before a lease can exist. | 11 |
 | **guard decision** | See *decision (GuardDecision)*. | 11 |
@@ -901,7 +917,7 @@ Two kinds of entry: **inherited** (created by a sibling document) and **roadmap-
 
 ## 9. Status
 
-**Every phase in this document: `DESIGNED` as a plan; no phase has formally exited.** **Implementation status (final audit, 2026-11-06):** code now exists for slices of M0/M1/M2 territory (kernel, runtime loop, tools, chat TUI, skills/subagents, code mode, preview — see `28-implementation-status.md`) built *outside* the phase protocol of §6.1: no gate in §3 has been run and no evidence bundle exists, so every phase deliverable, gate and artifact named here remains unmet until its checklist is executed.
+**Every phase in this document: `DESIGNED` as a plan; no phase has formally exited.** **Implementation status (final audit, 2026-11-06):** code now exists for slices of M0/M1/M2 territory (kernel, runtime loop, tools, chat TUI, skills/subagents, code mode, preview - see `28-implementation-status.md`) built *outside* the phase protocol of §6.1: no gate in §3 has been run and no evidence bundle exists, so every phase deliverable, gate and artifact named here remains unmet until its checklist is executed. **Refreshed 2026-11-10:** see section 3.0a for what shipped against each phase through pull request #28; no phase demo protocol was run and no level in this table changed.
 
 | Item | Level | Evidence |
 |---|---|---|
@@ -924,22 +940,22 @@ A claim above `DESIGNED` in this document, without a named artifact, is a defect
 
 | Document | Relationship |
 |---|---|
-| `00-index.md` | Reading order and the status ladder; phase-description staleness resolved (OQ-R1 closed — the index now says `M0`–`M8`) |
+| `00-index.md` | Reading order and the status ladder; phase-description staleness resolved (OQ-R1 closed - the index now says `M0`–`M8`) |
 | `_conventions.md` | Names, packages, crates, capability IDs, events, schemas, status levels, writing rules; §11 rulings are binding here |
 | `01-vision-and-superset.md` | Why the product exists; the superset claim the parity ratchet measures |
 | `02-decisions.md` | The 16 ADRs indexed in §4.3 |
 | `24-feature-catalog.md` | Parity matrix (Section A), new features (Section B, `NF-001`–`NF-075`), gates (§3.5), rejections (§7) |
 | `../README.md` | Product description |
-| `11-authority-safety.md` | Guard, leases, receipts, sandbox, policy — the M2 core |
-| `12-sessions-state.md` | Log, projections, claims, snapshots, time travel — the M1 core |
-| `10-cognition.md` | Providers, context compiler, memory, compaction — the M4 core |
-| `08-runtime.md` | Agent loop, subagents, teams, budgets — the M5 core |
-| `14-surfaces.md` | Every surface and the canonical exit-code table (RC-5) — the M3 core |
-| `16-operations.md` | Install, release integrity, observability, enterprise — the M7 core |
-| `28-implementation-status.md` | Implementation levels and evidence for everything built today — the single source of truth for status |
+| `11-authority-safety.md` | Guard, leases, receipts, sandbox, policy - the M2 core |
+| `12-sessions-state.md` | Log, projections, claims, snapshots, time travel - the M1 core |
+| `10-cognition.md` | Providers, context compiler, memory, compaction - the M4 core |
+| `08-runtime.md` | Agent loop, subagents, teams, budgets - the M5 core |
+| `14-surfaces.md` | Every surface and the canonical exit-code table (RC-5) - the M3 core |
+| `16-operations.md` | Install, release integrity, observability, enterprise - the M7 core |
+| `28-implementation-status.md` | Implementation levels and evidence for everything built today - the single source of truth for status |
 | `29-final-audit.md` | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
 | `30-steal-list.md` | The adoption queue RC-15(d) makes live: the pass-3 shortlist and the ordered work plan (items 1–8 and 11) |
 
-**Derivation.** `source: _conventions.md` (names, status ladder, RC-1…RC-15 — RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here); `source: 24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: 02-decisions.md` §1 (ADR table); `source: 00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
+**Derivation.** `source: _conventions.md` (names, status ladder, RC-1…RC-15 - RC-5, RC-7, RC-8, RC-10, RC-14 and RC-15 are load-bearing here); `source: 24-feature-catalog.md` §3.5 (gate names), §4 (parity rows), §5 (feature definitions); `source: 02-decisions.md` §1 (ADR table); `source: 00-index.md` (document order). Phase ordering and the `M0`–`M8` naming are this document's own decision, made in the same change that records it in §8 OQ-R1.
 
 
