@@ -15,6 +15,8 @@ import * as path from "node:path";
 
 /** Directories never offered for `@` completion. */
 const SKIP_DIRS = new Set([".git", "node_modules", ".hz", ".hzcode"]);
+/** C0, DEL, C1, and invisible/bidi format characters. */
+const UNSAFE_NAME = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/;
 /** Most entries listed from one directory. */
 const LIST_CAP = 200;
 
@@ -39,6 +41,9 @@ function listDir(workspace: string, rel: string): string[] {
     const entries = readdirSync(dir, { withFileTypes: true }).slice(0, LIST_CAP * 4);
     const names = entries
       .filter((e) => !(e.isDirectory() && SKIP_DIRS.has(e.name)))
+      // A name with control, C1 or bidi/invisible characters is never offered: it
+      // would be written raw to the terminal (ESC sequences) or spoof the path.
+      .filter((e) => !UNSAFE_NAME.test(e.name))
       .map((e) => (e.isDirectory() ? e.name + "/" : e.name));
     // Directories first, then files, each alphabetical; dotfiles only when asked for.
     return names.sort((a, b) => Number(b.endsWith("/")) - Number(a.endsWith("/")) || a.localeCompare(b)).slice(0, LIST_CAP);

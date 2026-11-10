@@ -12,6 +12,7 @@ writeFileSync(path.join(ws, "src", "app.ts"), "x");
 writeFileSync(path.join(ws, "src", "apple.ts"), "x");
 writeFileSync(path.join(ws, "README.md"), "x");
 writeFileSync(path.join(ws, ".env"), "x");
+writeFileSync(path.join(ws, "evil\u001b[2Jname.txt"), "x");
 afterAll(() => rmSync(ws, { recursive: true, force: true }));
 
 const ctx = { workspace: ws, commands: ["help", "?", "model", "mode", "plan", "review", "think"] };
@@ -48,5 +49,13 @@ describe("@file completion", () => {
   test("cannot climb out of the workspace", () => {
     expect(candidates("@../", ctx).hits).toEqual([]);
     expect(candidates("@/etc/", ctx).hits).toEqual([]);
+  });
+});
+
+describe("unsafe file names", () => {
+  test("a name with an escape character is never offered", () => {
+    const hits = candidates("@e", ctx).hits;
+    expect(hits.some((h) => h.includes("\u001b"))).toBe(false);
+    expect(ghostFor("@evil", ctx)).toBe("");
   });
 });
