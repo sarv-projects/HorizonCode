@@ -1,6 +1,12 @@
 # 15 — Extensibility
+> **Permission modes (`docs/28` ruling 58).** User config key `permissionMode` sets the starting mode (user file only; a bad or bypass value is ignored with a notice). Subagents inherit the parent's mode; a preset's tools stay within the parent's (ruling 61).
 
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: hooks v1 broadened to the ratified H1 lifecycle points plus the H9 attributed context channel (tool.post notes ride the system rail as an untrusted block); a user provider registry (user config only, data not code); LSP servers as user config (default off). The H7 hooks trust gate is still open. NOT STARTED: plugins, the marketplace, the workflow engine, and agent profiles / subagent presets (§2.6, §3.6 `AgentProfileV1`; analysis in `30-steal-list.md` §5.11).
+> **Print mode (`docs/28` ruling 57).** The headless result object is a stable machine surface for scripts and wrappers; it adds no extension point.
+
+
+> **Agent presets (stage 3, `docs/28` ruling 56).** The reduced form of `AgentProfileV1` (2.6, 3.6) ships as `app/src/core/agent-profiles.ts`: built-in explore/plan/code/review plus `agents/*.md` front-matter presets from the user config dir and workspace `.hz/` (name, description, tools, model, max_steps, body = prompt), bounded by the parent's tools with the `profile_ceiling_widens` refusal. Result schemas, `requiresInputs`, `refusesWhen`, pinning and plugin profiles stay NOT STARTED.
+>
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: hooks v1 broadened to the ratified H1 lifecycle points plus the H9 attributed context channel (tool.post notes ride the system rail as an untrusted block); a user provider registry (user config only, data not code); LSP servers as user config (default off). The H7 hooks trust gate is still open. NOT STARTED: plugins, the marketplace, the workflow engine, and full `AgentProfileV1` pinning (§2.6, §3.6; the reduced preset form shipped, ruling 56).
 
 > Plugins, skills, commands, hooks, workflows, agent profiles, MCP, ACP and the IDE bridge — every way a user, a team or a third party adds behaviour to `hzcode`, and the authority arithmetic that keeps all of them inside the same constitution.
 
@@ -1567,3 +1573,6 @@ Every capability below is **DESIGNED** except the two rows `28-implementation-st
 5. **The `skillify` eval gate depends on the evidence gate**, which is itself still `DESIGNED` (`11-authority-safety.md` §10.1). A synthesized skill cannot be promoted above `DESIGNED` before the gate is wired.
 6. **Plugin UI panels are specified as renderer-isolated webviews** with a declared action surface; the concrete webview technology per platform is not decided here and MUST NOT be a path to unsandboxed code.
 
+> **Session fork (`docs/28` ruling 59).** `session.start`/`session.end` hooks fire for the child as for any resumed session; `session.fork` is a log event, not a hook point.
+
+> **Guardian surfacing (`docs/28` ruling 60).** The guardian is not a hook point; a host may supply a `GuardianModelCapability` to `createGuardianClassifier`, but the gate uses the deterministic classifier.

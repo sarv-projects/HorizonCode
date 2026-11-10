@@ -231,3 +231,17 @@ describe("approval prompt fidelity", () => {
     expect(h.text()).not.toContain("\u001b");
   });
 });
+
+describe("guardian line in the prompt (docs/28 ruling 60)", () => {
+  test("a request carrying a guardian line renders it under the prompt", async () => {
+    const h = harness({ interactive: true, answer: "y" });
+    await h.answer({ ...SHELL, guardian: "\u00b7 guardian: flag - privileged or risky shell command" });
+    expect(h.text()).toContain("\u00b7 guardian: flag - privileged or risky shell command");
+  });
+
+  test("no guardian field renders no guardian line", async () => {
+    const h = harness({ interactive: true, answer: "y" });
+    await h.answer(SHELL);
+    expect(h.text()).not.toContain("guardian:");
+  });
+});

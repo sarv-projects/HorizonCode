@@ -1,5 +1,11 @@
 # 13 — Terminal UI (`hzcode tui`)
+> **Permission modes (`docs/28` ruling 58).** `/mode [default|plan|accept-edits|read-only]` shows or sets the mode; a non-default mode puts a bold yellow badge (`PLAN`, `ACCEPT-EDITS`, `READ-ONLY`) before the prompt and prints one notice at chat start. `/mode yolo` is refused with the reason.
 
+> **Print mode (`docs/28` ruling 57).** `hzcode -p` never opens the chat bar or an approval prompt, even on a TTY; stdout carries only the chosen format (`text`, `json`, `stream-json`), notices and errors go to stderr.
+
+
+> **Agent presets (stage 3, `docs/28` ruling 56).** A nested child run started with a `profile` prints one `profile: <name>` line behind the dim bar before its first nested line (renderer reads the additive `profile` on `subagent.event`).
+>
 > The TUI is the primary product surface (ADR-001). This document fixes its rendering model, component tree, input model, streaming rules, diff/approval surfaces, theming, accessibility, performance budgets and statuses. It does not describe the agent; it describes the glass.
 
 ---
@@ -780,4 +786,6 @@ Paths use the single planned convention `packages/<pkg>/test/<file>` (`_conventi
 
 Known inherited limitation that this document MUST NOT paper over: the ancestor kernel refuses two edits to the same file inside one message (`stale_preimage`), which is why R83 mandates sequential application with explicit preimage recomputation rather than a silent bulk apply (source: `/data/home/forge/repo-tour/horizoncode/HANDOFF.md`).
 
+> **Session fork (`docs/28` ruling 59).** `/fork` branches the chat into a new session and switches to it (the notice names both ids); `/fork n` cuts at checkpoint n from `/rewind`; `/sessions` lists recent sessions, marks the current one with `*` and shows `(fork of <id> at message <k>)`. Both need an idle chat.
 
+> **Guardian surfacing (`docs/28` ruling 60).** An approval prompt shows `· guardian: flag - <reason>` (or `deny`) on its own line when the guardian objects; allow shows nothing.

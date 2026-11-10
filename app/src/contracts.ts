@@ -67,6 +67,9 @@ export type EventSeed = Pick<EventEnvelope, "id" | "ts" | "stream" | "type" | "a
 export const EventTypes = {
   sessionStart: "session.start",
   sessionEnd: "session.end",
+  // Additive (session fork): the FIRST event of a forked session's own stream;
+  // payload is a SessionForkPayload naming the parent stream and its seq.
+  sessionFork: "session.fork",
   messageStart: "message.start",
   messageDelta: "message.delta",
   messageEnd: "message.end",
@@ -390,6 +393,8 @@ export interface ApprovalRequest {
   title: string;
   detail?: string;
   kind: GuardKind | "other";
+  /** Advisory guardian line (`· guardian: flag - reason`); additive, never changes the decision. */
+  guardian?: string;
 }
 export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
 
@@ -397,8 +402,9 @@ export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
  * A nested delegation run: the `agent` tool asks the runtime to execute `task`
  * in its own child session and return the subagent's final report. The runtime
  * supplies it on the tool context; a tool without one cannot delegate.
+ * `profile` (additive, docs/15 §3.6) names a narrowing preset for the child.
  */
-export type DelegateRunner = (task: string, maxSteps?: number) => Promise<ToolResult>;
+export type DelegateRunner = (task: string, maxSteps?: number, profile?: string) => Promise<ToolResult>;
 
 export interface ToolContext {
   cwd: string;
@@ -568,7 +574,7 @@ export type RuntimeEvent =
   // notice, error and the child's final assistant.done, truncates text, and
   // caps the number of events per child; the TUI renders them nested under
   // the agent card and the server relays them as ordinary `session.event`s.
-  | { type: "subagent.event"; agentId: string; name: string; depth: number; event: RuntimeEvent }
+  | { type: "subagent.event"; agentId: string; name: string; depth: number; event: RuntimeEvent; profile?: string }
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {
@@ -591,6 +597,13 @@ export interface RuntimeOptions {
   mock?: boolean;
   /** NF-073 run budget overrides (0 or absent per dimension = unlimited). */
   budget?: RunBudget;
+  /**
+   * Starting permission mode (ADDITIVE, docs/28): default | plan | accept-edits
+   * | read-only. A policy layer above the kernel guard that can only narrow or
+   * auto-answer an ask; there is no bypass value. Absent = the user config's
+   * `permissionMode`, else `default`.
+   */
+  permissionMode?: "default" | "plan" | "accept-edits" | "read-only";
 }
 
 export interface Runtime {
@@ -731,7 +744,9 @@ export const KERNEL_METHODS: KernelMethod[] = [
  *
  * v1 implements exactly the subset `SERVER_METHODS` names below:
  *   server.hello, session.create, session.list, session.prompt,
- *   session.rewind, session.subscribe.
+ *   session.rewind, session.subscribe, session.fork (additive: copies the
+ *   transcript, in whole or up to a message index, into a NEW session with
+ *   forkedFrom lineage; the parent is untouched).
  * Every session is opened through `createRuntime`, so attach/resume runs BOTH
  * crash recoveries (repairDanglingToolCalls + recoverInterrupted) before the
  * next turn — the server's rollout-reconstruction seam.
@@ -790,7 +805,8 @@ export type ServerMethod =
   | "session.list"
   | "session.prompt"
   | "session.rewind"
-  | "session.subscribe";
+  | "session.subscribe"
+  | "session.fork";
 
 export const SERVER_METHODS: ServerMethod[] = [
   "server.hello",
@@ -799,7 +815,23 @@ export const SERVER_METHODS: ServerMethod[] = [
   "session.prompt",
   "session.rewind",
   "session.subscribe",
+  "session.fork",
 ];
+
+/**
+ * Fork lineage (additive). Recorded on the child session row, returned by
+ * `session.fork` and listed by `session.list`/`/sessions`, and carried as the
+ * payload of the child stream's first event (`session.fork`). `messageIndex`
+ * is the number of parent messages copied (after the boundary-safe cut);
+ * `parentStream` + `parentSeq` pin the parent's append-only log at fork time
+ * (`parentSeq` 0 = the parent stream had no events).
+ */
+export interface SessionForkPayload {
+  parentSessionId: string;
+  parentStream: string;
+  parentSeq: number;
+  messageIndex: number;
+}
 
 /* ------------------------------ Hashing ------------------------------ */
 

@@ -1,5 +1,11 @@
 # 14 — Surfaces (headless, server, web, desktop, IDE/ACP, MCP server, SDKs)
 
+> **Permission modes (`docs/28` ruling 58).** `hzcode --permission-mode <m>` works with chat, pipes and `-p` (a non-default mode prints one stderr line; stdout stays clean). `hzcode serve` does not take a mode yet.
+>
+> **Headless print mode (`docs/28` ruling 57).** `hzcode -p [text] --output-format text|json|stream-json` runs one non-interactive turn (prompt from stdin when `-p` has no text). `json` prints one result object `{type:"result", result, sessionId, exit:{terminal,detail?,code}, usage, toolCalls, changedFiles}`; `stream-json` prints one RuntimeEvent per line then that object. The exit code is `exitCodeFor` (0/1/3/4/5/130/143; a missing prompt or bad format is 2). The line-per-message mode is unchanged.
+>
+> **Agent presets (stage 3, `docs/28` ruling 56).** `subagent.event` frames, relayed as `session.event` in server mode, carry an optional `profile` string (additive) when the child ran under a preset.
+>
 > **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: a single-attach server mode speaking NDJSON JSON-RPC v1 over stdio (`docs/28` §1 server row; resume by id, read-only `session.list`), reusing `createRuntime` recovery. Headless remains line-in / text-out (a `turn.diff` is summarised on stderr as `· changed N file(s)`, never printed to stdout; `subagent.event` frames are relayed to server clients as ordinary `session.event` notifications, `docs/28` ruling 54). Stage 1 (2026-11-09): the server answers each line while stdin is open (a Worker reads fd 0 because Bun batches pipe stdin until EOF) and `server.hello` reports the real `kernelMode` before any session (`docs/28` ruling 53). NOT STARTED: headless `-p` with JSON/JSONL output, UDS/TCP/HTTP+SSE transports, SDKs, web, desktop and IDE surfaces, the fullscreen TUI renderer.
 
 > ADR-001 makes the TUI the product and the protocol the API; ADR-005 makes every surface a client of one Controller. This document fixes each non-TUI surface: its architecture, protocol usage, auth, capabilities and limits — plus the parity ratchet that stops them drifting apart.
@@ -656,4 +662,6 @@ Known limitations this document MUST NOT paper over:
 2. The ancestor refuses two edits to the same file in one message (`stale_preimage`), so the web/IDE hunk flows MUST apply sequentially with recomputed preimages rather than bulk-applying (S57, S93).
 3. Cross-platform sandbox residuals are typed, not absent: a surface MUST render the residual vector rather than imply confinement it does not have (`docs/02-decisions.md`, ADR-002 and P6).
 
+> **Session fork (`docs/28` ruling 59).** `session.fork {sessionId, at?}` returns `{sessionId, uri, forkedFrom{uri,sessionId,messageIndex,parentSeq}, model, providerName, kernelMode}`; the child is live and promptable. `session.list` rows carry `forkedFrom` only for forks. Bad `at` or an unknown session is INVALID_PARAMS.
 
+> **Guardian surfacing (`docs/28` ruling 60).** `ApprovalRequest` gains an optional `guardian` string (additive); `HORIZON_GUARDIAN=enforce` is the only env switch.

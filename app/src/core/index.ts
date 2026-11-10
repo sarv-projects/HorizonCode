@@ -30,6 +30,7 @@ import type {
   RuntimeEvent,
   RunExit,
   RuntimeOptions,
+  SessionForkPayload,
   ToolContext,
   ToolResult,
 } from "../contracts";
@@ -79,6 +80,8 @@ import {
   rewindPlan,
   type CheckpointView,
 } from "./checkpoints";
+import type { PermissionMode } from "./permission-mode";
+import { isPermissionMode, permissionModeError } from "./permission-mode";
 import { consumeChange, reloadFromDisk } from "../tools/change-journal";
 import { isRefused, writeAtomic } from "../tools/atomic-write";
 
@@ -104,6 +107,12 @@ export interface HzRuntime extends Runtime {
    */
   setPlanMode(on: boolean): void;
   planMode(): boolean;
+  /**
+   * The named permission mode (permission-mode.ts): `plan` while plan mode is
+   * on, else the non-plan mode. Session-only; never written to disk.
+   */
+  permissionMode(): PermissionMode;
+  setPermissionMode(mode: PermissionMode): void;
   /** The session's staged changes, oldest first (plan mode's review surface). */
   stagedChanges(): readonly StagedChange[];
   /** Apply every staged change through the ordinary guard path; summary line. */
@@ -122,6 +131,16 @@ export interface HzRuntime extends Runtime {
    * overwritten). Returns the summary line the TUI prints.
    */
   rewindTo?(n: number): Promise<string>;
+  /**
+   * Session fork (docs/12 S-45): copy this session's transcript (all of it, or
+   * the first `at` messages, boundary-safe) into a NEW session with forkedFrom
+   * lineage. The parent is untouched and this runtime stays on it; the child's
+   * kernel stream starts with a `session.fork` event naming the parent stream
+   * and its head seq. Resume the child with `switchSession` or `createRuntime`.
+   */
+  forkSession?(at?: number): Promise<SessionInfo>;
+  /** Move this runtime onto an existing session of this workspace (resume). */
+  switchSession?(sessionId: string): HzRuntime;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -153,6 +172,8 @@ class HzRuntimeImpl implements HzRuntime {
   private readonly budget: RunBudget;
   /** Plan mode's per-session toggle (the TUI's /plan); off by default. */
   private planOn = false;
+  /** The non-plan permission mode (default | accept-edits | read-only). */
+  private mode: Exclude<PermissionMode, "plan"> = "default";
   /** The MCP manager this runtime owns, started by createRuntime, stopped by close(). */
   private mcp: McpManager | undefined;
 
@@ -165,7 +186,10 @@ class HzRuntimeImpl implements HzRuntime {
     session: SessionInfo;
     kernel: KernelClient;
     budget: RunBudget;
+    permissionMode?: PermissionMode;
   }) {
+    if (args.permissionMode === "plan") this.planOn = true;
+    else if (args.permissionMode !== undefined) this.mode = args.permissionMode;
     this.workspace = args.workspace;
     this.config = args.config;
     this.currentModel = args.model;
@@ -223,6 +247,53 @@ class HzRuntimeImpl implements HzRuntime {
     return this;
   }
 
+  /** send() calls accepted and not yet finished (fork refuses while any). */
+  private pendingSends = 0;
+
+  async forkSession(at?: number): Promise<SessionInfo> {
+    // A fork taken mid-turn would copy a partial transcript (an assistant
+    // message with its tool results still arriving): refuse until the turn ends.
+    if (this.active || this.pendingSends > 0) throw new Error("cannot fork while a turn is running; wait for it to finish or cancel it");
+    const parentStream = streamFor(this.session.id);
+    let parentSeq = 0;
+    try {
+      const events = await this.kernel.readEvents(parentStream, 1);
+      parentSeq = events.reduce((max, ev) => Math.max(max, ev.seq), 0);
+    } catch {
+      /* an unreadable parent log records seq 0; the fork itself still works */
+    }
+    const child = this.store.forkSession(this.session.id, { at, parentSeq });
+    const payload: SessionForkPayload = {
+      parentSessionId: this.session.id,
+      parentStream,
+      parentSeq,
+      messageIndex: child.forkedFrom?.messageIndex ?? 0,
+    };
+    // A fork is a NEW stream whose first event references the parent; the
+    // parent's log is never written to (append-only, no rewrite).
+    // The store row already carries the lineage, so a failed append leaves a
+    // valid fork (resume never reads this event); say so rather than fail.
+    try {
+      await this.append(streamFor(child.id), EventTypes.sessionFork, payload);
+    } catch (err) {
+      this.note(`fork recorded in the session store, but the session.fork event was not written: ${errorMessage(err)}`);
+    }
+    return child;
+  }
+
+  switchSession(sessionId: string): HzRuntime {
+    const next = this.store.getSession(sessionId);
+    if (!next) throw new Error(`no session ${sessionId} in this workspace`);
+    const previous = this.session;
+    // Resume runs the same transcript repair createRuntime runs on open.
+    this.store.repairDanglingToolCalls(next.id);
+    this.session = next;
+    this.leases.length = 0;
+    void this.logSessionEnd(previous.id);
+    void this.logSessionStart();
+    return this;
+  }
+
   setModel(model: string): string {
     const next = typeof model === "string" ? model.trim() : "";
     if (next === "") throw new Error("a model name is required");
@@ -244,6 +315,20 @@ class HzRuntimeImpl implements HzRuntime {
 
   planMode(): boolean {
     return this.planOn;
+  }
+
+  permissionMode(): PermissionMode {
+    return this.planOn ? "plan" : this.mode;
+  }
+
+  setPermissionMode(mode: PermissionMode): void {
+    if (!isPermissionMode(mode)) throw new Error(permissionModeError(mode));
+    if (mode === "plan") {
+      this.planOn = true;
+      return;
+    }
+    this.planOn = false;
+    this.mode = mode;
   }
 
   stagedChanges(): readonly StagedChange[] {
@@ -648,10 +733,15 @@ class HzRuntimeImpl implements HzRuntime {
 
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
     // Turns are serialized: a second send waits for the first to finish.
-    const run = this.sendQueue.then(
-      () => this.runSend(text, cb),
-      () => this.runSend(text, cb),
-    );
+    this.pendingSends += 1;
+    const run = this.sendQueue
+      .then(
+        () => this.runSend(text, cb),
+        () => this.runSend(text, cb),
+      )
+      .finally(() => {
+        this.pendingSends -= 1;
+      });
     this.sendQueue = run.then(
       () => undefined,
       () => undefined,
@@ -708,14 +798,16 @@ class HzRuntimeImpl implements HzRuntime {
           // Plan mode rides this run's deps: staging/refusals happen inside
           // executeTool, and the model is told via the plan rail line.
           planMode: this.planOn,
+          permissionMode: this.mode,
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
-          delegate: (task, maxSteps) =>
+          delegate: (task, maxSteps, profile) =>
             runNested({
               workspace: this.workspace,
               task,
               maxSteps,
+              profile,
               model: this.currentModel,
               provider: this.provider,
               kernel: this.kernel,
@@ -723,6 +815,7 @@ class HzRuntimeImpl implements HzRuntime {
               signal: controller.signal,
               sessionLeases: this.leases,
               approve: this.instanceApproval ?? getApprovalHandler(),
+              permissionMode: this.mode,
               ledger,
               onEvent: (ev) => emit(cb, ev),
             }),
@@ -850,6 +943,7 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     store,
     session,
     kernel,
+    permissionMode: opts?.permissionMode ?? config.permissionMode,
     // NF-073: steps stay capped at MAX_PROVIDER_CALLS unless the environment or
     // the caller set a budget; 0 (explicit) = unlimited, per dimension.
     budget: {
@@ -859,6 +953,9 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     },
   });
   await impl.logSessionStart();
+  if (config.permissionModeRejected !== undefined) {
+    impl.note(`config permissionMode ignored: ${config.permissionModeRejected}`);
+  }
   if (impl.kernelMode === "untrusted") {
     // Ruling 33: the mode is first-class. Coming up without the Rust kernel
     // gets exactly ONE notice, delivered on the first turn (note() queues it

@@ -18,6 +18,8 @@ import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
 import { catalogDefaultModel, loadCatalog, type LoadedCatalog } from "./catalog/catalog";
 import { userConfigDir } from "./paths";
+import type { PermissionMode } from "./permission-mode";
+import { parsePermissionMode, permissionModeError } from "./permission-mode";
 
 export type ProviderName = "anthropic" | "openai" | "google" | "ollama" | "mock";
 
@@ -102,6 +104,13 @@ export interface HzConfig {
    * from starting. The server list is pure config DATA — no command is baked in.
    */
   lsp?: LspConfig;
+  /**
+   * The starting permission mode (permission-mode.ts). USER config file only:
+   * no workspace file is ever read for it, and a bypass/unknown value is
+   * ignored and named in `permissionModeRejected` (never a startup failure).
+   */
+  permissionMode?: PermissionMode;
+  permissionModeRejected?: string;
   /** Where the values came from, for the banner and for debugging. */
   sources: {
     provider: "env" | "file" | "detected" | "default";
@@ -221,6 +230,7 @@ interface ConfigFile {
   mcp?: unknown;
   lsp?: unknown;
   providers?: unknown;
+  permissionMode?: unknown;
 }
 
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
@@ -654,6 +664,10 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   if (envTokens !== undefined) budget.maxTokens = envTokens;
   if (envWall !== undefined) budget.maxWallMs = envWall;
 
+  const fileMode = str(fromFile.permissionMode);
+  const permissionMode = fileMode !== undefined ? parsePermissionMode(fileMode) : undefined;
+  const permissionModeRejected = fileMode !== undefined && permissionMode === undefined ? permissionModeError(fileMode) : undefined;
+
   const mcp = parseMcpConfig(fromFile.mcp);
   const lsp = parseLspConfig(fromFile.lsp);
 
@@ -673,6 +687,8 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
     budget: Object.keys(budget).length > 0 ? budget : undefined,
     mcp,
     lsp,
+    permissionMode,
+    permissionModeRejected,
     providers: registry,
     resolved,
     sources: {

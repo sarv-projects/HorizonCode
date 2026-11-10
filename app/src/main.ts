@@ -15,9 +15,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
+import type { PermissionMode } from "./core/permission-mode";
+import { describeMode, parsePermissionMode, permissionModeError } from "./core/permission-mode";
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
-import { createApprovalUi, installApprovalHandler, runHeadless, runInteractive } from "./tui";
+import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
+import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
 
 const VERSION = "0.1.0";
@@ -30,6 +33,9 @@ const HELP = [
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
   "  --mock               offline demo, no key   --version    print the version",
+  "  -p, --print [text]   one non-interactive turn, print the answer (prompt from stdin if no text)",
+  "  --output-format <f>  with -p: text (default) | json | stream-json",
+  "  --permission-mode <m>  default | plan | accept-edits | read-only (no bypass mode; /mode in chat)",
   "  --max-steps <n>      cap model steps per turn (0 = unlimited)",
   "  --max-tokens <n>     cap tokens per turn    --max-wall-ms <n>  cap wall clock per turn",
 ].join("\n");
@@ -42,7 +48,12 @@ interface CliOptions {
   help: boolean;
   version: boolean;
   initialMessage?: string;
+  /** -p / --print: one non-interactive turn */
+  print: boolean;
+  printText?: string;
+  outputFormat?: PrintFormat;
   budget?: RunBudget;
+  permissionMode?: PermissionMode;
   errors: string[];
 }
 
@@ -53,6 +64,7 @@ function parseArgs(argv: string[]): CliOptions {
     mock: false,
     help: false,
     version: false,
+    print: false,
     errors: [],
   };
   const rest: string[] = [];
@@ -98,6 +110,33 @@ function parseArgs(argv: string[]): CliOptions {
       case "--resume":
         opts.continueSession = true;
         break;
+      case "--print":
+      case "-p": {
+        opts.print = true;
+        // the text is optional: `-p` alone reads the prompt from stdin
+        if (inline !== undefined) opts.printText = inline;
+        else {
+          const next = argv[i + 1];
+          if (next !== undefined && !String(next).startsWith("-")) {
+            i += 1;
+            opts.printText = String(next);
+          }
+        }
+        break;
+      }
+      case "--output-format": {
+        const value = nextValue();
+        if (value !== undefined && (PRINT_FORMATS as readonly string[]).includes(value)) opts.outputFormat = value as PrintFormat;
+        else opts.errors.push("--output-format needs text, json or stream-json");
+        break;
+      }
+      case "--permission-mode": {
+        const value = nextValue();
+        const mode = parsePermissionMode(value);
+        if (mode !== undefined) opts.permissionMode = mode;
+        else opts.errors.push(`--permission-mode: ${permissionModeError(value)}`);
+        break;
+      }
       case "--mock":
         opts.mock = true;
         break;
@@ -222,6 +261,10 @@ async function main(): Promise<number> {
     process.stderr.write("try 'hzcode --help'\n");
     return 2;
   }
+  if (opts.outputFormat !== undefined && !opts.print) {
+    process.stderr.write("hzcode: --output-format needs -p\n");
+    return 2;
+  }
   if (opts.help) {
     process.stdout.write(HELP + "\n");
     return 0;
@@ -243,7 +286,24 @@ async function main(): Promise<number> {
   }
 
   // A human is attached when they typed into a terminal; a pipe is a script.
-  const interactive = Boolean(process.stdin.isTTY);
+  // -p is always a script: never a chat bar, never an approval prompt.
+  const interactive = !opts.print && Boolean(process.stdin.isTTY);
+
+  let printPrompt = "";
+  if (opts.print) {
+    printPrompt = [opts.printText, opts.initialMessage].filter((x) => x !== undefined && x !== "").join(" ");
+    if (printPrompt.trim() === "" && !process.stdin.isTTY) {
+      try {
+        printPrompt = await Bun.stdin.text();
+      } catch {
+        printPrompt = "";
+      }
+    }
+    if (printPrompt.trim() === "") {
+      process.stderr.write("hzcode: -p needs a prompt (as text or on stdin)\n");
+      return 2;
+    }
+  }
 
   const mod = core as unknown as CoreModule;
   const createRuntime = typeof mod.createRuntime === "function" ? mod.createRuntime : mod?.default?.createRuntime;
@@ -260,11 +320,19 @@ async function main(): Promise<number> {
       continueSession: opts.continueSession,
       mock: opts.mock,
       budget: opts.budget,
+      permissionMode: opts.permissionMode,
     });
   } catch (err) {
     process.stderr.write(`\u26a0 could not start a session: ${errorMessage(err)}\n`);
     process.stderr.write("  (the runtime lives in app/src/core \u2014 nothing else is needed to start chatting)\n");
     return 1;
+  }
+
+  // A non-default mode is never silent: -p and pipes get one stderr line (the
+  // chat shows a badge and its own notice).
+  const startMode = (runtime as { permissionMode?: () => PermissionMode }).permissionMode?.call(runtime);
+  if (!interactive && startMode !== undefined && startMode !== "default") {
+    process.stderr.write(`hzcode: permission mode ${describeMode(startMode)}\n`);
   }
 
   // Approvals: the guard asks, the chat surface answers (deny when nobody can).
@@ -294,6 +362,9 @@ async function main(): Promise<number> {
   try {
     if (interactive) {
       return await runInteractive({ runtime, workspace, version: VERSION, ui, initialMessage: opts.initialMessage });
+    }
+    if (opts.print) {
+      return await runPrint({ runtime, prompt: printPrompt.trim(), format: opts.outputFormat ?? "text" });
     }
     return await runHeadless({ runtime, initialMessage: opts.initialMessage });
   } finally {
