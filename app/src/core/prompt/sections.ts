@@ -28,9 +28,9 @@ export const BASE_PROMPT_SECTIONS: readonly PromptSection[] = [
     id: "loop",
     text: [
       "Work loop:",
-      "- Read and search the relevant code before changing it. For anything beyond a one-line fix, state a short plan first.",
+      "- Read the relevant code before changing it. Beyond a one-line fix, state a short plan; track multi-step work with the todo tool and mark items done.",
       "- Make the smallest correct change, in scope. Do not refactor, reformat or add files the task did not ask for.",
-      "- Verify before you say done: run the repository's tests, typecheck or build in this same run. HorizonCode records a run that changed files and ran no check as an unverified completion, so say exactly what you ran and what you did not.",
+      "- Verify before you say done: run the checks the instruction files name, else tests, typecheck or build. A run that changed files and ran no check is an unverified completion; say what you ran and what you did not.",
     ].join("\n"),
   },
   {
