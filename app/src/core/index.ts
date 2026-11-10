@@ -148,6 +148,10 @@ export interface HzRuntime extends Runtime {
   retryLast?(): string | undefined;
   /** T-12: the session title (for exports). */
   sessionTitle?(): string;
+  /** T-16: run one shell command through the guard, approval and a receipt (hzcode commit). */
+  runGuardedShell?(command: string): Promise<{ ok: boolean; output: string }>;
+  /** T-16: the newest receipt hash, when the chain has one. */
+  receiptHead?(): string | undefined;
   /** T-12: the receipt chain status for exports (verify + head hash). */
   receiptChain?(): Promise<ChainStatus>;
 }
@@ -340,6 +344,39 @@ class HzRuntimeImpl implements HzRuntime {
     const text = rows[at].content;
     this.store.truncateMessages(this.session.id, at);
     return text;
+  }
+
+  receiptHead(): string | undefined {
+    return receiptHead(this.kernel.stateDir);
+  }
+
+  async runGuardedShell(command: string): Promise<{ ok: boolean; output: string }> {
+    const shell = getTool("shell");
+    if (!shell) return { ok: false, output: "the shell tool is not available" };
+    const ctx: ToolContext = {
+      cwd: this.workspace,
+      workspace: this.workspace,
+      sessionId: this.session.id,
+      signal: new AbortController().signal,
+      guard: (action: GuardAction) =>
+        this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
+      approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),
+      receipt: (rec) => this.kernel.issueReceipt(rec),
+    };
+    const args = { command };
+    const result = await shell.execute(args, ctx);
+    const output = result.ok ? result.output : `${result.error ?? "failed"}\n${result.output ?? ""}`.trim();
+    try {
+      await this.kernel.issueReceipt({
+        action: "tool.execute",
+        tool: "shell",
+        argsDigest: sha256Hex(canonicalJson(args)),
+        resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+      });
+    } catch {
+      /* the commit already happened or was refused; a lost receipt is reported by verify */
+    }
+    return { ok: result.ok, output };
   }
 
   async receiptChain(): Promise<ChainStatus> {
