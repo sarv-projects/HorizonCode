@@ -34,6 +34,7 @@
 
 import * as path from "node:path";
 import type { GuardAction } from "../contracts";
+import { realpathish } from "./paths";
 
 export type PermissionMode = "default" | "plan" | "accept-edits" | "read-only";
 
@@ -103,10 +104,10 @@ const SENSITIVE_FILES: readonly string[] = [
 ];
 
 function isSensitiveRel(rel: string): boolean {
-  const parts = rel.split(path.sep).filter((s) => s !== "");
-  const base = (parts[parts.length - 1] ?? "").toLowerCase();
-  if (parts.slice(0, -1).some((seg) => SENSITIVE_DIRS.includes(seg))) return true;
-  if (SENSITIVE_DIRS.includes(parts[parts.length - 1] ?? "")) return true;
+  // Lowercased throughout: on a case-insensitive filesystem `.GIT/hooks` IS `.git/hooks`.
+  const parts = rel.split(path.sep).filter((s) => s !== "").map((s) => s.toLowerCase());
+  const base = parts[parts.length - 1] ?? "";
+  if (parts.some((seg) => SENSITIVE_DIRS.includes(seg))) return true;
   return SENSITIVE_FILES.includes(base) || base.startsWith(".env.");
 }
 
@@ -126,8 +127,11 @@ export function modeAutoApproves(
   if (mode !== "accept-edits" || action === undefined) return false;
   if (action.kind !== "fs.write") return false;
   if (!inside(action.target, workspace)) return false;
-  const rel = path.relative(path.resolve(workspace), path.resolve(workspace, action.target));
-  return !isSensitiveRel(rel);
+  // Judge BOTH the lexical path and the symlink-resolved one: an in-workspace
+  // link (`gitlink -> .git`, `notes.md -> package.json`) must not hide a sensitive target.
+  const lexical = path.relative(path.resolve(workspace), path.resolve(workspace, action.target));
+  const real = path.relative(realpathish(workspace), realpathish(path.resolve(workspace, action.target)));
+  return !isSensitiveRel(lexical) && !isSensitiveRel(real);
 }
 
 /** The prompt badge text for a mode (empty for default). */
