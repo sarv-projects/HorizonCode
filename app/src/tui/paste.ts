@@ -28,6 +28,8 @@ export interface PasteCollector {
   key(name: string | undefined): boolean;
   /** True while lines should be diverted into the collector. */
   active(): boolean;
+  /** True strictly between paste-start and paste-end: the keys seen now are pasted, not typed. */
+  pasting(): boolean;
   /**
    * Feed one readline "line". Returns undefined while the paste is still being
    * gathered, and the finished paste once the line after `paste-end` arrives.
@@ -54,6 +56,7 @@ export function createPasteCollector(): PasteCollector {
       return false;
     },
     active: () => inside,
+    pasting: () => inside && !ended,
     line(text) {
       if (!inside) return undefined;
       lines.push(typeof text === "string" ? text : "");
