@@ -2,7 +2,7 @@
 
 > **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-17 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
 >
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** Twelve feature branches are merged and TESTED on the integration branch (typecheck 0 errors; `bun test` 1267 tests: 1267 pass as a non-root user, 1259 pass / 8 skip as root; `cargo test` 49 + 50; selftest 25 checks; `ops/gates.sh` 7/7 as root and as non-root). Nothing is RELEASED. The per-feature map is `28-implementation-status.md` §1; the done / partial / not-started table is `../CURRENT_RUN.md` §5.0.
+> **Implementation note (2026-11-10, branch `docs/handoff` on top of `feat/tui-part3`, pull requests #1 to #28).** Measured on this tree as root: `bun run typecheck` 0 errors; `bun test` 1800 tests in 148 files, **1792 pass / 8 skip / 0 fail** (the 8 skips are chmod based tests that cannot bind for uid 0); `cargo test --locked` 49 unit + 50 integration pass; `hz-kernel --selftest` `SELFTEST OK (25 checks)`; `bash ops/gates.sh` **8/8** green. Nothing is RELEASED. The per-feature map and the 91 numbered rulings are in `28-implementation-status.md`; the done / partial / not-started table is `../CURRENT_RUN.md` §5.0; the hand-off for a new coding agent is [`33-handoff.md`](33-handoff.md).
 >
 > Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-17).
 
