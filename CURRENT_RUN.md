@@ -216,6 +216,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Tool-argument JSON repair + schema coercion | TESTED, WIRED | `core/json-repair.ts` (ruling 67): syntax-only repairs counted, truncated tails refused for every side-effecting tool, receipt hashes the repaired args; `tool.card`/`tool.call` carry `repaired` |
 | Tool-schema snapshot test | TESTED, WIRED | `tests/tools/tool-schema-snapshot.test.ts` vs `tests/fixtures/tool-schemas.json` (ruling 68); update with `HZ_UPDATE_TOOL_SCHEMAS=1`, never auto-accepted |
 | Pending-todos re-check (one bounded re-entry) | TESTED, WIRED | ruling 69; once per run, budget and abort re-checked; `unknown` stays the terminal |
+| Attempts-remaining note on failed tool results | TESTED, WIRED | ruling 70; model-facing text only, derived from the mistake tracker and format cap |
 | Subagent presets (planner, coder, reviewer, explorer) | TESTED, WIRED (reduced form) | `agent` takes `profile`: built-in explore/plan/code/review plus user `.md` presets, bounded by the parent's tools (`profile_ceiling_widens`); rulings 56, 61. `AgentProfileV1` schema pinning, result schemas and kernel validation stay DESIGNED (`docs/15` §2.6, §3.6). See 5.0.1 |
 | Memory tiers / background "dream" consolidation | NOT STARTED | project memory files (AGENTS.md hierarchy) ship; episodic/semantic tiers and dream are DESIGNED |
 | Fullscreen TUI renderer | NOT STARTED | readline chat loop ships |
