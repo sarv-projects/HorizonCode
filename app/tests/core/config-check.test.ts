@@ -47,3 +47,10 @@ test("unknown and rejected keys are named, secrets are not echoed", () => {
 test("invalid JSON is reported", () => {
   expect(checkConfigFile(cfg("{nope")).rejected[0]).toContain("not valid JSON");
 });
+
+import { renderConfigCheck as __render } from "../../src/core/config";
+import { test as __t, expect as __e } from "bun:test";
+__t("config check masks credentials in a rejected baseUrl", () => {
+  const out = __render({ file: "f", exists: true, unknown: [], rejected: ['providers[0].baseUrl must be an http(s) URL (got "ftp://user:hunter2secret@host/x")'] });
+  __e(out).not.toContain("hunter2secret");
+});

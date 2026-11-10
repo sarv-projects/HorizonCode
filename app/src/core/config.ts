@@ -18,6 +18,7 @@ import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
 import { catalogDefaultModel, loadCatalog, type LoadedCatalog } from "./catalog/catalog";
 import { userConfigDir } from "./paths";
+import { maskSecrets } from "./compaction";
 import type { PermissionMode } from "./permission-mode";
 import { parsePermissionMode, permissionModeError } from "./permission-mode";
 
@@ -804,8 +805,9 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
 export function renderConfigCheck(check: ConfigCheck): string {
   if (!check.exists) return `no config file at ${check.file}; defaults and environment apply`;
   const lines = [`config: ${check.file}`];
-  for (const key of check.unknown) lines.push(`  unknown key (ignored): ${key}`);
-  for (const why of check.rejected) lines.push(`  rejected: ${why}`);
+  // Rejected values are echoed (a bad baseUrl may embed credentials): mask them.
+  for (const key of check.unknown) lines.push(`  unknown key (ignored): ${maskSecrets(key)}`);
+  for (const why of check.rejected) lines.push(`  rejected: ${maskSecrets(why)}`);
   if (check.unknown.length === 0 && check.rejected.length === 0) lines.push("  ok: every key is known and every value was accepted");
   return lines.join("\n");
 }

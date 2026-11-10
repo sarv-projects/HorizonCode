@@ -452,6 +452,7 @@ function tokensIn(messages: readonly ChatMsg[]): number {
 /** Mask secret-like values in a command line before it reaches the summary. */
 export function maskSecrets(text: string): string {
   return text
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@")
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 ***")
     .replace(/\b(sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "$1-***")
     .replace(/\b(gh[pousr]_|xox[abprs]-|AKIA)[A-Za-z0-9_-]{8,}/g, "$1***")
