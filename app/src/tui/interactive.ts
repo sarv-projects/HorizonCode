@@ -10,15 +10,17 @@
 import * as readline from "node:readline";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { ContextUsage, RunExit, Runtime } from "../contracts";
+import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
 import { loadCommands, resolveCommandForMessage } from "../core/commands";
 import { getSkill } from "../core/skills";
+import { maskSecrets } from "../core/compaction";
+import { chainLine, convoStats, lastOfRole, osc52, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
 import type { SessionInfo } from "../core/session";
 import type { PermissionMode } from "../core/permission-mode";
 import { PERMISSION_MODES, describeMode, isPermissionMode, modeBadge, parsePermissionMode, permissionModeError } from "../core/permission-mode";
-import { historyFilePath } from "../core/paths";
+import { historyFilePath, stateRoot } from "../core/paths";
 import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
@@ -75,6 +77,12 @@ type RuntimeWithExtras = Runtime & {
   forkSession?: (at?: number) => Promise<SessionInfo>;
   switchSession?: (sessionId: string) => unknown;
   sessions?: () => ReadonlyArray<SessionInfo>;
+  /** Conversation verbs (T-12), optional like the rest. */
+  history?: () => ChatMsg[];
+  renameSession?: (title: string) => string;
+  retryLast?: () => string | undefined;
+  sessionTitle?: () => string;
+  receiptChain?: () => Promise<ChainStatus>;
 };
 
 export interface InteractiveOptions {
@@ -172,6 +180,11 @@ function printHelp(r: Renderer, workspace?: string): void {
     ["/discard", "drop the staged changes"],
     ["/fork [n]", "branch this chat into a new session (n = checkpoint number, else everything so far)"],
     ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
+    ["/rename <title>", "retitle this session"],
+    ["/retry", "drop the last reply and ask the same question again"],
+    ["/stats", "message, tool call and token counts for this chat"],
+    ["/export [json|html]", "write the chat to .hz/exports (html shows the receipt chain status)"],
+    ["/copy", "copy the last answer to the clipboard (terminal OSC 52)"],
     ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
     ["/memory", "which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias /instructions)"],
     ["/init", "draft an AGENTS.md for this repo (staged; you review it, then /apply)"],
@@ -581,6 +594,89 @@ export async function runForkCommand(
     renderer.notice(`could not fork: ${errorMessage(err)}`);
   }
   return true;
+}
+
+/**
+ * T-12 conversation verbs: /rename, /stats, /export, /copy (and the history
+ * half of /retry lives in runtime.retryLast, called by the chat loop). Returns
+ * false when `name` is not one of them. Every hook is optional; never throws.
+ */
+export async function runConvoCommand(
+  name: string,
+  arg: string,
+  runtime: Runtime,
+  renderer: Renderer,
+  workspace: string,
+  write: (text: string) => void = (t) => void process.stdout.write(t),
+): Promise<boolean> {
+  const rt = runtime as RuntimeWithExtras;
+  const history = (): ChatMsg[] | undefined => {
+    if (typeof rt.history !== "function") {
+      notSupported(renderer, "history", name);
+      return undefined;
+    }
+    return rt.history();
+  };
+  try {
+    switch (name) {
+      case "rename": {
+        if (arg.trim() === "") renderer.notice("usage: /rename <title>");
+        else if (typeof rt.renameSession !== "function") notSupported(renderer, "renameSession", name);
+        else renderer.notice(`session renamed: ${rt.renameSession(arg)}`);
+        return true;
+      }
+      case "stats": {
+        const h = history();
+        if (h) renderer.notice(renderStats(convoStats(h)));
+        return true;
+      }
+      case "copy": {
+        const h = history();
+        if (!h) return true;
+        const text = lastOfRole(h, "assistant");
+        if (text === undefined) renderer.notice("nothing to copy yet");
+        else {
+          write(osc52(text));
+          renderer.notice(`copied ${text.length} character(s) via the terminal clipboard (OSC 52; needs terminal support)`);
+        }
+        return true;
+      }
+      case "export": {
+        const format = arg.trim().toLowerCase() || "json";
+        if (format !== "json" && format !== "html") {
+          renderer.notice("usage: /export [json|html]");
+          return true;
+        }
+        const h = history();
+        if (!h) return true;
+        let chain: ChainStatus | undefined;
+        try {
+          chain = typeof rt.receiptChain === "function" ? await rt.receiptChain() : undefined;
+        } catch {
+          chain = undefined;
+        }
+        const meta = {
+          sessionId: runtime.sessionId,
+          title: rt.sessionTitle?.() ?? "chat",
+          model: runtime.model,
+          exportedAt: new Date().toISOString(),
+          chain,
+        };
+        const dir = path.join(stateRoot(workspace), "exports");
+        mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `${runtime.sessionId.replace(/[^A-Za-z0-9._-]/g, "_")}.${format}`);
+        // The export leaves the guarded state tree as a shareable file: mask secret-like values.
+        writeFileSync(file, maskSecrets(format === "json" ? renderExportJson(h, meta) : renderExportHtml(h, meta)), { mode: 0o600 });
+        renderer.notice(`exported ${h.length} message(s) to ${shortenPath(file)} (${chainLine(chain)})`);
+        return true;
+      }
+      default:
+        return false;
+    }
+  } catch (err) {
+    renderer.notice(`/${name} failed: ${errorMessage(err)}`);
+    return true;
+  }
 }
 
 /**
@@ -1047,6 +1143,37 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           break;
         }
         await runForkCommand(name, arg, runtime, renderer);
+        break;
+      }
+      case "rename":
+      case "stats":
+      case "copy":
+      case "export":
+        await runConvoCommand(name, arg, runtime, renderer, workspace);
+        break;
+      case "retry": {
+        if (busy) {
+          renderer.notice("/retry needs an idle chat: try again when the current answer ends");
+          break;
+        }
+        const retry = (runtime as RuntimeWithExtras).retryLast;
+        if (typeof retry !== "function") {
+          notSupported(renderer, "retryLast", "retry");
+          break;
+        }
+        let again: string | undefined;
+        try {
+          again = retry.call(runtime);
+        } catch (err) {
+          renderer.notice(`could not retry: ${errorMessage(err)}`);
+          break;
+        }
+        if (again === undefined) {
+          renderer.notice("nothing to retry yet");
+          break;
+        }
+        renderer.notice("retrying the last request");
+        await sendUserText(again);
         break;
       }
       case "rewind": {

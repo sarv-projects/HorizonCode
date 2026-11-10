@@ -27,6 +27,7 @@ import {
   classifyTool,
   compactHistory,
   looksLikeConstraint,
+  maskSecrets,
   summariseElided,
 } from "../../src/core/compaction";
 import { KernelClient } from "../../src/core/kernel";
@@ -407,4 +408,13 @@ describe("eval case: a live turn over a 92-message transcript", () => {
       h.store.close();
     }
   });
+});
+
+test("maskSecrets hides tokens in command lines", () => {
+  const out = maskSecrets("curl -H 'Authorization: Bearer abcdef123456' x --token=hunter2 password=p4ss sk-abcdefghij12345");
+  expect(out).not.toContain("abcdef123456");
+  expect(out).not.toContain("hunter2");
+  expect(out).not.toContain("p4ss");
+  expect(out).not.toContain("abcdefghij12345");
+  expect(out).toContain("curl");
 });
