@@ -11,7 +11,7 @@ import * as readline from "node:readline";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
-import { loadCommands, resolveCommandForMessage } from "../core/commands";
+import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
 import { getSkill } from "../core/skills";
 import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, osc52, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
@@ -26,6 +26,7 @@ import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
 import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, unicodeLocale, userBlock, type Live, type StatusInfo } from "./live";
+import { complete, ghostFor, type CompletionContext } from "./completion";
 import { keyChoice, type KeyAnswer } from "./approval-card";
 import { PASTE_OFF, PASTE_ON, createPasteCollector, echoedRows, pasteLabel } from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
@@ -835,10 +836,33 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // /plan updates it through the optional hook when the core exposes one.
   const planState: PlanCommandState = { on: readPlanMode(runtime) };
 
+  // Tab completion (/commands and @paths). The command list is re-read at most
+  // every 2 s so a new .hz/commands file shows up without a restart.
+  let commandCache: { at: number; names: string[] } = { at: 0, names: [] };
+  const completionCtx = (): CompletionContext => {
+    if (Date.now() - commandCache.at > 2000) {
+      let custom: string[] = [];
+      try {
+        custom = loadCommands(workspace).commands.map((c) => c.name);
+      } catch {
+        /* a bad commands dir never breaks completion */
+      }
+      commandCache = { at: Date.now(), names: [...BUILTIN_COMMANDS, ...custom] };
+    }
+    return { workspace, commands: commandCache.names };
+  };
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
+    completer: (line: string): [string[], string] => {
+      try {
+        return complete(line, completionCtx());
+      } catch {
+        return [[], line];
+      }
+    },
     historySize: HISTORY_LIMIT,
     removeHistoryDuplicates: true,
   });
@@ -1379,6 +1403,37 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     finish(0);
   });
+
+  // Dim ghost text after the cursor: the rest of the first completion. It is
+  // erased BEFORE readline handles Enter (prepended listener) and redrawn after
+  // every other key; only drawn when the cursor is at the end of an idle line.
+  if (liveOn && canEsc) {
+    let ghostShown = false;
+    const eraseGhost = (): void => {
+      if (!ghostShown) return;
+      ghostShown = false;
+      process.stdout.write("\u001b[K");
+    };
+    process.stdin.prependListener("keypress", (_s: unknown, key: { name?: string } | undefined) => {
+      if (key?.name === "return" || key?.name === "enter") eraseGhost();
+    });
+    process.stdin.on("keypress", () => {
+      setImmediate(() => {
+        if (exiting) return;
+        eraseGhost();
+        if (busy || answerWaiter !== null) return;
+        const state = rl as unknown as { line?: string; cursor?: number };
+        const line = String(state.line ?? "");
+        if (line === "" || state.cursor !== line.length) return;
+        const ghost = ghostFor(line, completionCtx());
+        if (ghost === "") return;
+        const room = terminalWidth() - visibleWidth(planPrompt(planState.on, readPermissionMode(runtime))) - line.length - 1;
+        if (ghost.length > room) return;
+        ghostShown = true;
+        process.stdout.write(dim(ghost) + `\u001b[${ghost.length}D`);
+      });
+    });
+  }
 
   if (pasteOn) {
     process.stdin.on("keypress", (_s: unknown, key: { name?: string } | undefined) => {
