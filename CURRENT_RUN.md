@@ -218,6 +218,7 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Pending-todos re-check (one bounded re-entry) | TESTED, WIRED | ruling 69; once per run, budget and abort re-checked; `unknown` stays the terminal |
 | Attempts-remaining note on failed tool results | TESTED, WIRED | ruling 70; model-facing text only, derived from the mistake tracker and format cap |
 | `hzcode doctor [--json]` | TESTED, WIRED | ruling 71; diagnose-only OK/WARN/FAIL table, fix hint per problem, exit 1 on FAIL, key never printed |
+| Startup-latency gate (`ops/gates.sh`, 8th gate) | TESTED, WIRED | ruling 72; medians 96 ms (`--version`) and 198 ms (mock turn), ceilings 500 / 1000 ms; hosted-CI behaviour not yet observed |
 | Subagent presets (planner, coder, reviewer, explorer) | TESTED, WIRED (reduced form) | `agent` takes `profile`: built-in explore/plan/code/review plus user `.md` presets, bounded by the parent's tools (`profile_ceiling_widens`); rulings 56, 61. `AgentProfileV1` schema pinning, result schemas and kernel validation stay DESIGNED (`docs/15` §2.6, §3.6). See 5.0.1 |
 | Memory tiers / background "dream" consolidation | NOT STARTED | project memory files (AGENTS.md hierarchy) ship; episodic/semantic tiers and dream are DESIGNED |
 | Fullscreen TUI renderer | NOT STARTED | readline chat loop ships |
