@@ -13,7 +13,7 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { bold, colorEnabled, cyan, dim, strip, terminalWidth, truncate, visibleWidth, wrapText, yellow } from "./style";
+import { blend, bold, colorEnabled, paint, colorLevel, cyan, dim, pulse, rgbFg, strip, terminalWidth, truncate, visibleWidth, wrapText, yellow, type RGB } from "./style";
 
 /* ------------------------------ capability ------------------------------ */
 
@@ -73,8 +73,41 @@ export function clockTime(date: Date = new Date()): string {
 
 export const SPINNER_UNICODE = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
 export const SPINNER_ASCII = ["|", "/", "-", "\\"];
-/** Frame period: one timer, ~11 fps. */
-export const FRAME_MS = 90;
+/** Frame period of the one timer (25 fps): smooth enough for the colour pulse. */
+export const FRAME_MS = 40;
+/** The glyph advances every 100 ms (10 fps), deliberately slower than the frame clock. */
+export const SPINNER_MS = 100;
+/** One tick of the pulse clock (30 Hz of wall time). */
+export const PULSE_MS = 33;
+
+/** DEC 2026 synchronized output: not under tmux, which syncs its own output. */
+export function syncEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return !env.TMUX;
+}
+
+export const SYNC_BEGIN = "\u001b[?2026h";
+export const SYNC_END = "\u001b[?2026l";
+export const CURSOR_HIDE = "\u001b[?25l";
+export const CURSOR_SHOW = "\u001b[?25h";
+
+/** Wrap one live redraw so the terminal presents it atomically. */
+export function syncFrame(body: string, sync = syncEnabled()): string {
+  return sync ? SYNC_BEGIN + body + SYNC_END : body;
+}
+
+const PULSE_BASE: RGB = [0x14, 0x14, 0x14];
+const PULSE_ACCENT: RGB = [0xbb, 0x9a, 0xf7];
+
+/**
+ * The spinner glyph in the accent colour. At truecolor the brightness pulses
+ * (sin^2 blend, period ~1.3 s); at 256/16 colours it is the static accent.
+ */
+export function pulseGlyph(frame: string, pulseTick: number, level = colorLevel()): string {
+  if (level === 0) return frame;
+  if (level < 3) return paint("accent", frame, level);
+  const rgb = blend(PULSE_BASE, PULSE_ACCENT, 0.3 + 0.7 * pulse(pulseTick, 0.08));
+  return rgbFg(rgb, 3) + frame + "\u001b[0m";
+}
 
 export function spinnerFrame(tick: number, unicode = true): string {
   const frames = unicode ? SPINNER_UNICODE : SPINNER_ASCII;
@@ -136,6 +169,8 @@ export interface SpinnerLineInput {
   /** true when Esc cancels, false when only Ctrl+C does */
   esc: boolean;
   unicode?: boolean;
+  /** colours the glyph (default: cyan) */
+  glyph?: (frame: string) => string;
 }
 
 /** `⠋ Thinking… 4s · esc to cancel` (styled when colour is on). */
@@ -143,12 +178,76 @@ export function spinnerLine(input: SpinnerLineInput): string {
   const verb = input.verb && input.verb !== "" ? input.verb : "Thinking";
   const hint = input.esc ? "esc to cancel" : "ctrl+c to cancel";
   return (
-    cyan(spinnerFrame(input.tick, input.unicode ?? true)) +
+    (input.glyph ?? cyan)(spinnerFrame(input.tick, input.unicode ?? true)) +
     " " +
     verb +
     "\u2026 " +
     dim(`${formatElapsed(input.elapsedMs)} \u00b7 ${hint}`)
   );
+}
+
+export interface FooterInput {
+  tick: number;
+  /** pulse clock tick (30 Hz of wall time) */
+  pulseTick?: number;
+  verb?: string;
+  /** extra parallel tools beyond the one named by `verb` */
+  more?: number;
+  phaseMs: number;
+  turnMs: number;
+  inputTokens?: number;
+  esc: boolean;
+  unicode?: boolean;
+  /** columns available (already minus the last column) */
+  width: number;
+}
+
+/**
+ * The busy footer with the narrow ladder. Wide: `⠹ Reading x… 12s · esc to cancel`
+ * plus, right-aligned, the turn clock and `⇣31k` when they add information.
+ * <80 the hint shrinks, <60 the phase timer goes (turn clock stays), <40 only the
+ * truncated label and clock, <24 the spinner alone. Only the label is ever cut.
+ */
+export function footerLine(input: FooterInput): string {
+  const unicode = input.unicode ?? true;
+  const w = Math.max(1, Math.floor(input.width));
+  // The ladder is in terminal columns; `width` already leaves the last one free.
+  const cols = w + 1;
+  const glyph = pulseGlyph(spinnerFrame(input.tick, unicode), input.pulseTick ?? 0);
+  if (cols < 24) return glyph;
+  const base = input.verb && input.verb !== "" ? input.verb : "Thinking";
+  const label = (text: string): string => text + (input.more && input.more > 0 ? ` + ${input.more} more` : "") + (text.endsWith("\u2026") ? "" : "\u2026");
+  const phase = formatElapsed(input.phaseMs);
+  const turn = formatElapsed(input.turnMs);
+  const hintFull = input.esc ? "esc to cancel" : "ctrl+c to cancel";
+  const hintShort = input.esc ? "esc" : "ctrl+c";
+  let tail = "";
+  let right = "";
+  if (cols >= 80) tail = " " + dim(`${phase} \u00b7 ${hintFull}`);
+  else if (cols >= 60) tail = " " + dim(`${phase} \u00b7 ${hintShort}`);
+  {
+    const tok = input.inputTokens !== undefined && input.inputTokens > 0 && cols >= 60 ? ` ${unicode ? "\u21e3" : "v"}${formatTokens(input.inputTokens)}` : "";
+    // Wide: the turn clock shows only when it adds information over the phase timer.
+    if (cols < 60 || turn !== phase || tok !== "") right = dim(turn) + (tok ? dim(tok) : "");
+  }
+  let text = base;
+  const build = (t: string): string => {
+    const left = glyph + " " + label(t) + tail;
+    if (right === "") return left;
+    const gap = w - visibleWidth(left) - visibleWidth(right);
+    return left + " ".repeat(Math.max(2, gap)) + right;
+  };
+  let line = build(text);
+  let guard = 0;
+  while (visibleWidth(line) > w && visibleWidth(text) > 1 && guard++ < 200) {
+    text = truncate(strip(text), Math.max(1, visibleWidth(text) - Math.max(1, visibleWidth(line) - w)));
+    line = build(text);
+  }
+  if (visibleWidth(line) > w && tail !== "") {
+    tail = "";
+    line = build(text);
+  }
+  return line;
 }
 
 /* ------------------------------ status bar ------------------------------ */
@@ -310,11 +409,15 @@ export interface LiveOptions {
   /** pause drawing (an approval question owns the line) */
   paused?: () => boolean;
   now?: () => number;
+  /** extra live lines drawn above the spinner (the subagent group) */
+  group?: (tick: number, width: number) => string[];
+  /** DEC 2026 around each redraw (default: not under tmux) */
+  sync?: boolean;
 }
 
 export interface Live {
   readonly enabled: boolean;
-  /** erase the spinner line; call before every transcript write */
+  /** erase the live region; call before every transcript write */
   erase(): void;
   /**
    * Print the dim status line ONCE as a normal transcript line, just before the
@@ -323,69 +426,118 @@ export interface Live {
    */
   showIdle(): void;
   beginTurn(): void;
-  toolStart(name: string, args: unknown): void;
-  toolEnd(): void;
+  toolStart(name: string, args: unknown, callId?: string): void;
+  toolEnd(callId?: string): void;
   noteUsage(inputTokens: number): void;
   /** stats for the footer; stops the spinner */
   endTurn(): { ms: number; tools: number; inputTokens?: number };
   dispose(): void;
 }
 
+/** Escape that clears an `n`-line live region ending at the cursor. */
+export function eraseRegion(n: number): string {
+  if (n <= 1) return "\r\u001b[2K";
+  return `\r\u001b[${n - 1}A\u001b[J`;
+}
+
 /**
  * Design: readline owns the prompt line, so nothing is ever drawn below it. While
  * idle the status is a plain transcript line above the prompt. While a turn runs
- * exactly one live line (the spinner) sits at the cursor, redrawn in place with
- * `\r\x1b[2K` and erased before any transcript write.
+ * the live region (an optional subagent group plus the spinner footer) sits at
+ * the cursor, redrawn as ONE synchronized-output frame and erased before any
+ * transcript write. One timer; identical consecutive frames write nothing.
  */
 export function createLive(opts: LiveOptions): Live {
   const now = opts.now ?? Date.now;
   const unicode = unicodeLocale();
-  let drawn = false;
+  const sync = opts.sync ?? syncEnabled();
+  let drawnLines = 0;
+  let cursorHidden = false;
+  let lastFrame = "";
   let timer: ReturnType<typeof setInterval> | undefined;
-  let tick = 0;
   let startedAt = 0;
-  let verb = "Thinking";
+  let phaseAt = 0;
   let tools = 0;
-  let running = 0;
+  // Running tools in start order: the footer names the oldest and counts the rest.
+  const runningTools = new Map<string, string>();
+  let anonymous = 0;
   let inputTokens: number | undefined;
   let busy = false;
   let dirty = true;
   let lastBar = "";
 
+  const restoreCursor = (): void => {
+    if (!cursorHidden) return;
+    cursorHidden = false;
+    opts.write(CURSOR_SHOW);
+  };
+
   const erase = (): void => {
     if (!opts.enabled) return;
     dirty = true;
-    if (!drawn) return;
-    drawn = false;
-    opts.write("\r\u001b[2K");
+    if (drawnLines === 0) return;
+    const n = drawnLines;
+    drawnLines = 0;
+    lastFrame = "";
+    restoreCursor();
+    opts.write(eraseRegion(n));
   };
 
-  const drawBusy = (): void => {
-    const elapsed = now() - startedAt;
-    const spin = spinnerLine({ tick, verb, elapsedMs: elapsed, esc: opts.esc, unicode });
+  const draw = (): void => {
+    const t = now();
     const w = terminalWidth() - 1;
-    const line = visibleWidth(spin) > w ? truncate(strip(spin), w) : spin;
-    drawn = true;
-    opts.write("\r\u001b[2K" + line);
+    const verb = runningTools.size > 0 ? (runningTools.values().next().value as string) : "Thinking";
+    const foot = footerLine({
+      tick: Math.floor((t - startedAt) / SPINNER_MS),
+      pulseTick: Math.floor((t - startedAt) / PULSE_MS),
+      verb,
+      more: Math.max(0, runningTools.size - 1),
+      phaseMs: t - phaseAt,
+      turnMs: t - startedAt,
+      inputTokens,
+      esc: opts.esc,
+      unicode,
+      width: w,
+    });
+    const lines = [...(opts.group?.(Math.floor((t - startedAt) / SPINNER_MS), w) ?? []), foot].map((l) =>
+      visibleWidth(l) > w ? truncate(strip(l), w) : l,
+    );
+    const frame = lines.join("\n");
+    if (frame === lastFrame && drawnLines === lines.length) return;
+    const body = (drawnLines > 0 ? eraseRegion(drawnLines) : "\r\u001b[2K") + (cursorHidden ? "" : CURSOR_HIDE) + frame;
+    cursorHidden = true;
+    drawnLines = lines.length;
+    lastFrame = frame;
+    opts.write(syncFrame(body, sync));
   };
 
   const frame = (): void => {
     if (!busy) return;
-    tick++;
     if (opts.paused?.() || !opts.atLineStart() || opts.typed()) {
       // Text is streaming, a question is open or the human is typing: step aside.
-      if (drawn) erase();
+      if (drawnLines > 0) erase();
       return;
     }
-    drawBusy();
+    draw();
   };
 
   const onResize = (): void => {
-    if (drawn) erase();
+    if (drawnLines > 0) erase();
+  };
+  const onExit = (): void => {
+    if (cursorHidden) {
+      cursorHidden = false;
+      try {
+        process.stdout.write(CURSOR_SHOW);
+      } catch {
+        /* terminal went away */
+      }
+    }
   };
   if (opts.enabled) {
     try {
       process.stdout.on("resize", onResize);
+      process.on("exit", onExit);
     } catch {
       /* no resize events */
     }
@@ -412,11 +564,10 @@ export function createLive(opts: LiveOptions): Live {
     },
     beginTurn() {
       tools = 0;
-      running = 0;
+      runningTools.clear();
       inputTokens = undefined;
-      verb = "Thinking";
       startedAt = now();
-      tick = 0;
+      phaseAt = startedAt;
       busy = true;
       if (!opts.enabled) return;
       if (timer === undefined) {
@@ -425,14 +576,15 @@ export function createLive(opts: LiveOptions): Live {
       }
       frame();
     },
-    toolStart(name, args) {
+    toolStart(name, args, callId) {
       tools++;
-      running++;
-      verb = toolVerb(name, args);
+      if (runningTools.size === 0) phaseAt = now();
+      runningTools.set(callId ?? `#${anonymous++}`, toolVerb(name, args));
     },
-    toolEnd() {
-      running = Math.max(0, running - 1);
-      if (running === 0) verb = "Thinking";
+    toolEnd(callId) {
+      if (callId !== undefined && runningTools.has(callId)) runningTools.delete(callId);
+      else if (runningTools.size > 0) runningTools.delete(runningTools.keys().next().value as string);
+      phaseAt = now();
     },
     noteUsage(n) {
       if (Number.isFinite(n) && n > 0) inputTokens = n;
@@ -445,9 +597,11 @@ export function createLive(opts: LiveOptions): Live {
     dispose() {
       stop();
       erase();
+      restoreCursor();
       if (opts.enabled) {
         try {
           process.stdout.off("resize", onResize);
+          process.off("exit", onExit);
         } catch {
           /* ignore */
         }

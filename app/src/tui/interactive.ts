@@ -862,8 +862,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         onEvent: (ev) => {
           if (ev && typeof ev === "object") {
             if (ev.type === "tool.card") {
-              if (ev.status === "running") live?.toolStart(String(ev.name), ev.args);
-              else live?.toolEnd();
+              if (ev.status === "running") live?.toolStart(String(ev.name), ev.args, String(ev.callId));
+              else live?.toolEnd(String(ev.callId));
             } else if (ev.type === "context.usage") {
               if (ev.window > 0) contextPercent = (ev.estimatedInput / ev.window) * 100;
               live?.noteUsage(ev.estimatedInput);
