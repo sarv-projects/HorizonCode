@@ -65,7 +65,7 @@ Every item below is on `main` and covered by automated tests. Items that are par
 
 **Interfaces**
 
-- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering and approval prompts; there is no fullscreen mode.
+- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering, a single-key bordered approval card (`y`/`n`/`a`, Enter/Esc deny; paste and type-ahead can never approve), bracketed paste, diff gutters, collapsed reasoning (`/think`), Tab completion with ghost text for `/commands` and `@paths`, and `/theme`; there is no fullscreen mode.
 - **Headless mode**: `hzcode -p` prints one turn as `text`, `json` or `stream-json` with canonical exit codes; approvals fail closed.
 - **Server mode (single client)**: `hzcode serve` speaks NDJSON JSON-RPC on stdio with `session.create`, `list`, `subscribe`, `prompt`, `rewind` and `fork`.
 - **Hooks**: lifecycle hooks read from `hooks.json`; a malformed file refuses to run hooks rather than silently skipping them.

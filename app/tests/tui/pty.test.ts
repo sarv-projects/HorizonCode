@@ -50,7 +50,7 @@ afterAll(() => {
 });
 
 /** Start `hzcode` inside a pty, with the pty's input coming from our pipe. */
-function startChat(workspace: string) {
+function startChat(workspace: string, env: Record<string, string> = { NO_COLOR: "1" }) {
   const command = [
     "exec",
     shellQuote(BUN_BIN),
@@ -64,7 +64,7 @@ function startChat(workspace: string) {
     file: SCRIPT as string,
     args: ["-qec", command, "/dev/null"],
     cwd: APP_DIR,
-    env: { NO_COLOR: "1", TERM: "xterm-256color" },
+    env: { ...env, TERM: "xterm-256color" },
     timeoutMs: PTY_TIMEOUT_MS,
   });
 }
@@ -220,3 +220,116 @@ if (!SCRIPT) {
     PTY_TIMEOUT_MS + 5_000,
   );
 }
+
+if (SCRIPT) {
+  test(
+    "a bracketed multi-line paste is one input shown as [pasted N lines]",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws);
+      expect(await waitFor(proc, "\u276f")).toBe(true);
+
+      proc.write("\u001b[200~first line\nsecond line\nthird line\u001b[201~\n");
+      expect(await waitFor(proc, "[pasted 3 lines]")).toBe(true);
+      expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
+
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "rich mode: the approval card is answered by one key, Enter and type-ahead never approve",
+    async () => {
+      const ws = pool.make({ "alpha.txt": "alpha\n", ".hzcode/kernel/policy.json": ASK_POLICY });
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+
+      proc.write("list files\n");
+      expect(await waitFor(proc, "Approve read")).toBe(true);
+      expect(await waitFor(proc, "always this session")).toBe(true);
+      // Enter is a denial, not a yes
+      await new Promise((r) => setTimeout(r, 400));
+      proc.write("\r");
+      expect(await waitFor(proc, "DECLINED by the user")).toBe(true);
+
+      proc.write("list files\n");
+      expect(await waitFor(proc, "Approve read", { count: 2 })).toBe(true);
+      await new Promise((r) => setTimeout(r, 400));
+      proc.write("y"); // no Enter
+      expect(await waitFor(proc, "\u00b7 approved (this time)")).toBe(true);
+      expect(await waitFor(proc, "1 tool")).toBe(true);
+
+      proc.write("\u0004");
+      const run = await proc.done;
+      const out = flatten(run.stdout);
+      expect(run.code).toBe(0);
+      expect(out).toContain("\u256d"); // the card border
+      expect(out).toContain("risk");
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "rich mode: streamed reasoning collapses to a Thought line and /think expands it",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+      proc.write("think hard about this\n");
+      expect(await waitFor(proc, "Thought for")).toBe(true);
+      expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
+      proc.write("/think\n");
+      expect(await waitFor(proc, "I can simply greet them.")).toBe(true);
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "rich mode: ghost text suggests, Tab completes /commands and @files",
+    async () => {
+      const ws = pool.make({ "README.md": "hello\n" });
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+      expect(await waitFor(proc, "\u276f")).toBe(true);
+
+      // typing /pla shows the dim ghost "n" right after the cursor
+      proc.write("/pla");
+      await new Promise((r) => setTimeout(r, 500));
+      proc.write("\t");
+      await new Promise((r) => setTimeout(r, 300));
+      proc.write("\n"); // runs /plan
+      expect(await waitFor(proc, /plan mode/i)).toBe(true);
+
+      proc.write("see @READ\t");
+      expect(await waitFor(proc, "README.md")).toBe(true);
+
+      proc.write("\u0015"); // clear the line, Ctrl-D only leaves on an empty one
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+      // the dim ghost "n" was drawn after "/pla" and the cursor stepped back over it
+      expect(run.stdout).toContain("\u001b[2mn\u001b[0m\u001b[1D");
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "rich mode: /theme mono switches the palette and is acknowledged",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+      proc.write("/theme mono\n");
+      expect(await waitFor(proc, "theme: mono")).toBe(true);
+      proc.write("/theme\n");
+      expect(await waitFor(proc, "theme: mono, colour level")).toBe(true);
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+}
+

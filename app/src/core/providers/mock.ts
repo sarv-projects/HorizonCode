@@ -13,6 +13,8 @@ import type { ChatMsg, Provider, ProviderEvent, ProviderRequest } from "../../co
 export const MOCK_GREETING = "Hi! I am HzCode running in mock mode. Configure a provider key to talk to a real model.";
 /** Said before the single tool call, so the turn reads like a conversation. */
 export const MOCK_LOOKING = "Let me look at what is in this workspace.";
+/** A request containing this makes the mock stream a short reasoning block first. */
+export const MOCK_THINK_REQUEST = /think hard/i;
 export const MOCK_TOOL_CALL_ID = "mock-1";
 
 /** The one request the mock can act on: /list files|what.*here|ls\b/i */
@@ -58,6 +60,11 @@ export function createMockProvider(): Provider {
         yield { type: "text", text: summarize(last.toolName ?? "tool", last.content ?? "") };
         yield { type: "done", stopReason: "end" };
         return;
+      }
+
+      if (MOCK_THINK_REQUEST.test(latestUserText(messages))) {
+        yield { type: "thinking", text: "The user wants a considered answer.\n" };
+        yield { type: "thinking", text: "I can simply greet them.\n" };
       }
 
       // A loop is impossible: a tool result always takes the branch above and ends

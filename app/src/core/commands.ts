@@ -61,6 +61,8 @@ export const BUILTIN_COMMANDS: readonly string[] = [
   "stats",
   "export",
   "copy",
+  "think",
+  "theme",
 ];
 
 /** Largest template body kept; the rest is dropped. */
