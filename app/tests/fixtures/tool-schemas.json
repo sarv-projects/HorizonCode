@@ -1,0 +1,503 @@
+[
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Delegate a focused task to a subagent that works in its own context and returns a final summary. Must be used for self-contained research or multi-step sub-tasks.",
+    "exposure": "direct",
+    "name": "agent",
+    "parameters": {
+      "properties": {
+        "max_steps": {
+          "description": "Model turns the subagent may use (default 12, max 20).",
+          "type": "number"
+        },
+        "profile": {
+          "description": "Optional preset: explore, plan, code or review (a user preset may be listed below). A preset picks a subset of the parent's tools (never agent); the guard still decides every effect. Omit for the generic subagent.",
+          "type": "string"
+        },
+        "task": {
+          "description": "The task for the subagent. Write it self-contained: the subagent cannot see this conversation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Apply a freeform patch in the GPT-5/Codex apply_patch format. The single `input` string must be wrapped in '*** Begin Patch' / '*** End Patch' and use '*** Add File: <path>', '*** Update File: <path>' (with '@@' context chunks of ' ' context, '-' deletions and '+' additions, optionally '*** End of File'), '*** Delete File: <path>' and '*** Move to: <path>'. Context is matched with a graded fuzz ladder; chunks that cannot be located are skipped with a warning.",
+    "exposure": "direct",
+    "name": "apply_patch",
+    "parameters": {
+      "properties": {
+        "input": {
+          "description": "The full patch text, from '*** Begin Patch' to '*** End Patch'. Every Add File body line starts with '+'; Update chunks use ' '/'-'/'+' line prefixes under '@@' headers.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Structural replace in one file: match a pattern with metavariables ($NAME / $$$NAME) and substitute them into a replacement template. Every occurrence is replaced. Goes through the write guard and the preimage safety check, like edit.",
+    "exposure": "direct",
+    "name": "ast_edit",
+    "parameters": {
+      "properties": {
+        "lang": {
+          "description": "Optional language or extension hint selecting the lexer family (e.g. rust/rs for lifetimes, py/python/sh/yaml for # comments); default is inferred from the file extension, else C-like.",
+          "type": "string"
+        },
+        "out": {
+          "description": "Replacement template; $NAME / $$$NAME expand to captured text.",
+          "type": "string"
+        },
+        "pat": {
+          "description": "Structural pattern to match, e.g. 'foo($A)'.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File to edit (a single file).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "pat",
+        "out"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Structural (AST-style) pattern search. Metavariables: $NAME (one token), $$$NAME (a run of tokens). Uses a built-in structural matcher; an external ast-grep binary is used only when present and only through the guard.",
+    "exposure": "direct",
+    "name": "ast_search",
+    "parameters": {
+      "properties": {
+        "glob": {
+          "description": "Only search files matching this glob, e.g. '*.ts'.",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Optional language or extension hint (e.g. rust/rs, py/python). Selects the built-in matcher's lexer family (comments, quotes) and is passed to an external ast-grep; default is inferred from each file extension.",
+          "type": "string"
+        },
+        "pat": {
+          "description": "Structural pattern, e.g. 'foo($A)'. $NAME / $$$NAME are metavariables.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File or directory to search (default: workspace).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pat"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Run a JavaScript program in an isolated Bun subprocess to chain tool calls, filter large outputs, and compute. Use `await tools.call(name, args)` to call tools; console.log is collected; `return` a value to get it back.",
+    "exposure": "direct",
+    "name": "code_mode",
+    "parameters": {
+      "properties": {
+        "code": {
+          "description": "Async function body. `tools.call(name, args)` bridges to the tools; return the value you want back.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "Wall-clock budget (default 30000, max 120000).",
+          "type": "number"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Replace a string in a file: exact match, then relative-indent, three-way-merge and line-patch repair rungs (each only when unambiguous). All occurrences or the first only. Alternatively, address whole lines by the anchors read returns with anchors:true (start_anchor, optional end_anchor) instead of old.",
+    "exposure": "direct",
+    "name": "edit",
+    "parameters": {
+      "properties": {
+        "all": {
+          "description": "Replace every occurrence (default false).",
+          "type": "boolean"
+        },
+        "end_anchor": {
+          "description": "Anchored mode: last line to replace (default start_anchor).",
+          "type": "string"
+        },
+        "new": {
+          "description": "Replacement string.",
+          "type": "string"
+        },
+        "old": {
+          "description": "String to replace (must not be empty). Omit when using start_anchor.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path to edit.",
+          "type": "string"
+        },
+        "start_anchor": {
+          "description": "Anchored mode: first line to replace, LINE:abc:def from read anchors:true. Replaces old; the whole line range becomes new (empty new deletes).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "new"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Find files matching a glob pattern, newest-agnostic name order.",
+    "exposure": "direct",
+    "name": "glob",
+    "parameters": {
+      "properties": {
+        "path": {
+          "description": "Directory to search from (default: workspace).",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Glob pattern, e.g. '**/*.ts' or 'src/*.md'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Search file contents for a regex or text pattern.",
+    "exposure": "direct",
+    "name": "grep",
+    "parameters": {
+      "properties": {
+        "glob": {
+          "description": "Only search files matching this glob, e.g. '*.ts'.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File or directory to search (default: workspace).",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Regex (or literal text) to search for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Language-server diagnostics for a file. op:'diagnostics' (path required) syncs the file to any configured language server and reports only fresh diagnostics; a no-op when no server is configured for the file type.",
+    "exposure": "direct",
+    "name": "lsp",
+    "parameters": {
+      "properties": {
+        "op": {
+          "description": "The operation (v1: 'diagnostics').",
+          "enum": [
+            "diagnostics"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "File path to diagnose.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Start, stop, or check a local preview server for the project (dev server, static server, or an explicit command).",
+    "exposure": "deferred",
+    "name": "preview",
+    "parameters": {
+      "properties": {
+        "action": {
+          "description": "Preview operation.",
+          "enum": [
+            "start",
+            "stop",
+            "status"
+          ],
+          "type": "string"
+        },
+        "command": {
+          "description": "Explicit command to run (defaults to the package.json dev or start script).",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory for the server, inside the workspace (defaults to the workspace).",
+          "type": "string"
+        },
+        "id": {
+          "description": "Preview id to stop (from `status`; any session may stop any preview).",
+          "type": "string"
+        },
+        "port": {
+          "description": "Expected port, used to spot the URL in the server output.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Read a text file with line numbers, optionally a line range.",
+    "exposure": "direct",
+    "name": "read",
+    "parameters": {
+      "properties": {
+        "anchors": {
+          "description": "Prefix each line with a LINE:abc:def anchor usable by edit start_anchor/end_anchor (default false).",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Maximum lines to return (default and cap 2000).",
+          "type": "number"
+        },
+        "offset": {
+          "description": "1-based line number to start at (default 1).",
+          "type": "number"
+        },
+        "path": {
+          "description": "File path to read.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Produce a token-budgeted structural map of the repository (top definitions per file, ranked by relevance). For orientation without reading everything.",
+    "exposure": "direct",
+    "name": "repo_map",
+    "parameters": {
+      "properties": {
+        "focus": {
+          "description": "Files to personalise the ranking toward, e.g. the files under discussion.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "includeTests": {
+          "description": "Include test-looking paths (default false).",
+          "type": "boolean"
+        },
+        "maxTokens": {
+          "description": "Token budget (default 4000, hard 16000).",
+          "type": "number"
+        },
+        "path": {
+          "description": "Subdirectory to map (default: workspace root).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Run a bash command in the workspace and return its combined output and exit code.",
+    "exposure": "direct",
+    "name": "shell",
+    "parameters": {
+      "properties": {
+        "command": {
+          "description": "Bash command line to run.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory, relative to the workspace (default: workspace).",
+          "type": "string"
+        },
+        "timeoutMs": {
+          "description": "Timeout in milliseconds (default 120000, max 600000).",
+          "type": "number"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Drive an interactive terminal session: start a command in a persistent PTY-backed session (mode:start), feed it stdin (mode:write), or terminate it (mode:close). Unlike the one-shot shell tool, this is the explicit opt-in for interactive programs. Every start, and every input line written later, is authorized as its own shell.exec effect.",
+    "exposure": "direct",
+    "name": "shell_session",
+    "parameters": {
+      "properties": {
+        "command": {
+          "description": "The command line to run (mode:start).",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory relative to the workspace (mode:start; default: workspace).",
+          "type": "string"
+        },
+        "idleMs": {
+          "description": "Idle timeout in ms with no read/write before the session is killed (mode:start; default 120000).",
+          "type": "number"
+        },
+        "input": {
+          "description": "Text to feed to the session's stdin (mode:write). Include a trailing newline to submit a line.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "start a new session, write stdin to a running one, or close it.",
+          "enum": [
+            "start",
+            "write",
+            "close"
+          ],
+          "type": "string"
+        },
+        "sessionId": {
+          "description": "The session id returned by a start (mode:write / mode:close).",
+          "type": "string"
+        },
+        "timeoutMs": {
+          "description": "Overall wall-clock budget in ms (mode:start; default 120000, max 600000).",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Maintain the session todo checklist: list, add, or complete items.",
+    "exposure": "direct",
+    "name": "todo",
+    "parameters": {
+      "properties": {
+        "action": {
+          "description": "Checklist operation.",
+          "enum": [
+            "list",
+            "add",
+            "done"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "description": "Item text for 'add', or the item id (e.g. 't1') for 'done'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Search for additional (deferred) tools by describing what you need. Matching tools are unlocked for the rest of the session and their full specs are returned so you can call them immediately.",
+    "exposure": "direct",
+    "name": "tool_search",
+    "parameters": {
+      "properties": {
+        "query": {
+          "description": "What you want to do (e.g. 'start a dev server on localhost'). Matched against deferred tool names, descriptions, and keywords.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Revert the most recent write or edit the workspace recorded (the newest live change, any session, or the newest one to `path`). Restores the previous content, or removes a file the change created. Refuses when the file changed since, or when the previous content was not kept.",
+    "exposure": "direct",
+    "name": "undo",
+    "parameters": {
+      "properties": {
+        "path": {
+          "description": "Undo the most recent change to this file instead of the newest change overall.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Create or overwrite a file, creating parent directories as needed.",
+    "exposure": "direct",
+    "name": "write",
+    "parameters": {
+      "properties": {
+        "content": {
+          "description": "Full file content.",
+          "type": "string"
+        },
+        "force": {
+          "description": "Overwrite a binary or non-UTF-8 file. Without it such a target is refused.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "File path to write.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    }
+  }
+]

@@ -129,6 +129,7 @@ cd HorizonCode
 ./bin/hzcode -p "summarise this repo" --permission-mode read-only
 ./bin/hzcode --continue               # resume the last session
 ./bin/hzcode serve                    # single-client NDJSON JSON-RPC on stdio
+./bin/hzcode doctor                   # check this install: OK/WARN/FAIL with a fix per problem
 ```
 
 The mock model needs no key and exercises the whole path: tool call, guard, receipt. A JSON turn looks like this:
@@ -144,6 +145,8 @@ Piped input without `-p` runs headless, one message per line. `hzcode serve` ans
 ```bash
 printf '{"jsonrpc":"2.0","id":1,"method":"server.hello","params":{}}\n' | ./bin/hzcode serve
 ```
+
+`hzcode doctor` is diagnose-only. It checks the Bun version, the kernel binary and its `--selftest`, trusted or untrusted kernel mode, the config file, the provider, key presence (the key itself is never printed) and model, workspace and state-directory permissions, git, and the terminal (TTY, colour level, UTF-8 locale, `NO_COLOR`). It prints one line per check with a `fix:` line under every WARN or FAIL, and exits 1 if anything FAILs. `--json` gives the same report as JSON, suitable for a support ticket. Its only filesystem touch is the kernel selftest's scratch directory under the OS temp dir, removed afterwards.
 
 Other flags: `--workspace <path>`, `--model <name>`, `--max-steps <n>`, `--max-tokens <n>`, `--max-wall-ms <n>` (0 means unlimited). `hzcode --help` prints the full list.
 
@@ -260,7 +263,7 @@ No comparison with other agents is made here, because none was measured on the s
 
 ## Testing and CI
 
-The seven gates run through one entry point, `bash ops/gates.sh`, which CI also calls:
+The eight gates run through one entry point, `bash ops/gates.sh`, which CI also calls:
 
 | Gate | What it checks |
 |---|---|
@@ -271,13 +274,14 @@ The seven gates run through one entry point, `bash ops/gates.sh`, which CI also 
 | `e2e-headless-smoke` | a mock turn end to end with receipts |
 | `e2e-budget-rail` | the step budget stops a run with its exit code |
 | `e2e-usage-error` | a bad flag exits with the usage error |
+| `startup-latency` | median of 5 runs of `hzcode --version` (500 ms ceiling) and of a mock turn (1000 ms ceiling); measured medians are 96 ms and 198 ms |
 
 Results from a run on 2026-11-09 on this tree:
 
 - `cd kernel && cargo build --release --locked && cargo test --locked`: 49 unit tests and 50 integration tests pass.
 - `hz-kernel --selftest`: `SELFTEST OK (25 checks)`.
 - `cd app && bun install && bun test`: 1,597 tests in 128 files; 1,589 pass, 8 skip, 0 fail.
-- `bash ops/gates.sh`: all 7 gates pass.
+- `bash ops/gates.sh`: all 8 gates pass (to be re-run at release).
 
 The 8 skips are chmod-based tests that cannot bind when the process runs as root, so they skip by design; the run above was as root. The same suite also runs on hosted CI as a non-root user, where they execute.
 
