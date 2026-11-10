@@ -1,5 +1,11 @@
 # 11 — Authority, Safety & Trust
+> **Permission modes (`docs/28` ruling 58).** `default | plan | accept-edits | read-only` is a policy layer above the kernel guard: it narrows or answers an ask and can never turn a kernel `deny` into an allow. `accept-edits` answers only in-workspace `fs.write` asks (not `.git`/`.hz`, CI/hook directories, manifests, shell rc or env files, not shell, net, spawn, MCP or outside writes; the guardian, including `HORIZON_GUARDIAN=enforce`, runs first). `read-only` also refuses `mcp.invoke`. There is NO bypass/yolo mode: it would also answer exfiltration and shell asks with only the fixed kernel deny list left, so `yolo`/`bypass` are refused. The mode is opt-in per run (`--permission-mode`, `/mode`), shown as a prompt badge, never persisted by the app, and only the USER config may set a default (no workspace file is read for it).
 
+> **Print mode approvals (`docs/28` ruling 57).** `hzcode -p` is non-interactive: the approval UI is built non-interactive, so any action that needs a human is denied (fail closed). `-p --permission-mode accept-edits` answers only in-workspace write asks (ruling 58); everything else stays denied.
+
+
+> **Agent presets (stage 3, `docs/28` ruling 56).** A subagent preset is bounded by the parent's tools, not by the generic child's: an allow-list outside the ceiling (every tool except `agent`) is refused with `profile_ceiling_widens` (ruling 61). Presets grant no lease and skip no approval; read-only presets simply hold no write, edit or shell tool. Workspace preset files are repository content and their prompt text is untrusted-surface input, bounded by that ceiling rule.
+>
 > The execution constitution. How HorizonCode decides who may do what, confines it, proves it happened, and refuses to claim more than it can prove.
 
 ---
@@ -1911,3 +1917,6 @@ Every capability below is **`DESIGNED`** *as a specification claim* — with one
 4. **Windows and macOS sandbox backends are design-only here.** `source: /data/home/forge/repo-tour/codex/codex-rs/windows-sandbox-rs/src/lib.rs` and the macOS `.sbpl` policies are the reference material; neither is implemented in the ancestor project.
 5. **Local root attacker is out of scope** (§7.17.1). This is a limit, not a defect; it is stated so no reader infers protection we do not provide.
 
+> **Session fork (`docs/28` ruling 59).** A fork is a user action that copies settled history only and writes one `session.fork` event to a new stream; it grants nothing, and the child runs under the process's current mode and config (no wider than a fresh `/new`). Narrowing by parent posture (S-46) is not implemented.
+
+> **Guardian surfacing (`docs/28` ruling 60).** The advisory guardian runs only after the kernel answered "ask" and can only annotate or (with `HORIZON_GUARDIAN=enforce`) refuse a deny-verdict ask; it never grants and never overrides a kernel deny. Model-path inputs are JSON-encoded inside `<data>` delimiters.

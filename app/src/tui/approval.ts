@@ -147,6 +147,9 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
 
     r.ensureLineStart();
     r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + (detail ? " " + detail : "") + "\n");
+    if (typeof req?.guardian === "string" && req.guardian !== "") {
+      r.write(escapeInvisible(sanitizeText(req.guardian)).replace(/\s+/g, " ").trim() + "\n");
+    }
     // An optional preview rides the request when the caller can produce one (a
     // staged diff for a plan-mode write): shown before the ask, absent on old
     // callers — the prompt is unchanged then.

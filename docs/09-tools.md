@@ -1,5 +1,11 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
+> **Permission modes (`docs/28` ruling 58).** `read-only` refuses every `fs.write`, `shell.exec` and `mcp.invoke` admission (so `write`, `edit`, `apply_patch`, `undo`, `shell`, `shell_session`, `preview`); `accept-edits` answers an in-workspace `fs.write` ask. Tool code is unchanged: the mode acts in the shared guard gate.
 
+> **Print mode (`docs/28` ruling 57).** The print result counts distinct top-level tool calls (`toolCalls`) and lists files named by the turn diffs (`changedFiles`); no tool changes.
+
+
+> **Agent presets (stage 3, `docs/28` ruling 56).** The shipped `agent` tool takes an optional `profile`. A preset picks a subset of the parent's tools (read-only for explore, plan and review; `code` holds more than the generic child; ruling 61); the child still gets no parent leases (R-tools-32) and every effect re-enters guard and approval. `SubagentSpecV1` grants, fleets and `readOnlyProfile()` stay DESIGNED.
+>
 > Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/HorizonCode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
 > **Implementation note (2026-11-09, integration branch `integration/superset`).** The catalog below stays a specification. Eighteen tools ship in reduced form and are TESTED (§12 last row; `docs/28` §1): the base seven, `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch` (GPT/Codex grammar, model-routed), `shell_session` (interactive PTY), `lsp` (default off), `tool_search` (Deferred discovery), `ast_search` and `ast_edit`. `debug` (DAP), `multi_edit`, hashline-anchored edits and multi-dialect tool sets beyond `apply_patch` are NOT STARTED.
@@ -1564,3 +1570,7 @@ Levels per `/data/home/forge/HorizonCode/docs/_conventions.md` §8. **This docum
 - Skill/plugin contributed tools are designed to enter through the same pipeline; no upstream repo was surveyed deeply enough to claim the pattern is field-proven — see the sources in §1 for what was actually read.
 
 ---
+
+> **Session fork (`docs/28` ruling 59).** Forking adds no tool and no admission kind: it is a user action (slash command or server method) that copies settled transcript rows. A fork's tool-call groups are never split; the copy starts at a safe boundary.
+
+> **Guardian surfacing (`docs/28` ruling 60).** No tool or admission kind is added; the guardian only annotates the approval of an already-asked action.

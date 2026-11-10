@@ -13,6 +13,9 @@ import * as path from "node:path";
 import type { ContextUsage, RunExit, Runtime } from "../contracts";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
+import type { SessionInfo } from "../core/session";
+import type { PermissionMode } from "../core/permission-mode";
+import { PERMISSION_MODES, describeMode, isPermissionMode, modeBadge, parsePermissionMode, permissionModeError } from "../core/permission-mode";
 import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
@@ -44,6 +47,8 @@ export interface CheckpointView {
   label: string;
   /** The journal entry ids the checkpoint covers (the list's change count). */
   changes: readonly string[];
+  /** Transcript length at the checkpoint (what `/fork <n>` cuts at), when known. */
+  messageIndex?: number;
 }
 
 /** Extras the core runtime may or may not expose yet; each one is optional. */
@@ -54,12 +59,19 @@ type RuntimeWithExtras = Runtime & {
   /** Plan-mode hooks. An older core simply does not offer them; nothing breaks. */
   setPlanMode?: (on: boolean) => unknown;
   planMode?: () => boolean;
+  /** Permission-mode hooks (permission-mode.ts); optional like the plan ones. */
+  permissionMode?: () => PermissionMode;
+  setPermissionMode?: (mode: PermissionMode) => unknown;
   stagedChanges?: () => ReadonlyArray<StagedChangeView>;
   applyPlan?: () => Promise<string>;
   discardPlan?: () => number;
   /** Rewind hooks. An older core simply does not offer them; nothing breaks. */
   checkpoints?: () => ReadonlyArray<CheckpointView>;
   rewindTo?: (n: number) => Promise<string>;
+  /** Session fork hooks (optional like the rest). */
+  forkSession?: (at?: number) => Promise<SessionInfo>;
+  switchSession?: (sessionId: string) => unknown;
+  sessions?: () => ReadonlyArray<SessionInfo>;
 };
 
 export interface InteractiveOptions {
@@ -151,9 +163,12 @@ function printHelp(r: Renderer): void {
     ["/files", "tools the assistant can use"],
     ["/context", "what the next request will carry"],
     ["/plan [on|off]", "toggle plan mode (writes are staged)"],
+    ["/mode [name]", "show or set the permission mode: default, plan, accept-edits, read-only"],
     ["/changes", "review staged changes and diffs"],
     ["/apply", "write the staged changes"],
     ["/discard", "drop the staged changes"],
+    ["/fork [n]", "branch this chat into a new session (n = checkpoint number, else everything so far)"],
+    ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
     ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
     ["/memory", "which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias /instructions)"],
     ["/init", "draft an AGENTS.md for this repo (staged; you review it, then /apply)"],
@@ -231,8 +246,53 @@ function showTools(r: Renderer, runtime: Runtime): void {
 const CHANGES_DIFF_LINES = 20;
 
 /** The chat bar, with the PLAN badge ahead of the prompt when plan mode is on. */
-export function planPrompt(planOn: boolean): string {
-  return (planOn ? bold(yellow("PLAN")) + " " : "") + bold(cyan(PROMPT));
+export function planPrompt(planOn: boolean, mode: PermissionMode = "default"): string {
+  const badge = planOn ? "PLAN" : modeBadge(mode);
+  return (badge !== "" ? bold(yellow(badge)) + " " : "") + bold(cyan(PROMPT));
+}
+
+/** The runtime's permission mode, or "default" when the core does not say. */
+export function readPermissionMode(runtime: Runtime): PermissionMode {
+  const read = (runtime as RuntimeWithExtras).permissionMode;
+  if (typeof read !== "function") return "default";
+  try {
+    const mode = read.call(runtime);
+    return isPermissionMode(mode) ? mode : "default";
+  } catch {
+    return "default";
+  }
+}
+
+/**
+ * /mode [name]: show or set the permission mode. Session-only (nothing is
+ * written to config) and never a bypass: yolo/bypass names get the refusal.
+ * Returns the mode now in force so the caller can redraw the badge.
+ */
+export function runModeCommand(arg: string, runtime: Runtime, renderer: Renderer): PermissionMode {
+  const extras = runtime as RuntimeWithExtras;
+  const current = readPermissionMode(runtime);
+  if (arg === "") {
+    renderer.notice(`permission mode: ${describeMode(current)}. Set with /mode ${PERMISSION_MODES.join("|")}`);
+    return current;
+  }
+  const next = parsePermissionMode(arg);
+  if (next === undefined) {
+    renderer.notice(permissionModeError(arg));
+    return current;
+  }
+  if (typeof extras.setPermissionMode !== "function") {
+    notSupported(renderer, "setPermissionMode", "permission-mode");
+    return current;
+  }
+  try {
+    extras.setPermissionMode.call(runtime, next);
+  } catch (err) {
+    renderer.notice(`could not change permission mode: ${errorMessage(err)}`);
+    return readPermissionMode(runtime);
+  }
+  const now = readPermissionMode(runtime);
+  renderer.notice(`permission mode now ${describeMode(now)}`);
+  return now;
 }
 
 /** The runtime's current plan-mode flag, or false when it does not say. */
@@ -436,6 +496,71 @@ function listCheckpoints(runtime: Runtime, renderer: Renderer): void {
   if (views.length > REWIND_LIST_LIMIT) {
     renderer.notice(`... ${views.length - REWIND_LIST_LIMIT} older checkpoint(s) \u2014 /rewind <n> takes the number from this list`);
   }
+}
+
+/** One /sessions row: id, title, and the fork lineage when there is one. */
+export function describeSession(s: SessionInfo, currentId?: string): string {
+  const mark = s.id === currentId ? "* " : "  ";
+  const lineage =
+    s.forkedFrom !== undefined
+      ? ` (fork of ${s.forkedFrom.sessionId} at message ${s.forkedFrom.messageIndex})`
+      : "";
+  return `${mark}${s.id}  ${s.title}${lineage}`;
+}
+
+/**
+ * /fork [n] and /sessions. `/fork` copies the transcript into a new session
+ * and moves this chat onto it (the original stays as it was and can be resumed
+ * by id); `/fork n` cuts at checkpoint n's message index. Returns false when
+ * `name` is not one of the two.
+ */
+export async function runForkCommand(
+  name: string,
+  arg: string,
+  runtime: Runtime,
+  renderer: Renderer,
+): Promise<boolean> {
+  const rt = runtime as RuntimeWithExtras;
+  if (name === "sessions") {
+    if (typeof rt.sessions !== "function") {
+      notSupported(renderer, "sessions", "sessions");
+      return true;
+    }
+    for (const s of rt.sessions()) renderer.line(describeSession(s, runtime.sessionId));
+    return true;
+  }
+  if (name !== "fork") return false;
+  if (typeof rt.forkSession !== "function" || typeof rt.switchSession !== "function") {
+    notSupported(renderer, "forkSession", "fork");
+    return true;
+  }
+  let at: number | undefined;
+  const text = arg.trim();
+  if (text !== "") {
+    const n = Number(text);
+    if (!Number.isInteger(n) || n < 1) {
+      renderer.notice("usage: /fork [n]: n is a checkpoint number from /rewind");
+      return true;
+    }
+    const cp = typeof rt.checkpoints === "function" ? rt.checkpoints().find((c) => c.n === n) : undefined;
+    const idx = cp?.messageIndex;
+    if (typeof idx !== "number") {
+      renderer.notice(`no checkpoint ${n} to fork at; /rewind lists them`);
+      return true;
+    }
+    at = idx;
+  }
+  try {
+    const parentId = runtime.sessionId;
+    const child = await rt.forkSession(at);
+    rt.switchSession(child.id);
+    renderer.notice(
+      `forked ${parentId} -> ${child.id} (${child.forkedFrom?.messageIndex ?? 0} message(s) copied); the original is untouched`,
+    );
+  } catch (err) {
+    renderer.notice(`could not fork: ${errorMessage(err)}`);
+  }
+  return true;
 }
 
 /**
@@ -682,7 +807,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     typedGuardArmed = false;
     if (blank) renderer.write("\n");
     try {
-      rl.setPrompt(planPrompt(planState.on));
+      rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
       rl.prompt();
     } catch {
       /* terminal went away */
@@ -717,7 +842,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const drainQueue = async (): Promise<void> => {
     while (!exiting && queued.length > 0) {
       const next = queued.shift() as string;
-      renderer.write(planPrompt(planState.on) + sanitizeText(next) + "\n");
+      renderer.write(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(next) + "\n");
       await sendTurn(next);
     }
   };
@@ -809,6 +934,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "context":
         showContext();
         break;
+      case "mode":
+        runModeCommand(arg, runtime, renderer);
+        // /mode plan flips the runtime's plan flag: keep the badge in step.
+        planState.on = readPlanMode(runtime);
+        break;
       case "plan":
       case "changes":
       case "apply":
@@ -816,6 +946,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // The plan commands own their notices; the prompt (and its badge) is
         // reprinted by the common showPrompt() at the end of runSlash.
         await runPlanCommand(name, arg, runtime, renderer, planState);
+        break;
+      }
+      case "fork":
+      case "sessions": {
+        if (busy) {
+          renderer.notice(`/${name} needs an idle chat: try again when the current answer ends`);
+          break;
+        }
+        await runForkCommand(name, arg, runtime, renderer);
         break;
       }
       case "rewind": {
@@ -873,7 +1012,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const waiter = answerWaiter;
       answerWaiter = null;
       try {
-        rl.setPrompt(planPrompt(planState.on));
+        rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
       } catch {
         /* ignore */
       }
@@ -911,9 +1050,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   rl.on("close", () => finish(0));
 
+  // A non-default permission mode is never silent at startup.
+  const startMode = readPermissionMode(runtime);
+  if (startMode !== "default") renderer.notice(`permission mode: ${describeMode(startMode)}`);
+
   const initial = (opts.initialMessage ?? "").trim();
   if (initial !== "") {
-    renderer.line(planPrompt(planState.on) + sanitizeText(initial));
+    renderer.line(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(initial));
     void handleUserLine(initial);
   } else {
     showPrompt();

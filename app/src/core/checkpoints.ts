@@ -126,6 +126,8 @@ export interface CheckpointView {
   label: string;
   /** The journal entry ids the checkpoint covers (the list's change count). */
   changes: string[];
+  /** Transcript length at the checkpoint (what `/fork <n>` cuts at). */
+  messageIndex: number;
 }
 
 /** One entry the plan would put back, newest first. */
@@ -483,6 +485,7 @@ export function checkpointViews(checkpoints: readonly CheckpointRecord[]): Check
     at: checkpoint.at,
     label: checkpoint.label,
     changes: [...checkpoint.changes],
+    messageIndex: checkpoint.messageIndex,
   }));
 }
 

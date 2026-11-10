@@ -40,6 +40,7 @@ export const BASE_PROMPT_SECTIONS: readonly PromptSection[] = [
       "- Prefer the specialized tools (read, search, edit, write) over shell for file work; use shell for builds, tests and git.",
       "- Issue independent read-only calls together in one batch.",
       "- Keep outputs small: search or read ranges instead of dumping whole files or logs.",
+      "- Agent tool: use profile explore for broad search across many files and profile review before you finish a larger change; never for small lookups.",
       "- Write and edit refuse a file you have not read this session. If an edit fails, re-read the file, then retry with exact text.",
     ].join("\n"),
   },

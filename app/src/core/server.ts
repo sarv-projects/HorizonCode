@@ -30,7 +30,7 @@
  * fails closed as INVALID_PARAMS.
  *
  * ALL MUTATION GOES THROUGH THE RUNTIME (S4/S49): the server owns no DB writes
- * of its own. prompt -> runtime.send, rewind -> runtime.rewindTo, create/resume
+ * of its own. prompt -> runtime.send, rewind -> runtime.rewindTo, fork -> runtime.forkSession, create/resume
  * -> createRuntime. The server only routes frames and fans RuntimeEvents out as
  * notifications.
  *
@@ -250,6 +250,17 @@ export function createServer(opts: ServerOptions): ServerHandle {
       title: s.title,
       created: s.created,
       updated: s.updated,
+      // Fork lineage (additive): present only on a fork.
+      ...(s.forkedFrom !== undefined
+        ? {
+            forkedFrom: {
+              uri: `hz://session/${s.forkedFrom.sessionId}`,
+              sessionId: s.forkedFrom.sessionId,
+              messageIndex: s.forkedFrom.messageIndex,
+              parentSeq: s.forkedFrom.parentSeq,
+            },
+          }
+        : {}),
     }));
     return { sessions };
   }
@@ -300,6 +311,37 @@ export function createServer(opts: ServerOptions): ServerHandle {
     return { sessionId: runtime.sessionId, summary };
   }
 
+  async function handleFork(params: unknown): Promise<unknown> {
+    const sessionId = requireSessionId(params);
+    let at: number | undefined;
+    if (isRecord(params) && params.at !== undefined) {
+      if (typeof params.at !== "number" || !Number.isInteger(params.at) || params.at < 0) {
+        throw new ServerError(INVALID_PARAMS, "at must be a non-negative integer message index");
+      }
+      at = params.at;
+    }
+    const parent = await runtimeFor(sessionId);
+    if (typeof parent.forkSession !== "function") {
+      throw new ServerError(INTERNAL_ERROR, "this build does not support fork");
+    }
+    const child = await parent.forkSession(at);
+    // Resume the child through the ordinary by-id path (recovery runs).
+    const runtime = await runtimeFor(child.id);
+    return {
+      sessionId: runtime.sessionId,
+      uri: `hz://session/${runtime.sessionId}`,
+      forkedFrom: {
+        uri: `hz://session/${sessionId}`,
+        sessionId,
+        messageIndex: child.forkedFrom?.messageIndex ?? 0,
+        parentSeq: child.forkedFrom?.parentSeq ?? 0,
+      },
+      model: runtime.model,
+      providerName: runtime.providerName,
+      kernelMode: runtime.kernelMode,
+    };
+  }
+
   async function dispatch(method: string, params: unknown): Promise<unknown> {
     switch (method) {
       case "server.hello":
@@ -314,6 +356,8 @@ export function createServer(opts: ServerOptions): ServerHandle {
         return handlePrompt(params);
       case "session.rewind":
         return handleRewind(params);
+      case "session.fork":
+        return handleFork(params);
       default:
         // S89 spirit: an unknown method is a typed error, never ignored.
         throw new ServerError(METHOD_NOT_FOUND, `method not found: ${method}`);
