@@ -48,8 +48,8 @@
 | #23 | feat/tui-polish | TUI part 2: colour ladder, status bar and spinner, cards, streaming markdown (forgecode T-5, T-6) |
 | #24 | docs/product-readme | product README; designed capability list moved to docs/31 |
 | #25 | feat/forgecode-takes | forgecode T-1, T-2, T-3, T-4, T-10, T-11 (rulings 67 to 75); merge `51961de`, title "Forgecode takes: tolerant tool-arg repair, todo and attempt nudges, hzcode doctor, startup-latency gate" |
-| #26 | feat/forgecode-takes-2 | T-7, T-13, T-14 (rulings 76 to 79, per docs/28); merge `010fa17`, title "Forgecode takes 2: structured compaction summary, custom commands, skill folders" |
-| #27 | feat/forgecode-takes-3 | T-12, T-16 (commit half), T-19, T-20 (config check half) (rulings 80 to 83, per docs/28); merge `3dfd409`, title "Forgecode takes 3: conversation verbs, config check, plan files, hzcode commit, hardening" |
+| #26 | feat/forgecode-takes-2 | T-7, T-13, T-14 (rulings 76 to 78, verified from git history); merge `010fa17`, title "Forgecode takes 2: structured compaction summary, custom commands, skill folders" |
+| #27 | feat/forgecode-takes-3 | T-12, T-16 (commit half), T-19, T-20 (config check half) (rulings 79 to 83 plus two masking fixes, verified from git history; ruling 79 is commit 7eb7cda); merge `3dfd409`, title "Forgecode takes 3: conversation verbs, config check, plan files, hzcode commit, hardening" |
 | #28 | feat/tui-part3 | Grok minimal-mode behaviours (rulings 84 to 91), section 5.12; merge `5e34fac`, title "TUI part 3: bracketed paste, single-key approval card, diff gutters, thinking, subagent cells, completion, /theme" |
 | #29 | docs/handoff | docs only: hand-off, status refresh, exact upstream URLs |
 
