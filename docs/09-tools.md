@@ -1264,6 +1264,8 @@ model emits tool call (ToolCallV1)
 
 Steps 4–7 run before the effect; steps 8–12 after. Every boundary is a point where a crash leaves a *recorded*, reconcilable state: before step 7 nothing happened; after step 8 the outcome is either settled or `UNKNOWN`. There is no third state.
 
+**Cross-process serialization (as shipped, ruling 63 in `docs/28`).** `write`, `edit`, `apply_patch` and `ast_edit` take an advisory per-target-file lock (`core/file-lock.ts`) after approval and hold it across the final preimage check, the atomic write and the journal record. A second hzcode process that changed the file first is reported as `HZ_PRECONDITION_FAILED: ... preimage changed` and nothing is written; a second process that is mid-edit makes this call wait (bounded, `HZ_LOCK_TIMEOUT`), not interleave.
+
 ### 8.2 `edit` with a stale-preimage conflict
 
 | # | Actor | Action |

@@ -10,6 +10,8 @@
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
+import { withFileLock, targetLockPath } from "../core/file-lock";
+import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
@@ -687,41 +689,49 @@ export const editTool: Tool = {
         if (!approved) return fail("declined by user");
       }
 
-      // docs/09 §8.2 (R-tools-48): the preimage is checked immediately before
-      // the write — a file changed during the guard/approval window is a
-      // `Conflict`, and nothing is written. A stale edit may not silently
-      // overwrite a human's (or a tool's) concurrent change with "success".
-      let actualSha256: string;
-      try {
-        actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
-      } catch {
-        actualSha256 = "unreadable";
-      }
-      if (actualSha256 !== preimageSha256) {
-        return fail(
-          `HZ_PRECONDITION_FAILED: edit refused: preimage changed: ${rel} ` +
-            `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
-        );
-      }
+      // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
+      // section per target file, taken AFTER approval. A second process that changed
+      // the file first is caught by the sha256 check below, never clobbered.
+      const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+        // docs/09 §8.2 (R-tools-48): the preimage is checked immediately before
+        // the write — a file changed during the guard/approval window is a
+        // `Conflict`, and nothing is written. A stale edit may not silently
+        // overwrite a human's (or a tool's) concurrent change with "success".
+        let actualSha256: string;
+        try {
+          actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+        } catch {
+          actualSha256 = "unreadable";
+        }
+        if (actualSha256 !== preimageSha256) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: edit refused: preimage changed: ${rel} ` +
+              `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
+          );
+        }
 
-      // The effect: an atomic replacement (temp file + fsync + rename, ./atomic-write.ts)
-      // through a descriptor re-verified against the kernel state directory before a
-      // byte is written (same check, and same symlink policy, as `write` — see the
-      // header of ./verified-open.ts). Not `truncate(0)` + `write`: a crash between
-      // those two calls left the file at ZERO BYTES with nothing able to restore it.
-      const outcome = await writeAtomic(resolved, after, ctx);
-      if (isRefused(outcome)) return fail(outcome.refusal);
-      const verified = (await readFile(resolved)).toString("utf8") === after;
-      if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
+        // The effect: an atomic replacement (temp file + fsync + rename, ./atomic-write.ts)
+        // through a descriptor re-verified against the kernel state directory before a
+        // byte is written (same check, and same symlink policy, as `write` — see the
+        // header of ./verified-open.ts). Not `truncate(0)` + `write`: a crash between
+        // those two calls left the file at ZERO BYTES with nothing able to restore it.
+        const outcome = await writeAtomic(resolved, after, ctx);
+        if (isRefused(outcome)) return fail(outcome.refusal);
+        const verified = (await readFile(resolved)).toString("utf8") === after;
+        if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
-      recordChange(ctx.sessionId, {
-        path: resolved,
-        rel,
-        before,
-        afterSha256: sha256Hex(after),
-        at: Date.now(),
-        tool: "edit",
-      });
+        recordChange(ctx.sessionId, {
+          path: resolved,
+          rel,
+          before,
+          afterSha256: sha256Hex(after),
+          at: Date.now(),
+          tool: "edit",
+        });
+
+        return undefined;
+      }).catch((e: unknown) => fail(msg(e)));
+      if (locked !== undefined) return locked;
 
       // The session has now read this file (twice: the preimage and the
       // post-write check), so later fuzzy rungs on it are legitimate.
