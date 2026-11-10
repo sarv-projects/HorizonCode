@@ -14,7 +14,7 @@ import {
 } from "./cards";
 import { richDiff } from "./diff";
 import { createMarkdownStream, type MarkdownStream } from "./markdown";
-import { pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
+import { formatDuration, pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
 import {
   bold, colorLevel, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
 } from "./style";
@@ -50,6 +50,8 @@ export interface Renderer {
   atLineStart(): boolean;
   /** Live subagent group lines for the animated region (rich mode only). */
   liveLines?(tick: number, width: number): string[];
+  /** The last finished reasoning block (rich mode; "" when there was none). */
+  lastThinking?(): string;
 }
 
 /** Compact one-line rendering of tool arguments (never longer than 120 chars). */
@@ -406,8 +408,33 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     write("  " + dim("\u2502") + " " + text + "\n");
   };
 
+  // Reasoning (assistant.thinking) is buffered and committed as ONE dim
+  // collapsed line when the next real event arrives; `/think` shows the text.
+  let thinkBuf = "";
+  let thinkStart = 0;
+  let thinkLast = "";
+  const flushThinking = (): void => {
+    if (thinkBuf === "") return;
+    const text = thinkBuf;
+    const ms = Math.max(0, Date.now() - thinkStart);
+    thinkBuf = "";
+    thinkStart = 0;
+    thinkLast = text;
+    const n = text.split("\n").filter((l) => l.trim() !== "").length;
+    emit(dim(`\u25c6 Thought for ${formatDuration(ms)} \u00b7 ${n} line${n === 1 ? "" : "s"} \u00b7 /think to expand`), dim);
+  };
+
   const handle = (ev: RuntimeEvent): void => {
     if (!ev || typeof ev !== "object") return;
+    if (ev.type === "assistant.thinking") {
+      // Additive event: ignored outside rich mode so the plain transcript is unchanged.
+      if (rich && typeof ev.text === "string" && ev.text !== "") {
+        if (thinkBuf === "") thinkStart = Date.now();
+        if (thinkBuf.length < 64_000) thinkBuf += sanitizeText(ev.text);
+      }
+      return;
+    }
+    if (rich && ev.type !== "context.usage") flushThinking();
     if (rich && ev.type !== "assistant.delta" && ev.type !== "context.usage") mdFinish();
     if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "context.usage") flushFold();
     switch (ev.type) {
@@ -528,6 +555,6 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       emit(red("\u26a0 " + sanitizeText(message)), red);
     },
     atLineStart: () => atStart,
-    ...(rich ? { liveLines } : {}),
+    ...(rich ? { liveLines, lastThinking: () => thinkLast } : {}),
   };
 }

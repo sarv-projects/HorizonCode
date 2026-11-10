@@ -821,3 +821,4 @@ All rich-only unless noted; non-TTY output is unchanged.
 - **Bracketed paste.** A multi-line paste is one input shown as `[pasted N lines]` (`src/tui/paste.ts`, ruling 84). Mode `ESC[?2004h` is on only with a TTY and off again on exit.
 - **Approval card.** Bordered `⚠ Approve …?` card with tool, args, risk and keys; `y`/`n`/`a`/`Esc` without Enter (`approval-card.ts`, ruling 85). Rich TTY only; the line prompt remains the fallback.
 - **Diff gutters.** Line numbers, coloured +/- rows, folded context and an `… N more lines` footer in rich `turn.diff` and previews (`diff.ts`, ruling 86).
+- **Thinking.** `assistant.thinking` (additive C3) from openai-compatible and anthropic streams, collapsed to `◆ Thought for Ns · N lines`, `/think` expands (ruling 87).
