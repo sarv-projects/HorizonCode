@@ -25,7 +25,7 @@
  * silently — a bad skill file must never break a chat turn.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { skillsDir as resolveWorkspaceSkillsDir, userSkillsDir } from "./paths";
@@ -84,6 +84,7 @@ const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 /** One skill file, or undefined when it cannot be read or is malformed. */
 function readSkillFile(file: string, fallbackName?: string): Skill | undefined {
   try {
+    if (!lstatSync(file).isFile()) return undefined; // symlinks are refused
     const raw = readFileSync(file, "utf8");
     const { meta, body } = splitFrontmatter(raw);
     const name = (meta.name ?? fallbackName ?? path.basename(file, path.extname(file))).trim();
@@ -136,7 +137,7 @@ function folderResources(dir: string): string[] {
       const full = path.join(current, n);
       const r = rel === "" ? n : rel + "/" + n;
       try {
-        const st = statSync(full);
+        const st = lstatSync(full);
         if (st.isDirectory()) {
           if (depth < 3) walk(full, r, depth + 1);
         } else if (st.isFile() && r !== "SKILL.md") out.push(r);
@@ -163,7 +164,7 @@ export function listSkills(workspace: string): Skill[] {
       if (entry.startsWith(".")) continue;
       const file = path.join(dir, entry);
       try {
-        const st = statSync(file);
+        const st = lstatSync(file);
         if (st.isDirectory()) {
           // skills/<name>/SKILL.md, with the rest of the folder as resources
           const skill = readSkillFile(path.join(file, "SKILL.md"), entry);

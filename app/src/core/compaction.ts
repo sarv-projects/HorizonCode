@@ -449,6 +449,15 @@ function tokensIn(messages: readonly ChatMsg[]): number {
  * exceeds MAX_SUMMARY_CHARS. Tool results are not parsed: a failed call is
  * reported as attempted, since result text carries no reliable error marker.
  */
+/** Mask secret-like values in a command line before it reaches the summary. */
+export function maskSecrets(text: string): string {
+  return text
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 ***")
+    .replace(/\b(sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "$1-***")
+    .replace(/\b(gh[pousr]_|xox[abprs]-|AKIA)[A-Za-z0-9_-]{8,}/g, "$1***")
+    .replace(/((?:token|key|secret|password|passwd|pwd|apikey|api_key|api-key|auth)[A-Za-z0-9_-]*\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s"']+)/gi, "$1***");
+}
+
 export function summariseElided(elided: readonly ChatMsg[], total: number, limit: number): string {
   const byRole = countByRole(elided);
   const firstUser = elided.find((message) => message?.role === "user" && (message.content ?? "").trim() !== "");
@@ -485,7 +494,7 @@ export function summariseElided(elided: readonly ChatMsg[], total: number, limit
   if (activity.commands.length > 0) {
     const { shown, omitted } = newest(activity.commands, MAX_SUMMARY_COMMANDS);
     body.push(`- commands run (oldest first${omitted > 0 ? `, ${omitted} earlier omitted` : ""}):`);
-    for (const command of shown) body.push(`  - \`${command}\``);
+    for (const command of shown) body.push(`  - \`${maskSecrets(command)}\``);
   }
   if (activity.searches.length > 0) {
     const { shown, omitted } = newest(activity.searches, MAX_SUMMARY_SEARCHES);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { activeSkillSection, getSkill, listSkills } from "../../src/core/skills";
@@ -40,4 +40,18 @@ test("precedence: project hz > project .claude", () => {
   put(path.join(ws, ".hz", "state", "skills", "a", "SKILL.md"), "project hz");
   expect(getSkill(ws, "a")!.body).toBe("project hz");
   expect(listSkills(ws).filter((s) => s.name === "a")).toHaveLength(1);
+});
+
+test("symlinked skill files and folders are refused", () => {
+  const secret = path.join(ws, "secret.txt");
+  put(secret, "TOP SECRET");
+  const dir = path.join(ws, ".claude", "skills");
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(secret, path.join(dir, "flat.md"));
+  mkdirSync(path.join(dir, "fold"), { recursive: true });
+  symlinkSync(secret, path.join(dir, "fold", "SKILL.md"));
+  const outside = path.join(ws, "outside");
+  put(path.join(outside, "SKILL.md"), "body");
+  symlinkSync(outside, path.join(dir, "linked"));
+  expect(listSkills(ws).map((s) => s.name)).toEqual([]);
 });

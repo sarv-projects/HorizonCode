@@ -21,7 +21,7 @@
  * skipped silently, like skills.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stateRoot, userConfigDir } from "./paths";
@@ -89,7 +89,7 @@ function frontmatter(raw: string): { meta: Record<string, string>; body: string 
 
 function readCommandFile(file: string): CustomCommand | undefined {
   try {
-    const stat = statSync(file);
+    const stat = lstatSync(file); // lstat: a symlink must not smuggle a file past the read guard
     if (!stat.isFile() || stat.size > COMMAND_FILE_CAP) return undefined;
     const { meta, body } = frontmatter(readFileSync(file, "utf8"));
     const name = (meta.name ?? path.basename(file, path.extname(file))).trim();

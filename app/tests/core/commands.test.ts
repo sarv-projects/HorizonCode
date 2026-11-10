@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expandCommand, listCommands, loadCommands, resolveCommandForMessage } from "../../src/core/commands";
@@ -38,4 +38,12 @@ test("builtin names are shadowed, unknown and malformed are ignored", () => {
   expect(resolveCommandForMessage(root, "/help")).toBeUndefined();
   expect(resolveCommandForMessage(root, "/nothing")).toBeUndefined();
   expect(resolveCommandForMessage(root, "plain text")).toBeUndefined();
+});
+
+test("a symlinked command file is refused", () => {
+  const root = ws({});
+  const secret = path.join(root, "secret.txt");
+  writeFileSync(secret, "TOP SECRET");
+  symlinkSync(secret, path.join(root, ".hz", "commands", "leak.md"));
+  expect(listCommands(root)).toEqual([]);
 });
