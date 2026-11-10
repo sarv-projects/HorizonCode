@@ -26,7 +26,7 @@
 | `gate:cross-plane-abi` | declared-gap | There is no native addon and no ABI to version: the cross-plane is NDJSON over stdio. The closest shipped behaviour is refusal-finality (a kernel refusal is never routed around, `app/src/core/kernel.ts`) — posture evidence, not this gate. |
 | `gate:doc-status` | declared-gap | Status levels are maintained by hand (docs/28 §1); nothing parses the tables, and no claimed level names an executable evidence command that CI runs. |
 | `gate:dead-lane-fail-closed` | declared-gap | v0.1 has no optional lane with an on/off switch (the kernel-mode fallback is reported honestly with its reason, but it is a transport fallback, not a dead lane), so no disabled lane can be demanded to refuse. |
-| `gate:provenance` | declared-gap | No provenance register, no `NOTICE` and no upstream pins in the tree (the reference clones live outside it, `/data/home/forge/repo-tour/`); no inherited code is registered, so no entry can be missing. |
+| `gate:provenance` | declared-gap | No machine-readable provenance register and no `NOTICE`. Upstream commits are pinned as prose in `docs/research/upstream-pins.md` and each design document carries a Provenance section with exact URLs, but nothing parses them and the reference clones live outside the tree (read-only checkouts); no inherited code is registered, so no entry can be missing. |
 | `gate:repolint-debt` | declared-gap | No repolint and no debt baseline: nothing to ratchet. |
 
 ## 2. What `ops/gates.sh` runs today

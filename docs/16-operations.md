@@ -1,8 +1,10 @@
 # 16 — Operations: install, release, gates, diagnostics, updates
 
-> **Status of this document:** `DESIGNED` as a specification of the operations plane. **Implementation status (final audit, 2026-11-06):** a `hzcode` binary exists (`/data/home/forge/HorizonCode/bin/hzcode`, chat-first, headless-capable) and so does the v0.1 kernel — as a Rust binary named `hz-kernel` at `kernel/target/release/hz-kernel`, *not* the designed `hzk` asset; levels and evidence in `28-implementation-status.md`. Install/release integrity, signing, the gate runner, `hzcode doctor`, backup/restore and the enterprise plane below remain specification targets, marked `[planned]` unless defined by `/data/home/forge/HorizonCode/docs/_conventions.md`. The README status note this paragraph used to cite was rewritten in the final audit (the README now leads with the implemented state).
+> **Implementation reality (read first).** Shipped: the gate runner `ops/gates.sh` (eight gates, fail-fast, hermetic, including the `startup-latency` gate), the catalogue `ops/gate-catalogue.md`, the CI workflow (`.github/workflows/ci.yml`, identical to the payload `ops/ci/github-actions.yml`), a SUBSET of `hzcode doctor`, `hzcode config check` and `hzcode commit`. **Everything else here is DESIGN ONLY: NOT IMPLEMENTED:** install channels, signing, SBOM, kernel pin, release manifest, self-update, `hzcode version` / `update` / `bench` / `support-bundle` / `release verify`, crash records, OpenTelemetry, waivers and lanes, enterprise controls, profiling. The Provenance section at the end of this document lists what exists, where the designs came from (exact upstream URLs at pinned commits), and a detailed deferral note (I1 to I13) for each missing piece, including forgecode takes T-9 (request dump and hygiene evals), T-15, T-16 `suggest`, T-17 and the generated-schema half of T-20.
+
+> **Status of this document:** `DESIGNED` as a specification of the operations plane. **Implementation status (final audit, 2026-11-06):** a `hzcode` binary exists (`bin/hzcode`, chat-first, headless-capable) and so does the v0.1 kernel — as a Rust binary named `hz-kernel` at `kernel/target/release/hz-kernel`, *not* the designed `hzk` asset; levels and evidence in `28-implementation-status.md`. Install/release integrity, signing, backup/restore and the enterprise plane below remain specification targets; a gate runner (`ops/gates.sh`, 8 gates) and a subset of `hzcode doctor` have since shipped (see the implementation-reality note above), marked `[planned]` unless defined by `_conventions.md`. The README status note this paragraph used to cite was rewritten in the final audit (the README now leads with the implemented state).
 >
-> This document decides *how the thing is built, shipped, watched, diagnosed, updated and defended*. It does not restate authority semantics: those live in `/data/home/forge/HorizonCode/docs/14-surfaces.md` (exit-code table, §3.2; S16 points at it) and in `11-authority-safety.md`. Where this document needs a name that `_conventions.md` does not define, it says so and requires the addition (R-ops-74).
+> This document decides *how the thing is built, shipped, watched, diagnosed, updated and defended*. It does not restate authority semantics: those live in `14-surfaces.md` (exit-code table, §3.2; S16 points at it) and in `11-authority-safety.md`. Where this document needs a name that `_conventions.md` does not define, it says so and requires the addition (R-ops-74).
 
 **Owner:** operations (release engineering, CI/CD, observability, diagnostics, security response, cost accounting, docs governance).
 **Plane:** cross-plane. Operations is the only authority allowed to build, sign, distribute and diagnose binaries on an operator's machine.
@@ -74,7 +76,7 @@ Rules are numbered `R-ops-<n>` and are individually testable. Runbooks (§2.12) 
 
 ### 2.4 CI/CD gate catalog
 
-The gate table in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 is the registry; this subsection adds the operations-owned gates and the rules that govern all of them. Names introduced here MUST be registered in §3.5 in the same change (`_conventions.md` §1: a document that needs a new name adds it to the canonical set), and `25-roadmap-and-glossary.md` owns the glossary entries.
+The gate table in `24-feature-catalog.md` §3.5 is the registry; this subsection adds the operations-owned gates and the rules that govern all of them. Names introduced here MUST be registered in §3.5 in the same change (`_conventions.md` §1: a document that needs a new name adds it to the canonical set), and `25-roadmap-and-glossary.md` owns the glossary entries.
 
 | # | Rule | Test |
 |---|---|---|
@@ -89,7 +91,9 @@ The gate table in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.
 
 #### 2.4.1 The gate catalog
 
-Roughly two dozen gates exist. The table below is the operational view: what fails the build, which lane, and whether it is waivable. Gates marked `catalog` are defined in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5; gates marked `ops` are introduced by this document.
+> **DESIGN TARGET.** The table is the operational view of the designed catalogue. What runs today is the eight-step `ops/gates.sh`; the mapping of the docs/24 section 3.5 gates to `runnable` or `declared-gap` is `ops/gate-catalogue.md`. Lanes, per-gate timeouts, waivers and the `gate:*` names below that are not in that catalogue do not exist.
+
+Roughly two dozen gates exist. The table below is the operational view: what fails the build, which lane, and whether it is waivable. Gates marked `catalog` are defined in `24-feature-catalog.md` §3.5; gates marked `ops` are introduced by this document.
 
 | Gate | Source | Fails the build when | Lane | Waivable |
 |---|---|---|---|---|
@@ -126,7 +130,7 @@ Roughly two dozen gates exist. The table below is the operational view: what fai
 
 "Waivable: no-by-practice" means the gate is technically insertable into the waiver file, but any waiver that touches authority semantics MUST be treated as an ADR change by the reviewer; the rationale for not doing that is recorded in the waiver's `reason`.
 
-The remaining ops gates introduced by this document — none of which appears in the table above — are registered in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 in the same change (R-ops-26):
+The remaining ops gates introduced by this document — none of which appears in the table above — are registered in `24-feature-catalog.md` §3.5 in the same change (R-ops-26):
 
 | Gate | Fails when |
 |---|---|
@@ -186,6 +190,8 @@ Path: `.hz/traces/<session-id>.jsonl` in the workspace, or the state root `~/.lo
 | **R-ops-47** | Every diagnostic artifact (doctor report, bundle, crash record) MUST embed `versions.json` built from `hzcode version --json`, including `hzk` digest, `HZ_PROTO`, `HZ_ABI`, schema revision, platform triple, sandbox backend and its guarantee summary. A diagnostic that cannot name the kernel digest is not a diagnostic. | `packages/cli/test/commands/versions-embed.test.ts` `[planned]`. |
 
 #### 2.6.1 The doctor check set
+
+> **PARTIAL.** `hzcode doctor` ships (ruling 71) with a different, smaller check set: `bun`, `kernel.selftest`, `kernel.mode`, `config.file`, `config.perms`, `config.permission_mode`, `provider`, `provider.key`, `model`, `workspace`, `state.perms`, git, terminal and colour. Of the rows below none is implemented under these ids; `kernel.exec` is covered by `kernel.selftest`, `config.narrowing` is not checked, and the flags `--online`, `--strict` and `--fix` do not exist. Deferral note I2.
 
 | Check | Passes when | Fail-closed? |
 |---|---|---|
@@ -252,7 +258,7 @@ Path: `.hz/traces/<session-id>.jsonl` in the workspace, or the state root `~/.lo
 
 | # | Rule | Test |
 |---|---|---|
-| **R-ops-73** | Authority order inside `docs/`: `/data/home/forge/HorizonCode/docs/_conventions.md` > `/data/home/forge/HorizonCode/docs/02-decisions.md` (ADRs) > the topic-owner document for a topic > `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` (catalogue; it references, it does not rule) > `/data/home/forge/HorizonCode/docs/25-roadmap-and-glossary.md` (terms and sequencing). When two documents disagree, the higher one wins and the lower one MUST be corrected in the same change. | `gate:doc-status` `[planned]` extension: a cross-reference conflict list is produced for review. |
+| **R-ops-73** | Authority order inside `docs/`: `_conventions.md` > `02-decisions.md` (ADRs) > the topic-owner document for a topic > `24-feature-catalog.md` (catalogue; it references, it does not rule) > `25-roadmap-and-glossary.md` (terms and sequencing). When two documents disagree, the higher one wins and the lower one MUST be corrected in the same change. | `gate:doc-status` `[planned]` extension: a cross-reference conflict list is produced for review. |
 | **R-ops-74** | `_conventions.md` wins on **names**. A document that needs a name not defined there MUST add it there in the same change (as this document does for the state root `~/.local/state/horizon/`). Names introduced by a lower-authority document without a `_conventions.md` entry are a gate failure. | `gate:doc-names` `[planned]`: extracts backticked identifiers from `docs/*.md` and checks the ones that look like names (paths, commands, gates, packages, crates) against `_conventions.md` plus the registered gate catalog. |
 | **R-ops-75** | Status law (`_conventions.md` §8): a document MUST NOT claim a status level above its evidence, must state the level it does claim, and MUST render an unknown as `UNKNOWN`, never as implied success. Every status table row carries an evidence column; "evidence" is a file, a test, a run id or the literal `UNKNOWN`. | `gate:doc-status`; this document's §10 is itself checked. |
 | **R-ops-76** | Every document in `docs/` uses the template in `_conventions.md` §9, in order. A section may be omitted only with a stated reason. Sections the template does not cover (like the runbooks below) MUST be placed inside an existing template section rather than appended as a new top-level one. Reference sections that refine an existing template section MAY be appended after the template's last section as a numbered sequence; each MUST name the template section it refines. This document's §12–§16 are such a sequence (§12 refines §7, §13–§14 refine the observability rules, §15 refines §8, §16 refines the versioning and release rules). | `gate:doc-template` `[planned]`. |
@@ -260,7 +266,7 @@ Path: `.hz/traces/<session-id>.jsonl` in the workspace, or the state root `~/.lo
 
 ### 2.12 Runbooks
 
-A runbook is not law; it is the prescribed first response. Each names its exit code (RC-5, owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2; S16 points at it) and the artifact it produces for later diagnosis. Runbooks are consumed by `hzcode doctor` fix hints, so each MUST be referenced from the check it serves.
+A runbook is not law; it is the prescribed first response. Each names its exit code (RC-5, owned by `14-surfaces.md` §3.2; S16 points at it) and the artifact it produces for later diagnosis. Runbooks are consumed by `hzcode doctor` fix hints, so each MUST be referenced from the check it serves.
 
 **RN-1 — Kernel missing or digest mismatch.**
 - *Symptoms:* `kernel_asset_missing` or `kernel_digest_mismatch`; every effect attempt refuses; exit `3`. `hzcode version` still works (R-ops-9).
@@ -279,12 +285,12 @@ A runbook is not law; it is the prescribed first response. Each names its exit c
 
 **RN-4 — Disk full.**
 - *Symptoms:* writes fail (`ENOSPC`); event append or blob write refuses; exit `1`; `doctor` `disk.space` fails.
-- *Diagnosis:* `hzcode doctor` reports free space at the state root and the workspace; `hzcode du` `[planned]` (inherited ergonomic command, see `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.3) attributes usage per session, trace file, artifact and snapshot.
+- *Diagnosis:* `hzcode doctor` reports free space at the state root and the workspace; `hzcode du` `[planned]` (inherited ergonomic command, see `24-feature-catalog.md` A.3) attributes usage per session, trace file, artifact and snapshot.
 - *Action:* reclaim in this order — (1) traces older than retention (default 14 days, §4); (2) expired worktrees via the worktree pool; (3) superseded session snapshots, keeping the newest per session; (4) compact the database. Never delete the event log under pressure: the log is the record of what happened. If the log itself must be relocated, use the storage-root setting and follow RN-5's guidance when the new root is not local. Record the action in the session log as a retention marker, not as a new event type (RC-3).
 
 **RN-5 — NFS or another network filesystem detected.**
 - *Symptoms:* `doctor` `fs.type` warns; SQLite write latency spikes; occasional `SQLITE_IOERR`, `disk I/O error` or lost-lock messages; `hzcode session reindex` `[planned]` finds gaps.
-- *Diagnosis:* the check reports the filesystem type and mount options for the workspace and the state root. A network filesystem (NFS, SMB, SSHFS, some FUSE layers) is a **supported but degraded** state-root mode, owned by `12-sessions-state.md` §4.10: journal mode is selected from the mount class, each host gets its own database file, the host guard refuses a second writer (`MULTI_HOST_DETECTED`), and `mmap` is disabled (`/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.2 records the reference implementation's own NFS migration work).
+- *Diagnosis:* the check reports the filesystem type and mount options for the workspace and the state root. A network filesystem (NFS, SMB, SSHFS, some FUSE layers) is a **supported but degraded** state-root mode, owned by `12-sessions-state.md` §4.10: journal mode is selected from the mount class, each host gets its own database file, the host guard refuses a second writer (`MULTI_HOST_DETECTED`), and `mmap` is disabled (`24-feature-catalog.md` A.2 records the reference implementation's own NFS migration work).
 - *Action:* prefer moving the state root to a local disk (storage-root setting). If it must stay on a network filesystem, that is the degraded mode of `12-sessions-state.md` §4.10 — `hzcode doctor` warns with the mount evidence and `hzcode doctor --strict` refuses until the state root is local. There is no `--allow-network-fs` flag: the supported/degraded distinction is a property of the mount, not a runtime escape hatch. If the *workspace* lives on a network filesystem that is allowed — the workspace is files, not state — but the state root MUST NOT follow it.
 
 **RN-6 — Provider outage and fallback.**
@@ -311,7 +317,7 @@ Operations owns the commands, files and settings below. Anything not listed here
 | Command | Purpose | Key flags | Exit codes (RC-5) | Status |
 |---|---|---|---|---|
 | `hzcode version` | Identity of this install: `{ version, channel, commit, kernelDigest, HZ_PROTO, HZ_ABI, schemaRevision }` (R-ops-9). | `--json` | 0; 3 if the kernel digest cannot be resolved | `[planned]` |
-| `hzcode doctor` | Run the §2.6.1 check set; read-only (R-ops-42). | `--json`, `--online`, `--strict`, `--fix <check>` | 0 ok/warn; 2 usage/config; 3 any fail-closed check fails | `[planned]` |
+| `hzcode doctor` | Run the §2.6.1 check set; read-only (R-ops-42). | `--json`, `--online`, `--strict`, `--fix <check>` | 0 ok/warn; 2 usage/config; 3 any fail-closed check fails | PARTIAL: ships with a smaller check set and only `--json` (ruling 71) |
 | `hzcode update` | Self-update of CLI + kernel per R-ops-62. | `--check`, `--staged`, `--apply`, `--offline --from <dir>`, `--pin <version>`, `--rollback`, `--channel <stable\|beta\|nightly>` | 0; 1 `update_busy`/swap failure after rollback; 2 usage; 3 verification failure | `[planned]` |
 | `hzcode support-bundle` | Build or verify a redacted diagnostics archive (R-ops-43). | `--out <path>`, `--since <ts>`, `--verify <file>`, `--include-prompts` (interactive confirmation required) | 0; 1; 2 path/permission | `[planned]` |
 | `hzcode bench` | Run a benchmark suite from `ops/bench/suites.toml`. | `--suite <name>`, `--profile <preset>`, `--baseline <file>`, `--record <file>` | 0; 1 regression; 2 setup | `[planned]` |
@@ -325,22 +331,24 @@ Operations owns the commands, files and settings below. Anything not listed here
 
 ### 3.2 Files and settings operations owns
 
+> **Of the paths below only `ops/` files that appear in the Implemented operations table in the Provenance section exist.** Every other path is a design target.
+
 | Path | Kind | Owner | Purpose |
 |---|---|---|---|
-| `/data/home/forge/HorizonCode/ops/budgets.toml` | registry | ops | Every numeric budget in the project (R-ops-48, §8). |
-| `/data/home/forge/HorizonCode/ops/kernel-pin.toml` | pin | ops | The `hzk` digest(s) this revision of the CLI expects (R-ops-4). |
-| `/data/home/forge/HorizonCode/ops/kernel-compat.toml` | matrix | ops | CLI↔kernel compatibility set (R-ops-11, R-ops-12). |
-| `/data/home/forge/HorizonCode/ops/release.lock` | lockfile | ops | Toolchain + dependency pin set for reproducible builds (R-ops-15, R-ops-22). |
-| `/data/home/forge/HorizonCode/ops/release-manifest.json` | artifact | ops | `ReleaseManifestV1`, the single release authority (R-ops-21). |
-| `/data/home/forge/HorizonCode/ops/gates/<gate>.toml` | gate config | ops | Timeouts, lane, fixture paths, non-waivable flag (R-ops-26…R-ops-32). |
-| `/data/home/forge/HorizonCode/ops/gates/waivers/<gate>.toml` | waiver | ops | The only exception mechanism (R-ops-31). |
-| `/data/home/forge/HorizonCode/ops/install.sh` | installer | ops | Verified standalone install (R-ops-3). |
-| `/data/home/forge/HorizonCode/ops/homebrew/hzcode.rb` | formula | ops | Homebrew channel (R-ops-5). |
-| `/data/home/forge/HorizonCode/ops/docker/Dockerfile` | image | ops | Docker channel (R-ops-7). |
-| `/data/home/forge/HorizonCode/flake.nix` | build | ops | `.#hzcode` output (R-ops-6). |
-| `/data/home/forge/HorizonCode/ops/bench/suites.toml`, `/data/home/forge/HorizonCode/ops/bench/baseline/` | benchmark | ops | Suites and ratcheted baselines (R-ops-49, R-ops-52). |
-| `/data/home/forge/HorizonCode/packages/provider/src/prices.json` | data | provider, ops-signed-off | Append-only price table (R-ops-68). |
-| `/data/home/forge/HorizonCode/ops/pricecheck.ts` | tool | ops | Price-table and gap verification (R-ops-69). |
+| `ops/budgets.toml` | registry | ops | Every numeric budget in the project (R-ops-48, §8). |
+| `ops/kernel-pin.toml` | pin | ops | The `hzk` digest(s) this revision of the CLI expects (R-ops-4). |
+| `ops/kernel-compat.toml` | matrix | ops | CLI↔kernel compatibility set (R-ops-11, R-ops-12). |
+| `ops/release.lock` | lockfile | ops | Toolchain + dependency pin set for reproducible builds (R-ops-15, R-ops-22). |
+| `ops/release-manifest.json` | artifact | ops | `ReleaseManifestV1`, the single release authority (R-ops-21). |
+| `ops/gates/<gate>.toml` | gate config | ops | Timeouts, lane, fixture paths, non-waivable flag (R-ops-26…R-ops-32). |
+| `ops/gates/waivers/<gate>.toml` | waiver | ops | The only exception mechanism (R-ops-31). |
+| `ops/install.sh` | installer | ops | Verified standalone install (R-ops-3). |
+| `ops/homebrew/hzcode.rb` | formula | ops | Homebrew channel (R-ops-5). |
+| `ops/docker/Dockerfile` | image | ops | Docker channel (R-ops-7). |
+| `flake.nix` | build | ops | `.#hzcode` output (R-ops-6). |
+| `ops/bench/suites.toml`, `ops/bench/baseline/` | benchmark | ops | Suites and ratcheted baselines (R-ops-49, R-ops-52). |
+| `packages/provider/src/prices.json` | data | provider, ops-signed-off | Append-only price table (R-ops-68). |
+| `ops/pricecheck.ts` | tool | ops | Price-table and gap verification (R-ops-69). |
 | `~/.config/horizon/budgets.toml` | user config | user | User-level budget ceilings (R-ops-71). |
 | `.hz/budgets.toml` | workspace config | user | Workspace budget ceilings; narrowing only (R-ops-71). |
 | `~/.config/horizon/install-journal.jsonl` | journal | ops | Install/update/rollback history, append-only. |
@@ -351,7 +359,7 @@ Environment settings owned here: `HZ_LOG` (R-ops-46), `HZ_OTEL_EXPORT` (R-ops-34
 
 ### 3.3 What operations does *not* own
 
-Kernel semantics, capability IDs, guard decisions, receipts and the ABI live in `11-authority-safety.md` and `_conventions.md`. Exit codes are owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2 (the canonical table; S16 points at it) and are only referenced here. Event names are owned by `_conventions.md` §6; operations MUST NOT introduce a session event, and its own bookkeeping (install journal, retention markers, bench results) MUST stay outside the session event log (RC-2, RC-3).
+Kernel semantics, capability IDs, guard decisions, receipts and the ABI live in `11-authority-safety.md` and `_conventions.md`. Exit codes are owned by `14-surfaces.md` §3.2 (the canonical table; S16 points at it) and are only referenced here. Event names are owned by `_conventions.md` §6; operations MUST NOT introduce a session event, and its own bookkeeping (install journal, retention markers, bench results) MUST stay outside the session event log (RC-2, RC-3).
 
 ---
 
@@ -379,7 +387,7 @@ Kernel semantics, capability IDs, guard decisions, receipts and the ABI live in 
 
 ## 5. Errors & failure modes
 
-Exit codes are the canonical table from `/data/home/forge/HorizonCode/docs/14-surfaces.md` §3.2 (S16 points at it; RC-5): `0` success · `1` error · `2` usage/config/environment · `3` unprovable/fail-closed · `4` policy denial · `5` budget · `130`/`143` signals. Operations MUST NOT invent codes; it MUST use one of these and a named reason code below.
+Exit codes are the canonical table from `14-surfaces.md` §3.2 (S16 points at it; RC-5): `0` success · `1` error · `2` usage/config/environment · `3` unprovable/fail-closed · `4` policy denial · `5` budget · `130`/`143` signals. Operations MUST NOT invent codes; it MUST use one of these and a named reason code below.
 
 | Reason code | Exit | Trigger | Behaviour | Fail-closed? |
 |---|---|---|---|---|
@@ -516,7 +524,9 @@ The threat model itself belongs to `11-authority-safety.md` §1.2 (R-ops-59); th
 
 ## 8. Performance budgets
 
-Every number below is a *citation* of a key in `/data/home/forge/HorizonCode/ops/budgets.toml` `[planned]` (R-ops-48). Because that file does not exist yet, this table is the design intent; when the file lands, the table's numbers MUST be generated from it, and any divergence is a `gate:lane-budget` failure. All figures are `[planned]` targets, not measurements — none has been observed.
+> **DESIGN TARGETS, unmeasured.** The one enforced budget is the startup-latency gate (500 ms for `hzcode --version`, 1000 ms for a headless mock turn, medians of 5; measured 96 ms and 198 ms). The per-command rows below, including `hzcode version` at 150 ms p95, are not measured and `hzcode version` does not exist.
+
+Every number below is a *citation* of a key in `ops/budgets.toml` `[planned]` (R-ops-48). Because that file does not exist yet, this table is the design intent; when the file lands, the table's numbers MUST be generated from it, and any divergence is a `gate:lane-budget` failure. All figures are `[planned]` targets, not measurements — none has been observed.
 
 ### 8.1 CI wall-clock targets
 
@@ -599,7 +609,7 @@ Suites (R-ops-49) cover: CLI cold start, TUI startup to first frame, step stream
 | F5 waiver | Covered by `waiver.test.ts` (F5 is the human half of the same mechanism) `[planned]`. | `[planned]` |
 | F6 perf | A synthetic regression injected into a suite must be caught with the correct metric, baseline and run ids `[planned]`. | `[planned]` |
 
-No test in this section has been written or run: there is no CI, no `ops/` tree and no gate runner yet. The `hzcode` binary and the v0.1 kernel **do** exist (`/data/home/forge/HorizonCode/bin/hzcode`, `kernel/target/release/hz-kernel`), and the headless/print paths this document ships run today — levels and evidence are in `28-implementation-status.md`.
+None of the `[planned]` tests in this section has been written. The gates that DO exist are tested as follows: `app/tests/core/gate-startup-latency.test.ts` drives the `startup-latency` gate in isolation (a generous ceiling must pass, a 1 ms ceiling must fail and name the median and the limit) and checks that the documented ceilings appear in both `ops/gates.sh` and `ops/gate-catalogue.md`; `app/tests/core/doctor.test.ts`, `config-check.test.ts` and `commit.test.ts` cover the three commands. A full `bash ops/gates.sh` run is the integration test of the other seven gates. Levels and evidence are in `28-implementation-status.md`.
 
 ---
 
@@ -609,24 +619,24 @@ Every capability described by this document is `DESIGNED`, **except where `28-im
 
 | Capability | Level | Evidence |
 |---|---|---|
-| Distribution channels (npm/bun, `install.sh`, Homebrew, cargo, nix, Docker, debug sidecars) | `DESIGNED` | §2.1, §3; channel inventory from `/data/home/forge/HorizonCode/README.md` §3.8 ("Distribution — single static binary; npm/brew/apt/scoop/nix/docker; auto-update with digest pinning; signed releases with debug sidecars") |
-| Kernel asset co-delivery, digest pinning and signature | `DESIGNED` | R-ops-4, R-ops-18, R-ops-21, R-ops-58; `gate:kernel-pin` in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
-| Versioning policy, release trains, channels, rollback | `DESIGNED` | §2.2; `HZ_PROTO`/`HZ_ABI` naming from `/data/home/forge/HorizonCode/docs/_conventions.md` §1 |
+| Distribution channels (npm/bun, `install.sh`, Homebrew, cargo, nix, Docker, debug sidecars) | `DESIGNED` | §2.1, §3; channel inventory from `../README.md` §3.8 ("Distribution — single static binary; npm/brew/apt/scoop/nix/docker; auto-update with digest pinning; signed releases with debug sidecars") |
+| Kernel asset co-delivery, digest pinning and signature | `DESIGNED` | R-ops-4, R-ops-18, R-ops-21, R-ops-58; `gate:kernel-pin` in `24-feature-catalog.md` §3.5 |
+| Versioning policy, release trains, channels, rollback | `DESIGNED` | §2.2; `HZ_PROTO`/`HZ_ABI` naming from `_conventions.md` §1 |
 | Release integrity (signing, SBOM, provenance, reproducibility) | `DESIGNED` | §2.3; reproducibility is deliberately left as a declared flag (R-ops-15) rather than an assumed property |
-| Gate catalog, lanes, timeouts, waiver process | `DESIGNED` | §2.4, §8.2; catalog gates from `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` §3.5 |
+| Gate catalog, lanes, timeouts, waiver process | `DESIGNED` | §2.4, §8.2; catalog gates from `24-feature-catalog.md` §3.5 |
 | Observability (OTel, redaction, local trace, opt-in telemetry) | `DESIGNED` | §2.5; README §3.8 ("OpenTelemetry traces/metrics/logs, GenAI semantic conventions, local dashboard") |
-| Diagnostics (`doctor`, support bundle, crash handling, log levels) | `DESIGNED` | §2.6; README §3.8 ("opt-in crash reports"); `doctor` as an inherited ergonomic command in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.3 |
-| Performance engineering (budgets registry, harness, thresholds, presets) | `DESIGNED` | §2.7, §8; metric-discipline requirement NF-041/NF-050 in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.4 |
+| Diagnostics (`doctor`, support bundle, crash handling, log levels) | `DESIGNED` | §2.6; README §3.8 ("opt-in crash reports"); `doctor` as an inherited ergonomic command in `24-feature-catalog.md` A.3 |
+| Performance engineering (budgets registry, harness, thresholds, presets) | `DESIGNED` | §2.7, §8; metric-discipline requirement NF-041/NF-050 in `24-feature-catalog.md` A.4 |
 | Security operations (disclosure, dependency policy, secret scanning, threat-model maintenance) | `DESIGNED` | §2.8; supply-chain pinning referenced in README §3.8 |
 | Update mechanism (self-update, swap, rollback, offline/staged) | `DESIGNED` | §2.9; README §3.8 ("auto-update with digest pinning") |
-| Cost and budget operations (`prices.json`, `pricecheck`, budgets, opt-in dashboard) | `DESIGNED` | §2.10; append-only price table + `pricecheck` in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.4; budgets in README §3.1 |
-| Docs governance (authority order, names, status law, template) | `DESIGNED` | §2.11; `/data/home/forge/HorizonCode/docs/_conventions.md` §1, §8, §9, §10 |
+| Cost and budget operations (`prices.json`, `pricecheck`, budgets, opt-in dashboard) | `DESIGNED` | §2.10; append-only price table + `pricecheck` in `24-feature-catalog.md` A.4; budgets in README §3.1 |
+| Docs governance (authority order, names, status law, template) | `DESIGNED` | §2.11; `_conventions.md` §1, §8, §9, §10 |
 | Runbooks RN-1…RN-8 | `DESIGNED` | §2.12 |
-| Every gate named `[planned]` in this document | `DESIGNED` | §2.4.1; all are `[planned]` because no CI exists |
-| Implementation of any command in §3.1 | `DESIGNED`; commands `[planned]` | `hzcode version`, `hzcode run` and the headless paths run today (`bin/hzcode`; `28-implementation-status.md` §1 records chat TUI + headless as VERIFIED with 48 TUI tests). Every operations command above them — `doctor`, `support-bundle`, `update`, `bench`, the gate runner — is `[planned]`: no `ops/` tree and no CI configuration exist in `/data/home/forge/HorizonCode` |
+| Every gate named `[planned]` in this document | `DESIGNED` | §2.4.1; all were `[planned]` when this was written because no CI existed; `ops/gates.sh` now runs eight steps and `ops/gate-catalogue.md` records the rest as `declared-gap` |
+| Implementation of any command in §3.1 | `DESIGNED`; `hzcode doctor` PARTIAL (subset, ruling 71); other commands `[planned]` | `bin/hzcode` runs chat, `-p` and headless; `hzcode serve`, `doctor`, `config check` and `commit` exist; `--version` prints `hzcode 0.1.0` (there is no `hzcode version` subcommand). `hzcode update`, `support-bundle`, `bench`, `release verify`, `audit export` and `observe dashboard` do not exist. `ops/gates.sh` is the gate runner (8 gates); `ops/gates/run.ts` does not exist. See the Provenance section and `28-implementation-status.md` |
 | Reproducibility of any artifact | `UNKNOWN` | Not attempted; R-ops-15 requires the claim to be explicit either way, and until then `reproducible: false` would be the only honest value |
 | Enterprise controls — managed policy, SSO/OIDC, audit export, quota/rate-limit, BYO gateway, air-gap, proxy interplay | `DESIGNED` | §12; README §3.8 ("Enterprise — managed policy, MDM, SSO, audit export, quota/rate-limit policy, bring-your-own-cloud") and §3.6 (server surfaces) |
-| Profiling (CPU, heap, cgroup v2 sampling, leak procedure) | `DESIGNED` | §13; the cgroup v2 / resource-sampler approach is recorded in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.8 |
+| Profiling (CPU, heap, cgroup v2 sampling, leak procedure) | `DESIGNED` | §13; the cgroup v2 / resource-sampler approach is recorded in `24-feature-catalog.md` A.8 |
 | OTel metrics catalog, span attributes, sampling, local dashboard | `DESIGNED` | §14; extends R-ops-36 and R-ops-39 |
 | Product performance budgets and their enforcing suites | `DESIGNED` | §15; every number is a target, none measured |
 | Deprecation, migration notes, LTS and the compatibility matrix | `DESIGNED` | §16 |
@@ -640,18 +650,18 @@ Every capability described by this document is `DESIGNED`, **except where `28-im
 
 | Document | Relationship |
 |---|---|
-| `/data/home/forge/HorizonCode/docs/_conventions.md` | Names (`hzcode`, `hzk`, `hz://`, `HZ_PROTO`/`HZ_ABI`, capability IDs, events), status levels, document template. Wins on every name conflict (R-ops-74). |
-| `/data/home/forge/HorizonCode/docs/02-decisions.md` | ADRs this document implements operationally: ADR-002 (fail closed on ABI mismatch), ADR-009 (cache guard), ADR-012 (receipt coverage), ADR-014 (provenance), ADR-015 (tool declarations). |
-| `/data/home/forge/HorizonCode/docs/14-surfaces.md` | Owner of the exit-code table §3.2 (S16 points at it; RC-5) and of the surface list this document ships. |
-| `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` | Owner of the gate table §3.5 and of the capability-parity rows that several gates here reference. New gate names MUST be registered there (R-ops-26). |
-| `/data/home/forge/HorizonCode/docs/25-roadmap-and-glossary.md` | Owns glossary entries for the names this document introduces and the sequencing of the gates it marks `[planned]`. |
-| `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` | Owns the event vocabulary and the ratified rulings RC-1…RC-4 that restrict what operations may record. |
-| `/data/home/forge/HorizonCode/docs/10-cognition.md` | Owns the cache-guard pin rule (R65) referenced by RN-3 and RC-8. |
-| `/data/home/forge/HorizonCode/docs/01-vision-and-superset.md` | Source of the superset claim this document does not extend: operations ships capabilities, it does not invent them. |
-| `/data/home/forge/HorizonCode/README.md` | Product-level claims this document makes operable (install, distribution, observability, security, self-improvement boundary). |
-| `/data/home/forge/HorizonCode/docs/11-authority-safety.md` | Owns the kernel semantics, the capability registry semantics, the threat model (§1.2), receipt/reconciliation and THS (§4.7) that §2.5.1 and RN-2 reference. |
-| `/data/home/forge/HorizonCode/docs/12-sessions-state.md` | Owns the session store, the state-root layout and the network-filesystem mode (§4.10) that RN-4, RN-5 and RN-7 reference. |
-| `/data/home/forge/HorizonCode/docs/11-authority-safety.md` §2.11 and §7.13 | Own the network/egress policy decisions that §12.5–§12.7 defer to (R-ops-93, R-ops-99, R-ops-101). Operations supplies the transport facts — proxy, gateway, air-gap — and never the decision. |
+| `_conventions.md` | Names (`hzcode`, `hzk`, `hz://`, `HZ_PROTO`/`HZ_ABI`, capability IDs, events), status levels, document template. Wins on every name conflict (R-ops-74). |
+| `02-decisions.md` | ADRs this document implements operationally: ADR-002 (fail closed on ABI mismatch), ADR-009 (cache guard), ADR-012 (receipt coverage), ADR-014 (provenance), ADR-015 (tool declarations). |
+| `14-surfaces.md` | Owner of the exit-code table §3.2 (S16 points at it; RC-5) and of the surface list this document ships. |
+| `24-feature-catalog.md` | Owner of the gate table §3.5 and of the capability-parity rows that several gates here reference. New gate names MUST be registered there (R-ops-26). |
+| `25-roadmap-and-glossary.md` | Owns glossary entries for the names this document introduces and the sequencing of the gates it marks `[planned]`. |
+| `06-events-and-flows.md` | Owns the event vocabulary and the ratified rulings RC-1…RC-4 that restrict what operations may record. |
+| `10-cognition.md` | Owns the cache-guard pin rule (R65) referenced by RN-3 and RC-8. |
+| `01-vision-and-superset.md` | Source of the superset claim this document does not extend: operations ships capabilities, it does not invent them. |
+| `../README.md` | Product-level claims this document makes operable (install, distribution, observability, security, self-improvement boundary). |
+| `11-authority-safety.md` | Owns the kernel semantics, the capability registry semantics, the threat model (§1.2), receipt/reconciliation and THS (§4.7) that §2.5.1 and RN-2 reference. |
+| `12-sessions-state.md` | Owns the session store, the state-root layout and the network-filesystem mode (§4.10) that RN-4, RN-5 and RN-7 reference. |
+| `11-authority-safety.md` §2.11 and §7.13 | Own the network/egress policy decisions that §12.5–§12.7 defer to (R-ops-93, R-ops-99, R-ops-101). Operations supplies the transport facts — proxy, gateway, air-gap — and never the decision. |
 | `§12`–`§16` of this document | Reference sections appended after the template's last section (R-ops-76): enterprise features, profiling, OTel detail, product budgets, release engineering. |
 
 ---
@@ -730,7 +740,7 @@ Profiling exists for engineers diagnosing their own runs and for the perf lane o
 | **R-ops-102** | Profiling is **off in default builds and default invocations**. The profilers are compiled behind a build feature (`hz_native` cargo feature `profiling`, TS `@horizoncode/observe` flag) and enabled per run by an explicit flag (`--cpu-profile=<file>`, `--heap-profile=<file>`) or `HZ_PROFILE`. `hzcode version --json` MUST report `profiling: on|off` for the build so a profile can never be mistaken for representative of a stock run. | `gate:clean-build` asserts a stock release build has `profiling: off` `[planned]`; `packages/testing/src/ops/profiling-off.test.ts` `[planned]`. |
 | **R-ops-103** | A profiled run MUST produce the same authority outcomes as an unprofiled one: same decisions, same receipts, same terminal states. Profiling MUST NOT be a path to skip a decision, shorten a lease, hide an `UNKNOWN`, or disable redaction; the profiler writes its own artifacts and never replaces the trace. | `packages/testing/src/ops/profile-parity.test.ts` `[planned]` records the same fixture run with and without profiling and diffs decision/receipt output. |
 | **R-ops-104** | The heap profiler captures a snapshot on `SIGUSR2` or after `--heap-profile-after=<n>` observed steps, with a configurable sampling interval. Snapshots are written to the state root `profiles/` — never into a workspace, never into a git tree. **A heap snapshot is classified as containing prompt text and file contents**: it MUST be opt-in, MUST print a confirmation naming the output file, MUST NOT be attached to a support bundle automatically, and MUST be deleted after 7 days by default. | `packages/testing/src/ops/heap-snapshot-policy.test.ts` `[planned]`; `gate:log-redaction`-adjacent check that no snapshot path appears in a default bundle manifest. |
-| **R-ops-105** | Resource sampling follows the reference kernel's approach (`/data/home/forge/repo-tour/horizoncode/kernel/src/resource_sampler.rs`, `.../cgroup_v2.rs`, recorded in `/data/home/forge/HorizonCode/docs/24-feature-catalog.md` A.8): periodic samples of `memory.current`, `memory.peak`, `cpu.stat`, `io.stat` and `pids.current` per session and per worker, default interval 1 s (250 ms under a profiling preset). Samples are storage/kernel metadata (RC-3) and MUST NOT be written as session events; enforcement uses cgroup v2 limits where available, and where a dimension is unavailable the sampler reports a typed residual rather than a zero — an unmeasured value is never rendered as `0`. | `packages/testing/src/ops/resource-sampler.test.ts` `[planned]`; second test asserting no `hz.*` event is emitted by sampling. |
+| **R-ops-105** | Resource sampling follows the reference kernel's approach (`kernel/src/resource_sampler.rs` of the ancestor project (not cloned, path not verified), `.../cgroup_v2.rs`, recorded in `24-feature-catalog.md` A.8): periodic samples of `memory.current`, `memory.peak`, `cpu.stat`, `io.stat` and `pids.current` per session and per worker, default interval 1 s (250 ms under a profiling preset). Samples are storage/kernel metadata (RC-3) and MUST NOT be written as session events; enforcement uses cgroup v2 limits where available, and where a dimension is unavailable the sampler reports a typed residual rather than a zero — an unmeasured value is never rendered as `0`. | `packages/testing/src/ops/resource-sampler.test.ts` `[planned]`; second test asserting no `hz.*` event is emitted by sampling. |
 | **R-ops-106** | The CPU profiling workflow is fixed: capture a window (default 30 s, configurable) with the Rust side profiled by the built-in sampler (eBPF/`perf` are opt-in and only when the platform backend allows), the TS side profiled by the Bun/V8 profiler; artifacts land in the state root `profiles/`; flamegraphs are rendered offline by tooling that reads those artifacts and is not part of a release build. A capture MUST NOT run concurrently with a session that holds an execution claim on another workspace without naming the target workspace explicitly. | `packages/testing/src/ops/cpu-profile.test.ts` `[planned]`. |
 | **R-ops-107** | Memory-leak hunting is a written procedure with thresholds: idle → warm → steady state RSS captured at checkpoints; a suspected leak is RSS growth > 10 % across 200 steps with no proportional context growth, or `memory.current` monotonic growth under a bounded workload. Diagnosis takes three heap snapshots (before, mid, after) and diffs retention paths; kernel-side growth is attributed with the sampler of R-ops-105; containment before root-cause is an explicit worker recycle ceiling, and a recycled worker's in-flight effects MUST settle or terminate as `UNKNOWN` — recycling is never allowed to manufacture a success. | `packages/testing/src/ops/leak-procedure.test.ts` `[planned]` runs the documented steps against a deliberately leaking fixture and asserts the leak is detected within the stated thresholds. |
 
@@ -805,7 +815,7 @@ No span attribute carries prompt text, tool arguments, file paths or file conten
 
 ## 15. Performance budgets table
 
-§8 fixes CI lane budgets and gate timeouts. This section fixes the **product budgets**: what a user should be able to feel, with the anchor each number is measured at and the suite that enforces it. Every row is a design target that will cite a key in `/data/home/forge/HorizonCode/ops/budgets.toml` `[planned]`; every figure is a target, none has been measured, and until that file exists and a row cites its key no figure here may be quoted to a user as a guarantee (R-ops-48).
+§8 fixes CI lane budgets and gate timeouts. This section fixes the **product budgets**: what a user should be able to feel, with the anchor each number is measured at and the suite that enforces it. Every row is a design target that will cite a key in `ops/budgets.toml` `[planned]`; every figure is a target, none has been measured, and until that file exists and a row cites its key no figure here may be quoted to a user as a guarantee (R-ops-48).
 
 | # | Rule | Test |
 |---|---|---|
@@ -850,3 +860,189 @@ Budgets already fixed elsewhere: `doctor` 2.0 s / 8.0 s, `update --check` 2.0 s,
 | 2 | `0.x` | `hzk 1.x` | Refused (`kernel_abi_incompatible`); the old CLI is told to update. | `[planned]` |
 
 **Reading the matrix.** Columns: the protocol revision, the CLI trains that speak it, the kernel builds that speak it, and what happens when a pair from *different* cells is combined. The compatibility window (R-ops-12) is a *duration*, not a set of blessed pairs: during it both directions fail closed with a named reason code so an operator is never left guessing which side to update.
+
+---
+
+## Provenance (operations: what ships, what is design only, where it came from)
+
+This section records, for install, release, gates, diagnostics and CI, which designs and which bytes came from other repositories, with exact GitHub URLs at the commit that was read, which parts of this document are design only, and a detailed deferral note for every missing piece. It is a handoff aid and changes no status level; `docs/28-implementation-status.md` is the only place that may claim a level above DESIGNED.
+
+Reading the tables:
+
+- URLs point at a file at the full 40 character SHA from [`research/upstream-pins.md`](research/upstream-pins.md). Each path was checked with `git ls-files` in the read-only clone before it was written. Anything not checkable is written `path not verified`.
+- **Relation**: **copied verbatim**, **ported**, **adapted**, or **idea only**, as defined in the Provenance section of [`08-runtime.md`](08-runtime.md). In this document nothing is copied verbatim and nothing is ported. `ops/gates.sh` is original bash; `doctor`, `config check` and `commit` are original TypeScript that follow the forgecode takes T-10, T-20 and T-16 as ideas.
+- Judged from the header comments of the HorizonCode files, the docs/28 rulings (17, 39, 71, 72, 81, 83) and reading both sides.
+- Licences: cline and codex Apache-2.0; oh-my-pi and opencode MIT; grok-build and claude-code carry their own `LICENSE` files that were not analysed. The worktree has no `LICENSE` or `NOTICE` (OPEN item for the human owner, also relevant to I4). Nothing here is copied, so nothing is owed today.
+- Not cloned, paths not verified: aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix, opencode-v2 (see the 'Not cloned' table in [`research/upstream-pins.md`](research/upstream-pins.md)), and the ancestor project. Claude Code's product behaviour has no source in the pinned clone; only its `.github` hardening script, egress firewall file and `SECURITY.md` are linked.
+- Research: [`research/forgecode-deep.md`](research/forgecode-deep.md) (T-9 to T-20), [`research/compare-codex-grok.md`](research/compare-codex-grok.md), [`30-steal-list.md`](30-steal-list.md).
+
+### Implemented operations versus the design (read this first)
+
+Earlier text of this document said there was 'no CI, no `ops/` tree and no gate runner'. That is no longer true. What exists today, all under the repository root:
+
+| Item | State | Notes |
+|---|---|---|
+| `ops/gates.sh` | 8 gates, runnable, fail-fast | `rust-kernel-suite`, `kernel-selftest`, `ts-typecheck`, `ts-suite`, `e2e-headless-smoke`, `e2e-budget-rail`, `e2e-usage-error`, `startup-latency` |
+| `ops/gate-catalogue.md` | maps the 18 docs/24 section 3.5 gates | every row is `runnable` or `declared-gap`; the eight steps are NOT section 3.5 gates |
+| `ops/ci/github-actions.yml`, `.github/workflows/ci.yml` | identical files | `ops/install-ci.sh` copies the payload; workflow edits go through a PR by an identity with the `workflow` scope |
+| `ops/landlock-probe.sh` | re-runnable probe | Landlock was ENOSYS in the gVisor test kernel; the result is recorded in `docs/audit/landlock-spike-2026-11-08.md`; nothing claims OS confinement |
+| `hzcode doctor` | subset of section 2.6.1 | see the doctor row below and deferral I2 |
+| `hzcode config check`, `hzcode commit` | shipped | rulings 81 and 83 |
+
+Everything else in this document (install channels, signing, SBOM, kernel pin, release manifest, self-update, support bundle, crash records, OpenTelemetry, `hzcode version`, `hzcode update`, `hzcode bench`, `hzcode release verify`, waivers, lanes, enterprise controls, profiling) is **DESIGN ONLY: NOT IMPLEMENTED**. Files named in section 3.2 that do not exist: `ops/budgets.toml`, `ops/kernel-pin.toml`, `ops/kernel-compat.toml`, `ops/release.lock`, `ops/release-manifest.json`, `ops/gates/*`, `ops/install.sh`, `ops/homebrew/hzcode.rb`, `ops/docker/Dockerfile`, `flake.nix`, `ops/bench/*`, `packages/provider/src/prices.json` (there is no `packages/` tree), `ops/pricecheck.ts`.
+
+### What shipped, and where it came from
+
+| # | HorizonCode file(s) | Upstream exact URL(s) at the pinned SHA | Relation | Notes |
+|---|---|---|---|---|
+| 1 | `ops/gates.sh`, `ops/gate-catalogue.md`, `app/tests/core/gate-startup-latency.test.ts` | [`.github/workflows/ci.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/.github/workflows/ci.yml)<br>[`crates/forge_ci/src/workflows/ci.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_ci/src/workflows/ci.rs)<br>[`.github/workflows/ci.yml`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/.github/workflows/ci.yml) | idea only (one entry point that CI and a developer both run); original bash | Pass-5 C.3 plus rulings 17 and 39. Eight gates, fail-fast, each temp-logged: `rust-kernel-suite`, `kernel-selftest`, `ts-typecheck`, `ts-suite`, `e2e-headless-smoke`, `e2e-budget-rail`, `e2e-usage-error`, `startup-latency`. Hermetic: the e2e gates pin the provider to `mock` under a throwaway `HOME` and strip provider keys, so a gate never reaches the network. Sourcing the file defines functions and runs nothing (tests drive single gates). `ops/gate-catalogue.md` maps all 18 docs/24 section 3.5 rows to `runnable` or `declared-gap`; none of the eight shipped steps IS a section 3.5 gate. As root, `ts-suite` skips 8 chmod-dependent tests; baseline 1792 pass / 8 skip. |
+| 2 | `ops/gates.sh` (`gate_startup_latency`), `ops/gate-catalogue.md` (Startup-latency numbers) | [`.github/workflows/ci.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/.github/workflows/ci.yml)<br>[`crates/forge_ci/src/workflows/ci.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_ci/src/workflows/ci.rs) | idea only (forgecode take T-11: a CI job that fails over a latency budget) | Ruling 72. Median of 5 timed runs after one untimed warm-up of `hzcode --version` (ceiling 500 ms) and of one headless mock turn (ceiling 1000 ms), overridable by `HZ_LATENCY_VERSION_MS` and `HZ_LATENCY_TURN_MS`. Measured 96 ms and 198 ms on an 8-core x86_64 container, Bun 1.2.14, as root. Ceilings are about 5x because a flaky gate gets ignored. forge benchmarks `forge zsh rprompt` ten times against a 60 ms threshold; HorizonCode's numbers are its own measurements. A crash is never 'fast': every run must exit 0 and print the expected text. |
+| 3 | `ops/ci/github-actions.yml`, `ops/install-ci.sh`, `.github/workflows/ci.yml` | [`.github/workflows/ci.yml`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/.github/workflows/ci.yml)<br>[`.github/scripts/check_workflow_hardening.py`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.github/scripts/check_workflow_hardening.py) | idea only; the payload-plus-installer mechanism is original | Ruling 17. The automation identity's GitHub App token lacks the `workflow` scope, so the workflow lived as a tracked payload (`ops/ci/github-actions.yml`) copied by `bash ops/install-ci.sh`; `.github/workflows/ci.yml` is now present in the tree. The job installs Rust and bun, builds the kernel with `--locked`, runs `bun install` in `app/` for the dev type packages only, then calls `bash ops/gates.sh`. Rule: edits to `.github/workflows/` go through a PR by an identity with the `workflow` scope; keep the payload and the live file identical (no test enforces that yet, see I3). |
+| 4 | `app/src/core/doctor.ts`, `app/tests/core/doctor.test.ts`, `app/src/main.ts` (`doctor`) | [`shell-plugin/doctor.zsh`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/shell-plugin/doctor.zsh)<br>[`crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs)<br>[`crates/codegen/xai-grok-pager/src/doctor_cmd/human.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/doctor_cmd/human.rs)<br>[`crates/codegen/xai-grok-pager/src/doctor_cmd/json.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/doctor_cmd/json.rs)<br>[`crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs)<br>[`crates/codegen/xai-grok-shell/src/mcp_doctor.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/mcp_doctor.rs)<br>[`packages/coding-agent/src/extensibility/plugins/doctor.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/extensibility/plugins/doctor.ts) | idea only (report shape: OK, WARN, FAIL plus a one-line fix per non-OK line; `--json`); original implementation | Ruling 71 (forgecode take T-10). Seven check groups: `bun`, `kernel` (`kernel.selftest`, `kernel.mode`), `config` (`config.file`, `config.perms`, `config.permission_mode`), `provider` (`provider`, `provider.key`, `model`), `workspace`, `git`, `terminal` (`term.color` and TTY, locale). Exit 1 on any FAIL, 0 with WARN, 2 on usage. Diagnose-only, no network, never prints a key. Everything it reads is injected (`DoctorEnv`), so tests run with a fake environment. **It is a SUBSET of the section 2.6.1 check set**: `kernel.asset` digest pin, `kernel.abi`, `sandbox.backends`, `fs.type`, `state.db`, `state.migrations`, `disk.space`, `cache.prefix`, `providers.reachability`, `clock.skew`, `plugins.manifests` are NOT implemented, and the `--online`, `--strict`, `--fix` flags do not exist. Status words are lowercase `ok\|warn\|fail` in JSON; `skipped` is not produced. Earlier text (docs/09 Provenance row 25) said the Grok `/doctor` source was not located; it is linked here. |
+| 5 | `app/src/core/config.ts` (`checkConfigFile`, `renderConfigCheck`), `app/tests/core/config-check.test.ts`, `app/src/main.ts` (`config check`) | [`crates/forge_config/tests/schema.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_config/tests/schema.rs)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/26-config-reference.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/26-config-reference.md)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md) | idea only (report unknown keys; Grok `grok inspect` is cited by the research note, its source path was not located) | Ruling 81 (forgecode take T-20, first half). Reports unknown top-level keys, unknown keys inside `mcp`, `lsp` and `providers` entries, wrong-typed scalars, an unknown provider id, a bad `permissionMode`, and every entry the MCP, LSP and provider validators reject. Read-only, never echoes a value, exit 1 when anything is reported. **The generated JSON schema half of T-20 is NOT done** (deferral I8). |
+| 6 | `app/src/core/commit.ts`, `app/tests/core/commit.test.ts`, `app/src/main.ts` (`commit`) | [`templates/forge-commit-message-prompt.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/templates/forge-commit-message-prompt.md) | adapted (fixed prompt over the staged diff); the guard path and the `HZ-Receipt` trailer are original | Ruling 83 (take T-16). `hzcode commit [--preview] [--receipt] [context]`: `git diff --staged` capped at 24000 characters goes to one ordinary model turn, the commit runs through `runtime.runGuardedShell` (a `shell.exec` decision and a receipt). `--receipt` appends `HZ-Receipt: <chain head>`. `suggest` from T-16 is NOT built (deferral I9). Detailed provenance row: [`09-tools.md`](09-tools.md) row 24. |
+| 7 | `bin/hzcode`, `app/src/main.ts` (`--version`) | original | original | The launcher execs `bun run app/src/main.ts`. `hzcode --version` prints `hzcode 0.1.0`. There is NO `hzcode version` subcommand and no `--json` identity (`{version, channel, commit, kernelDigest, HZ_PROTO, HZ_ABI, schemaRevision}` of R-ops-9); see I1. |
+
+
+### Where each design family came from (all DESIGN ONLY unless marked)
+
+| Family | Upstream exact URL(s) at the pinned SHA | Status | Notes |
+|---|---|---|---|
+| Distribution channels, `install.sh`, Homebrew, cargo, nix, Docker, debug sidecars (section 2.1) | [`install`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/install)<br>[`.github/release/plan-release.sh`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/release/plan-release.sh)<br>[`.github/release/publish-cli.sh`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/release/publish-cli.sh)<br>[`.github/release/lib.sh`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/release/lib.sh)<br>[`.github/actions/publish-dotslash/action.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/actions/publish-dotslash/action.yml)<br>[`.github/actions/build-cargo-package-binaries/action.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/actions/build-cargo-package-binaries/action.yml)<br>[`docs/natives-build-release-debugging.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/natives-build-release-debugging.md)<br>[`docs/install-id.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/install-id.md) | NOT IMPLEMENTED (design only) | The only way to run HorizonCode is `bin/hzcode` from a checkout with Bun installed and the kernel built with cargo. See I4. |
+| Versioning, release trains, release integrity: signing, SBOM, attestation, reproducibility (section 2.2, 2.3) | [`.github/workflows/release.yml`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/workflows/release.yml)<br>[`.github/workflows/release-dry-run.yml`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/workflows/release-dry-run.yml)<br>[`.github/workflows/nightly-beta.yml`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/workflows/nightly-beta.yml)<br>[`.github/actions/linux-code-sign/action.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/actions/linux-code-sign/action.yml)<br>[`.github/workflows/cargo-deny.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/cargo-deny.yml)<br>[`docs/macos-signing-notarization.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/macos-signing-notarization.md) | NOT IMPLEMENTED (design only) | No release has been cut, nothing is signed, there is no SBOM, no `ops/release-manifest.json`, no `ops/kernel-pin.toml`. See I4. |
+| CI/CD gate catalog beyond the eight shipped steps: lanes, timeouts, waivers, `ops/gates/<gate>.toml` (section 2.4) | [`crates/forge_ci/src/workflows/ci.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_ci/src/workflows/ci.rs)<br>[`.github/workflows/blocking-ci.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/blocking-ci.yml)<br>[`.github/workflows/postmerge-ci.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/postmerge-ci.yml)<br>[`.github/workflows/repo-checks.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/repo-checks.yml)<br>[`.github/scripts/check_workflow_hardening.py`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.github/scripts/check_workflow_hardening.py)<br>[`.github/egress-firewall.yaml`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.github/egress-firewall.yaml) | PARTIAL: `ops/gates.sh` ships; lanes, timeouts per gate, waivers and the 10+ declared-gap gates do not | See I3. |
+| Observability: OpenTelemetry, local trace file, log levels, opt-in telemetry (section 2.5, 14) | [`codex-rs/app-server-daemon/src/telemetry.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-daemon/src/telemetry.rs)<br>[`codex-rs/app-server-protocol/schema/typescript/v2/OtelExporter.ts`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol/schema/typescript/v2/OtelExporter.ts) | NOT IMPLEMENTED (design only); `HZ_LOG` does not exist | The shipped observability is the hash-chained event log and receipt chain (docs/06, docs/11), `app/src/core/metrics.ts` and the TUI status line. See I5. |
+| Diagnostics beyond doctor: support bundle, crash records (section 2.6) | [`crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md) | NOT IMPLEMENTED (design only) | See I2. |
+| Performance engineering: `ops/budgets.toml`, `hzcode bench`, baselines (section 2.7, 8, 15) | [`benchmarks/README.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/README.md)<br>[`benchmarks/cli.ts`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/cli.ts)<br>[`crates/forge_ci/src/workflows/ci.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_ci/src/workflows/ci.rs) | PARTIAL: the startup-latency gate is the only enforced budget | See I7. |
+| Security operations: disclosure, dependency policy, secret scanning (section 2.8) | [`SECURITY.md`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/SECURITY.md)<br>[`.github/workflows/cargo-deny.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/cargo-deny.yml) | NOT IMPLEMENTED (design only) | No `SECURITY.md` in the HorizonCode tree. See I10. |
+| Update mechanism (section 2.9) | [`packages/cli/src/services/updater.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/updater.ts)<br>[`packages/cli/src/services/update-preflight.tsx`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/update-preflight.tsx)<br>[`packages/cli/src/services/updater-action.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/updater-action.ts) | NOT IMPLEMENTED (design only) | See I4. |
+| Cost and budget operations (section 2.10) | [`crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md) | PARTIAL: run budgets (`--max-steps`, `--max-tokens`, `--max-wall-ms`, exit 5) and the local `/stats` token estimate ship; `prices.json` and `pricecheck` do not | See I11. |
+| Enterprise: managed policy, SSO and OIDC, audit export, quotas, BYO gateway, air-gap, proxies (section 12) | [`crates/codegen/xai-grok-cloud-config/src/managed_config/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-cloud-config/src/managed_config/mod.rs)<br>[`crates/codegen/xai-grok-cloud-config/src/managed_config/policy.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-cloud-config/src/managed_config/policy.rs)<br>[`codex-rs/app-server-protocol/schema/json/v2/ConfigRequirementsReadResponse.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol/schema/json/v2/ConfigRequirementsReadResponse.json) | NOT IMPLEMENTED (design only) | See I12. |
+| Profiling (section 13) | idea only: no upstream reference was found in the pinned clones | NOT IMPLEMENTED (design only) | See I13. |
+
+
+### Sources that could not be linked
+
+Grok's `grok inspect` (named by the forgecode research note for T-20) was not located in the pinned clone; the nearest linked sources are its configuration docs. The ancestor project's operations files are in a repository that is not cloned. DeepSeek-Reasonix release tooling is likewise not cloned.
+
+
+### Deferred or not started: detailed notes for the next agent
+
+Each note gives: what is deferred, why, the upstream reference, whether to adopt as is or adapt, a suggested design, and the files to touch. 'Adapt' is the default because the references are workflows for other products. No note changes a status level. Paths are from the repository root.
+
+#### I1. `hzcode version` and the identity record (R-ops-9, R-ops-47)
+
+- **What is deferred.** A `version` subcommand and `--json` that print `{ version, channel, commit, kernelDigest, HZ_PROTO, HZ_ABI, schemaRevision, platform, sandboxBackend }`, embedded in every diagnostic artifact. Today only `hzcode --version` prints `hzcode 0.1.0` (a constant in `app/src/main.ts`).
+- **Why.** Without a release process there is no channel or commit to stamp; the kernel digest needs a pin (I4).
+- **Upstream reference.** [`packages/cli/src/services/updater.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/updater.ts)<br>[`crates/codegen/xai-grok-pager/src/doctor_cmd/json.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/doctor_cmd/json.rs)
+- **Adopt as is or adapt.** ADAPT; trivial.
+- **Suggested design.** Add `version` next to `doctor` in `main.ts`. Read `HZ_PROTO` from `contracts.ts`, the kernel version from the kernel `ping` result (`KernelRequestMap.ping`), the kernel binary sha256 from `resolveKernelBinary`, the git commit from `git rev-parse HEAD` when run from a checkout. Make `doctor --json` include the same object under `versions`.
+- **Files to touch.** `app/src/main.ts`, `app/src/core/doctor.ts`, `app/tests/core/doctor.test.ts`.
+
+#### I2. Doctor: the remaining checks, `--online`, `--strict`, `--fix`, support bundle, crash records
+
+- **What is deferred.** The check ids in section 2.6.1 that are not implemented (see the doctor row above), the three flags, `hzcode support-bundle` (`tar.zst` with a manifest, redaction report and receipts) and crash records written to the state root.
+- **Why.** Most checks need artefacts that do not exist yet: a kernel digest pin (I4), a migration table, a prompt-prefix golden (docs/10: `gate:cache-guard` is a declared gap). The checks that can be written today are cheap: `disk.space`, `fs.type`, `state.db` integrity (open the SQLite file, run `PRAGMA integrity_check`), `clock.skew` is meaningless without a server.
+- **Upstream reference.** [`crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs)<br>[`crates/codegen/xai-grok-pager/src/diagnostics/doctor_format.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/diagnostics/doctor_format.rs)<br>[`crates/codegen/xai-grok-shell/src/mcp_doctor.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/mcp_doctor.rs)<br>[`shell-plugin/doctor.zsh`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/shell-plugin/doctor.zsh)
+- **Adopt as is or adapt.** ADAPT. Grok's `mcp_doctor.rs` is the right model for an MCP section (spawn each configured server, run the handshake, report). Keep the diagnose-only rule (R-ops-42) and the injected `DoctorEnv` design.
+- **Suggested design.** (1) `state.db`: `PRAGMA integrity_check` on a READ-ONLY connection. (2) `disk.space` via `statfs` (Bun has no direct API; shell out to `df -Pk` argv). (3) `mcp.servers`: for each configured server, do the admission-free dry validation only (`parseMcpServer`), and with `--online` run the real handshake through the manager. (4) Crash record: wrap `main()` in a handler that writes `<state root>/crashes/<utc>.json` (0600) with versions and the last redacted notice lines, and prints its path. Redaction must reuse `maskSecrets` (`core/compaction.ts`). (5) `support-bundle` only after (4), as a plain directory first (no `tar.zst` without a dependency; use `tar` argv).
+- **Files to touch.** `app/src/core/doctor.ts`, `app/src/main.ts`, new `app/src/core/crash.ts`, `app/tests/core/doctor.test.ts`.
+
+#### I3. Gate runner: lanes, timeouts, waivers, per-gate config, payload parity, the declared-gap gates
+
+- **What is deferred.** `ops/gates/<gate>.toml`, `ops/gates/waivers/<gate>.toml`, the `ops/gates/run.ts` single entry point, per-gate timeouts and lanes (R-ops-26 to R-ops-33), hermeticity detection and the `gate:gate-selftest` meta gate. Also: a test that `ops/ci/github-actions.yml` and `.github/workflows/ci.yml` stay byte-identical, and the ten or more `declared-gap` rows of `ops/gate-catalogue.md` (`parity-ratchet`, `cache-guard`, `layering`, `frontend-parity`, `file-size`, `function-size`, `wire-parity`, `sensitive-path-coverage`, `boundary-test`, `tool-declaration`, `receipt-coverage`, `no-unknown-retry`, `kernel-pin`, `cross-plane-abi`, `doc-status`, `dead-lane-fail-closed`, `provenance`, `repolint-debt`).
+- **Why.** The monolithic bash runner is honest and small; each declared gap needs a surface that does not exist. Gates that check nothing are worse than no gate (the catalogue's two-state rule).
+- **Upstream reference.** [`crates/forge_ci/src/workflows/ci.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_ci/src/workflows/ci.rs)<br>[`.github/workflows/blocking-ci.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/blocking-ci.yml)<br>[`.github/workflows/repo-checks.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/repo-checks.yml)<br>[`.github/scripts/check_workflow_hardening.py`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.github/scripts/check_workflow_hardening.py)
+- **Adopt as is or adapt.** ADAPT. Cheap wins in order: `gate:wire-parity` (a test that every `KERNEL_METHODS` entry has a match arm in `kernel/src/protocol.rs`, grep-based), `gate:doc-status` (parse the docs/28 table and check each claimed test file exists), `gate:provenance` (see below), payload parity.
+- **Suggested design.** Keep `ops/gates.sh` as the entry point and add functions that are registered in `GATES=(...)`; update `ops/gate-catalogue.md` in the same commit (the startup-latency test reads the catalogue). `gate:provenance` can now be made real: add `docs/research/upstream-pins.md` as the register and a test that every `https://github.com/<slug>/blob/<sha>/` link in `docs/*.md` uses a SHA listed in that file. The previous text of the catalogue (clones live outside the tree) is superseded by the research folder.
+- **Files to touch.** `ops/gates.sh`, `ops/gate-catalogue.md`, `app/tests/core/*gate*.test.ts`, `ops/ci/github-actions.yml`, `.github/workflows/ci.yml` (via PR only).
+
+#### I4. Install, release, signing, SBOM, kernel pin, update
+
+- **What is deferred.** Distribution channels, `ops/install.sh`, Homebrew, nix, Docker, a release manifest, signatures, SBOM, attestation, `ops/kernel-pin.toml` and `gate:kernel-pin`, versioned compatibility, self-update with staged swap and rollback.
+- **Why.** No release has been cut and no distribution decision is made. Self-update and signing are the highest-risk operational code (an update path is a remote-code-execution path) and must not be rushed. The owner also has to decide licence and attribution first (no `LICENSE` or `NOTICE` in the tree).
+- **Upstream reference.** [`install`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/install)<br>[`.github/release/plan-release.sh`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/release/plan-release.sh)<br>[`.github/release/publish-cli.sh`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/release/publish-cli.sh)<br>[`.github/workflows/release.yml`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/workflows/release.yml)<br>[`.github/workflows/release-dry-run.yml`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/.github/workflows/release-dry-run.yml)<br>[`packages/cli/src/services/updater.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/updater.ts)<br>[`packages/cli/src/services/update-preflight.tsx`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/update-preflight.tsx)<br>[`.github/actions/linux-code-sign/action.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/actions/linux-code-sign/action.yml)<br>[`.github/actions/publish-dotslash/action.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/actions/publish-dotslash/action.yml)<br>[`docs/macos-signing-notarization.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/macos-signing-notarization.md)
+- **Adopt as is or adapt.** ADAPT the structure (plan-release script, dry-run workflow, preflight before swap). Do not copy workflows: they publish to their own registries and secrets.
+- **Suggested design.** Order: (1) `ops/kernel-pin.toml` with the sha256 of the release-built kernel plus a doctor check (`kernel.asset`) and `gate:kernel-pin`. (2) A `release-dry-run` workflow that builds both artefacts and uploads them without publishing. (3) A single-file install script that verifies a sha256 before moving anything. (4) Only then signing and self-update, with the swap verified by a signature the binary already trusts.
+- **Files to touch.** new `ops/kernel-pin.toml`, `ops/install.sh`, `.github/workflows/release-dry-run.yml` (via PR), `app/src/core/doctor.ts`, `ops/gates.sh`.
+
+#### I5. Observability: OpenTelemetry, local trace file, `HZ_LOG`, opt-in telemetry
+
+- **What is deferred.** Everything in sections 2.5 and 14: spans and metrics with redaction, a local trace file, log levels, an opt-in exporter, a loopback dashboard. Nothing exists; there is no `HZ_LOG`.
+- **Why.** Zero runtime dependencies rules out the OTel SDK; an OTLP/HTTP JSON exporter is writable by hand but only valuable once a collector exists. The shipped audit trail (event log and receipts) already records what happened.
+- **Upstream reference.** [`codex-rs/app-server-daemon/src/telemetry.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-daemon/src/telemetry.rs)<br>[`codex-rs/app-server-protocol/schema/typescript/v2/OtelExporter.ts`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol/schema/typescript/v2/OtelExporter.ts)
+- **Adopt as is or adapt.** idea only.
+- **Suggested design.** Start with a local-only JSONL trace: reuse `app/src/core/metrics.ts` and the run summary, write `<state root>/trace.jsonl` at level `debug` only. Levels via `HZ_LOG` (never widening a capability). Exporters last, behind an explicit config key and the egress policy.
+- **Files to touch.** `app/src/core/metrics.ts`, new `app/src/core/log.ts`, `app/tests/core/metrics.test.ts`.
+
+#### I6. Forgecode take T-9: `HZ_DEBUG_REQUESTS` and the tool-hygiene eval pack
+
+- **What is deferred.** (a) An env var `HZ_DEBUG_REQUESTS=<path>` that dumps each outgoing provider request body to a file; (b) a key-free eval pack of about eight scenarios run with the scripted provider that asserts on the outgoing requests and on receipts: used `read` not `cat`; no `cd` when `cwd` exists; patch had no 'Could not find match'; at least two tool calls in one message; every admitted shell call has a receipt. NOT STARTED. `core/evals.ts`, `eval-run.ts`, `eval-executor.ts` and `providers/scripted.ts` exist but ship no pack and no request dump.
+- **Why.** Request dumps can contain secrets and file contents, so the dump needs redaction and a 0600 file; the first real measured quality table (README) needs keyed runs that were not available in the sandbox.
+- **Upstream reference.** [`benchmarks/README.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/README.md)<br>[`benchmarks/cli.ts`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/cli.ts)<br>[`benchmarks/evals/read_over_cat/task.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/evals/read_over_cat/task.yml)<br>[`benchmarks/evals/redundant_cd_with_cwd/task.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/evals/redundant_cd_with_cwd/task.yml)<br>[`benchmarks/evals/parallel_tool_calls/task.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/evals/parallel_tool_calls/task.yml)<br>[`benchmarks/evals/patch_exact_match/task.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/evals/patch_exact_match/task.yml)<br>[`benchmarks/evals/multi_file_patch/task.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/evals/multi_file_patch/task.yml)<br>[`README.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/README.md)
+- **Adopt as is or adapt.** ADAPT. The scenarios are portable ideas (task text plus assertions); forge's harness is TypeScript plus YAML plus jq. Write HorizonCode's as TypeScript tests over the scripted provider so they run in `bun test` with no keys.
+- **Suggested design.** (1) In `providers/index.ts` wrap the selected provider in `withRequestDump(provider, path)` when `HZ_DEBUG_REQUESTS` is set; append JSONL, run bodies through `maskSecrets`, open with mode 0600, and print one notice naming the file. Never enabled by workspace config. (2) `app/tests/core/hygiene-evals.test.ts` driving `scripted.ts` with canned model turns and asserting on the recorded `ProviderRequest`s and on `receipts.jsonl`. (3) Add a `hygiene` row to the README quality table only when run against a real provider and recorded with the model id and date.
+- **Files to touch.** `app/src/core/providers/index.ts`, new `app/src/core/providers/request-dump.ts`, `app/tests/core/hygiene-evals.test.ts`, `app/tests/core/providers-*.test.ts`, README.
+
+#### I7. Performance budgets registry, `hzcode bench` and ratcheted baselines
+
+- **What is deferred.** `ops/budgets.toml`, `ops/bench/suites.toml`, `hzcode bench`, baselines under `ops/bench/baseline/`, the section 15 table as generated output. Only the startup-latency ceilings are enforced, and they live inside `ops/gates.sh`.
+- **Why.** Every number in sections 8 and 15 is an unmeasured design target; building a registry before measuring would formalise guesses.
+- **Upstream reference.** [`benchmarks/README.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/README.md)<br>[`benchmarks/cli.ts`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/cli.ts)<br>[`crates/forge_ci/src/workflows/ci.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_ci/src/workflows/ci.rs)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** Measure first: extend the startup-latency measurement script to also time the prompt-assembly path and a 100-tool-call mock turn; record the numbers with machine, Bun version and date in `ops/gate-catalogue.md` (as done for startup), then add ceilings. Create `ops/budgets.toml` only when two gates read from it.
+- **Files to touch.** `ops/gates.sh`, `ops/gate-catalogue.md`, later `ops/budgets.toml`.
+
+#### I8. Forgecode take T-20, second half: generated JSON schema for the config
+
+- **What is deferred.** A `hzcode.schema.json` generated from the validators in `app/src/core/config.ts` so editors can complete the config file. `hzcode config check` (first half) is done.
+- **Why.** The validators are hand-written functions (`parseMcpServer`, `parseLspServer`, `parseProviderEntry`, scalar checks in `loadConfig`), not a declarative table, so there is nothing to generate from yet.
+- **Upstream reference.** [`crates/forge_config/tests/schema.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_config/tests/schema.rs)<br>[`crates/forge_config/src/config.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_config/src/config.rs)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/26-config-reference.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/26-config-reference.md)
+- **Adopt as is or adapt.** ADAPT the idea (a checked-in schema plus a test that fails when the code and the schema drift). forge generates it from Rust types; here a small declarative key table is the single source.
+- **Suggested design.** Introduce `CONFIG_KEYS: Record<string, {type, enum?, description}>` in `config.ts`, make `checkConfigFile` read it for the unknown-key and type checks (its output must not change; the existing tests are the guard), generate `app/schema/hzcode.schema.json` from it with a script, commit it, and add a snapshot test. Keep it additive and keep `config.ts` free of runtime dependencies.
+- **Files to touch.** `app/src/core/config.ts`, new `app/scripts/gen-config-schema.ts`, `app/schema/hzcode.schema.json`, `app/tests/core/config-check.test.ts`.
+
+#### I9. Forgecode take T-16 remainder: `suggest`; T-15 `--worktree`; T-17 status-line script
+
+- **What is deferred.** `hzcode suggest "<natural language>"` (turn a request into a shell command, print it, never run it), `hzcode --worktree <name>` (create a git worktree and branch beside the repo and start there), and the status-line script contract (a user-config script receives session JSON on stdin and prints up to five lines). None started.
+- **Why.** `suggest` is a convenience over `-p`; `--worktree` is an effect (git writes) that must go through the guard and carry a receipt; the status-line script runs a user program on every redraw and needs a timeout and an output bound. T-15 and T-17 are also recorded in [`08-runtime.md`](08-runtime.md) Provenance.
+- **Upstream reference.** [`crates/forge_main/src/sandbox.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_main/src/sandbox.rs)<br>[`benchmarks/evals/suggest/task.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/benchmarks/evals/suggest/task.yml)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/25-status-line.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/25-status-line.md)
+- **Adopt as is or adapt.** ADAPT. NAME IT HONESTLY: a worktree is not a sandbox; `sandbox.report` must keep meaning OS confinement.
+- **Suggested design.** `suggest`: reuse the `commit.ts` pattern (fixed prompt, one ordinary model turn, no tool access), print the command. `--worktree`: `git worktree add ../<repo>-<name> -b hz/<name>` through `runtime.runGuardedShell`, then re-exec with `--workspace` set; refuse if the name has path separators; add a receipt. Status line: user-config key only (never workspace), spawn through `spawnOwned` with a 200 ms timeout, 5 lines and 200 characters per line, ignore output on timeout.
+- **Files to touch.** `app/src/main.ts`, `app/src/core/commit.ts` or new `suggest.ts`, `app/src/tui/live.ts` (status row), `app/src/core/config.ts`, `app/tests/core/*`.
+
+#### I10. Security operations: `SECURITY.md`, disclosure, dependency policy, secret scanning
+
+- **What is deferred.** A security policy file, a disclosure checklist (`ops/security/disclosure-checklist.md`), a dependency policy (`cargo deny` for the Rust kernel, lockfile review for `app/`), secret scanning in CI, a kill-switch procedure (R-ops-60).
+- **Why.** Writing a disclosure address is the owner's decision; the dependency story is already small (zero runtime dependencies in `app/`, a short `Cargo.lock` in `kernel/`).
+- **Upstream reference.** [`SECURITY.md`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/SECURITY.md)<br>[`.github/workflows/cargo-deny.yml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/.github/workflows/cargo-deny.yml)<br>[`.github/egress-firewall.yaml`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.github/egress-firewall.yaml)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** Add `SECURITY.md` once an address exists. Add a `cargo deny check` step as a gate after `rust-kernel-suite` (needs `deny.toml`; do it only if network egress for the advisory DB is acceptable in CI). Add a test that `app/package.json` has no `dependencies` key (enforces the zero-runtime-dependency invariant mechanically).
+- **Files to touch.** `SECURITY.md`, `kernel/deny.toml`, `ops/gates.sh`, `app/tests/core/zero-deps.test.ts`.
+
+#### I11. Cost operations: `prices.json`, `pricecheck`, cost dashboards
+
+- **What is deferred.** An append-only price table, a verification tool, cost lines per turn and a local dashboard. Shipped: run budgets and token estimates only.
+- **Why.** Prices change; stale numbers shown as cost would mislead. The models.dev catalogue seam (docs/07 K5) carries `cost` fields and is the natural source.
+- **Upstream reference.** [`crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md)
+- **Adopt as is or adapt.** idea only.
+- **Suggested design.** Read `cost` from the catalogue record (`catalog.ts` already decodes it) and show an ESTIMATE in `/stats` labelled with the catalogue date. No `pricecheck` until a full snapshot exists.
+- **Files to touch.** `app/src/core/catalog/catalog.ts`, `app/src/core/convo.ts`, `app/tests/core/catalog.test.ts`.
+
+#### I12. Enterprise plane: managed policy, SSO and OIDC, audit export, quotas, BYO gateway, air-gap, proxies
+
+- **What is deferred.** All of section 12.
+- **Why.** Needs a server surface, an identity model and a policy-distribution channel; none exists. The kernel already treats policy as a file that can only narrow.
+- **Upstream reference.** [`crates/codegen/xai-grok-cloud-config/src/managed_config/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-cloud-config/src/managed_config/mod.rs)<br>[`crates/codegen/xai-grok-cloud-config/src/managed_config/policy.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-cloud-config/src/managed_config/policy.rs)<br>[`crates/codegen/xai-grok-cloud-config/src/managed_config/store.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-cloud-config/src/managed_config/store.rs)<br>[`codex-rs/app-server-protocol/schema/json/v2/ConfigRequirementsReadResponse.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol/schema/json/v2/ConfigRequirementsReadResponse.json)
+- **Adopt as is or adapt.** idea only. Grok's managed config and codex's `ConfigRequirements` show the shape (a signed or server-fetched layer that is meet-composed with user config).
+- **Suggested design.** Smallest honest step: a `managed-policy.json` read from a root-owned system path (`/etc/horizon/`), meet-composed with user policy exactly like the workspace file (narrow only), reported by `doctor`. No network fetch.
+- **Files to touch.** `app/src/core/config.ts`, `kernel/src/guard.rs` (policy merge), `app/src/core/doctor.ts`.
+
+#### I13. Profiling and leak procedure (section 13)
+
+- **What is deferred.** `hzcode run --cpu-profile`, `--heap-profile`, cgroup sampling.
+- **Why.** Bun exposes `--cpu-prof` and heap snapshots itself; wrapping them adds little before there is a performance problem to chase.
+- **Upstream reference.** idea only: no upstream reference was found in the pinned clones.
+- **Adopt as is or adapt.** Original.
+- **Suggested design.** Document the Bun flags in a runbook; add nothing to the CLI.
+- **Files to touch.** docs only.
