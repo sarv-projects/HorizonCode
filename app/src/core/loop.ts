@@ -37,7 +37,7 @@ import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
 import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
-import { openTodos } from "../tools/todo";
+import { openTodos, todoVersion } from "../tools/todo";
 import { presetCatalog } from "./agent-profiles";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
@@ -1202,7 +1202,10 @@ const TODO_REMINDER_MAX_TEXT = 80;
  * has open items, or undefined when nothing is open (no todos, or all done).
  * Pure text over the session's own list: no authority, no tool call.
  */
-export function pendingTodosReminder(sessionId: string): { text: string; open: number } | undefined {
+export function pendingTodosReminder(sessionId: string, sinceVersion?: number): { text: string; open: number } | undefined {
+  // Stale open items from an earlier run are not this run's business: when a
+  // start-of-run version is given, the list must have changed since (ruling 74).
+  if (sinceVersion !== undefined && todoVersion(sessionId) === sinceVersion) return undefined;
   const open = openTodos(sessionId);
   if (open.length === 0) return undefined;
   const shown = open
@@ -2107,6 +2110,8 @@ export async function runTurn(
     let loopNudge: string | undefined;
     // T-3: the end-of-turn pending-todos reminder fires at most once per run.
     let todoReminderSent = false;
+    // Ruling 74: the reminder fires only if this run modified the todo list.
+    const todoVersionAtStart = todoVersion(deps.sessionId);
     // One report per run, not one per dispatch: the compaction numbers describe
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
@@ -2265,7 +2270,7 @@ export async function runTurn(
         // run settles (the exit-status gate below keeps `unknown` as the
         // terminal if it stops again). Budgets and abort are re-checked at the
         // top of the loop, so the extra step is never free.
-        const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId);
+        const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId, todoVersionAtStart);
         if (pending === undefined) break;
         todoReminderSent = true;
         try {
