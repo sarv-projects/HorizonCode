@@ -26,6 +26,7 @@ import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
 import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, userBlock, type Live, type StatusInfo } from "./live";
+import { PASTE_OFF, PASTE_ON, createPasteCollector, echoedRows, pasteLabel } from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
 
@@ -933,6 +934,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     exiting = true;
     live?.dispose();
     try {
+      if (process.stdout.isTTY && process.stdin.isTTY) process.stdout.write(PASTE_OFF);
+    } catch {
+      /* terminal went away */
+    }
+    try {
       runtime.abort();
     } catch {
       /* nothing in flight */
@@ -1239,7 +1245,24 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   };
 
+  const paste = createPasteCollector();
+  const pasteOn = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+  if (pasteOn) process.stdout.write(PASTE_ON);
+
   rl.on("line", (raw: string) => {
+    if (pasteOn && paste.active()) {
+      const pasted = paste.line(raw);
+      if (pasted === undefined) return;
+      if (pasted.lines > 1) {
+        // Replace the echoed lines by one collapsed stand-in, submit the whole paste once.
+        const promptW = visibleWidth(planPrompt(planState.on, readPermissionMode(runtime)));
+        const rows = echoedRows(pasted.raw, answerWaiter ? 0 : promptW, terminalWidth());
+        process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
+        handlePasted(pasted.text, pasteLabel(pasted.lines));
+        return;
+      }
+      raw = pasted.text;
+    }
     if (answerWaiter) {
       const waiter = answerWaiter;
       answerWaiter = null;
@@ -1268,6 +1291,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     void handleUserLine(text);
   });
 
+  const handlePasted = (text: string, label: string): void => {
+    if (answerWaiter) {
+      // A multi-line paste is never an approval answer: it denies.
+      const waiter = answerWaiter;
+      answerWaiter = null;
+      waiter("");
+      return;
+    }
+    const wasIdle = !busy;
+    if (wasIdle) echoUser(label);
+    void handleUserLine(text);
+  };
+
   const abortTurn = (): void => {
     if (answerWaiter) {
       const waiter = answerWaiter;
@@ -1292,6 +1328,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     finish(0);
   });
+
+  if (pasteOn) {
+    process.stdin.on("keypress", (_s: unknown, key: { name?: string } | undefined) => {
+      paste.key(key?.name);
+    });
+  }
 
   if (liveOn) {
     process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {

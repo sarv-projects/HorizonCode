@@ -307,3 +307,7 @@ Status line printed once above the prompt, single in-place spinner line during a
 
 ## TUI polish part 2 (feat/tui-polish)
 Built (P0 + P1 of `research/grok-tui-deep.md`): colour level ladder + role table + display-width fix (`style.ts`); DEC 2026 synchronized single-write frames, pulsing glyph slower than the frame clock, narrow footer ladder, hidden cursor restored on exit (`live.ts`); pure card formatters (`cards.ts`): per-tool cards with durations, shell panel (first 2 / `… +N` / last 3), folded read-only runs, subagent start/end lines and the live `▾ Subagents N` group; zero-dep streaming markdown with code blocks, tables and a highlighter (`markdown.ts`). One additive contract field: `tool.card.detail` (durationMs, shell output/exitCode, read/grep/glob count). Non-rich output is byte-identical (golden fixture from the pre-redesign renderer). Verified: `bun run typecheck` 0 errors, full `bun test` green, real-PTY capture of read/glob/grep fold, long shell output, edit, approval, subagent and markdown answer at 100 and 60 columns, LANG=C and NO_COLOR (`.scratch/p2/`). Deferred: P2/P3 (status-line rework, completion, paste, approval card, diff gutters, thinking display, C2 subagent events, `/verbose`). Details in `docs/13-tui.md` "Part 2 polish".
+
+## TUI polish part 3 (feat/tui-part3)
+Grok-derived deferred items, one commit each (docs/28 rulings 84+, docs/13 Part 3). Suite and PTY evidence per item below.
+- `[pasted N lines]` bracketed paste: `tests/tui/paste.test.ts`, PTY case in `tests/tui/pty.test.ts` (ruling 84).

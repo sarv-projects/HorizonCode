@@ -814,3 +814,8 @@ Studied against Grok Build's minimal mode (`research/grok-tui-deep.md`). Everyth
 - **Fallbacks.** Non-UTF-8 locales get ASCII glyphs of the same width (`*`, `x`, `|`, `` ` ``, `~`); level 1 has no backgrounds (rail bars instead); `NO_COLOR`/`TERM=dumb` is the plain transcript.
 
 Deferred (follow-ups): P2 status-line rework with `used / window` and the contextual hint segment, tab completion and ghost text, bracketed paste, approval card and single-key mode, diff gutters with line numbers; P3 thinking display (needs `assistant.thinking`, C3), popup dropdown, `/theme`; contract C2 (`subagent.start|end` with a `callId`); a `/verbose` toggle for nested subagent lines; `Worked for` turn-footer wording; resize reprint of history (not needed on scrollback).
+
+## Part 3 polish: Grok-derived deferred items (v0.1)
+
+All rich-only unless noted; non-TTY output is unchanged.
+- **Bracketed paste.** A multi-line paste is one input shown as `[pasted N lines]` (`src/tui/paste.ts`, ruling 84). Mode `ESC[?2004h` is on only with a TTY and off again on exit.
