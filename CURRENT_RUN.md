@@ -101,8 +101,8 @@ Twelve branches merged in this order with `git merge --no-edit`; every row is TE
 | `a4d9fee` | TUI part 3 provenance, safety properties, contract notes, known gaps and deferrals (ruling 91 docs); the PR #28 head on `feat/tui-part3` |
 | `66d2839` .. `b62c8a2` | TUI part 3 features, one commit each: bracketed paste (84), approval card (85), diff gutters (86), thinking (87), subagent cells (88), completion (89), `/theme` (90), review fixes (91) |
 | `0ed704d`, `f5cb9ed` | masking of URL credentials in `config check` and of secret-like values in `/export` files |
-| `b053bfa`, `165715e`, `01c831b`, `484b713` | forgecode takes, third batch (PR #27): `hzcode commit` (83), plan files + `execute-plan` (82), `config check` (81), conversation verbs (80) |
-| `7eb7cda`, `9b3ec75`, `8bdf2d6`, `165c3ca` | forgecode takes, second batch (PR #26): symlink refusal + ruling reorder (79), skill folders (78), custom commands (77), structured compaction summary (76) |
+| `0ed704d`, `f5cb9ed`, `b053bfa`, `165715e`, `01c831b`, `484b713`, `7eb7cda` | forgecode takes, third batch (PR #27): config-check URL-credential masking, `/export` secret masking, `hzcode commit` (83), plan files + `execute-plan` (82), `config check` (81), conversation verbs (80), symlink refusal + compaction secret masking + ruling reorder (79) |
+| `9b3ec75`, `8bdf2d6`, `165c3ca` | forgecode takes, second batch (PR #26): skill folders (78), custom commands (77), structured compaction summary (76) |
 | `51961de` | Merge PR #25 (forgecode takes, first batch: rulings 67-75) |
 | `bcaae25`, `cbf79b2` | PR #24: product README; the designed capability list moved to `docs/31` |
 | `11eecca` | Merge PR #23 (TUI polish parts 1 and 2) |
