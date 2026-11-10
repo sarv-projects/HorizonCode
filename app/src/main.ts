@@ -17,6 +17,7 @@ import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
 import type { PermissionMode } from "./core/permission-mode";
 import { describeMode, parsePermissionMode, permissionModeError } from "./core/permission-mode";
+import { doctorExitCode, realDoctorEnv, renderDoctor, renderDoctorJson, runDoctor } from "./core/doctor";
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
 import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
@@ -30,6 +31,7 @@ const HELP = [
   "",
   "  hzcode [message]     start chatting (optionally with an opening message)",
   "  hzcode serve         run the single-attach server (NDJSON JSON-RPC on stdio)",
+  "  hzcode doctor        diagnose this install (OK/WARN/FAIL + a fix per problem; --json, --workspace <path>)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
   "  --mock               offline demo, no key   --version    print the version",
@@ -230,10 +232,39 @@ async function runServe(opts: CliOptions, workspace: string): Promise<number> {
   return terminated ? 143 : 0;
 }
 
+/** `hzcode doctor [--json] [--workspace <path>]`: diagnose only, exit 1 on any FAIL. */
+function runDoctorCommand(args: string[]): number {
+  let json = false;
+  let workspace = process.cwd();
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = String(args[i] ?? "");
+    if (arg === "--json") json = true;
+    else if (arg === "--help" || arg === "-h") {
+      process.stdout.write("hzcode doctor [--json] [--workspace <path>]\n  check bun, the kernel, config, provider, workspace, git and terminal; prints OK/WARN/FAIL with a fix per problem; exits 1 on FAIL; changes nothing\n");
+      return 0;
+    } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
+      if (value === undefined || value === "" || (!arg.includes("=") && String(value).startsWith("--"))) {
+        process.stderr.write("hzcode: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = value;
+    } else {
+      process.stderr.write(`hzcode: doctor: unknown argument ${arg}\ntry 'hzcode doctor --help'\n`);
+      return 2;
+    }
+  }
+  const checks = runDoctor(realDoctorEnv(path.resolve(workspace)));
+  process.stdout.write((json ? renderDoctorJson(checks) : renderDoctor(checks)) + "\n");
+  return doctorExitCode(checks);
+}
+
 async function main(): Promise<number> {
   // Subcommand dispatch happens before the chat-first arg parse so no existing
   // flag behaviour changes: `serve` is additive, everything else is unchanged.
   const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
   if (rawArgs[0] === "serve") {
     const serveOpts = parseArgs(rawArgs.slice(1));
     if (serveOpts.errors.length > 0) {

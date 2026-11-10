@@ -129,6 +129,7 @@ cd HorizonCode
 ./bin/hzcode -p "summarise this repo" --permission-mode read-only
 ./bin/hzcode --continue               # resume the last session
 ./bin/hzcode serve                    # single-client NDJSON JSON-RPC on stdio
+./bin/hzcode doctor                   # check this install: OK/WARN/FAIL with a fix per problem
 ```
 
 The mock model needs no key and exercises the whole path: tool call, guard, receipt. A JSON turn looks like this:
@@ -144,6 +145,8 @@ Piped input without `-p` runs headless, one message per line. `hzcode serve` ans
 ```bash
 printf '{"jsonrpc":"2.0","id":1,"method":"server.hello","params":{}}\n' | ./bin/hzcode serve
 ```
+
+`hzcode doctor` is diagnose-only. It checks the Bun version, the kernel binary and its `--selftest`, trusted or untrusted kernel mode, the config file, the provider, key presence (the key itself is never printed) and model, workspace and state-directory permissions, git, and the terminal (TTY, colour level, UTF-8 locale, `NO_COLOR`). It prints one line per check with a `fix:` line under every WARN or FAIL, and exits 1 if anything FAILs. `--json` gives the same report as JSON, suitable for a support ticket. Its only filesystem touch is the kernel selftest's scratch directory under the OS temp dir, removed afterwards.
 
 Other flags: `--workspace <path>`, `--model <name>`, `--max-steps <n>`, `--max-tokens <n>`, `--max-wall-ms <n>` (0 means unlimited). `hzcode --help` prints the full list.
 
