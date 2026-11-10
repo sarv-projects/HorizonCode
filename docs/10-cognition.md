@@ -82,7 +82,7 @@ R66) — not a terminal state.
 | R12 | Every codec is streaming-first. A non-streaming path MAY exist only as a buffer over the same event stream, and MUST NOT be used by the interactive loop (ADR-011). | `codec-streaming.test.ts` |
 | R13 | Codec output MUST be a subset of `{start, text_delta, reasoning_delta, tool_call_delta, tool_call_final, usage, stop, error}` and MUST be driven by **recorded fixtures** under `packages/provider/test/fixtures/<protocol>/`; codecs within one protocol family share the fixture set and are parity-checked against each other. | `codec-fixture.test.ts`, `codec-family-parity.test.ts` |
 | R14 | A codec MUST NOT contain vendor policy (retry counts, fallback order, budgets, prompt text). A codec that reads session state fails review. | `codec-purity.test.ts` |
-| R15 | Tool-call arguments that do not parse after stream completion MUST surface as `error{class=tool_arguments_invalid}`. Tolerant decoding is permitted only for whitespace and escape defects, every repair is counted in telemetry, and repairs MUST NOT invent or reorder parameters. | `tool-arg-integrity.test.ts` |
+| R15 | Tool-call arguments that do not parse after stream completion MUST surface as `error{class=tool_arguments_invalid}`. Tolerant decoding is permitted only for whitespace and escape defects, every repair is counted in telemetry, and repairs MUST NOT invent or reorder parameters. *Implemented (ruling 67): syntax-only repair, truncated tails refused for side-effecting tools, `repaired` marked on the event and card, the receipt hashes the repaired args.* | `tool-arg-integrity.test.ts` |
 
 ### 2.B Auth
 
