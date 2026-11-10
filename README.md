@@ -1,189 +1,333 @@
 # HorizonCode (`hzcode`)
 
-**The agent runtime with an execution constitution.**
+[![ci](https://github.com/sarv-projects/HorizonCode/actions/workflows/ci.yml/badge.svg)](https://github.com/sarv-projects/HorizonCode/actions/workflows/ci.yml)
 
-HorizonCode is a terminal-first coding agent whose *reasoning* is separated from its *authority to act*: a fast TypeScript/Bun runtime runs the agent loop, context, tools and UI, while a supervised **Rust kernel** owns capability admission, policy, leases, sandbox confinement, effects and receipts. It is designed as the **superset of the state of the art** — deliberately merging the best capabilities of OpenCode, Claude Code, Codex, Grok Build, DeepSeek-Reasonix, oh-my-pi and ForgeCode — and then adding capabilities none of them have.
+A terminal coding agent that separates what the model proposes from what is allowed to happen, and records every admitted action in a hash-chained log with receipts.
 
-> **Status (2026-11-09, integration branch `integration/superset`):** the design set (`docs/`; slots 17-23 unassigned by convention) is ratified; the product is implemented and tested but **not released**. Measured on the integration branch: `bun run typecheck` 0 errors; `bun test` **1334 tests, 113 files: 1334 pass as a non-root user (uid 1000), 1326 pass / 8 skip as root** (the 8 are chmod-based tests that cannot bind for uid 0; rulings 39, 51); `cargo test --locked` **49 + 50 pass** (root and non-root); `hz-kernel --selftest` **25 checks OK**; `bash ops/gates.sh` **7/7** as root and as non-root. On top of v0.1 and V2 waves 1-14, the integration branch adds: provider superset (fail-loud, openai-compatible adapter, user registry, models.dev seam), loop safety rails, `apply_patch` with model-to-tool routing, the edit-engine superset, server mode + conversational rewind, OS-sandbox seams (admission-time only; capability detection exists, OS enforcement does not, and `sandbox.report` never claims it), an interactive PTY tool, the LSP loop, the hooks lifecycle, tool exposure + `tool_search` + `turn.diff`, AST tools, and two primitives that are present but not wired (speculative execution, guardian). Live handoff state and the done / partial / not-started table: [`CURRENT_RUN.md`](./CURRENT_RUN.md) §5.0 · implemented-vs-designed map: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) · audits: [`docs/29-final-audit.md`](./docs/29-final-audit.md) and [`docs/30-steal-list.md`](./docs/30-steal-list.md).
+The model can request an action; a Rust trust kernel decides whether it runs (`deny > lease > ask > allow`) and settles each admitted action into a receipt in a tamper-evident event log. The runtime is TypeScript on Bun with no runtime dependencies. The terminal UI is scrollback-native: finished output goes into your terminal's own history, and only the prompt and the running turn are redrawn.
 
-## Run it now
+> **Status: pre-release.** Nothing is published or packaged; you build from source. The version is `0.1.0`. There is no OS-level sandbox: the kernel is a decision layer, not a confinement layer. See [Status and limitations](#status-and-limitations).
 
-```bash
-cd HorizonCode
-./bin/hzcode                          # opens the chat bar (mock model, zero config)
-printf 'list files' | ./bin/hzcode    # headless: one message per stdin line
+## Contents
+
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Providers and configuration](#providers-and-configuration)
+- [Slash commands](#slash-commands)
+- [Permission modes](#permission-modes)
+- [Project instructions](#project-instructions)
+- [Agent profiles](#agent-profiles)
+- [Performance](#performance)
+- [Testing and CI](#testing-and-ci)
+- [Status and limitations](#status-and-limitations)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Licence](#licence)
+
+## Features
+
+Every item below is on `main` and covered by automated tests. Items that are partial, opt-in or off by default say so.
+
+**Safety and evidence**
+
+- **Kernel-admitted actions**: every file write, shell command and network request is authorised by the Rust kernel before it runs and settles into a receipt.
+- **Tamper-evident log**: events and receipts are hash-chained, verifiable by `log.verify` and `receipt.verify`, and optionally anchored with an HMAC key (`HZ_ANCHOR_KEY`); without that key, someone who can write the files can rewrite the whole chain.
+- **Policy file**: `policy.json` rules, one-use leases, a structural deny on the kernel's own state directory, and fail-closed loading of malformed policy.
+- **Command allowlist and egress decider (admission only)**: a per-origin network decider and a command allowlist feed the same guard; nothing intercepts traffic or confines a process.
+- **Permission modes**: `default`, `plan`, `accept-edits` and `read-only` sit above the guard, a kernel deny always wins, and there is deliberately no bypass mode.
+- **Guardian line (advisory)**: approval prompts show a `guardian: flag` line for risky requests; it blocks only when `HORIZON_GUARDIAN=enforce` is set.
+- **Per-line shell approval**: the interactive `shell_session` tool admits every complete input line as its own `shell.exec` and shows the line verbatim in the prompt.
+
+**Agent loop**
+
+- **Loop safety rails**: step, token and wall-clock budgets, repeated-tool and loop detection, a mistake tracker, and a corrective for malformed tool calls; each stop is a named exit code.
+- **Parallel tool batches**: calls are classed shared or exclusive and scheduled with per-call leases.
+- **Checkpoints and rewind**: file checkpoints after each turn, `/rewind` restores files, and server `session.rewind` rewinds the conversation.
+- **Session fork**: `/fork` branches a chat into a new session with lineage, leaving the original untouched.
+- **Agent profiles**: `explore`, `plan`, `code` and `review` subagent presets, plus user presets, always bounded by the parent's tools.
+- **Crash recovery**: sessions live in SQLite and survive restarts; resume with `--continue` or `--resume <id>`.
+- **Cross-process locking**: lockfiles with stale-owner reclaim guard sessions, checkpoints, the change journal and per-file writes.
+
+**Tools** (18 registered; `/files` lists them)
+
+- **Edit ladder**: exact, relative-indent, unicode-fold, three-way and line-patch matching, each applied only when the match is unique and CRLF-safe.
+- **`apply_patch`**: the patch format GPT-style models emit, routed by model so each model sees one coherent edit tool set.
+- **Hashline anchors (opt-in)**: `read` can print `LINE:hash` anchors and `edit` can target them, recovering a unique shift of up to 15 lines.
+- **AST tools**: `ast_search` and `ast_edit` use an in-tree structural matcher.
+- **Interactive PTY**: `shell_session` runs a long-lived terminal program for the model.
+- **Language server loop (default off)**: the `lsp` tool and a diagnostics ledger run only for servers you configure.
+- **`tool_search` and `turn.diff`**: rarely used tools are deferred until the model asks for them, and each turn reports a diff of what it changed.
+- **Code mode**: a JavaScript subprocess calls tools over a bridge; each call is still admitted individually.
+- **MCP client**: stdio servers declared in user config only; a workspace file cannot add one.
+- **Repo map**: a ranked structural map of the repository.
+
+**Interfaces**
+
+- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering and approval prompts; there is no fullscreen mode.
+- **Headless mode**: `hzcode -p` prints one turn as `text`, `json` or `stream-json` with canonical exit codes; approvals fail closed.
+- **Server mode (single client)**: `hzcode serve` speaks NDJSON JSON-RPC on stdio with `session.create`, `list`, `subscribe`, `prompt`, `rewind` and `fork`.
+- **Hooks**: lifecycle hooks read from `hooks.json`; a malformed file refuses to run hooks rather than silently skipping them.
+- **Project instructions**: `AGENTS.md`, `CLAUDE.md` and other tools' rule files load as peers, with lazy nested loading; `/memory` and `/init` manage them.
+
+**Providers**
+
+- **Provider adapters**: Anthropic, OpenAI, Google, Ollama, any OpenAI-compatible endpoint, and an offline mock; an unknown provider id fails loud instead of falling back.
+- **User provider registry**: endpoints are declared as data in `config.json`, not code.
+
+## How it works
+
+```
+  user / script / client
+          |
+          v
+  +--------------------------+   proposes tool calls
+  |  TypeScript on Bun       | <---------------------- model provider
+  |  agent loop, tools, TUI, |   (Anthropic, OpenAI, Google,
+  |  sessions, hooks, server |    Ollama, OpenAI-compatible)
+  +------------+-------------+
+               |  NDJSON over stdio:  guard.check / record / verify ...
+               v
+  +--------------------------+
+  |  hz-kernel (Rust)        |  deny > lease > ask > allow
+  |  guard, leases, policy,  |  admit or refuse every effect
+  |  hash-chained event log, |
+  |  receipts, anchors       |
+  +------------+-------------+
+               |  admitted effect, then a receipt
+               v
+       files, processes, network        state: <workspace>/.hz/state/
 ```
 
-Real models: set `HZ_PROVIDER` + `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`; also `google`, `ollama`, or any OpenAI-compatible endpoint declared in the user provider registry; an unknown `HZ_PROVIDER` now fails loud instead of falling back to mock), or write a config with `provider`, `model` and `apiKey` at `~/.config/horizon/config.json` (an existing `~/.hzcode/config.json` is honoured in place). Everything is receipted: the Rust kernel hash-chains the event log and issues a receipt per admitted action (`<workspace>/.hz/state/kernel/`; a workspace that already has `.hzcode/` keeps using it in place: RC-17).
+The runtime asks the kernel to authorise each effect. If the kernel says `ask`, the TUI shows a prompt (`y`, `n`, `a`); an `always` answer becomes a time-limited lease that names the exact target. After the effect runs, a receipt is appended to the chain. The two sides share a frozen contract (`app/src/contracts.ts`), and event and receipt hashes are byte-identical between the Rust and TypeScript implementations.
 
-What exists today (all verified end-to-end by the integrator, not just reported):
-- `kernel/`: Rust trust kernel `hz-kernel` with a chained event log + receipts, guard (`deny > lease > ask > allow` per [`docs/11-authority-safety.md`](./docs/11-authority-safety.md) R1; leases, `policy.json`, structural kernel-state protection), optional keyed anchors (`HZ_ANCHOR_KEY`), NDJSON stdio protocol (8 methods); `cargo test --locked` 47 + 50 green and `--selftest` 25 checks (2026-11-09); the integration branch adds the command allowlist, the per-origin egress decider and the fail-closed `SandboxMode` ladder (admission-time seams, no OS confinement backend yet); wave 12 adds the lexical symlink walk, owner-scoped leases, fail-closed policy loading (malformed rules, hardlinked `policy.json`) and the warm append tail cache.
-- `app/src/core/`: runtime: kernel client (`trusted`) with byte-identical TS fallback (`untrusted`), SQLite sessions, providers (Anthropic, OpenAI, Google, Ollama, generic openai-compatible, mock), agent loop (stream → guard → approve → tool → receipt → events) with budget, format, loop-detection and mistake rails, hooks, plan mode, checkpoints and rewind, the LSP loop (default off) and a single-attach JSON-RPC server mode.
-- `app/src/tools/`: `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` (the base seven) plus `undo`, `repo_map` (B-1 ranked structural map), `agent` (subagent delegation), `code_mode` (JS subprocess over the NDJSON tool bridge), `preview` (dev-server lifecycle), `apply_patch`, `shell_session` (interactive PTY), `lsp`, `tool_search`, `ast_search` and `ast_edit`: eighteen registered tools, all guard- and approval-aware.
-- **Project instructions** (`app/src/core/instructions.ts`): `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `CONVENTIONS.md`, `.github/copilot-instructions.md`, `.cursorrules`, `.cursor/rules/*.mdc` (`alwaysApply: true` only) and `.windsurfrules` load as peers. Precedence, least to most specific (later wins, and your own messages win over every file): user `~/.config/horizon/`, then repository root down to the working directory, then `.hz/AGENTS.md`, `ZH.md`, and local overrides. A nested `AGENTS.md`/`CLAUDE.md` below the working directory loads on demand when a tool touches a file under it. Files are capped (32 KB each, 128 KB total), symlink escapes are refused, and they are treated as conventions, never permissions. In the TUI: `/memory` (alias `/instructions`) shows what is loaded; `/init` drafts an `AGENTS.md` staged for review (`/changes`, then `/apply`). The base system prompt is data under `app/src/core/prompt/` (rendered copy in [`docs/10-cognition.md`](./docs/10-cognition.md) §2.J.1).
-- `app/src/tui/` + `app/src/main.ts` — chat-first UI: streaming chat bar, tool cards, y/n/a approvals, history, headless mode; `bin/hzcode` launcher.
-- `app/src/tui/print.ts`: headless `hzcode -p [text] --output-format text|json|stream-json` (one turn, canonical exit codes, approvals fail closed).
-- `app/src/core/permission-mode.ts`: named permission modes `hzcode --permission-mode default|plan|accept-edits|read-only` and `/mode` (a layer above the kernel guard; a kernel deny always wins; user-config default only; no bypass/yolo mode by design).
-- Guardian: approval prompts show an advisory `· guardian: flag - reason` line for risky asks; it never blocks unless `HORIZON_GUARDIAN=enforce` (a deny then refuses; the kernel guard is unchanged).
-- Session fork: `/fork [n]` and server `session.fork` branch a chat into a new session (transcript copied, `forkedFrom` lineage shown by `/sessions` and `session.list`, new kernel stream starting with a `session.fork` event; the original is never touched).
-- `app/src/core/agent-profiles.ts`: specialised `agent` presets (explore, plan, code, review, plus user `.hz/agents/*.md`), bounded by the parent's tools.
-- `app/tests/`: 1334 tests in 113 files (all pass as non-root; 8 skip as root; see above) across core (incl. skills, subagents, code mode, preview, tool batches, loop rails, output budget, metric contract, canonical numbers, the NF-071 managed runtime, canonical state paths, the NF-075 growth loop, post-mortems/evals, and the wave-12 kernel-hardening / logging-hardening / durability-perms suites), tools (incl. the NF-069 edit ladder, the shell minimiser/interception, the B-1 repo-map, hostile-read and tools-hardening fixtures), providers and TUI (incl. real PTY scenarios); run `cd app && bun test`.
-- `ops/`: the CI gate runner (`gates.sh`, seven real gates incl. `ts-typecheck`) and its honest gate catalogue (`gate-catalogue.md`: all 18 `docs/24` §3.5 gates `declared-gap` with reasons); the GitHub Actions wiring ships as `ops/ci/github-actions.yml`, installed by `ops/install-ci.sh` (installing it needs a token with the `workflow` scope).
+The runtime reports its kernel mode on startup. In `trusted` mode the Rust kernel is running. In `untrusted` mode, used when the kernel binary is absent, a byte-compatible TypeScript fallback decides instead; the guarantees are weaker because the decider shares a process with the agent.
 
-Architecture note: [`app/src/contracts.ts`](./app/src/contracts.ts) is the frozen interface both implementations compile against — event and receipt hashes interop between Rust and TypeScript byte-for-byte.
+## Install
 
----
+HorizonCode is not packaged. Build from source.
 
-## 1. What it is, in one page
+Requirements: [Bun](https://bun.sh) (developed with 1.2.14) and a Rust toolchain (developed with 1.92.0) for the kernel. Linux x86_64 is the tested platform.
 
-> *Designed target. Implemented state is the status line above and exactly what `docs/28-implementation-status.md` §1 lists — secondary surfaces, the model catalog breadth, the event-sourced store and the sandbox matrix are designed, not shipped.*
+```bash
+git clone https://github.com/sarv-projects/HorizonCode.git
+cd HorizonCode
+(cd kernel && cargo build --release --locked)   # builds kernel/target/release/hz-kernel
+(cd app && bun install)                          # dev type definitions only
+./bin/hzcode --version
+```
 
-| | |
-|---|---|
-| **Binary** | `hzcode` (aliases `hz`, `horizon`) |
-| **Product name** | HorizonCode |
-| **Primary surface** | Terminal chat-first TUI (streaming inline chat bar; fullscreen alt-screen planned) |
-| **Secondary surfaces** | Headless/print · HTTP+SSE server · Web app · Desktop (Electron) · IDE bridge (ACP + VS Code/JetBrains) · MCP server · SDKs (TS, Python, Go, Rust) |
-| **Runtimes** | TypeScript on **Bun** (interaction, orchestration, cognition) + **Rust** (authority kernel, native capabilities) |
-| **Storage** | Event-sourced SQLite (durable log + projections) + JSONL transcripts + content-addressed blob/artifact store |
-| **Model access** | 300+ models via `models.dev` + native protocol codecs + local servers (Ollama, LM Studio, vLLM, llama.cpp) |
-| **License** | MIT (first-party), upstream notices preserved |
+`bin/hzcode` is a launcher for `app/src/main.ts`. Put the `bin` directory on your `PATH` to run `hzcode` from anywhere. Without the kernel build the runtime starts in `untrusted` mode.
 
----
+## Quickstart
 
-## 2. The one idea that makes it different
+```bash
+./bin/hzcode                          # chat bar; offline mock model unless a provider is configured
+./bin/hzcode --mock                   # force the offline mock model
+./bin/hzcode -p "list files" --mock --output-format json
+./bin/hzcode -p "summarise this repo" --permission-mode read-only
+./bin/hzcode --continue               # resume the last session
+./bin/hzcode serve                    # single-client NDJSON JSON-RPC on stdio
+```
 
-> Most agents ask the model what it wants to do, then do it.
-> **HorizonCode separates the agent's reasoning from the authority to act.**
+The mock model needs no key and exercises the whole path: tool call, guard, receipt. A JSON turn looks like this:
 
-The model can *request* an action; only the kernel can *authorise* it. Every admitted effect settles into a durable **receipt**, and anything that cannot be proven settled terminates as an explicit **`UNKNOWN`** that is reconciled rather than blindly retried. A run is therefore **auditable instead of believable**: the receipt chain replays and verifies today (`log.verify` / `receipt.verify` in the kernel protocol, hash-chained in `kernel/`), and the designed `hzcode session verify <id>` adds the independent-evidence gate on top (docs 14/16; DESIGNED) — the question is what is *proven*, not what the model said.
+```json
+{"type":"result","result":"...","sessionId":"...","exit":{"terminal":"succeeded","code":0,"detail":"turn_end"},"usage":{"model":"mock-1",...},"toolCalls":1,"changedFiles":[]}
+```
 
----
+Every run writes receipts and the event log under `<workspace>/.hz/state/kernel/` (a workspace that already has `.hzcode/` keeps using it).
 
-## 3. Capability summary
+Piped input without `-p` runs headless, one message per line. `hzcode serve` answers `server.hello` first:
 
-> *These sections are the **designed** capability list (the complete final feature list across `docs/00`–`docs/30`); the shipped v0.1 surface is exactly `docs/28` §1.*
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"server.hello","params":{}}\n' | ./bin/hzcode serve
+```
 
-### 3.1 Agent runtime
-- **One Controller, every front-end** — one transport-agnostic `Controller` owns the run loop and session lifecycle; TUI, headless, server, web, desktop, IDE and SDKs all drive it. A CI **parity ratchet** fails any front-end-specific behaviour.
-- **Event-sourced session core** — every fact is a durable event; projections (messages, inbox, claims, stats) fold from the log; sessions survive crash, restart and eviction.
-- **Write-ahead execution claims** — the busy period claims before work begins and clears only on a terminal outcome, so interrupted runs are resumable, never ambiguous.
-- **One `llm.stream` per step** — each step reloads history and issues exactly one provider stream call; no hidden in-memory tool loop.
-- **Prompt admission precedes execution** — input is admitted to a durable inbox (`steer` / `queue`) before the model is engaged.
-- **Dual-model Planner / Executor** — optionally plan in a read-only session; a deterministic host policy (no classifier guessing) routes `executor-only · light · full · plan-for-approval · plan-only`, with planner and executor prefixes never mixed.
-- **Subagent fleet** — `task`, `fleet`, `parallel_tasks`, `read_only_task` with a dependency graph, concurrency ceilings, depth limits, **capability grants** and context capsules; child construction funnels through one primitive guarded by a boundary test.
-- **Budgets and leases** — token, wall-clock, step, triage, web-search and cost budgets scoped per root run and inherited; adaptive progress leases renew only on real progress.
-- **Goals, plans, todos** — state machines with plan-mode gating and an approved-plan execution window.
-- **Self-improvement loop** — human-gated (see §3.9).
+Other flags: `--workspace <path>`, `--model <name>`, `--max-steps <n>`, `--max-tokens <n>`, `--max-wall-ms <n>` (0 means unlimited). `hzcode --help` prints the full list.
 
-### 3.2 Tools — the catalog in [`docs/09-tools.md`](./docs/09-tools.md) §4 (authoritative), every one typed
-- **Files:** `read`, `read_many`, `write`, `edit`, `multi_edit`, `patch`, `apply_patch`, `notebook_edit`, `delete_range`, `delete_symbol`, `move`, `undo`, `attach`, `snapshot`, `rewind`.
-- **Search & navigation:** `glob`, `grep`, `find`, `ast_grep`, `ast_edit`, `symbols`, `references`, `definitions`, `repo_map`, `code_index`, `outline`.
-- **Execution:** `shell` (foreground/background/PTY), `shell_session`, `powershell`, `job`, `repl`, `run_code`, `code_mode` (confined JS/TS over namespaced tools), `container`, `ssh`.
-- **Web & media:** `web_fetch`, `web_search`, `web_image`, `browse`, `computer`, `view_image`, `read_video`, `generate_image`, `tts`, `stt`, `chart`.
-- **Memory & context:** `memory_recall`, `memory_retain`, `memory_edit`, `memory_reflect`, `context_notes`, `new_context`, `compress`, `history_search`, `learn`, `skill_manage`, `todo`, `complete_step`, `update_goal`.
-- **Agent & orchestration:** `task`, `fleet`, `parallel_tasks`, `read_only_task`, `team_create`, `team_delete`, `send_message`, `wait`, `yield`, `plan_enter`, `plan_exit`, `brief`, `ask_user`.
-- **Integrations:** `lsp` (14+ ops), `debug` (DAP, 28+ ops), `mcp` (tools/resources/prompts), `tool_search` (deferred discovery), `github`, `gitlab`, `schedule`, `remote_trigger`, `workflow` (Rhai), `artifact_*`, `config`, `setting`.
-- **Verification:** `verify`, `run_tests`, `lint`, `typecheck`, `security_scan`, `review`, `budget_report`.
-- **Every tool declares:** JSON-schema input/output, read-only class, concurrency class, permission requirements, **capability ID**, effect class, UI renderers and idempotency semantics. Nothing is a blind string exec.
+## Providers and configuration
 
-### 3.3 Cognition — models, context, memory
-- **Providers:** `models.dev` catalog + native protocol codecs (OpenAI chat/responses, Anthropic messages, Gemini, Bedrock converse/event-stream, Vertex, Cohere, Mistral, xAI, Groq, DeepSeek, Qwen, OpenRouter, Together, Fireworks, Cloudflare, GitHub Copilot, GitLab Duo, Cursor agent, Azure, Ollama, LM Studio, vLLM, llama.cpp, Apple Foundation Models, plus an OpenAI-compatible fallback). **Vendor endpoints are config, not code.**
-- **Cache-first context compiler:** byte-stable prefix (system prompt + tool schemas + declared config) and a projected turn tail (memory, skills index, goal/plan, retrievals). A CI **cache-guard** test fails on prefix drift.
-- **Reasoning control:** per-model thinking levels, effort mapping, reasoning budgets, interleaved thinking.
-- **Memory:** four tiers — working, episodic (retrieval over past sessions), semantic (curated facts with provenance), team (shared/syncable) — with extraction, reflection and consolidation.
-- **Compaction:** multi-strategy (summary, structured digest, verbatim tail, **snapcompact** vision-frame compression) with a single automatic trigger ratio and a rare explicit provider-visible checkpoint.
-- **Retrieval:** BM25 + embeddings + symbol/reference index + repo map, all local-first.
-- **Media:** images, PDFs, video, audio (STT/TTS), diagrams (out-of-process Mermaid), charts.
+Configuration is resolved in this order: environment variables, then `~/.config/horizon/config.json`, then detection from provider keys, then the mock. An existing `~/.hzcode/config.json` is still honoured.
 
-### 3.4 Authority, safety and trust
-- **Rust kernel (`hzk`)** — capability registry, `Guard.authorize()`, one-use leases, `EffectHost`, receipts, reconciliation, OwnerLog, resource budgets, cgroup v2 accounting, worktree pool, supervisor leases.
-- **Origin-typed effects** — `SessionBatch`, `UserAction`, `ManagedRun`, `ManagedRoot`; a model-originated batch can never present itself as human authority.
-- **Policy-as-code** — wildcard rule DSL (`Shell(git *)`, `Edit(src/**)`) plus a Starlark prefix engine for command decisions; precedence `deny > ask > allow`.
-- **Postures** — `allow` / `ask` / `deny` (full-access / workspace-write + on-request / read-only), **enforced by the kernel, not by prompt text**.
-- **Sandbox matrix** — Linux (Landlock + bubblewrap + seccomp + namespaces), macOS (Seatbelt), Windows (write-restricted token / AppContainer / job objects); per-dimension guarantee vectors with **typed residuals** instead of silent degradation.
-- **Trusted Host State** — content-addressed, hash-chained records for contracts, evidence bundles and capability rollout.
-- **Verification** — independent-evidence gate: claims are checked against host receipts and can only be **lowered**, never raised.
-- **Project-config safety** — workspace files may only *narrow* user config, never widen it; programs named by a workspace stay off until explicitly trusted for that folder.
-
-### 3.5 Sessions, state and time travel
-- Event log + projections; branch / fork / resume / archive / delete.
-- Checkpoints and **rewind by turn**; workspace snapshots; **rollout replay** (time-travel debugger).
-- Worktree pool and per-task isolation; snapshot-based revert.
-- Usage, cost and currency accounting across the whole session tree.
-
-### 3.6 Interface surfaces
-- **TUI** — fullscreen alt-screen, mouse-interactive (click-to-focus, scrollbars, drag-select), inline/scrollback fallback, command palette, slash commands, diff viewer, session picker, themeable, keybindable, accessible.
-- **Headless** — `run`, `exec`, `print`, JSON/JSONL output for CI.
-- **Server protocol** — versioned JSON-RPC over stdio/UDS/TCP + HTTP/SSE + WebSocket; **code-generated** clients and schemas.
-- **Web app** and **Desktop** — thin clients of the same protocol (sessions, diffs, terminal panes, approvals, collaboration).
-- **IDE bridge** — ACP plus a JWT-authenticated bridge with session replay; VS Code and JetBrains.
-- **MCP** — client **and** server (expose HorizonCode's tools to other agents), with OAuth and deferred tool discovery.
-- **Collaboration** — shared live sessions, presence, share links, team memory.
-- **Voice** — streaming STT/TTS for hands-free operation.
-
-### 3.7 Extensibility
-- **Plugins** with a signed manifest, sandboxed host, capability declarations and a marketplace; can contribute tools, commands, agents, skills, providers, integrations and UI.
-- **Skills** — Markdown workflows with front-matter, `runAs: subagent`, lock/update, marketplace, and synthesis (`skillify`).
-- **Commands and hooks** — user-facing slash commands and lifecycle hooks (pre/post tool, prompt, session, commit).
-- **Workflow engine (Rhai)** — declarative multi-agent orchestration through a host channel.
-- **Custom agents** — named agent profiles (act / plan / research / custom) with tool allow-lists.
-- **Self-hosting config** — the repo carries its own `.hz/` agent config.
-
-### 3.8 Operations
-- **OpenTelemetry** traces/metrics/logs, GenAI semantic conventions, local dashboard.
-- **Local-first and offline-capable**; BYO keys; air-gapped mode.
-- **Remote execution** — SSH/SFTP/WSL/containers; multi-machine fleets; remote sandboxes.
-- **Enterprise** — managed policy, MDM, SSO, audit export, quota/rate-limit policy, bring-your-own-cloud.
-- **Security** — secret vault with redaction, egress control, network proxy, opt-in crash reports, supply-chain pinning.
-- **Distribution** — single static binary; npm/brew/apt/scoop/nix/docker; auto-update with digest pinning; signed releases with debug sidecars.
-
-### 3.9 Self-improvement (human-gated)
-- **Trajectory capture** of every run (events + receipts) as the evidence substrate.
-- **Evals harness** with regression gates and benchmark suites (SWE-bench-style, repo-specific, task catalogs).
-- **Memory distillation** — episodic → semantic, with provenance and review.
-- **Skill synthesis** — turn a successful workflow into a reusable skill, then verify it in the evals harness before it is offered.
-- **Policy and prompt tuning** — candidate prompt/policy variants evaluated A/B under the cache-guard discipline.
-- **Background “dream” consolidation** — scheduled reflection that proposes improvements, never applies them.
-- **Hard rule:** self-improvement may propose changes to memory, skills, prompts and *routing* — it may **never widen authority**; every code or policy change lands as a reviewable proposal gated by receipts and human approval.
-
----
-
-## 4. The superset, explicitly
-
-| Capability family | Inherited strength | Our addition |
+| Setting | Environment | `config.json` key |
 |---|---|---|
-| Separate execution authority + receipts | HorizonCode (kernel / Guard / effects) | Universal receipts for *every* mutation, `UNKNOWN` reconciliation, origin-typed effects, capability-ID registry |
-| Event-sourced core, one stream per step | OpenCode | Write-ahead claims + admission inbox + parity ratchet |
-| Deep OS sandbox + policy DSL | Codex | Guarantee vectors with typed residuals + Trusted Host State |
-| Fullscreen mouse TUI + leader/replay | Grok Build | Inline fallback + front-end parity + shared leader across all surfaces |
-| One controller, four front-ends, ratchet linter | Reasonix | Extended to eight surfaces incl. web, desktop, MCP server and SDKs |
-| Native capability stack (shell/VFS/edit/diff/VCS/AST) | oh-my-pi | Unified native crate set + conflict-aware edit engine |
-| Clean architecture + compile-time tool specs | ForgeCode | Plus schema-validated runtime tools and capability IDs |
-| ~40 tools, skills, coordinator, bridge, dream | Claude Code | Superset tool catalog + planner/executor + authority kernel |
-| — (new) | — | **Execution constitution, evidence gate, self-improvement proposals, `hz://` resource space, workflow engine, team memory, time-travel replay** |
+| Provider | `HZ_PROVIDER` (`anthropic`, `openai`, `google`, `ollama`, `mock`, or a registry id) | `provider` |
+| Model | `HZ_MODEL` | `model` |
+| API key | `HZ_API_KEY`, or `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY` | `apiKey` |
+| Base URL | `HZ_BASE_URL` | `baseUrl` |
+| Budgets | `HZ_MAX_STEPS`, `HZ_MAX_TOKENS`, `HZ_MAX_WALL_MS` | none |
 
----
+If `HZ_PROVIDER` and the config file name no provider, a vendor key variable selects one (checked in the order Anthropic, OpenAI, Google). Ollama needs no key.
 
-## 5. Decisions already made
+**Any OpenAI-compatible endpoint** is declared in the user config as data. Only the user config is read for this; a workspace file cannot register a provider.
 
-1. **Terminal-first, protocol-first.** The TUI is the product; the protocol is the API. Web, desktop and IDE clients are thin front-ends over the same Controller. Rationale and trade-offs in [`docs/02-decisions.md`](./docs/02-decisions.md).
-2. **TypeScript/Bun + Rust hybrid.** Interaction/orchestration/cognition in TS for velocity and the React/Ink-style TUI; authority and native capabilities in Rust for safety and speed.
-3. **Event-sourced storage.** Durable log + projections; no mutable state of record.
-4. **Kernel-enforced policy.** Permissions are never prompt text.
-5. **Self-improvement never widens authority.**
+```json
+{
+  "provider": "my-gateway",
+  "providers": [
+    {
+      "id": "my-gateway",
+      "baseUrl": "https://llm.example.com/v1",
+      "envKey": "MY_GATEWAY_KEY",
+      "models": ["my-model"]
+    }
+  ]
+}
+```
 
----
+An `id` must match `[a-z0-9-]` and must not collide with a built-in. An entry may carry `apiKey` or `envKey`; with neither, it is treated as keyless (a local vLLM server, for example). `protocol` is `openai-chat`, the only value in v1. A malformed entry is skipped with a notice rather than stopping startup. A registered provider with no model fails with a readable error instead of sending a placeholder id.
 
-## 6. Documentation set
+Other user-config files: `policy.json` (kernel rules), `hooks.json`, `agents/*.md` (profiles), and `mcp` / `lsp` sections in `config.json`. Workspace files can narrow these but not widen them.
 
-Start at [`docs/00-index.md`](./docs/00-index.md). The set covers vision, competitive synthesis, decisions, HLD, LLD, domain model, schemas, events, flows, APIs, contracts, runtime, tools, providers, context/memory, authority/safety, sessions/state, TUI, web/desktop/IDE, extensibility, self-improvement, observability, performance, packaging, the final feature catalog, roadmap and glossary — plus the **second learning synthesis** ([`docs/26-learning-synthesis-2.md`](./docs/26-learning-synthesis-2.md), the ten-repo deep-dive record) and the **implementation plan** ([`docs/27-implementation-plan.md`](./docs/27-implementation-plan.md), with the runtime-viability results). A post-writing audit of the set — traceability, consistency, parity and technical hole-hunt — is in [`AUDIT.md`](./AUDIT.md). Implementation state: [`docs/28-implementation-status.md`](./docs/28-implementation-status.md); live handoff and exact continuation steps: [`CURRENT_RUN.md`](./CURRENT_RUN.md).
+## Slash commands
 
----
+These are the commands in the chat bar, as printed by `/help`.
 
-## 7. Non-goals
+| Command | Description |
+|---|---|
+| `/help` | this list |
+| `/new` | start a fresh session |
+| `/model [name]` | show or switch the model |
+| `/files` | tools the assistant can use |
+| `/context` | what the next request will carry |
+| `/plan [on\|off]` | toggle plan mode (writes are staged) |
+| `/mode [name]` | show or set the permission mode: default, plan, accept-edits, read-only |
+| `/changes` | review staged changes and diffs |
+| `/apply` | write the staged changes |
+| `/discard` | drop the staged changes |
+| `/fork [n]` | branch this chat into a new session (n = checkpoint number, else everything so far) |
+| `/sessions` | recent sessions with fork lineage (resume a fork with `hzcode --resume <id>`) |
+| `/rewind [n]` | list checkpoints; n restores the files changed since one |
+| `/memory` | which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias `/instructions`) |
+| `/init` | draft an AGENTS.md for this repo (staged; you review it, then `/apply`) |
+| `/exit` | leave (Ctrl+D also works) |
 
-- Not a chat app: every capability exists to change a repository and prove it.
-- Not a hosted service by default: local-first, BYO keys; hosting is optional (enterprise).
-- Not a model: HorizonCode is the harness, and stays model-agnostic.
-- Not a silent auto-improver: self-modification is proposed, reviewed and receipted.
+Ctrl+C stops the current answer (again to leave), Ctrl+D leaves, and the up and down arrows recall earlier messages.
+
+Plan mode stages every write instead of performing it. `/changes` shows the staged diffs, `/apply` writes them, `/discard` drops them.
+
+## Permission modes
+
+Set with `--permission-mode <mode>`, `/mode <mode>`, or `permissionMode` in the user config. Workspace files cannot change it.
+
+| Mode | Behaviour |
+|---|---|
+| `default` | the guard decides and you answer the asks |
+| `plan` | writes are staged for review with `/changes` and `/apply` |
+| `accept-edits` | in-workspace write and edit asks are answered yes, except CI, hook, manifest and shell-rc files; shell and everything else still ask |
+| `read-only` | every write, shell command and MCP tool call is refused before it can reach the guard |
+
+A kernel deny always wins over a mode. There is no bypass mode: it would also answer network, spawn, MCP and shell asks, leaving only the deny list.
+
+## Project instructions
+
+These files load as peers: `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `CONVENTIONS.md`, `.github/copilot-instructions.md`, `.cursorrules`, `.cursor/rules/*.mdc` (only `alwaysApply: true`) and `.windsurfrules`.
+
+Precedence runs from least to most specific, and later wins: user `~/.config/horizon/`, then the repository root down to the working directory, then `.hz/AGENTS.md` and local overrides. Your own messages win over every file. A nested `AGENTS.md` or `CLAUDE.md` below the working directory loads when a tool touches a file under it.
+
+Files are capped at 32 KB each and 128 KB in total, symlink escapes are refused, and the files are treated as conventions, never as permissions. `/memory` shows what is loaded; `/init` drafts an `AGENTS.md` for review.
+
+## Agent profiles
+
+The `agent` tool delegates a task to a subagent. A `profile` selects a preset. A profile can only narrow the parent's tool set, and the kernel guard still decides every effect a subagent attempts.
+
+| Profile | Modifies files | Tools | Step cap | Returns |
+|---|---|---|---|---|
+| `explore` | no | `read`, `grep`, `glob`, `repo_map`, `ast_search`, `lsp` | 12 | concise findings with `path:line` |
+| `plan` | no | same read-only set | 12 | a structured plan with steps, files and risks |
+| `code` | yes | read-only set plus `write`, `edit`, `shell`, `todo`, `apply_patch`, `ast_edit`, `undo` | 20 | the result of one scoped implementation task |
+| `review` | no | same read-only set | 12 | findings with `path:line` and severity |
+
+Add your own as Markdown files with front-matter (`name`, `description`, `tools`, `model`, `max_steps`) in `~/.config/horizon/agents/` or `<workspace>/.hz/agents/`. A preset naming a tool outside the ceiling is refused and listed.
+
+## Performance
+
+Measured on this tree on 2026-11-09. Environment: x86_64, 8 cores, Linux, Bun 1.2.14, Rust 1.92.0, running as root in a sandbox container. These are single-machine numbers, not a benchmark suite, and they exclude model latency.
+
+| Metric | Value | How it was measured |
+|---|---|---|
+| Headless turn, mock model | 0.173 s median (range 0.164 to 0.182 s) | 10 runs of `printf 'list files\n' \| bin/hzcode` in a fresh `$HOME` and workspace; wall time of the whole process, including kernel spawn, one tool call and its receipt |
+| Kernel self-test | 4 ms for 25 checks | `hz-kernel --selftest --state-dir <tmp>`, wall time |
+| Kernel binary | 1,156,816 bytes (1.1 MiB) | `ls -l kernel/target/release/hz-kernel`, release profile |
+| Idle memory of the chat bar | 85 MB RSS for the Bun process, plus 1 MB for the kernel child | `hzcode --mock` in a PTY, VmRSS from `/proc/<pid>/status` three seconds after the banner; 87 MB after running `/help`, `/files`, `/mode`, `/memory`, `/rewind` and `/sessions` |
+| TypeScript source | 37,827 lines | all `*.ts` under `app/src` (tests live in `app/tests`), comments and blank lines included |
+| Rust source | 5,866 lines (7,070 with inline unit tests) | `kernel/src/*.rs`, counting up to the first `#[cfg(test)]` in each file for the first figure |
+| Runtime dependencies | 0 | `app/package.json` has only `devDependencies` (type definitions and the TypeScript compiler) |
+
+No comparison with other agents is made here, because none was measured on the same machine with the same model.
+
+## Testing and CI
+
+The seven gates run through one entry point, `bash ops/gates.sh`, which CI also calls:
+
+| Gate | What it checks |
+|---|---|
+| `rust-kernel-suite` | `cargo test --locked` |
+| `kernel-selftest` | `hz-kernel --selftest` |
+| `ts-typecheck` | `tsc --noEmit` over the app |
+| `ts-suite` | `bun test` |
+| `e2e-headless-smoke` | a mock turn end to end with receipts |
+| `e2e-budget-rail` | the step budget stops a run with its exit code |
+| `e2e-usage-error` | a bad flag exits with the usage error |
+
+Results from a run on 2026-11-09 on this tree:
+
+- `cd kernel && cargo build --release --locked && cargo test --locked`: 49 unit tests and 50 integration tests pass.
+- `hz-kernel --selftest`: `SELFTEST OK (25 checks)`.
+- `cd app && bun install && bun test`: 1,597 tests in 128 files; 1,589 pass, 8 skip, 0 fail.
+- `bash ops/gates.sh`: all 7 gates pass.
+
+The 8 skips are chmod-based tests that cannot bind when the process runs as root, so they skip by design; the run above was as root. The same suite also runs on hosted CI as a non-root user, where they execute.
+
+The hosted workflow is [`.github/workflows/ci.yml`](./.github/workflows/ci.yml). The e2e gates pin the provider to `mock` under a throwaway `HOME`, so CI uses no keys and no model network access.
+
+## Status and limitations
+
+Pre-release and single-platform. Read this before relying on it.
+
+- **No OS-level sandboxing.** The kernel decides and records; it does not confine. No Landlock ruleset, seccomp filter, network namespace or resource limit is applied to a spawned process, and `sandbox.report` never claims otherwise. A permitted command runs with your user's authority.
+- **Not released.** There is no package, installer, signed binary or auto-update. Build from source.
+- **Live providers.** Live runs have been exercised only against an OpenAI-compatible endpoint (NVIDIA NIM). The Anthropic, OpenAI, Google and Ollama adapters are covered by tests against recorded and mock streams, not by live runs against those vendors.
+- **No benchmarks.** Same-model head-to-head comparisons have not been run. No ranking or token-efficiency claim is made.
+- **Platforms.** Linux x86_64 is the only tested platform. macOS and Windows are untested.
+- **Not wired by default.** Speculative execution exists as code and tests but is off, and a test pins it inert. The guardian is advisory unless `HORIZON_GUARDIAN=enforce`. The language server loop is off until you configure a server. Hashline anchors are opt-in.
+- **Partial.** Per-model tool dialects beyond `apply_patch` (the routing table exists, one dialect ships). The server accepts one client over stdio; there is no socket, TCP or HTTP transport and no SDK. Hook trust gating is still open.
+- **Not started.** Fullscreen TUI renderer; MITM or routed egress proxy (egress decisions are recorded, nothing intercepts traffic); debugger (DAP) tool; episodic and semantic memory tiers and background consolidation (only the instruction-file hierarchy ships); same-model benchmarks.
+- **Tamper-evident, not tamper-proof.** See Features. In `untrusted` mode the guarantees are weaker still.
+
+The authoritative status table is `CURRENT_RUN.md` §5.0, and the implemented-versus-designed map is [`docs/28-implementation-status.md`](./docs/28-implementation-status.md). Many capabilities described in `docs/` (web and desktop apps, IDE bridge, SDKs, plugin marketplace, collaboration, voice) are designs, not shipped code.
+
+## Documentation
+
+Start at [`docs/00-index.md`](./docs/00-index.md).
+
+| Read | For |
+|---|---|
+| [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) | what is implemented, with evidence commands |
+| [`CURRENT_RUN.md`](./CURRENT_RUN.md) | current state, open work and exact continuation steps |
+| [`docs/11-authority-safety.md`](./docs/11-authority-safety.md) | threat model, guard, leases, receipts |
+| [`docs/09-tools.md`](./docs/09-tools.md) | the tool catalogue (designed superset; `/files` shows what is registered) |
+| [`docs/13-tui.md`](./docs/13-tui.md) | the terminal UI |
+| [`docs/14-surfaces.md`](./docs/14-surfaces.md) | headless, server and other surfaces |
+| [`docs/03-hld.md`](./docs/03-hld.md) | high-level architecture |
+| [`docs/31-design-summary.md`](./docs/31-design-summary.md) | the designed capability list (the former long README) |
+| [`AUDIT.md`](./AUDIT.md), [`docs/29-final-audit.md`](./docs/29-final-audit.md) | audits of the design set |
+
+## Contributing
+
+Run the gates before sending a change:
+
+```bash
+(cd kernel && cargo build --release --locked && cargo test --locked)
+(cd app && bun install && bun test)
+bash ops/gates.sh
+git checkout -- app/bun.lock   # bun install may rewrite the lockfile
+```
+
+Claims in documentation should cite a command that produces them; `docs/28-implementation-status.md` shows the convention. The interface shared by both runtimes is `app/src/contracts.ts`; change it in both implementations together. There is no separate contributing guide or security policy yet.
+
+## Licence
+
+Not yet chosen. The repository has no `LICENSE` file, so no licence is granted until one is added.
