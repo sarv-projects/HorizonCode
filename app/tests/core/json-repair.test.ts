@@ -240,3 +240,15 @@ describe("parseToolArguments policy", () => {
     expect(out.repairs?.[0]).toContain("limit");
   });
 });
+
+describe("own-property keys", () => {
+  test('a "__proto__" key is an own property, as with JSON.parse, and never swaps the prototype', () => {
+    const out = repairJson("{'__proto__': {'polluted': 1}, path: 'a'}");
+    expect(out.ok).toBe(true);
+    const value = out.value as Record<string, unknown>;
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(value, "__proto__")).toBe(true);
+    expect((value as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+});

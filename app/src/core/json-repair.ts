@@ -139,7 +139,8 @@ class Repairer {
         this.note("closed unterminated object");
         return out;
       }
-      out[key] = value;
+      // Own property even for "__proto__", matching JSON.parse (no prototype swap).
+      Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
       this.skipWs();
       if (this.eof()) {
         this.truncated = true;
