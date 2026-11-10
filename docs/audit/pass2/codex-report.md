@@ -1,8 +1,8 @@
 # Codex — Deep Code-Organization Tour
 
-Repo: `/data/home/forge/repo-tour/codex`  |  Org `openai`  |  Rust  |  "Lightweight coding agent that runs in your terminal"
+Repo: [`openai/codex`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053)  |  Org `openai`  |  Rust  |  "Lightweight coding agent that runs in your terminal"
 Tour commit: `ddd1812a51f4aded35c3ec5446672474d5cb546b` (2026-11-06, "Carry targeted moderation decisions on final-answer messages (#59842)")
-All paths below are ABSOLUTE under `/data/home/forge/repo-tour/codex`.
+All paths below are ABSOLUTE under [`openai/codex`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053).
 
 ---
 
@@ -10,22 +10,22 @@ All paths below are ABSOLUTE under `/data/home/forge/repo-tour/codex`.
 
 Codex CLI is OpenAI's open-source coding agent that runs locally in the terminal. It is a **polyglot monorepo**:
 
-- **Rust** is the heart — a Cargo workspace of ~130 member crates under `codex-rs/` (`/data/home/forge/repo-tour/codex/codex-rs/Cargo.toml`).
+- **Rust** is the heart — a Cargo workspace of ~130 member crates under `codex-rs/` ([`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml)).
 - **TypeScript/Node** thin wrapper + SDK: `codex-cli/` (npm package `@openai/codex`) and `sdk/typescript/`.
 - **Python** SDK + runtime: `sdk/python/`, `sdk/python-runtime/`.
 - **Bazel** build alongside Cargo: root `BUILD.bazel`, `MODULE.bazel`, `defs.bzl`, `bazel/`, `.bazelrc`.
 - **Nix** flake: `flake.nix`, `flake.lock`.
 - **just** as the task runner: `justfile` (working dir `codex-rs`).
 
-The README (`/data/home/forge/repo-tour/codex/README.md#L1-L8`) frames three surfaces: **Codex CLI** (local terminal), **Codex IDE** (VS Code/Cursor/Windsurf), and the **Codex app** (`codex app` desktop / cloud). The same repo backs all of them, which explains crates like `app-server*`, `cloud-tasks*`, `plugin*`.
+The README ([`codex/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/README.md#L1-L8)) frames three surfaces: **Codex CLI** (local terminal), **Codex IDE** (VS Code/Cursor/Windsurf), and the **Codex app** (`codex app` desktop / cloud). The same repo backs all of them, which explains crates like `app-server*`, `cloud-tasks*`, `plugin*`.
 
-Workspace package metadata (`/data/home/forge/repo-tour/codex/codex-rs/Cargo.toml#L174-L181`): version `0.0.0`, edition **2024**, Apache-2.0. Lints are strict: `unwrap_used`/`expect_used` denied, plus a large `clippy` deny list (`#L594-L633`).
+Workspace package metadata ([`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml#L174-L181)): version `0.0.0`, edition **2024**, Apache-2.0. Lints are strict: `unwrap_used`/`expect_used` denied, plus a large `clippy` deny list (`#L594-L633`).
 
 ---
 
 ## 2. Top-level map
 
-Root entries (`/data/home/forge/repo-tour/codex`):
+Root entries ([`openai/codex`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053)):
 
 | Entry | Role |
 |---|---|
@@ -46,15 +46,15 @@ Root entries (`/data/home/forge/repo-tour/codex`):
 | `CHANGELOG.md`, `SECURITY.md`, `LICENSE`, `NOTICE` | Meta |
 | `flake.nix`, `flake.lock` | Nix dev env |
 
-`docs/` index (`/data/home/forge/repo-tour/codex/docs`): `getting-started.md`, `install.md`, `config.md`, `example-config.md`, `authentication.md`, `sandbox.md`, `exec.md`, `execpolicy.md`, `slash_commands.md`, `skills.md`, `agents_md.md`, `contributing.md`, `license.md`, `CLA.md`, `open-source-fund.md`.
+`docs/` index ([`codex/docs/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/docs)): `getting-started.md`, `install.md`, `config.md`, `example-config.md`, `authentication.md`, `sandbox.md`, `exec.md`, `execpolicy.md`, `slash_commands.md`, `skills.md`, `agents_md.md`, `contributing.md`, `license.md`, `CLA.md`, `open-source-fund.md`.
 
-The `justfile` (`/data/home/forge/repo-tour/codex/justfile`) is the canonical dev entry: `just codex` → `cargo run --bin codex`; `just test` (nextest), `just bench`, `just bazel-codex`, `write-config-schema`, `write-app-server-schema`, `log` (SQLite log tail), plus Bazel/E2E variants.
+The `justfile` ([`codex/justfile`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/justfile)) is the canonical dev entry: `just codex` → `cargo run --bin codex`; `just test` (nextest), `just bench`, `just bazel-codex`, `write-config-schema`, `write-app-server-schema`, `log` (SQLite log tail), plus Bazel/E2E variants.
 
 ---
 
 ## 3. Crate graph + responsibilities
 
-The workspace declares ~130 members (`/data/home/forge/repo-tour/codex/codex-rs/Cargo.toml#L2-L171`). Grouped by role:
+The workspace declares ~130 members ([`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml#L2-L171)). Grouped by role:
 
 ### Core agent / session
 - **`core`** (`codex-core`) — the agent engine: session, turn loop, context manager, client (model API), tools, sandboxing glue, compaction, realtime, MCP glue. The largest crate.
@@ -148,9 +148,9 @@ The workspace declares ~130 members (`/data/home/forge/repo-tour/codex/codex-rs/
 ## 4. Entry points
 
 ### The primary `codex` binary
-Built by the **`cli`** crate: `/data/home/forge/repo-tour/codex/codex-rs/cli/Cargo.toml` declares `default-run = "codex"`, `[[bin]] name = "codex" path = "src/main.rs"`, and a second bin `logs_client` (`src/bin/logs_client.rs`). It also exposes `lib codex_cli` (`src/lib.rs`).
+Built by the **`cli`** crate: [`codex/codex-rs/cli/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/Cargo.toml) declares `default-run = "codex"`, `[[bin]] name = "codex" path = "src/main.rs"`, and a second bin `logs_client` (`src/bin/logs_client.rs`). It also exposes `lib codex_cli` (`src/lib.rs`).
 
-`/data/home/forge/repo-tour/codex/codex-rs/cli/src/main.rs` is the subcommand router. It uses `clap` + `codex-arg0` (`arg0_dispatch_or_else`) so one executable can masquerade as the Linux sandbox helper too. Declared `Subcommand` variants (`main.rs#L145-L246`):
+[`codex/codex-rs/cli/src/main.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src/main.rs) is the subcommand router. It uses `clap` + `codex-arg0` (`arg0_dispatch_or_else`) so one executable can masquerade as the Linux sandbox helper too. Declared `Subcommand` variants (`main.rs#L145-L246`):
 
 - `Exec` (non-interactive run) and `Review`
 - `Login` / `Logout`
@@ -161,17 +161,17 @@ Built by the **`cli`** crate: `/data/home/forge/repo-tour/codex/codex-rs/cli/Car
 - `Cloud`, `ResponsesApiProxy`, `StdioToUds`, `ExecServer`, `Features`
 - plus `Agents`, `TcpTunnel`
 
-CLI modules under `/data/home/forge/repo-tour/codex/codex-rs/cli/src`: `app_cmd.rs`, `cloud_config.rs`, `config_override_args.rs`, `daemon_install.rs`, `daemon_telemetry.rs`, `desktop_app`, `doctor.rs`, `login.rs`, `mcp_cmd.rs`, `mcp_login.rs`, `migrate_nfs_db.rs`, `migrate_rollouts.rs`, `plugin_cmd.rs`, `queue_cmd.rs`, `remote_control_cmd.rs`, `sandbox_setup.rs`, `sandbox_uninstall.rs`, `state_db_recovery.rs`, `wsl_paths.rs`, `debug_sandbox.rs`.
+CLI modules under [`codex/codex-rs/cli/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src): `app_cmd.rs`, `cloud_config.rs`, `config_override_args.rs`, `daemon_install.rs`, `daemon_telemetry.rs`, `desktop_app`, `doctor.rs`, `login.rs`, `mcp_cmd.rs`, `mcp_login.rs`, `migrate_nfs_db.rs`, `migrate_rollouts.rs`, `plugin_cmd.rs`, `queue_cmd.rs`, `remote_control_cmd.rs`, `sandbox_setup.rs`, `sandbox_uninstall.rs`, `state_db_recovery.rs`, `wsl_paths.rs`, `debug_sandbox.rs`.
 
 macOS/Windows allocator & desktop app: `main.rs#L205-L215` selects `tikv_jemallocator` on Linux musl and `mod desktop_app` on mac/windows.
 
 ### npm wrapper
-`/data/home/forge/repo-tour/codex/codex-cli/package.json` is package `@openai/codex` with `bin.codex = bin/codex.js`. `/data/home/forge/repo-tour/codex/codex-cli/bin/codex.js` detects platform/arch, maps to a `PLATFORM_PACKAGE_BY_TARGET` npm sub-package (e.g. `@openai/codex-linux-x64`), and `spawn`s the native binary.
+[`codex/codex-cli/package.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/package.json) is package `@openai/codex` with `bin.codex = bin/codex.js`. [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) detects platform/arch, maps to a `PLATFORM_PACKAGE_BY_TARGET` npm sub-package (e.g. `@openai/codex-linux-x64`), and `spawn`s the native binary.
 
 ### Other workspace binaries (`[[bin]]`)
-- `codex-tui` (interactive TUI) and `md-events` — `/data/home/forge/repo-tour/codex/codex-rs/tui/Cargo.toml`
-- `codex-exec` — `/data/home/forge/repo-tour/codex/codex-rs/exec/Cargo.toml`
-- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` — `/data/home/forge/repo-tour/codex/codex-rs/app-server/Cargo.toml`
+- `codex-tui` (interactive TUI) and `md-events` — [`codex/codex-rs/tui/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/Cargo.toml)
+- `codex-exec` — [`codex/codex-rs/exec/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/Cargo.toml)
+- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` — [`codex/codex-rs/app-server/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/Cargo.toml)
 - `codex-exec-server` (exec-server-cli), `codex-file-search`, `codex-responses-api-proxy`, `codex-network-proxy`
 - `apply_patch` (standalone), `codex-linux-sandbox` + `bwrap` (linux-sandbox), `codex-windows-sandbox-setup` / `codex-command-runner` / `codex-windows-managed-deny-probe`, `codex-windows-sandbox-service`
 - `codex-code-mode-host`, `codex-voice-host`, `codex-message-board-mcp`, `codex-stdio-to-uds`, `codex-plugin-test-helper`, `codex-write-config-schema`
@@ -180,7 +180,7 @@ macOS/Windows allocator & desktop app: `main.rs#L205-L215` selects `tikv_jemallo
 
 ## 5. Core subsystems with file paths
 
-All under `/data/home/forge/repo-tour/codex/codex-rs/core/src`.
+All under [`codex/codex-rs/core/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src).
 
 ### Agent engine (turn loop)
 Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/`.
@@ -203,9 +203,9 @@ Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/
 ## 4. Entry points
 
 ### The primary `codex` binary
-Built by the **`cli`** crate: `/data/home/forge/repo-tour/codex/codex-rs/cli/Cargo.toml` declares `default-run = "codex"`, `[[bin]] name = "codex" path = "src/main.rs"`, and a second bin `logs_client` (`src/bin/logs_client.rs`). It also exposes `lib codex_cli` (`src/lib.rs`).
+Built by the **`cli`** crate: [`codex/codex-rs/cli/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/Cargo.toml) declares `default-run = "codex"`, `[[bin]] name = "codex" path = "src/main.rs"`, and a second bin `logs_client` (`src/bin/logs_client.rs`). It also exposes `lib codex_cli` (`src/lib.rs`).
 
-`/data/home/forge/repo-tour/codex/codex-rs/cli/src/main.rs` is the subcommand router. It uses `clap` + `codex-arg0` (`arg0_dispatch_or_else`) so one executable can masquerade as the Linux sandbox helper too. Declared `Subcommand` variants (`main.rs#L145-L246`):
+[`codex/codex-rs/cli/src/main.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src/main.rs) is the subcommand router. It uses `clap` + `codex-arg0` (`arg0_dispatch_or_else`) so one executable can masquerade as the Linux sandbox helper too. Declared `Subcommand` variants (`main.rs#L145-L246`):
 
 - `Exec` (non-interactive run) and `Review`
 - `Login` / `Logout`
@@ -216,17 +216,17 @@ Built by the **`cli`** crate: `/data/home/forge/repo-tour/codex/codex-rs/cli/Car
 - `Cloud`, `ResponsesApiProxy`, `StdioToUds`, `ExecServer`, `Features`
 - plus `Agents`, `TcpTunnel`
 
-CLI modules under `/data/home/forge/repo-tour/codex/codex-rs/cli/src`: `app_cmd.rs`, `cloud_config.rs`, `config_override_args.rs`, `daemon_install.rs`, `daemon_telemetry.rs`, `desktop_app`, `doctor.rs`, `login.rs`, `mcp_cmd.rs`, `mcp_login.rs`, `migrate_nfs_db.rs`, `migrate_rollouts.rs`, `plugin_cmd.rs`, `queue_cmd.rs`, `remote_control_cmd.rs`, `sandbox_setup.rs`, `sandbox_uninstall.rs`, `state_db_recovery.rs`, `wsl_paths.rs`, `debug_sandbox.rs`.
+CLI modules under [`codex/codex-rs/cli/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src): `app_cmd.rs`, `cloud_config.rs`, `config_override_args.rs`, `daemon_install.rs`, `daemon_telemetry.rs`, `desktop_app`, `doctor.rs`, `login.rs`, `mcp_cmd.rs`, `mcp_login.rs`, `migrate_nfs_db.rs`, `migrate_rollouts.rs`, `plugin_cmd.rs`, `queue_cmd.rs`, `remote_control_cmd.rs`, `sandbox_setup.rs`, `sandbox_uninstall.rs`, `state_db_recovery.rs`, `wsl_paths.rs`, `debug_sandbox.rs`.
 
 macOS/Windows allocator & desktop app: `main.rs#L205-L215` selects `tikv_jemallocator` on Linux musl and `mod desktop_app` on mac/windows.
 
 ### npm wrapper
-`/data/home/forge/repo-tour/codex/codex-cli/package.json` is package `@openai/codex` with `bin.codex = bin/codex.js`. `/data/home/forge/repo-tour/codex/codex-cli/bin/codex.js` detects platform/arch, maps to a `PLATFORM_PACKAGE_BY_TARGET` npm sub-package (e.g. `@openai/codex-linux-x64`), and `spawn`s the native binary.
+[`codex/codex-cli/package.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/package.json) is package `@openai/codex` with `bin.codex = bin/codex.js`. [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) detects platform/arch, maps to a `PLATFORM_PACKAGE_BY_TARGET` npm sub-package (e.g. `@openai/codex-linux-x64`), and `spawn`s the native binary.
 
 ### Other workspace binaries (`[[bin]]`)
-- `codex-tui` (interactive TUI) and `md-events` — `/data/home/forge/repo-tour/codex/codex-rs/tui/Cargo.toml`
-- `codex-exec` — `/data/home/forge/repo-tour/codex/codex-rs/exec/Cargo.toml`
-- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` — `/data/home/forge/repo-tour/codex/codex-rs/app-server/Cargo.toml`
+- `codex-tui` (interactive TUI) and `md-events` — [`codex/codex-rs/tui/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/Cargo.toml)
+- `codex-exec` — [`codex/codex-rs/exec/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/Cargo.toml)
+- `codex-app-server` + `exec-server` + `codex-app-server-test-notify-capture` — [`codex/codex-rs/app-server/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/Cargo.toml)
 - `codex-exec-server` (exec-server-cli), `codex-file-search`, `codex-responses-api-proxy`, `codex-network-proxy`
 - `apply_patch` (standalone), `codex-linux-sandbox` + `bwrap` (linux-sandbox), `codex-windows-sandbox-setup` / `codex-command-runner` / `codex-windows-managed-deny-probe`, `codex-windows-sandbox-service`
 - `codex-code-mode-host`, `codex-voice-host`, `codex-message-board-mcp`, `codex-stdio-to-uds`, `codex-plugin-test-helper`, `codex-write-config-schema`
@@ -235,7 +235,7 @@ macOS/Windows allocator & desktop app: `main.rs#L205-L215` selects `tikv_jemallo
 
 ## 5. Core subsystems with file paths
 
-All under `/data/home/forge/repo-tour/codex/codex-rs/core/src`.
+All under [`codex/codex-rs/core/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src).
 
 ### Agent engine (turn loop)
 Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/`.
@@ -255,9 +255,9 @@ Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/
 
 ### Tool dispatch + built-in tools
 - Registry/router: `tools/mod.rs`, `tools/registry.rs`, `tools/router.rs`, `tools/orchestrator.rs`, `tools/parallel.rs`, `tools/lifecycle.rs`, `tools/hosted_spec.rs`, `tools/spec_plan.rs`, `tools/tool_namespaces_info.rs`.
-- Handler implementations: `/data/home/forge/repo-tour/codex/codex-rs/core/src/tools/handlers/` — `apply_patch.rs`, `plan.rs` (update_plan), `view_image.rs`, `request_user_input.rs`, `request_permissions.rs`, `tool_search.rs`, `multi_agents.rs` / `multi_agents_v2.rs`, `mcp.rs` + `mcp_resource.rs`, `unified_exec.rs`, `sleep.rs`, `current_time.rs`, `get_context_remaining.rs`, `new_context_window.rs`, `extension_tools.rs`, `dynamic.rs`, `list_available_plugins_to_install.rs`, `request_plugin_install.rs`, `send_message_to_user_async.rs`, `wait_for_environment.rs`, `test_sync.rs`.
+- Handler implementations: [`codex/codex-rs/core/src/tools/handlers/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/handlers) — `apply_patch.rs`, `plan.rs` (update_plan), `view_image.rs`, `request_user_input.rs`, `request_permissions.rs`, `tool_search.rs`, `multi_agents.rs` / `multi_agents_v2.rs`, `mcp.rs` + `mcp_resource.rs`, `unified_exec.rs`, `sleep.rs`, `current_time.rs`, `get_context_remaining.rs`, `new_context_window.rs`, `extension_tools.rs`, `dynamic.rs`, `list_available_plugins_to_install.rs`, `request_plugin_install.rs`, `send_message_to_user_async.rs`, `wait_for_environment.rs`, `test_sync.rs`.
 - Runtime executors: `tools/runtimes/apply_patch.rs`, `tools/runtimes/unified_exec.rs`.
-- Tool metadata/JSON schema types live in `codex-tools` (`/data/home/forge/repo-tour/codex/codex-rs/tools/src`): `tool_definition.rs`, `tool_spec.rs`, `json_schema.rs`, `function_call_error.rs`, `tool_executor.rs`, `responses_api.rs`, `output_schema.rs`, `code_mode.rs`.
+- Tool metadata/JSON schema types live in `codex-tools` ([`codex/codex-rs/tools/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tools/src)): `tool_definition.rs`, `tool_spec.rs`, `json_schema.rs`, `function_call_error.rs`, `tool_executor.rs`, `responses_api.rs`, `output_schema.rs`, `code_mode.rs`.
 
 **Key built-in tools and where implemented:**
 - **shell / exec** — `core/src/exec.rs` (spawning + sandboxed exec), `shell-command` crate, `tools/handlers/shell_spec.rs`.
@@ -269,7 +269,7 @@ Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/
 - **request_user_input / permissions / MCP tools / multi-agent tools / code-mode** — as listed above.
 
 ### Prompt construction
-- Prompts crate: `/data/home/forge/repo-tour/codex/codex-rs/prompts/src` — `model_instructions.rs` (renders base instructions from model metadata), `compact.rs`, `guardian_instructions.rs`, `multi_agent_instructions.rs`, `permissions_instructions.rs`, `realtime.rs`, `review_exit.rs`, `review_request.rs`, `update_plan_instructions.rs`, `model_messages/`.
+- Prompts crate: [`codex/codex-rs/prompts/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/src) — `model_instructions.rs` (renders base instructions from model metadata), `compact.rs`, `guardian_instructions.rs`, `multi_agent_instructions.rs`, `permissions_instructions.rs`, `realtime.rs`, `review_exit.rs`, `review_request.rs`, `update_plan_instructions.rs`, `model_messages/`.
 - Conversation/context assembly: `core/src/context/`, `core/src/context_manager/` (`history.rs`, `normalize.rs`, `sampling.rs`, `updates.rs`, `image_availability.rs`), `core/src/agents_md.rs` + `agents_md_manager.rs` (AGENTS.md ingestion).
 
 ### Session/state + rollout persistence
@@ -279,22 +279,22 @@ Dirs: `agent/`, `session/`, `tasks/`, `state/`, `thread_manager/`, `turn_timing/
 - Compaction: `core/src/compact.rs` + the `compact_*` family (`compact_remote_v2*.rs`, `compact_token_budget.rs`, `compact_model_fallback.rs`).
 
 ### Sandboxing + approvals
-- Orchestration crate `codex-sandboxing` (`/data/home/forge/repo-tour/codex/codex-rs/sandboxing/src`): `seatbelt.rs` + `.sbpl` policy files (macOS), `landlock.rs`, `bwrap.rs`, `linux_pid_namespace.rs`, `manager.rs`, `policy_transforms.rs`, `spawn.rs`, `denial.rs`, `violation.rs`, `windows.rs`, `windows_mxc.rs`, `seatbelt_daemon.rs`.
+- Orchestration crate `codex-sandboxing` ([`codex/codex-rs/sandboxing/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src)): `seatbelt.rs` + `.sbpl` policy files (macOS), `landlock.rs`, `bwrap.rs`, `linux_pid_namespace.rs`, `manager.rs`, `policy_transforms.rs`, `spawn.rs`, `denial.rs`, `violation.rs`, `windows.rs`, `windows_mxc.rs`, `seatbelt_daemon.rs`.
 - Linux launcher crate `codex-linux-sandbox` (`linux_run_main.rs`, `seccomp.rs`, `launcher.rs`, `proxy_lifecycle.rs`, `wslg.rs`, `fd_mount.rs`, `bundled_bwrap.rs`).
 - Windows: `windows-sandbox-rs` (AppContainer ACLs, WFP, provisioning) + `windows-sandbox-service`.
 - Approvals: `core/src/tools/approvals.rs`, `core/src/tools/sandboxing.rs`, `core/src/tools/network_approval.rs`, `utils/approval-presets`; policy engine `codex-execpolicy`.
 
 ### TUI
-`codex-tui` (`/data/home/forge/repo-tour/codex/codex-rs/tui/src`): `app.rs`, `cli.rs`, `chatwidget.rs` + `chatwidget/`, `bottom_pane/`, `status/`, `status_indicator_widget/`, `streaming/`, `transcript_view/`, `transcript_transcript*`, `diff_render.rs`, `config_panel/`, `theme_picker.rs`, `slash_command.rs`, `custom_terminal.rs`, `terminal_hyperlinks/`, `ui_tree.rs`, `app_server_session.rs`, `app_server_connection.rs`.
+`codex-tui` ([`codex/codex-rs/tui/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/src)): `app.rs`, `cli.rs`, `chatwidget.rs` + `chatwidget/`, `bottom_pane/`, `status/`, `status_indicator_widget/`, `streaming/`, `transcript_view/`, `transcript_transcript*`, `diff_render.rs`, `config_panel/`, `theme_picker.rs`, `slash_command.rs`, `custom_terminal.rs`, `terminal_hyperlinks/`, `ui_tree.rs`, `app_server_session.rs`, `app_server_connection.rs`.
 
 ### Config
-`codex-config` (`/data/home/forge/repo-tour/codex/codex-rs/config/src`): `config_toml.rs`, `loader/`, `merge.rs`, `overrides.rs`, `requirements_layers/`, `permissions_toml.rs`, `project_trust.rs`, `model_provider_defaults.rs`, `mcp_ema.rs`, `skills_config.rs`, `tui_keymap.rs`, `strict_config.rs`; schema in `codex-config-schema`.
+`codex-config` ([`codex/codex-rs/config/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/config/src)): `config_toml.rs`, `loader/`, `merge.rs`, `overrides.rs`, `requirements_layers/`, `permissions_toml.rs`, `project_trust.rs`, `model_provider_defaults.rs`, `mcp_ema.rs`, `skills_config.rs`, `tui_keymap.rs`, `strict_config.rs`; schema in `codex-config-schema`.
 
 ### MCP client + server
-`codex-mcp` (`/data/home/forge/repo-tour/codex/codex-rs/codex-mcp/src`): `connection_manager.rs` + `connection_pool.rs`, `auth.rs`, `catalog.rs`, `resource_client.rs`, `server.rs`, `codex_apps.rs`, `rmcp_client.rs`, `proxy`/`runtime`. Server side in `message-board-mcp`, `ext/mcp`; core glue `core/src/mcp.rs`, `core/src/mcp_tool_call.rs`, `core/src/session/mcp.rs`.
+`codex-mcp` ([`codex/codex-rs/codex-mcp/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/codex-mcp/src)): `connection_manager.rs` + `connection_pool.rs`, `auth.rs`, `catalog.rs`, `resource_client.rs`, `server.rs`, `codex_apps.rs`, `rmcp_client.rs`, `proxy`/`runtime`. Server side in `message-board-mcp`, `ext/mcp`; core glue `core/src/mcp.rs`, `core/src/mcp_tool_call.rs`, `core/src/session/mcp.rs`.
 
 ### Auth / login
-`codex-login` (`/data/home/forge/repo-tour/codex/codex-rs/login/src`): `AuthManager`, API-key/ChatGPT OAuth/device-code flows; `codex-keyring-store`, `codex-secrets`, `aws-auth`, `codex-websocket-auth`, `codex-workload-identity`.
+`codex-login` ([`codex/codex-rs/login/src/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/login/src)): `AuthManager`, API-key/ChatGPT OAuth/device-code flows; `codex-keyring-store`, `codex-secrets`, `aws-auth`, `codex-websocket-auth`, `codex-workload-identity`.
 
 ### LSP / IDE / app-server
 `codex-app-server` (`app-server/src`: `message_processor.rs`, `request_processors.rs`, `thread_state.rs`, `config_manager*.rs`, `mcp_refresh.rs`, `transport.rs`, `server_request_error.rs`, `code_mode_host.rs`, `fs_watch.rs`, `fuzzy_file_search.rs`). Protocol in `codex-app-server-protocol` (`rpc.rs`, `protocol/`, `export.rs`). IDE clients use the JSON-RPC surface.
@@ -375,46 +375,46 @@ A formal extension API (`ext/extension-api`) with ~18 built-in extensions (`ext/
 ## 9. Most important absolute paths
 
 Build/workspace:
-- `/data/home/forge/repo-tour/codex/codex-rs/Cargo.toml` — workspace manifest (member list + deps)
-- `/data/home/forge/repo-tour/codex/justfile` — dev task runner
-- `/data/home/forge/repo-tour/codex/README.md`, `/data/home/forge/repo-tour/codex/MODULE.bazel`, `/data/home/forge/repo-tour/codex/BUILD.bazel`, `/data/home/forge/repo-tour/codex/defs.bzl`
-- `/data/home/forge/repo-tour/codex/package.json`, `/data/home/forge/repo-tour/codex/pnpm-workspace.yaml`
+- [`codex/codex-rs/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/Cargo.toml) — workspace manifest (member list + deps)
+- [`codex/justfile`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/justfile) — dev task runner
+- [`codex/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/README.md), [`codex/MODULE.bazel`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/MODULE.bazel), [`codex/BUILD.bazel`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/BUILD.bazel), [`codex/defs.bzl`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/defs.bzl)
+- [`codex/package.json`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/package.json), [`codex/pnpm-workspace.yaml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/pnpm-workspace.yaml)
 
 Entry points:
-- `/data/home/forge/repo-tour/codex/codex-rs/cli/src/main.rs` — CLI router
-- `/data/home/forge/repo-tour/codex/codex-rs/cli/Cargo.toml` — `codex` + `logs_client` bins
-- `/data/home/forge/repo-tour/codex/codex-cli/bin/codex.js` — npm launcher
+- [`codex/codex-rs/cli/src/main.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/src/main.rs) — CLI router
+- [`codex/codex-rs/cli/Cargo.toml`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/cli/Cargo.toml) — `codex` + `logs_client` bins
+- [`codex/codex-cli/bin/codex.js`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-cli/bin/codex.js) — npm launcher
 
 Core engine:
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/lib.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/client.rs` — model client / Responses API
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/session/session.rs` — session
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/session/turn.rs` — turn loop
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/tools/router.rs` — tool dispatch
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/exec.rs` — sandboxed exec
-- `/data/home/forge/repo-tour/codex/codex-rs/core/src/tools/handlers/apply_patch.rs`, `.../plan.rs`, `.../view_image.rs`, `.../unified_exec.rs`
+- [`codex/codex-rs/core/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/lib.rs)
+- [`codex/codex-rs/core/src/client.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/client.rs) — model client / Responses API
+- [`codex/codex-rs/core/src/session/session.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/session.rs) — session
+- [`codex/codex-rs/core/src/session/turn.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/turn.rs) — turn loop
+- [`codex/codex-rs/core/src/tools/router.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/router.rs) — tool dispatch
+- [`codex/codex-rs/core/src/exec.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/exec.rs) — sandboxed exec
+- [`codex/codex-rs/core/src/tools/handlers/apply_patch.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/tools/handlers/apply_patch.rs), `.../plan.rs`, `.../view_image.rs`, `.../unified_exec.rs`
 
 Subsystems:
-- `/data/home/forge/repo-tour/codex/codex-rs/sandboxing/src/seatbelt.rs`, `.../landlock.rs`, `.../bwrap.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/linux-sandbox/src/linux_run_main.rs`, `.../seccomp.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/windows-sandbox-rs/src/lib.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/execpolicy/src/lib.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/codex-mcp/src/connection_manager.rs`, `.../server.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/app-server/src/message_processor.rs`, `.../main.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/app-server-protocol/src/rpc.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/tui/src/app.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/config/src/config_toml.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/state/src/sqlite.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/rollout/src/lib.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/login/src/lib.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/prompts/src/model_instructions.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/model-provider/src/provider.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/otel/src/lib.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/tools/src/tool_definition.rs`
-- `/data/home/forge/repo-tour/codex/codex-rs/exec/src/lib.rs`
+- [`codex/codex-rs/sandboxing/src/seatbelt.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/seatbelt.rs), `.../landlock.rs`, `.../bwrap.rs`
+- [`codex/codex-rs/linux-sandbox/src/linux_run_main.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/linux-sandbox/src/linux_run_main.rs), `.../seccomp.rs`
+- [`codex/codex-rs/windows-sandbox-rs/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/windows-sandbox-rs/src/lib.rs)
+- [`codex/codex-rs/execpolicy/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/lib.rs)
+- [`codex/codex-rs/codex-mcp/src/connection_manager.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/codex-mcp/src/connection_manager.rs), `.../server.rs`
+- [`codex/codex-rs/app-server/src/message_processor.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/src/message_processor.rs), `.../main.rs`
+- [`codex/codex-rs/app-server-protocol/src/rpc.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol/src/rpc.rs)
+- [`codex/codex-rs/tui/src/app.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tui/src/app.rs)
+- [`codex/codex-rs/config/src/config_toml.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/config/src/config_toml.rs)
+- [`codex/codex-rs/state/src/sqlite.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/state/src/sqlite.rs)
+- [`codex/codex-rs/rollout/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/rollout/src/lib.rs)
+- [`codex/codex-rs/login/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/login/src/lib.rs)
+- [`codex/codex-rs/prompts/src/model_instructions.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/src/model_instructions.rs)
+- [`codex/codex-rs/model-provider/src/provider.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/model-provider/src/provider.rs)
+- [`codex/codex-rs/otel/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/otel/src/lib.rs)
+- [`codex/codex-rs/tools/src/tool_definition.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/tools/src/tool_definition.rs)
+- [`codex/codex-rs/exec/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/src/lib.rs)
 
 Docs:
-- `/data/home/forge/repo-tour/codex/docs/config.md`, `/data/home/forge/repo-tour/codex/docs/sandbox.md`, `/data/home/forge/repo-tour/codex/docs/exec.md`, `/data/home/forge/repo-tour/codex/docs/execpolicy.md`, `/data/home/forge/repo-tour/codex/docs/authentication.md`, `/data/home/forge/repo-tour/codex/docs/skills.md`
+- [`codex/docs/config.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/docs/config.md), [`codex/docs/sandbox.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/docs/sandbox.md), [`codex/docs/exec.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/docs/exec.md), [`codex/docs/execpolicy.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/docs/execpolicy.md), [`codex/docs/authentication.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/docs/authentication.md), [`codex/docs/skills.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/docs/skills.md)
 
 — End of tour —
 ## 7. Notable / unique subsystems

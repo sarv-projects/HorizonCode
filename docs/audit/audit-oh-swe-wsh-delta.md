@@ -10,9 +10,9 @@ Repo roots
 
 | Short name | Path | HEAD | Earlier report |
 |---|---|---|---|
-| OpenHands | `/data/home/forge/repo-tour/OpenHands` | `56342def7820ebe26218f24a407105394d458fbb` (2026-11-06) | `/tmp/deep-openhands-report.md` |
-| SWE-agent | `/data/home/forge/repo-tour/SWE-agent` | 436 files; 100 `.py`, 61 yaml, 15 tool bundles | `/tmp/deep-sweagent-aci-report.md` |
-| wshobson | `/data/home/forge/repo-tour/wshobson-agents` | 92 plugins (79 with agents); 202 agent `.md`, 185 `SKILL.md`, 105 command `.md` | `/tmp/deep-wshobson-report.md` |
+| OpenHands | `OpenHands` (repo not cloned, path not verified) | `56342def7820ebe26218f24a407105394d458fbb` (2026-11-06) | `/tmp/deep-openhands-report.md` |
+| SWE-agent | `SWE-agent` (repo not cloned, path not verified) | 436 files; 100 `.py`, 61 yaml, 15 tool bundles | `/tmp/deep-sweagent-aci-report.md` |
+| wshobson | `wshobson-agents` (repo not cloned, path not verified) | 92 plugins (79 with agents); 202 agent `.md`, 185 `SKILL.md`, 105 command `.md` | `/tmp/deep-wshobson-report.md` |
 | OpenHands | (above) | 2860 files; 85 `.md`, 10 contributor skills, 30 feature-map files | `/tmp/deep-openhands-report.md` |
 
 Status: COMPLETE (2026-11-06). Section 0 records exactly what was and was not read.
@@ -46,7 +46,7 @@ output that the harness strips before the model sees them. Three tokens, three c
 ###SWE-AGENT-EXIT-FORFEIT###
 ```
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L219-L221`
+`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified)
 
 ```python
 RETRY_WITH_OUTPUT_TOKEN = "###SWE-AGENT-RETRY-WITH-OUTPUT###"
@@ -54,7 +54,7 @@ RETRY_WITHOUT_OUTPUT_TOKEN = "###SWE-AGENT-RETRY-WITHOUT-OUTPUT###"
 EXIT_FORFEIT_TOKEN = "###SWE-AGENT-EXIT-FORFEIT###"
 ```
 
-Dispatched in `handle_action` (`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L995-L1002`):
+Dispatched in `handle_action` (`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified)):
 
 ```python
 if RETRY_WITH_OUTPUT_TOKEN in step.observation:
@@ -67,7 +67,7 @@ elif EXIT_FORFEIT_TOKEN in step.observation:
     raise _ExitForfeit()
 ```
 
-The semantics (in `forward_with_handling`, `file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L1142-L1159`):
+The semantics (in `forward_with_handling`, `SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified)):
 `RETRY_WITH_OUTPUT` re-queries the model **with** the (token-stripped) tool output as a normal
 observation; `RETRY_WITHOUT_OUTPUT` silently re-queries **without** adding anything — the erroneous
 turn never enters the history; `EXIT_FORFEIT` terminates and triggers autosubmission. The tool
@@ -89,7 +89,7 @@ stripped from the durable record's model-visible projection while remaining in t
 The agent never just dies. For a catalogue of exception classes the loop instead *finalises the
 work product* and returns a scored-comparable submission:
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L1154-L1218`
+`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified)
 
 ```python
 except _ExitForfeit:            -> "exit_forfeit"
@@ -105,7 +105,7 @@ except Exception:               -> "exit_error"
                                    -> "exit_format"
 ```
 
-`attempt_autosubmission_after_error` (`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L823-L868`)
+`attempt_autosubmission_after_error` (`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified))
 re-runs `git add -A && git diff --cached > /root/model.patch` in the container, and if the container
 is already dead it falls back to the **`diff` recorded in the last trajectory step's `state`**
 (line 840-848: `if "diff" not in last_trajectory_step["state"]: ... return`). Two nested salvage
@@ -117,9 +117,9 @@ termination reason should be an enumerated, typed field, not a string in a log l
 #### 1.A.3 `exit_status` is a first-class typed outcome used for **scoring and selection**
 
 Not a log message. It threads into the reviewer (`failure_score_penalty` applied when
-`exit_status != "submitted"`, `file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/reviewer.py#L416-L421`)
+`exit_status != "submitted"`, `SWE-agent/sweagent/agent/reviewer.py` (repo not cloned, path not verified))
 and into the chooser (which *filters the candidate pool down to submitted runs* when at least two
-submitted, `file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/reviewer.py#L332-L337`):
+submitted, `SWE-agent/sweagent/agent/reviewer.py` (repo not cloned, path not verified)):
 
 ```python
 n_submitted = sum(s.info.get("exit_status", "") == "submitted" for s in input)
@@ -130,8 +130,8 @@ if n_submitted >= 2:
 
 #### 1.A.4 A complete **best-of-N / retry architecture** (`RetryAgent`, `ScoreRetryLoop`, `ChooserRetryLoop`)
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L257-L441` and
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/reviewer.py#L499-L658`.
+`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified) and
+`SWE-agent/sweagent/agent/reviewer.py` (repo not cloned, path not verified).
 Nothing about this exists in the earlier report, which treats "submit" as the end of the story.
 
 | Component | Behaviour worth noting |
@@ -149,7 +149,7 @@ Nothing about this exists in the earlier report, which treats "submit" as the en
 
 #### 1.A.5 The **history-processor pipeline** is 7 stages, and one of them is ACI-aware
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/history_processors.py#L390-L399`
+`SWE-agent/sweagent/agent/history_processors.py` (repo not cloned, path not verified)
 (`HistoryProcessor` = discriminated union of 7). Earlier report knew only 2-3 of these.
 
 | Processor | What it really does |
@@ -169,7 +169,7 @@ cheaper than summarisation for the common case (stale file windows, stale search
 
 #### 1.A.6 Model layer details with direct budget/caching consequences
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/models.py`
+`SWE-agent/sweagent/agent/models.py` (repo not cloned, path not verified)
 
 | Device | Where | Why it matters |
 |---|---|---|
@@ -185,7 +185,7 @@ cheaper than summarisation for the common case (stale file windows, stale search
 
 #### 1.A.7 Action sampling — self-consistency built into the loop (two strategies)
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/action_sampler.py`
+`SWE-agent/sweagent/agent/action_sampler.py` (repo not cloned, path not verified)
 
 - `ask_colleagues` (L49-L93): sample `n=2` completions, render a "colleagues" discussion block,
 then one final query that must return a tool call. `extra_info["colleagues"]` records the discussion.
@@ -201,7 +201,7 @@ when the action mutates) rather than off a global setting.
 
 #### 1.A.8 Task statements have **two projections** (env vs model)
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/problem_statement.py#L35-L40` and L187-L192:
+`SWE-agent/sweagent/agent/problem_statement.py` (repo not cloned, path not verified) and L187-L192:
 
 ```python
 def get_problem_statement_for_env(self) -> str:
@@ -218,14 +218,14 @@ the schema; (b) task ids derived from content make dedup/replay free.
 
 #### 1.A.9 Templates are validated and warned about, and the pipeline tolerates empty ones
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/agents.py#L122-L146` — every `*_template`
+`SWE-agent/sweagent/agent/agents.py` (repo not cloned, path not verified) — every `*_template`
 field is passed through `_warn_probably_wrong_jinja_syntax`, and a missing `system_template` warns
 with a doc link instead of raising. There is a separate `strategy_template` appended after the
 instance template, and `put_demos_in_history` marks each demo entry `is_demo: True` so later
 processors (`last_n_observations`, `closed_window`) can treat demonstrations as untouchable.
 #### 1.A.10 The lint gate is **narrower and more configurable** than "flake8 the file"
 
-`file:///data/home/forge/repo-tour/SWE-agent/tools/windowed/lib/flake8_utils.py#L137-L144`:
+`SWE-agent/tools/windowed/lib/flake8_utils.py` (repo not cloned, path not verified):
 
 ```python
 def flake8(file_path: str) -> str:
@@ -241,7 +241,7 @@ never style; (b) only `.py` files are linted at all; (c) the command is **overri
 registry key `LINT_COMMAND`, so the gate is a *policy hook*, not a hard-coded flake8.
 
 The diagnostic-diff algorithm is also more careful than "new errors":
-`file:///data/home/forge/repo-tour/SWE-agent/tools/windowed/lib/flake8_utils.py#L59-L134`
+`SWE-agent/tools/windowed/lib/flake8_utils.py` (repo not cloned, path not verified)
 
 - previous errors are **line-shifted** by the edit (`lines_added = replacement_n_lines - replaced_span`);
 - errors *inside* the replaced window are always re-reported (never "pre-existing");
@@ -252,7 +252,7 @@ There are **two lint policies in the same repo**, deliberately:
 `edit_anthropic/bin/str_replace_editor` has an opt-in `USE_LINTER` flag that *applies the edit anyway*
 and appends a warning, with the text: *"In rare cases, the linter errors might not actually be errors or
 caused by your edit. Please use your own judgement."*
-(`file:///data/home/forge/repo-tour/SWE-agent/tools/edit_anthropic/bin/str_replace_editor#L25-L50`).
+(`SWE-agent/tools/edit_anthropic/bin/str_replace_editor` (repo not cloned, path not verified)).
 
 #### 1.A.11 `str_replace_editor` internals the earlier report never opened
 
@@ -268,7 +268,7 @@ caused by your edit. Please use your own judgement."*
 
 #### 1.A.12 `filemap` is a **tree-sitter query**, and the elision rule is stated in the query
 
-`file:///data/home/forge/repo-tour/SWE-agent/tools/edit_anthropic/bin/str_replace_editor#L200-L222`
+`SWE-agent/tools/edit_anthropic/bin/str_replace_editor` (repo not cloned, path not verified)
 
 ```python
 query = language.query("""
@@ -299,14 +299,14 @@ tools:
       Replace the currently displayed lines with <text>.
 ```
 
-`file:///data/home/forge/repo-tour/SWE-agent/tools/windowed_edit_rewrite/config.yaml` — i.e. *"replace the
+`SWE-agent/tools/windowed_edit_rewrite/config.yaml` (repo not cloned, path not verified) — i.e. *"replace the
 window, wholesale"*, with the same lint-gate/revert semantics (`bin/edit` in that bundle is a
 near-copy of the replace variant with the same `_LINT_ERROR_TEMPLATE`). The windowed family is therefore
 a 2×2 matrix: {search/replace-in-window, replace-window-wholesale} × {linting, non-linting} plus the
 line-range variant.
 
 The shared failure template is worth quoting for its anti-thrash sentence:
-`file:///data/home/forge/repo-tour/SWE-agent/tools/windowed_edit_rewrite/bin/edit#L8-L26`
+`SWE-agent/tools/windowed_edit_rewrite/bin/edit` (repo not cloned, path not verified)
 
 ```text
 Your changes have NOT been applied. Please fix your edit command and try again.
@@ -315,7 +315,7 @@ DO NOT re-run the same failed edit command. Running it again will lead to the sa
 
 #### 1.A.14 The dry-run / replay harness: a trajectory is re-executable from its own config
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/run/run_replay.py`
+`SWE-agent/sweagent/run/run_replay.py` (repo not cloned, path not verified)
 
 - The `.traj` file records `replay_config`, and `_get_config_from_agent` re-validates it into a
   `RunSingleConfig`; the *whole environment and agent configuration travels inside the trajectory*.
@@ -341,7 +341,7 @@ DO NOT re-run the same failed edit command. Running it again will lead to the sa
 
 #### 1.A.16 "Promising" is a defined predicate, and it gates irreversible actions
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/run/common.py#L382-L387`
+`SWE-agent/sweagent/run/common.py` (repo not cloned, path not verified)
 
 ```python
 def _is_promising_patch(info: AgentInfo) -> bool:
@@ -357,7 +357,7 @@ It gates both the "🎉 Submission successful 🎉" message and **applying the p
 
 #### 1.A.17 The PR hook: preconditions before an irreversible external side effect
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/run/hooks/open_pr.py#L149-L186` — six gates, in order:
+`SWE-agent/sweagent/run/hooks/open_pr.py` (repo not cloned, path not verified) — six gates, in order:
 no submission → not `exit_status == submitted` → not a GitHub issue → **issue not open** →
 **issue already assigned ("Be nice :)")** → issue locked → already-associated commits (configurable via
 `skip_if_commits_reference_issue`). Then the PR is created as a **draft**, and the trajectory is embedded
@@ -392,7 +392,7 @@ state, (2) refuse when someone else is already on it, (3) default to the reversi
 
 #### 1.A.19 Parsing: 11 parsers, not 6
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/tools/parsing.py#L609-L621` — the union is
+`SWE-agent/sweagent/tools/parsing.py` (repo not cloned, path not verified) — the union is
 `ActionParser | ThoughtActionParser | ActionOnlyParser | XMLThoughtActionParser | XMLFunctionCallingParser |
 FunctionCallingParser | EditFormat | Identity | JsonParser | BashCodeBlockParser | SingleBashCodeBlockParser`.
 New to the catalogue: `EditFormat` (window-replacement), `Identity` (no parsing), `JsonParser`
@@ -408,7 +408,7 @@ special-cases `view_range` needing the literal form `[<start>, <end>]`.
 
 #### 1.A.20 Action sampling, revisited (mechanics)
 
-`file:///data/home/forge/repo-tour/SWE-agent/sweagent/agent/action_sampler.py`
+`SWE-agent/sweagent/agent/action_sampler.py` (repo not cloned, path not verified)
 
 - `ask_colleagues` (`n_samples=2`): the *discussion* is stored in `extra_info["colleagues"]`; the final
   query is made with the discussion appended as a user message and must return a tool call — the

@@ -1,6 +1,6 @@
 # Grok Build (`grok`) — Deep Code-Organization Tour
 
-Repository: `/data/home/forge/repo-tour/grok-build`  
+Repository: [`xai-org/grok-build`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8)  
 Org: `xai-org` (SpaceXAI) · Primary language: **Rust** (edition 2024) · Artifact: `xai-grok-pager` (shipped as `grok`)  
 Monorepo sync commit (`SOURCE_REV`): `559751fdcec02d413e4c57c8832ab275e4f44980`  
 License: Apache-2.0 (first-party) · Builds via Cargo workspace (Bazel lint aspect also referenced in comments)  
@@ -10,7 +10,7 @@ All paths below are absolute and read-only; no file in the repo was modified.
 
 ## 1. Identity
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. From `/data/home/forge/repo-tour/grok-build/README.md:13-17`:
+**Grok Build** is SpaceXAI's terminal-based AI coding agent. From `grok-build/README.md:13-17` (path not found in the pinned clone, not verified):
 
 > "Grok Build is SpaceXAI's terminal-based AI coding agent. It runs as a full-screen TUI that understands your codebase, edits files, executes shell commands, searches the web, and manages long-running tasks — interactively, headlessly for scripting/CI, or embedded in editors via the Agent Client Protocol (ACP)."
 
@@ -23,13 +23,13 @@ Binary name: the built artifact is `xai-grok-pager` (`README.md:76-83`); release
 
 Key repository meta-facts:
 - The root `Cargo.toml` is **generated** and treated as read-only; per-crate `Cargo.toml` files are the edit surface (`Cargo.toml:1`, README.md:108-111).
-- Toolchain pinned to Rust **1.94.0** with `rustfmt` + `clippy`, targets `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` (`/data/home/forge/repo-tour/grok-build/rust-toolchain.toml:1-8`).
-- `rustfmt.toml` is a one-liner: `use_field_init_shorthand = true` (`/data/home/forge/repo-tour/grok-build/rustfmt.toml:1`).
+- Toolchain pinned to Rust **1.94.0** with `rustfmt` + `clippy`, targets `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` (`grok-build/rust-toolchain.toml:1-8` (path not found in the pinned clone, not verified)).
+- `rustfmt.toml` is a one-liner: `use_field_init_shorthand = true` (`grok-build/rustfmt.toml:1` (path not found in the pinned clone, not verified)).
 - External contributions are **not** accepted (`CONTRIBUTING.md:1-8`); security via HackerOne (`SECURITY.md:1-7`).
 - DotSlash is required so `bin/protoc` can resolve; proto codegen uses `bin/protoc` (`README.md:60-71`).
 - Workspace uses `resolver = "2"`, `[workspace.package] edition = "2024"`, `license = "Apache-2.0"` (`Cargo.toml:6-121`).
 
-`clippy.toml` (`/data/home/forge/repo-tour/grok-build/clippy.toml`) encodes strong cross-cutting policy discipline:
+`clippy.toml` ([`grok-build/clippy.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/clippy.toml)) encodes strong cross-cutting policy discipline:
 - Bans raw `std::fs::canonicalize` / `Path::canonicalize` / `tokio::fs::canonicalize` in favour of `dunce::canonicalize` (Windows `\\?\` verbatim paths) (lines 15-47).
 - Bans `reqwest::Client::new` / `ClientBuilder::build` — all outbound HTTP must go through the grok TLS policy (`xai_grok_extra_ca`) (lines 40-44).
 - Bans `std::env::home_dir` / `dirs::home_dir` — home resolution must go through `xai-dirs`/`xai_grok_config::grok_home` (lines 24-35, 48-51).
@@ -43,7 +43,7 @@ Production profiles in `Cargo.toml:402-466`: `release` (panic=abort, incremental
 ## 2. Top-level map
 
 ```
-/data/home/forge/repo-tour/grok-build/
+`grok-build/` (path not found in the pinned clone, not verified)
 ├── Cargo.toml              # GENERATED workspace root (members, deps, lints, profiles)
 ├── Cargo.lock              # 364 KB
 ├── clippy.toml             # codegen-wide clippy policy (bans: canonicalize, reqwest, home_dir, spawn)
@@ -74,7 +74,7 @@ Note: `third_party/README.md:9-11` also describes vendored `nfsserve` (grove-on-
 
 ## 3. Crate graph + responsibilities
 
-Workspace membership is enumerated in `/data/home/forge/repo-tour/grok-build/Cargo.toml:8-116`. The crate closure is deliberately **decomposed into many small crates** ("so they compile in parallel" is stated verbatim in several descriptions, e.g. `xai-grok-shell-terminal`). Groupings below are by responsibility; all descriptions are quoted from each crate's `Cargo.toml`.
+Workspace membership is enumerated in `grok-build/Cargo.toml:8-116` (path not found in the pinned clone, not verified). The crate closure is deliberately **decomposed into many small crates** ("so they compile in parallel" is stated verbatim in several descriptions, e.g. `xai-grok-shell-terminal`). Groupings below are by responsibility; all descriptions are quoted from each crate's `Cargo.toml`.
 
 ### 3.1 Composition root & TUI
 
@@ -241,7 +241,7 @@ A recurring architectural theme across the closure is **dependency inversion via
 
 ### 4.1 The shipping binary
 
-`/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs` (3,793 lines) is the single composition root. `fn main()` at `main.rs:2036`:
+[`grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs) (3,793 lines) is the single composition root. `fn main()` at `main.rs:2036`:
 
 1. Sets version, marks process start, and dispatches **out-of-process helpers** first: `maybe_run_render_subprocess()` (Mermaid worker) and `maybe_run_capture_subprocess()` (voice) — these let the binary re-exec itself as a child worker (`main.rs:2039-2044`).
 2. Parses CLI (`PagerArgs::parse_cli()`, `main.rs:2048`), handles early `--version` / `doctor` intents (`main.rs:2049`).
@@ -251,7 +251,7 @@ A recurring architectural theme across the closure is **dependency inversion via
 
 `async_main` (`main.rs:2133`) is the real dispatcher. It first handles `Completions` and `Wrap`, then decides interactivity and `set_client_name(GrokPager | Generic)` (`main.rs:2142-2150`), prewarms HTTP, pins the local resume target, resolves the startup **sandbox profile** (refusing a resume that would change a session's sandbox — `main.rs:2152-2164`), optionally heals managed policy, applies the sandbox (`xai_grok_shell::config::apply_sandbox`, `main.rs:2202`), then branches on `args.command` (`main.rs:2211-2427`) across: `Version`, `Agent` (→ `run_agent_command`), `Inspect`, `Setup`, `Mcp`, `Plugin`, `Models`, `Leader`, `Worktree`, `DiskUsage`, `Workspace`, `Sessions`, `Usage`, `Share`, `Export`, `Trace`, `Memory`, `Update`, `Login`, `Logout`, `Wrap`, `Completions`, `Dashboard`.
 
-The CLI surface is defined in `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/app/cli.rs`:
+The CLI surface is defined in [`grok-build/crates/codegen/xai-grok-pager/src/app/cli.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app/cli.rs):
 - `enum Command` (`cli.rs:8-145`) — top-level subcommands listed above.
 - `PagerArgs` (`cli.rs:416-771`) — the interactive/headless flags (`-p/--single`, `--prompt-json`, `--prompt-file`, `--output-format`, `--json-schema`, `-m/--model`, `--reasoning-effort`, `--permission-mode`, `--allow/--deny`, `--sandbox`, `-w/--worktree`, `-r/--resume`, `-c/--continue`, `--fork-session`, `--minimal`/`--fullscreen`, `--no-alt-screen`, `--max-turns`, …).
 - `enum AgentCmd` (`cli.rs:330-339`) — `Stdio`, `Headless`, `Serve` (WebSocket server, default `127.0.0.1:2419`), `Leader`.
@@ -260,9 +260,9 @@ If no subcommand and no headless prompt, `async_main` ultimately calls `xai_grok
 
 ### 4.2 Agent-mode binary entry points (library `bin/` targets)
 
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/bin/chat-history-downgrade.rs` — session-history downgrade utility.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-workspace/src/bin/workspace_server.rs` — **standalone workspace ToolServer for remote sandboxes**; reads OIDC from `~/.grok/auth.json`, connects to the hub, exposes workspace tools, uses `xai_grok_diag_server` for `/ready` `/statusz` `/logs`, and `xai_grok_workspace_daemon::daemonize`. Also `workspace_server_probe.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/ptyctl-cli/src/main.rs` — CLI for the headless PTY controller.
+- [`grok-build/crates/codegen/xai-grok-shell/src/bin/chat-history-downgrade.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/bin/chat-history-downgrade.rs) — session-history downgrade utility.
+- [`grok-build/crates/codegen/xai-grok-workspace/src/bin/workspace_server.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-workspace/src/bin/workspace_server.rs) — **standalone workspace ToolServer for remote sandboxes**; reads OIDC from `~/.grok/auth.json`, connects to the hub, exposes workspace tools, uses `xai_grok_diag_server` for `/ready` `/statusz` `/logs`, and `xai_grok_workspace_daemon::daemonize`. Also `workspace_server_probe.rs`.
+- [`grok-build/crates/codegen/ptyctl-cli/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/ptyctl-cli/src/main.rs) — CLI for the headless PTY controller.
 
 ### 4.3 Auxiliary / test / bench binaries
 
@@ -274,35 +274,35 @@ If no subcommand and no headless prompt, `async_main` ultimately calls `xai_grok
 
 ### 4.4 The in-process agent runners
 
-`/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/app.rs` is the shared runtime used by the pager binary and the leader: it exposes `run_leader`, `run_headless`, and the stdio path, defines `LeaderAutoUpdateConfig`, and owns the auto-update checker loop for long-running leaders (`app.rs:26-80`). `run_agent_command` in `main.rs:1227` wires the leader/stdio/headless/serve modes, including the **stdio↔leader ACP bridge with replay** (see §7).
+[`grok-build/crates/codegen/xai-grok-shell/src/agent/app.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/app.rs) is the shared runtime used by the pager binary and the leader: it exposes `run_leader`, `run_headless`, and the stdio path, defines `LeaderAutoUpdateConfig`, and owns the auto-update checker loop for long-running leaders (`app.rs:26-80`). `run_agent_command` in `main.rs:1227` wires the leader/stdio/headless/serve modes, including the **stdio↔leader ACP bridge with replay** (see §7).
 
 ---
 
 ## 5. Core subsystems (absolute file paths)
 
 ### 5.1 Agent definition & system-prompt assembly — `xai-grok-agent`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-agent/src/lib.rs` — module list + re-exports (`Agent`, `AgentBuilder`, `AgentDefinition`, `CompactionPolicy`, `ReminderPolicy`, presets `preset_names()`, `toolset_for_preset()`, `workspace_grok_build_toolset()`).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-agent/src/agent.rs` — the built `Agent` (definition + `PromptContext` + cached system prompt + `Arc<ToolBridge>` + policies + hosted tools). `should_auto_compact()` uses `xai_token_estimation::exceeds_threshold` (agent.rs:165-176).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-agent/src/builder.rs`, `config.rs` (`AgentDefinition`, `PermissionMode`, `CompletionRequirement`), `discovery.rs`, `repo.rs` (AGENTS.md), `system_reminder.rs` (`ReminderPolicy`), `compaction.rs`, `timing.rs`, and `prompt/` (context, template, user_message).
+- [`grok-build/crates/codegen/xai-grok-agent/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-agent/src/lib.rs) — module list + re-exports (`Agent`, `AgentBuilder`, `AgentDefinition`, `CompactionPolicy`, `ReminderPolicy`, presets `preset_names()`, `toolset_for_preset()`, `workspace_grok_build_toolset()`).
+- [`grok-build/crates/codegen/xai-grok-agent/src/agent.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-agent/src/agent.rs) — the built `Agent` (definition + `PromptContext` + cached system prompt + `Arc<ToolBridge>` + policies + hosted tools). `should_auto_compact()` uses `xai_token_estimation::exceeds_threshold` (agent.rs:165-176).
+- [`grok-build/crates/codegen/xai-grok-agent/src/builder.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-agent/src/builder.rs), `config.rs` (`AgentDefinition`, `PermissionMode`, `CompletionRequirement`), `discovery.rs`, `repo.rs` (AGENTS.md), `system_reminder.rs` (`ReminderPolicy`), `compaction.rs`, `timing.rs`, and `prompt/` (context, template, user_message).
 
 ### 5.2 The agent/session run loop — `xai-grok-shell`
 Each session is an **actor** with its own chat history and tool context (`session/acp_session.rs:1-12`).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/` — the MVP ACP agent: `acp_agent.rs`, `agent_runtime.rs`, `session_lifecycle.rs`, `session_setup.rs`, `session_registry.rs`, `subagent_spawn.rs`, `turn_end.rs`, `replay.rs`, `sampler_prewarm.rs`, `code_nav.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/app.rs` — leader/headless/stdio runners (see §4.4).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/handlers/` — `session.rs`, `models.rs`, `model_switch.rs`, `config_option.rs`, `workspaces.rs` (ACP request handlers).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/subagent/` — `spawn.rs`, `child_runtime.rs`, `handle_request.rs`, `resume_window.rs`, `prompt_turn_receipt.rs`, `start_artifact_publication.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/acp_session.rs` — the `SessionActor` implementation (command/event channels).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/acp_session_impl/` — **the turn machinery**, split into ~90 files: `run_loop.rs` (the main `run_session` loop), `turn.rs`, `turn_task.rs`, `sampler_turn.rs`, `tool_calls.rs`, `tool_dispatch.rs`, `prompt_build.rs`, `stop_gate.rs`, `turn_end.rs`, `turn_end_hooks.rs`, `cancel.rs`, `mcp.rs`, `mcp_init.rs`, `memory_*.rs`, `goal*.rs`, `side_call.rs`, `slash_exec.rs`, `status_line.rs`, `title_refresh.rs`, `updates.rs`, `workflow.rs`, `rewind.rs`, `rate_limit_waits.rs`, `auth_retry.rs`, `length_salvage.rs`, `laziness.rs`, `interjection.rs`, `parent_interject.rs`, `subagent_handoff.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/` (top level) — `commands.rs`, `handle.rs`, `persistence.rs` (+ many focused `*_tests`), `compaction*.rs`, `goal_*.rs` (orchestrator/planner/tracker/stop-detector/strategist/summarizer), `prompt_queue.rs`, `plan_mode.rs`, `slash_commands.rs`, `signals.rs`, `worktree*.rs`, `usage_file.rs`, `summary.rs`, `two_pass.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/workflow(s)/` — workflow engine wiring (Rhai via `xai-workflow`).
+- [`grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent) — the MVP ACP agent: `acp_agent.rs`, `agent_runtime.rs`, `session_lifecycle.rs`, `session_setup.rs`, `session_registry.rs`, `subagent_spawn.rs`, `turn_end.rs`, `replay.rs`, `sampler_prewarm.rs`, `code_nav.rs`.
+- [`grok-build/crates/codegen/xai-grok-shell/src/agent/app.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/app.rs) — leader/headless/stdio runners (see §4.4).
+- [`grok-build/crates/codegen/xai-grok-shell/src/agent/handlers/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/handlers) — `session.rs`, `models.rs`, `model_switch.rs`, `config_option.rs`, `workspaces.rs` (ACP request handlers).
+- [`grok-build/crates/codegen/xai-grok-shell/src/agent/subagent/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/subagent) — `spawn.rs`, `child_runtime.rs`, `handle_request.rs`, `resume_window.rs`, `prompt_turn_receipt.rs`, `start_artifact_publication.rs`.
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/acp_session.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session.rs) — the `SessionActor` implementation (command/event channels).
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/acp_session_impl/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_impl) — **the turn machinery**, split into ~90 files: `run_loop.rs` (the main `run_session` loop), `turn.rs`, `turn_task.rs`, `sampler_turn.rs`, `tool_calls.rs`, `tool_dispatch.rs`, `prompt_build.rs`, `stop_gate.rs`, `turn_end.rs`, `turn_end_hooks.rs`, `cancel.rs`, `mcp.rs`, `mcp_init.rs`, `memory_*.rs`, `goal*.rs`, `side_call.rs`, `slash_exec.rs`, `status_line.rs`, `title_refresh.rs`, `updates.rs`, `workflow.rs`, `rewind.rs`, `rate_limit_waits.rs`, `auth_retry.rs`, `length_salvage.rs`, `laziness.rs`, `interjection.rs`, `parent_interject.rs`, `subagent_handoff.rs`.
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session) (top level) — `commands.rs`, `handle.rs`, `persistence.rs` (+ many focused `*_tests`), `compaction*.rs`, `goal_*.rs` (orchestrator/planner/tracker/stop-detector/strategist/summarizer), `prompt_queue.rs`, `plan_mode.rs`, `slash_commands.rs`, `signals.rs`, `worktree*.rs`, `usage_file.rs`, `summary.rs`, `two_pass.rs`.
+- ``grok-build/crates/codegen/xai-grok-shell/src/session/workflow(s` (path not found in the pinned clone, not verified))/` — workflow engine wiring (Rhai via `xai-workflow`).
 
 ### 5.3 Tool system — `xai-grok-tools`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/lib.rs` — crate root; output caps `DEFAULT_TOOL_OUTPUT_BYTES = 40_000`, `DEFAULT_TOOL_OUTPUT_CHARS = 20_000`; modules `bridge`, `computer`, `implementations`, `registry`, `types`, `util`, `sandbox_launch`, `tool_taxonomy`, `versions`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/registry/types.rs` — `ToolRegistryBuilder`, `FinalizedToolset`, `SessionContext`, plus the **process-global tool-pack** seam `register_tool_pack()` that lets out-of-tree packs contribute registrations.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/bridge.rs` — `ToolBridge`: adapts the `ToolRegistry` to a session, dispatches via `call_new_tool()`, manages definitions/enable/disable/name overrides, and translates results into model prompt text + ACP notifications.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/` — all tool implementations (see §5.3.1).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/computer/` — local task/terminal state, content search, file acceleration, task log.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/types/` — tool trait/definition/metadata/params validation/output/resources/schema/requirements.
+- [`grok-build/crates/codegen/xai-grok-tools/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/lib.rs) — crate root; output caps `DEFAULT_TOOL_OUTPUT_BYTES = 40_000`, `DEFAULT_TOOL_OUTPUT_CHARS = 20_000`; modules `bridge`, `computer`, `implementations`, `registry`, `types`, `util`, `sandbox_launch`, `tool_taxonomy`, `versions`.
+- [`grok-build/crates/codegen/xai-grok-tools/src/registry/types.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/registry/types.rs) — `ToolRegistryBuilder`, `FinalizedToolset`, `SessionContext`, plus the **process-global tool-pack** seam `register_tool_pack()` that lets out-of-tree packs contribute registrations.
+- [`grok-build/crates/codegen/xai-grok-tools/src/bridge.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/bridge.rs) — `ToolBridge`: adapts the `ToolRegistry` to a session, dispatches via `call_new_tool()`, manages definitions/enable/disable/name overrides, and translates results into model prompt text + ACP notifications.
+- [`grok-build/crates/codegen/xai-grok-tools/src/implementations/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations) — all tool implementations (see §5.3.1).
+- [`grok-build/crates/codegen/xai-grok-tools/src/computer/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/computer) — local task/terminal state, content search, file acceleration, task log.
+- [`grok-build/crates/codegen/xai-grok-tools/src/types/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/types) — tool trait/definition/metadata/params validation/output/resources/schema/requirements.
 
 #### 5.3.1 Built-in tools (name → implementing module)
 
@@ -353,83 +353,83 @@ Stubs used in tests / non-streaming contexts: `streaming_stub`, `non_streaming_s
 Tool-feature gating is enforced by `ToolFeature` (e.g. `AskUserQuestion`, `ImageEdit`, `ImageGen`, `LspTools`, `VideoGen`, `WebFetch`, `WriteFile`) — see `implementations/tool_feature_names_tests.rs:6-33`.
 
 ### 5.4 Model / inference layer — `xai-grok-sampler`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sampler/src/lib.rs` — crate root.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sampler/src/actor/mod.rs` — `SamplerActor`: single-threaded command actor; **each request streams in its own `tokio::spawn` task** so multiple requests run concurrently (`actor/mod.rs:1-2`, 33-47). Commands: `Submit`, `Cancel`, `UpdateConfig`, `IsActive`, `ActiveCount` (`actor/mod.rs:85-129`); it cleans up finished tasks via a `JoinSet<RequestId>`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sampler/src/stream/` — `chat_completions.rs`, `responses.rs`, `messages.rs`, `collect.rs` (the API shapes).
+- [`grok-build/crates/codegen/xai-grok-sampler/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampler/src/lib.rs) — crate root.
+- [`grok-build/crates/codegen/xai-grok-sampler/src/actor/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampler/src/actor/mod.rs) — `SamplerActor`: single-threaded command actor; **each request streams in its own `tokio::spawn` task** so multiple requests run concurrently (`actor/mod.rs:1-2`, 33-47). Commands: `Submit`, `Cancel`, `UpdateConfig`, `IsActive`, `ActiveCount` (`actor/mod.rs:85-129`); it cleans up finished tasks via a `JoinSet<RequestId>`.
+- [`grok-build/crates/codegen/xai-grok-sampler/src/stream/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampler/src/stream) — `chat_completions.rs`, `responses.rs`, `messages.rs`, `collect.rs` (the API shapes).
 - `client.rs`, `config.rs`, `retry.rs`, `events.rs`, `handle.rs`, `commands.rs`, `metrics.rs`, `attribution.rs`, `doom_loop.rs` (+ recovery), `prewarm.rs`, `request_compression.rs`, `span_timing.rs`, `stream_classify.rs`, `shared_http/`.
-- Wire types: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sampling-types/src`.
+- Wire types: [`grok-build/crates/codegen/xai-grok-sampling-types/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampling-types/src).
 
 ### 5.5 Prompt / context
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-agent/src/prompt/` — `context.rs` (`PromptContext`, `RenderedPrompt`, `PromptAudience`), `template.rs` (`COMPACT_SYSTEM_PROMPT`), `user_message.rs` (`UserMessageTemplate`).
+- [`grok-build/crates/codegen/xai-grok-agent/src/prompt/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-agent/src/prompt) — `context.rs` (`PromptContext`, `RenderedPrompt`, `PromptAudience`), `template.rs` (`COMPACT_SYSTEM_PROMPT`), `user_message.rs` (`UserMessageTemplate`).
 - AGENTS.md handling: `xai-grok-agent/src/repo.rs`, `types/agents_md_tracker.rs`, and `agents_md_section()` / `agents_md_user_reminder()` in `agent.rs:112-125`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/acp_session_impl/prompt_build.rs` — per-turn prompt assembly.
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/acp_session_impl/prompt_build.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_impl/prompt_build.rs) — per-turn prompt assembly.
 
 ### 5.6 Session / state / persistence
 - `xai-chat-state` (`crates/codegen/xai-chat-state`) — actor-based chat state; `CompactionMode`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/persistence.rs` (+ dozens of `persistence_*_tests.rs`) — session storage, resume resolution, sandbox-profile recovery.
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/persistence.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/persistence.rs) (+ dozens of `persistence_*_tests.rs`) — session storage, resume resolution, sandbox-profile recovery.
 - `xai-sqlite-journal` — WAL-vs-rollback choice by filesystem type.
 - `xai-grok-session-search` — FTS5 BM25 session search; `xai-grok-dashboard-store` — SQLite dashboard workspace.
 - `xai-grok-active-sessions` — open-TUI-session registry (JSON under grok home).
 
 ### 5.7 TUI — `xai-grok-pager` + `xai-grok-pager-render`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/app/` — the app: `app_view.rs`, `agent_view/`, `event_loop.rs`, `mouse.rs`, `modals.rs`, `dispatch/`, `actions.rs`, `effects/`, `signal_handler.rs`, `terminal_restore.rs`, `screen_mode_relaunch.rs`, `status_line*.rs`, `workspace_*.rs`, `reader_thread.rs`, `session_startup.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/views/` — ~150 files: `dashboard/`, `prompt_widget/`, `settings_modal/`, `block_viewer/`, overlays (btw, elicitation, permission, plan_approval, question), `scrollback`-related panes, `shortcuts_help.rs`, `timeline.rs`, `fps_hud.rs`, `scroll_debug_hud.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/scrollback/` — `block.rs`, `blocks/`, `render.rs`, `scrollback_pane.rs`, `selection.rs`, `text_selection.rs`, `link_map.rs`, `sticky.rs`, `export.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/slash/` — slash-command handling; `src/settings/`, `src/tips/`, `src/headless*`, `src/minimal/`, `src/acp/`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs` — **alt-screen policy** (`determine_alt_screen_policy`, `AltScreenMode`, `--no-alt-screen`, `[terminal] alt_screen`) at `terminal/mod.rs:936-1000`; plus `appearance/`, `render/` (`draw.rs`, `EscapeWriter`), `input/`, `syntax.rs`, `theme/`, `clipboard/`, `glyphs.rs`.
-- Docs: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/docs/user-guide/` — 27+ markdown chapters (getting-started … sandbox, plan-mode, dashboard, status-line, config-reference).
+- [`grok-build/crates/codegen/xai-grok-pager/src/app/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app) — the app: `app_view.rs`, `agent_view/`, `event_loop.rs`, `mouse.rs`, `modals.rs`, `dispatch/`, `actions.rs`, `effects/`, `signal_handler.rs`, `terminal_restore.rs`, `screen_mode_relaunch.rs`, `status_line*.rs`, `workspace_*.rs`, `reader_thread.rs`, `session_startup.rs`.
+- [`grok-build/crates/codegen/xai-grok-pager/src/views/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/views) — ~150 files: `dashboard/`, `prompt_widget/`, `settings_modal/`, `block_viewer/`, overlays (btw, elicitation, permission, plan_approval, question), `scrollback`-related panes, `shortcuts_help.rs`, `timeline.rs`, `fps_hud.rs`, `scroll_debug_hud.rs`.
+- [`grok-build/crates/codegen/xai-grok-pager/src/scrollback/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/scrollback) — `block.rs`, `blocks/`, `render.rs`, `scrollback_pane.rs`, `selection.rs`, `text_selection.rs`, `link_map.rs`, `sticky.rs`, `export.rs`.
+- [`grok-build/crates/codegen/xai-grok-pager/src/slash/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/slash) — slash-command handling; `src/settings/`, `src/tips/`, `src/headless*`, `src/minimal/`, `src/acp/`.
+- [`grok-build/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs) — **alt-screen policy** (`determine_alt_screen_policy`, `AltScreenMode`, `--no-alt-screen`, `[terminal] alt_screen`) at `terminal/mod.rs:936-1000`; plus `appearance/`, `render/` (`draw.rs`, `EscapeWriter`), `input/`, `syntax.rs`, `theme/`, `clipboard/`, `glyphs.rs`.
+- Docs: [`grok-build/crates/codegen/xai-grok-pager/docs/user-guide/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide) — 27+ markdown chapters (getting-started … sandbox, plan-mode, dashboard, status-line, config-reference).
 
 ### 5.8 Config — `xai-grok-config`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-config/src/lib.rs` and siblings: `effective_config.rs` (requirements > user > managed), `config_layers.rs`, `config_override.rs`, `config_requirements.rs`, `loader.rs`, `validation.rs`, `endpoints.rs`, `remote_settings.rs`, `remote_fetch.rs`, `signed_policy.rs` (+ `signed_policy/`), `managed_cache/`, `managed_text/`, `macos_managed.rs`, `mcp_servers.rs`, `memory_v2.rs`, `global_hook_sources.rs`, `shell.rs`, `distribution.rs`, `paths.rs`.
-- Runtime config in the shell: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/config.rs` (`Config as AgentConfig`, `PermissionMode`, `MemoryConfig`), `agent/config_model_override_parse.rs`, `src/config/{mod,reloader,watcher}.rs`.
+- [`grok-build/crates/codegen/xai-grok-config/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/lib.rs) and siblings: `effective_config.rs` (requirements > user > managed), `config_layers.rs`, `config_override.rs`, `config_requirements.rs`, `loader.rs`, `validation.rs`, `endpoints.rs`, `remote_settings.rs`, `remote_fetch.rs`, `signed_policy.rs` (+ `signed_policy/`), `managed_cache/`, `managed_text/`, `macos_managed.rs`, `mcp_servers.rs`, `memory_v2.rs`, `global_hook_sources.rs`, `shell.rs`, `distribution.rs`, `paths.rs`.
+- Runtime config in the shell: [`grok-build/crates/codegen/xai-grok-shell/src/agent/config.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/config.rs) (`Config as AgentConfig`, `PermissionMode`, `MemoryConfig`), `agent/config_model_override_parse.rs`, `src/config/{mod,reloader,watcher}.rs`.
 
 ### 5.9 Auth & login — `xai-grok-login` / `xai-grok-auth`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-login/src/` — `flow.rs`, `manager.rs` (+ `manager/lock`), `refresh/`, `oidc/`, `backend/`, `device_code.rs`, `auth_provider.rs`, `credential_provider.rs`, `storage.rs`, `jwt.rs`, `grok_auth_credentials.rs`, `pre_tui.rs`, `external_auth.rs`, `recovery.rs`, `side_call_bearer.rs`, `single_flight.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-auth/src/` — `auth_provider.rs`, `bearer_fragment.rs`, `retry_middleware.rs` (the DI seam).
+- [`grok-build/crates/codegen/xai-grok-login/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login/src) — `flow.rs`, `manager.rs` (+ `manager/lock`), `refresh/`, `oidc/`, `backend/`, `device_code.rs`, `auth_provider.rs`, `credential_provider.rs`, `storage.rs`, `jwt.rs`, `grok_auth_credentials.rs`, `pre_tui.rs`, `external_auth.rs`, `recovery.rs`, `side_call_bearer.rs`, `single_flight.rs`.
+- [`grok-build/crates/codegen/xai-grok-auth/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-auth/src) — `auth_provider.rs`, `bearer_fragment.rs`, `retry_middleware.rs` (the DI seam).
 - Shell-side glue: `xai-grok-shell/src/credential_factory.rs`, `src/agent/init.rs` (`run_cli_login`, `apply_post_login_config`, `run_cli_logout`).
 
 ### 5.10 Permissions — `xai-grok-permission-rules`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs` + `rules.rs`, `resolution.rs`, `policy.rs`, `policy/`, `managed_policy/`, `bash_permission_script.rs`, `bash_command_splitting.rs`, `exec_risk.rs`, `env_risk.rs`, `folder_trust.rs`, `project_config.rs`, `trust.rs`, `reasons.rs`, `domain.rs`, `shell_access.rs`, `git_content_filters.rs`, `worktree.rs`.
+- [`grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/lib.rs) + `rules.rs`, `resolution.rs`, `policy.rs`, `policy/`, `managed_policy/`, `bash_permission_script.rs`, `bash_command_splitting.rs`, `exec_risk.rs`, `env_risk.rs`, `folder_trust.rs`, `project_config.rs`, `trust.rs`, `reasons.rs`, `domain.rs`, `shell_access.rs`, `git_content_filters.rs`, `worktree.rs`.
 - Session-side integration: `xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs`, `stop_gate.rs`, and `xai-grok-workspace/src/permission/`.
 
 ### 5.11 Sandboxing — `xai-grok-sandbox`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sandbox/src/lib.rs` — `SandboxManager`, `ProfileName`, applied **once at process startup**; covers in-process `tokio::fs` and child processes; network left open at process level, child network blocked per-subprocess via seccomp (`lib.rs:8-24`). `enforce` feature (default) pulls `nono` (`nono = "=0.53.0"`, Cargo.toml:44).
+- [`grok-build/crates/codegen/xai-grok-sandbox/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/lib.rs) — `SandboxManager`, `ProfileName`, applied **once at process startup**; covers in-process `tokio::fs` and child processes; network left open at process level, child network blocked per-subprocess via seccomp (`lib.rs:8-24`). `enforce` feature (default) pulls `nono` (`nono = "=0.53.0"`, Cargo.toml:44).
 - `profiles.rs` (`ProfileName`, `SandboxConfig`, `SandboxProfile`, `load_sandbox_config`), `network_policy.rs` (WebsitePolicy/Origin), `command/` (+ `backend`, `policy`, `violation`), `child_net.rs`, `deny/`, `hook_write_deny.rs`, `read_deny_verify.rs`, `runtime_sockets.rs`, `allow_path.rs`, `paths.rs`, `logging.rs`.
 - Applied at startup from `xai-grok-pager-bin/src/main.rs:2202` (`xai_grok_shell::config::apply_sandbox`).
 
 ### 5.12 MCP — `xai-grok-mcp`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-mcp/src/lib.rs` + `servers.rs`, `owned_clients.rs`, `shared_mcp_state.rs`, `acp_transport.rs`, `credentials.rs`, `oauth.rs`, `oauth_config.rs`, `auth_status.rs`, `bearer_token_file.rs`, `call_result.rs`, `elicitation.rs`, `liveness.rs`, `mcp_http_client.rs`, `tool_name.rs`, `wire.rs`, `generation.rs`. (Hermetic reason: quarantines `rmcp` + reqwest 0.13 vs workspace reqwest 0.12 — `Cargo.toml` description.)
+- [`grok-build/crates/codegen/xai-grok-mcp/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-mcp/src/lib.rs) + `servers.rs`, `owned_clients.rs`, `shared_mcp_state.rs`, `acp_transport.rs`, `credentials.rs`, `oauth.rs`, `oauth_config.rs`, `auth_status.rs`, `bearer_token_file.rs`, `call_result.rs`, `elicitation.rs`, `liveness.rs`, `mcp_http_client.rs`, `tool_name.rs`, `wire.rs`, `generation.rs`. (Hermetic reason: quarantines `rmcp` + reqwest 0.13 vs workspace reqwest 0.12 — `Cargo.toml` description.)
 - Session-side wiring: `xai-grok-shell/src/session/mcp_servers.rs`, `mcp_dispatcher.rs`, `mcp_restart.rs`, `managed_mcp.rs`, and `session/acp_session_impl/{mcp,mcp_init,mcp_snapshot,mcp_argument_coercion,mcp_file_input}.rs`; doctor at `xai-grok-shell/src/mcp_doctor.rs` and `xai-grok-pager/src/mcp_cmd.rs`.
 
 ### 5.13 ACP — `xai-acp-lib`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-acp-lib/src/lib.rs` — channels (`AcpAgentChannel`/`AcpClientChannel`), gateway (`acp_gateway`), typed messages (`AcpAgentMessage`, `AcpClientMessage`, `AcpMethod`, `AcpRequest`, `AcpSide`), and stdin/line readers (`spawn_stdin_line_reader`).
+- [`grok-build/crates/codegen/xai-acp-lib/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-acp-lib/src/lib.rs) — channels (`AcpAgentChannel`/`AcpClientChannel`), gateway (`acp_gateway`), typed messages (`AcpAgentMessage`, `AcpClientMessage`, `AcpMethod`, `AcpRequest`, `AcpSide`), and stdin/line readers (`spawn_stdin_line_reader`).
 - The concrete ACP agent loop lives in `xai-grok-shell/src/agent/mvp_agent/` and `session/acp_session*.rs`; the extended method surface is the `x.ai/*` / `_x.ai/*` namespace under `xai-grok-shell/src/extensions/` (see §7.6).
 
 ### 5.14 LSP
-- Tool: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/lsp/` — `manager.rs`, `client.rs`, `capabilities.rs`, `diagnostics.rs`, `documents.rs`, `format.rs`, `pull.rs`, `refresh.rs`, `restart.rs`, `watched_files.rs`, `workspace_open.rs`.
+- Tool: [`grok-build/crates/codegen/xai-grok-tools/src/implementations/lsp/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations/lsp) — `manager.rs`, `client.rs`, `capabilities.rs`, `diagnostics.rs`, `documents.rs`, `format.rs`, `pull.rs`, `refresh.rs`, `restart.rs`, `watched_files.rs`, `workspace_open.rs`.
 - Also `implementations/grok_build/lsp/mod.rs` (the tool) and `xai-grok-shell/src/agent/mvp_agent/code_nav.rs`.
 
 ### 5.15 Telemetry — `xai-grok-otel` (+ `xai-grok-telemetry`)
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-otel/src/lib.rs` — `config`, `otlp`, `provider`, `redact_common`, `timeout`, `trace_context` (W3C propagation).
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-telemetry/src` — product events, Mixpanel, Sentry, unified log, sampling log, span profile, debug-log firehose (wired in `main.rs:239-263`).
+- [`grok-build/crates/codegen/xai-grok-otel/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-otel/src/lib.rs) — `config`, `otlp`, `provider`, `redact_common`, `timeout`, `trace_context` (W3C propagation).
+- [`grok-build/crates/codegen/xai-grok-telemetry/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-telemetry/src) — product events, Mixpanel, Sentry, unified log, sampling log, span profile, debug-log firehose (wired in `main.rs:239-263`).
 - `xai-mixpanel` and `xai-grok-secrets` (outbound scrubbing).
 
 ### 5.16 Memory
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-memory/src/` — `index.rs`, `embedding.rs`, `search.rs`, `mmr.rs`, `chunk.rs`(er), `flush.rs`, `dream.rs` + `batch_dream*.rs` (consolidation), `storage.rs`/`storage_v2.rs`, `schema.rs`, `query_expansion.rs`, `watcher.rs`, `v2*.rs`.
+- [`grok-build/crates/codegen/xai-grok-memory/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-memory/src) — `index.rs`, `embedding.rs`, `search.rs`, `mmr.rs`, `chunk.rs`(er), `flush.rs`, `dream.rs` + `batch_dream*.rs` (consolidation), `storage.rs`/`storage_v2.rs`, `schema.rs`, `query_expansion.rs`, `watcher.rs`, `v2*.rs`.
 - Session-side: `xai-grok-shell/src/session/{memory_state,memory_observation,memory_carryover,batch_memory_dream}.rs`, `session/acp_session_impl/memory_*.rs`; CLI at `xai-grok-pager/src/memory_cmd.rs`.
 
 ### 5.17 Web search / fetch
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/web_search/` — `client.rs`, `tool.rs`, `types.rs`.
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/web_fetch/` — `client.rs`, `ssrf.rs`, `cache.rs`, `artifact.rs`, `overflow.rs`, `domain.rs`, `http.rs`, `config.rs`.
+- [`grok-build/crates/codegen/xai-grok-tools/src/implementations/web_search/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations/web_search) — `client.rs`, `tool.rs`, `types.rs`.
+- [`grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/web_fetch/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations/grok_build/web_fetch) — `client.rs`, `ssrf.rs`, `cache.rs`, `artifact.rs`, `overflow.rs`, `domain.rs`, `http.rs`, `config.rs`.
 
 ### 5.18 Plugins / marketplace / hooks
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-plugin-marketplace/src/` — `catalog.rs`, `index.rs`, `git.rs`, `installer.rs`, `install_resolve.rs`, `matcher.rs`, `scanner.rs`, `types.rs`, `config.rs`.
+- [`grok-build/crates/codegen/xai-grok-plugin-marketplace/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-plugin-marketplace/src) — `catalog.rs`, `index.rs`, `git.rs`, `installer.rs`, `install_resolve.rs`, `matcher.rs`, `scanner.rs`, `types.rs`, `config.rs`.
 - Shell: `xai-grok-shell/src/plugin/{acquire,mod,sources}.rs`, `src/extensions/{plugins,marketplace,hooks}.rs`; CLI `xai-grok-pager/src/plugin_cmd.rs`.
 - Hooks: `xai-grok-hooks/src/{discovery,dispatcher,runner,matcher,event,result,trust,env_expand,config}.rs`; session-side `xai-grok-shell/src/session/acp_session_impl/{hook_dispatch,turn_end_hooks,hooks_plugins}.rs`.
 
 
 ### 5.19 Workspace / Computer Hub / remote sandbox
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-workspace/src/lib.rs` — core host-local workspace library: FS, VCS, permissions, tool config, and subsystem wiring. Modules: `file_system/`, `worktree/`, `sandbox/`, `session/`, `hub*.rs` (`hub.rs`, `hub_server.rs`, `hub_channel.rs`, `hub_auth/`, `hub_ids.rs`), `permission/`, `mcp.rs`, `mcp_claim.rs`, `plugins.rs`, `discovery.rs`, `folder_trust.rs`, `path_virtualization.rs`, `host_kind.rs`, `git_odb.rs`, `restore_fetch.rs`, `export_github.rs`, `publish.rs`, `recovery.rs`, `envrc.rs`, `bind_env.rs`, `hooks` (`hook_inputs.rs`, `global_hook_sources` on the config side).
+- [`grok-build/crates/codegen/xai-grok-workspace/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-workspace/src/lib.rs) — core host-local workspace library: FS, VCS, permissions, tool config, and subsystem wiring. Modules: `file_system/`, `worktree/`, `sandbox/`, `session/`, `hub*.rs` (`hub.rs`, `hub_server.rs`, `hub_channel.rs`, `hub_auth/`, `hub_ids.rs`), `permission/`, `mcp.rs`, `mcp_claim.rs`, `plugins.rs`, `discovery.rs`, `folder_trust.rs`, `path_virtualization.rs`, `host_kind.rs`, `git_odb.rs`, `restore_fetch.rs`, `export_github.rs`, `publish.rs`, `recovery.rs`, `envrc.rs`, `bind_env.rs`, `hooks` (`hook_inputs.rs`, `global_hook_sources` on the config side).
 - `xai-grok-workspace-types`, `xai-grok-workspace-client`, `xai-grok-workspace-daemon` — the wire types, the hub-proxied RPC client, and the daemonization/pidfile/preview-proxy supervisor.
 - `xai-computer-hub-core` (`crates/common`) — `Transport`, `ToolRegistry` trait, `CompoundResolver` (local-shadows-remote), `LocalTransport`, `RemoteTransport`, and `bot_tools.rs` (grok-bot tool catalog). `xai-computer-hub-sdk` — connection pool, transparent reconnect, tool harness/tool-server runtime. `xai-computer-hub-mcp-adapter` — registers MCP tools as native hub tools.
 - `xai-tool-protocol` — the Computer Hub wire protocol: ids, registration, capabilities, hook events, handshake, JSON-RPC envelope, method catalog, `ToolErrorWire`/`ToolOutputWire`/`WireToolNotification`, bot-relay frames, `methods`, `session_event`, `turn_hook`.
@@ -448,7 +448,7 @@ Tool-feature gating is enforced by `ToolFeature` (e.g. `AskUserQuestion`, `Image
 ### 6.1 Startup (interactive `grok`)
 1. **`main()`** (`xai-grok-pager-bin/src/main.rs:2036`): version/intent checks, install minimal + jemalloc + crash hooks, `configure_process_env`, `raise_fd_limit`, validate managed requirements, init Sentry/crash handler, build capped tokio runtime (`worker_threads = min(cores,8)`), run `async_main` under a 2 s shutdown grace.
 2. **`async_main`** (`main.rs:2133`): pick client type; **pin the local resume target before the sandbox** (`pin_local_resume_target()`); resolve/refuse sandbox profile for resumes; heal managed policy; `apply_sandbox` (`main.rs:2202`).
-3. **Interactive path**: `xai_grok_pager::app::run(args, bg_update_rx)` (`main.rs:2528`) → `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/app/mod.rs` → `event_loop.rs` + `app_view.rs`. The event loop enters raw mode; for fullscreen it emits `EnterAlternateScreen` and `EnableMouseCapture` (see §7.1).
+3. **Interactive path**: `xai_grok_pager::app::run(args, bg_update_rx)` (`main.rs:2528`) → [`grok-build/crates/codegen/xai-grok-pager/src/app/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app/mod.rs) → `event_loop.rs` + `app_view.rs`. The event loop enters raw mode; for fullscreen it emits `EnterAlternateScreen` and `EnableMouseCapture` (see §7.1).
 4. The pager opens an **ACP connection** to the agent runtime — either in-process or (leader mode) to a shared leader over a Unix socket — and calls `initialize`, then `session/new` or `session/load` (`xai-grok-pager/src/acp/`, `app/session_startup.rs`).
 
 ### 6.2 Prompt → turn → tools → response (headless-equivalent, same core)
@@ -470,9 +470,9 @@ Tool-feature gating is enforced by `ToolFeature` (e.g. `AskUserQuestion`, `Image
 
 ### 7.1 Fullscreen, mouse-interactive TUI (a first-class design choice)
 The TUI is not a thin readline wrapper; it is a full ratatui application with an **alternate-screen mode** (`EnterAlternateScreen`) with an inline fallback, driven by an explicit policy:
-- Render entry: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/app/mod.rs:98` imports `crossterm::terminal::{EnterAlternateScreen, Clear, ...}`.
+- Render entry: `grok-build/crates/codegen/xai-grok-pager/src/app/mod.rs:98` (path not found in the pinned clone, not verified) imports `crossterm::terminal::{EnterAlternateScreen, Clear, ...}`.
 - The app tracks whether mouse capture is active: `app/mod.rs:140` — "Tracks whether mouse capture (the five DEC modes enabled by crossterm `EnableMouseCapture`, plus bracketed paste) is currently active." (global `MOUSE_CAPTURE_ENABLED`).
-- Alt-screen policy: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs:936-1000` `determine_alt_screen_policy(cli_no_alt_screen, mode, ctx, control)`, with `AltScreenMode = Auto | Always | Never` (config `[terminal] alt_screen`, `appearance/config.rs:35,647`). `Auto` consults the terminal control/context.
+- Alt-screen policy: `grok-build/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs:936-1000` (path not found in the pinned clone, not verified) `determine_alt_screen_policy(cli_no_alt_screen, mode, ctx, control)`, with `AltScreenMode = Auto | Always | Never` (config `[terminal] alt_screen`, `appearance/config.rs:35,647`). `Auto` consults the terminal control/context.
 - Screen-mode flags: `--minimal` (scrollback-native) and `--fullscreen` are **mutually exclusive** (`app/cli.rs:735-744`, test `cli.rs:1161-1168`). `--no-alt-screen` disables the alternate screen (`cli.rs:734`).
 - Enter/leave alt screen is done with explicit crossterm `execute!` calls around the run, and mouse capture is **conditionally** toggled (`event_loop.rs:445-471`):
   ```rust
@@ -484,7 +484,7 @@ The TUI is not a thin readline wrapper; it is a full ratatui application with an
   ...
   if mouse_captured { let _ = crossterm::execute!(stderr, crossterm::event::EnableMouseCapture); }
   ```
-- **Mouse** is deeply integrated: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/app/mouse.rs:1-6` — "Mouse input handling for `AgentView`: the `handle_mouse` event handler and the scrollbar click helper. `handle_mouse` covers click-to-focus, hit-testing of cached click rects, and per-pane click dispatch." Hit-tests use rects cached from the last rendered frame (mouse.rs:4-5).
+- **Mouse** is deeply integrated: `grok-build/crates/codegen/xai-grok-pager/src/app/mouse.rs:1-6` (path not found in the pinned clone, not verified) — "Mouse input handling for `AgentView`: the `handle_mouse` event handler and the scrollbar click helper. `handle_mouse` covers click-to-focus, hit-testing of cached click rects, and per-pane click dispatch." Hit-tests use rects cached from the last rendered frame (mouse.rs:4-5).
 - There is a **mouse-capture re-assertion on refocus** because ConPTY-backed relays can strip DEC private modes: `reassert_mouse_capture_on_focus()` (`event_loop.rs:658-663`, comment: "downloading SGR mouse reports to X10 … corrupts into typed characters").
 - Fullscreen↔minimal switching relaunches the process (`app/screen_mode_relaunch.rs`), and terminal state is restored on panic/signal (`app/terminal_restore.rs`, `xai_crash_handler::install_terminal_restore_only()` at `main.rs:2089`).
 
@@ -503,7 +503,7 @@ Multiple clients can share one backend: `grok agent leader` runs a shared proces
 `register_tool_pack()` (`xai-grok-tools/src/registry/types.rs:30-37`) lets harness code that lives outside the crate contribute tool registrations without `xai-grok-tools` depending on it — an inversion of the usual plugin direction.
 
 ### 7.5 Upstream tool **ports** (codex + opencode)
-The repo ships in-tree ports of two other agents' tools, with a crate-local third-party notice: `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md` (license texts + Apache §4(b) change notice) and root `THIRD-PARTY-NOTICES` (README.md:134-139). These are `implementations/codex/` (apply_patch, grep_files, list_dir, read_file) and `implementations/opencode/` (bash, edit, glob, grep, read, skill, todowrite, write).
+The repo ships in-tree ports of two other agents' tools, with a crate-local third-party notice: [`grok-build/crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md) (license texts + Apache §4(b) change notice) and root `THIRD-PARTY-NOTICES` (README.md:134-139). These are `implementations/codex/` (apply_patch, grep_files, list_dir, read_file) and `implementations/opencode/` (bash, edit, glob, grep, read, skill, todowrite, write).
 
 ### 7.6 Large ACP extension namespace (`x.ai/*` / `_x.ai/*`)
 Beyond standard ACP, the agent exposes a big vendor extension surface implemented under `xai-grok-shell/src/extensions/`: auth (`x.ai/auth/*`, `x.ai/getBearerToken`, `x.ai/setApiKey`), git (`x.ai/git/*`, worktrees), fs (`x.ai/fs/*`), mcp (`x.ai/mcp/*`), memory (`x.ai/memory/*`), skills, plugins, marketplace, hooks, hunk-tracker, subagent (`x.ai/subagent/*`), task, terminal (`x.ai/terminal/*`, including PTY create/load/resize), sessions (`x.ai/session/*`, fork/rename/search/repair), code-nav (`x.ai/code/find-definitions`, `find-references`), search (`x.ai/search/*`), feedback, billing, privacy, rewind, debug, and more.
@@ -559,49 +559,49 @@ Because shipped profiles build with `panic = "abort"` (Cargo.toml:404), `catch_u
 ## 9. Most important absolute file paths
 
 Composition root / CLI
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs` (3,793 lines — everything) & `.../src/agent_command.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/app/cli.rs` (CLI surface) & `.../src/app/mod.rs`, `.../src/app/event_loop.rs`, `.../src/app/app_view.rs`, `.../src/app/mouse.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/lib.rs`
+- [`grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs) (3,793 lines — everything) & `.../src/agent_command.rs`
+- [`grok-build/crates/codegen/xai-grok-pager/src/app/cli.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app/cli.rs) (CLI surface) & `.../src/app/mod.rs`, `.../src/app/event_loop.rs`, `.../src/app/app_view.rs`, `.../src/app/mouse.rs`
+- [`grok-build/crates/codegen/xai-grok-pager/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/lib.rs)
 
 Workspace root & policy
-- `/data/home/forge/repo-tour/grok-build/Cargo.toml`, `/data/home/forge/repo-tour/grok-build/clippy.toml`, `/data/home/forge/repo-tour/grok-build/rust-toolchain.toml`, `/data/home/forge/repo-tour/grok-build/SOURCE_REV`
+- [`grok-build/Cargo.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/Cargo.toml), [`grok-build/clippy.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/clippy.toml), [`grok-build/rust-toolchain.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/rust-toolchain.toml), [`grok-build/SOURCE_REV`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/SOURCE_REV)
 
 Agent / session runtime
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/app.rs` (leader/headless runners)
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/acp_session.rs` (SessionActor)
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/session/acp_session_impl/run_loop.rs` (turn loop) + `sampler_turn.rs`, `tool_calls.rs`, `tool_dispatch.rs`, `prompt_build.rs`, `turn_end.rs`, `compaction.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/{acp_agent.rs,session_lifecycle.rs,replay.rs}`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-agent/src/{agent.rs,builder.rs,config.rs}` and `.../src/prompt/context.rs`
+- [`grok-build/crates/codegen/xai-grok-shell/src/agent/app.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/app.rs) (leader/headless runners)
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/acp_session.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session.rs) (SessionActor)
+- [`grok-build/crates/codegen/xai-grok-shell/src/session/acp_session_impl/run_loop.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_impl/run_loop.rs) (turn loop) + `sampler_turn.rs`, `tool_calls.rs`, `tool_dispatch.rs`, `prompt_build.rs`, `turn_end.rs`, `compaction.rs`
+- ``grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/{acp_agent.rs` (path not found in the pinned clone, not verified),session_lifecycle.rs,replay.rs}`
+- ``grok-build/crates/codegen/xai-grok-agent/src/{agent.rs` (path not found in the pinned clone, not verified),builder.rs,config.rs}` and `.../src/prompt/context.rs`
 
 Tools
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/lib.rs`, `.../src/bridge.rs`, `.../src/registry/types.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/mod.rs` (tool set + `register_all`) and `.../implementations/mod.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/bash/mod.rs`, `.../read_file/mod.rs`, `.../grep/mod.rs`, `.../task/mod.rs`, `.../search_replace/mod.rs`
+- [`grok-build/crates/codegen/xai-grok-tools/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/lib.rs), `.../src/bridge.rs`, `.../src/registry/types.rs`
+- [`grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations/grok_build/mod.rs) (tool set + `register_all`) and `.../implementations/mod.rs`
+- [`grok-build/crates/codegen/xai-grok-tools/src/implementations/grok_build/bash/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-tools/src/implementations/grok_build/bash/mod.rs), `.../read_file/mod.rs`, `.../grep/mod.rs`, `.../task/mod.rs`, `.../search_replace/mod.rs`
 
 Model / inference
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sampler/src/lib.rs` and `.../src/actor/mod.rs`, `.../src/stream/`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sampling-types/src/lib.rs`
+- [`grok-build/crates/codegen/xai-grok-sampler/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampler/src/lib.rs) and `.../src/actor/mod.rs`, `.../src/stream/`
+- [`grok-build/crates/codegen/xai-grok-sampling-types/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampling-types/src/lib.rs)
 
 TUI rendering
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs` (alt-screen policy), `.../src/render/draw.rs`, `.../src/appearance/config.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/src/scrollback/{scrollback_pane.rs,render.rs,block.rs}`
+- [`grok-build/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-render/src/terminal/mod.rs) (alt-screen policy), `.../src/render/draw.rs`, `.../src/appearance/config.rs`
+- ``grok-build/crates/codegen/xai-grok-pager/src/scrollback/{scrollback_pane.rs` (path not found in the pinned clone, not verified),render.rs,block.rs}`
 
 Config / auth / security
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-config/src/{lib.rs,effective_config.rs,signed_policy.rs,remote_settings.rs}`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-login/src/{lib.rs,flow.rs,manager.rs}` and `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-login/docs/user-guide/` equivalents
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sandbox/src/lib.rs`
+- ``grok-build/crates/codegen/xai-grok-config/src/{lib.rs` (path not found in the pinned clone, not verified),effective_config.rs,signed_policy.rs,remote_settings.rs}`
+- ``grok-build/crates/codegen/xai-grok-login/src/{lib.rs` (path not found in the pinned clone, not verified),flow.rs,manager.rs}` and `grok-build/crates/codegen/xai-grok-login/docs/user-guide` (path not found in the pinned clone, not verified) equivalents
+- [`grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/lib.rs)
+- [`grok-build/crates/codegen/xai-grok-sandbox/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/lib.rs)
 
 Integrations
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-mcp/src/lib.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-acp-lib/src/lib.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-shell/src/extensions/mod.rs` (x.ai/* method surface)
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-workspace/src/lib.rs` and `.../src/bin/workspace_server.rs`
+- [`grok-build/crates/codegen/xai-grok-mcp/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-mcp/src/lib.rs)
+- [`grok-build/crates/codegen/xai-acp-lib/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-acp-lib/src/lib.rs)
+- [`grok-build/crates/codegen/xai-grok-shell/src/extensions/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/extensions/mod.rs) (x.ai/* method surface)
+- [`grok-build/crates/codegen/xai-grok-workspace/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-workspace/src/lib.rs) and `.../src/bin/workspace_server.rs`
 
 Telemetry / docs
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-otel/src/lib.rs`, `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-telemetry/src/lib.rs`
-- `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager/docs/user-guide/` (01-getting-started.md … 27-grok-clone.md)
-- `/data/home/forge/repo-tour/grok-build/README.md`
+- [`grok-build/crates/codegen/xai-grok-otel/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-otel/src/lib.rs), [`grok-build/crates/codegen/xai-grok-telemetry/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-telemetry/src/lib.rs)
+- [`grok-build/crates/codegen/xai-grok-pager/docs/user-guide/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide) (01-getting-started.md … 27-grok-clone.md)
+- [`grok-build/README.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/README.md)
 
 ---
 

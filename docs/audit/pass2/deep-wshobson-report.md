@@ -1,6 +1,6 @@
 # Ultra Deep-Dive: `wshobson/agents` — Subagent System Design Study
 
-**Repo:** `/data/home/forge/repo-tour/wshobson-agents` ("Claude Code Workflows" — multi-harness plugin marketplace)
+**Repo:** `wshobson-agents` (repo not cloned, path not verified) ("Claude Code Workflows" — multi-harness plugin marketplace)
 **Purpose:** Learning pass for HorizonCode's subagent system (`AgentProfileV1` + fleet, docs 08 / 15)
 **Method:** structure map → 202-agent frontmatter census (mechanical) → deep-read of 17 agent specs + 5 meta-docs
 **Date:** 2026-11-06 · **Read-only on the repo; nothing outside this report file was modified.**
@@ -621,7 +621,7 @@ The good parts: stages are **strictly ordered**, each has an explicit **input li
 
 ## 4. Ten design patterns to adopt into HorizonCode
 
-Each pattern is stated as: **the observed pattern** → **the HorizonCode binding** (into `AgentProfileV1` in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §`AgentProfileV1` and the fleet in `file:///data/home/forge/HorizonCode/docs/08-runtime.md` §2.11).
+Each pattern is stated as: **the observed pattern** → **the HorizonCode binding** (into `AgentProfileV1` in `05-domain-and-schemas.md` §`AgentProfileV1` and the fleet in `08-runtime.md` §2.11).
 
 ---
 
@@ -1105,7 +1105,7 @@ Explicitly **do not** replicate the repo's 202-agent sprawl. Concretely:
 
 ### 6.6 Schema deltas this study implies
 
-Consolidated list of field additions to `AgentProfileV1` (`file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`) and their sources:
+Consolidated list of field additions to `AgentProfileV1` (`05-domain-and-schemas.md`) and their sources:
 
 | Delta | Pattern | Rationale |
 |---|---|---|

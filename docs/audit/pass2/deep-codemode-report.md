@@ -8,7 +8,7 @@ Scope: (A) `opencode`'s `@opencode/codemode`; (B) `codex-rs`'s code-mode family 
 
 ### (A) opencode — `@opencode/codemode` (v2.2.5, pure TypeScript, Effect-native)
 
-Root: `/data/home/forge/repo-tour/opencode/packages/codemode`
+Root: [`opencode/packages/codemode/`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/codemode)
 
 ```
 README.md                       # contract: supported subset, limits, results, discovery
@@ -38,7 +38,7 @@ test/*.test.ts                  # codemode, limits, tool-paths, parity, callback
 
 ### (B) codex-rs — code-mode family (Rust, embedded V8, out-of-process host)
 
-Root: `/data/home/forge/repo-tour/codex/codex-rs`
+Root: [`codex/codex-rs/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs)
 
 ```
 code-mode/                      # client side: session providers + transport clients
