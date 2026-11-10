@@ -56,6 +56,11 @@ export const BUILTIN_COMMANDS: readonly string[] = [
   "memory",
   "instructions",
   "init",
+  "rename",
+  "retry",
+  "stats",
+  "export",
+  "copy",
 ];
 
 /** Largest template body kept; the rest is dropped. */
