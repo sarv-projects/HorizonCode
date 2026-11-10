@@ -311,3 +311,4 @@ Built (P0 + P1 of `research/grok-tui-deep.md`): colour level ladder + role table
 ## TUI polish part 3 (feat/tui-part3)
 Grok-derived deferred items, one commit each (docs/28 rulings 84+, docs/13 Part 3). Suite and PTY evidence per item below.
 - `[pasted N lines]` bracketed paste: `tests/tui/paste.test.ts`, PTY case in `tests/tui/pty.test.ts` (ruling 84).
+- `approval-card.test.ts` (5) and a rich PTY case: one-key yes, Enter denies (ruling 85).
