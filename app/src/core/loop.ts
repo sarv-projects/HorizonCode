@@ -1798,7 +1798,10 @@ async function runToolCall(
   // are of the tool's own output; the note is appended to the transcript text.
   const attemptsNote =
     countsAsMistake && attemptsAfterFailure !== undefined ? attemptsRemainingNote(attemptsAfterFailure(parsed.error !== undefined)) : "";
-  const content = toolMessageContent(result, plan.text) + attemptsNote;
+  // A truncation repair closed a cut-off blob for a read-only tool: say so to
+  // the model, since the card flag is not visible to it (ruling 74).
+  const truncationNote = parsed.truncated === true ? `\n${TRUNCATED_ARGS_NOTE}` : "";
+  const content = toolMessageContent(result, plan.text) + truncationNote + attemptsNote;
   if (lazy !== undefined && result.ok && LAZY_TRIGGER_TOOLS.has(call.name)) {
     for (const touched of touchedPaths(call.name, parsed.args)) {
       for (const fragment of lazy.discover(touched)) {
@@ -1910,6 +1913,9 @@ async function runToolCall(
     expected,
   };
 }
+
+/** One line appended to the model-facing result when its arguments were cut off and closed. */
+const TRUNCATED_ARGS_NOTE = "[arguments were cut off and closed; re-issue the call if the values are incomplete]";
 
 /** Most characters of shell output a finished tool card carries (head and tail kept). */
 const CARD_OUTPUT_CAP = 16_000;
