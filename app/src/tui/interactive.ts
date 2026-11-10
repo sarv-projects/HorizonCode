@@ -11,6 +11,8 @@ import * as readline from "node:readline";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ContextUsage, RunExit, Runtime } from "../contracts";
+import { loadCommands, resolveCommandForMessage } from "../core/commands";
+import { getSkill } from "../core/skills";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import { unifiedDiff } from "../core/plan";
 import type { SessionInfo } from "../core/session";
@@ -156,7 +158,7 @@ function printWrapped(r: Renderer, text: string, style: (s: string) => string = 
   for (const part of wrapText(plain, terminalWidth())) r.line(style(part));
 }
 
-function printHelp(r: Renderer): void {
+function printHelp(r: Renderer, workspace?: string): void {
   const rows: Array<[string, string]> = [
     ["/help", "this list"],
     ["/new", "start a fresh session"],
@@ -180,6 +182,23 @@ function printHelp(r: Renderer): void {
   r.line("");
   for (const [cmd, desc] of rows) r.line("  " + bold(cmd.padEnd(width)) + dim(desc));
   r.line("");
+  if (workspace !== undefined) {
+    let listing: ReturnType<typeof loadCommands> = { commands: [], shadowed: [] };
+    try {
+      listing = loadCommands(workspace);
+    } catch {
+      /* a bad commands dir never breaks /help */
+    }
+    if (listing.commands.length > 0) {
+      r.line("");
+      r.line(dim("Custom commands (prompt templates from .hz/commands):"));
+      const cw = listing.commands.reduce((max, c) => Math.max(max, c.name.length + 1), 0) + 2;
+      for (const c of listing.commands) r.line("  " + bold(("/" + c.name).padEnd(cw)) + dim(c.description));
+    }
+    if (listing.shadowed.length > 0) {
+      r.line(dim(`  ignored (a builtin owns the name): ${listing.shadowed.map((n) => "/" + n).join(", ")}`));
+    }
+  }
   printWrapped(r, "  Ctrl+C  stop the current answer (again to leave)   Ctrl+D  leave   \u2191/\u2193  earlier messages", dim);
 }
 
@@ -961,6 +980,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     );
   };
 
+  /** Send text as if typed: queue it while an answer streams, else run it now. */
+  const sendUserText = async (text: string): Promise<void> => {
+    if (busy) {
+      queued.push(text);
+      renderer.notice(`queued \u2014 it goes next (${queued.length} waiting)`);
+      return;
+    }
+    await sendTurn(text);
+    await drainQueue();
+  };
+
   const runSlash = async (text: string): Promise<void> => {
     const body = text.slice(1).trim();
     const spaceAt = body.search(/\s/);
@@ -970,7 +1000,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     switch (name) {
       case "help":
       case "?":
-        printHelp(renderer);
+        printHelp(renderer, workspace);
         break;
       case "exit":
       case "quit":
@@ -1038,9 +1068,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         await drainQueue();
         break;
       }
-      default:
+      default: {
+        // A custom command (file template) wins over a skill of the same name;
+        // both are prompt text, so the expansion is sent like any typed message.
+        const custom = resolveCommandForMessage(workspace, text);
+        if (custom) {
+          renderer.notice(`command /${custom.command.name} expanded`);
+          await sendUserText(custom.prompt);
+          break;
+        }
+        if (getSkill(workspace, body.split(/\s/)[0] ?? "")) {
+          await sendUserText(text);
+          break;
+        }
         renderer.notice(`unknown command /${name} \u2014 try /help`);
         break;
+      }
     }
     showPrompt();
   };
