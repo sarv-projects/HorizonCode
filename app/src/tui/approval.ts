@@ -10,6 +10,7 @@ import type { ApprovalHandler, ApprovalRequest, GuardAction, GuardKind, Lease, R
 import * as core from "../core";
 import { SESSION_LEASE_TTL_MS } from "../core/loop";
 import type { KernelClient } from "../core/kernel";
+import { richDiff } from "./diff";
 import { approvalCard, type KeyAnswer } from "./approval-card";
 import { createRenderer, diffBlock, previewOf, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, terminalWidth, truncate, yellow } from "./style";
@@ -167,7 +168,9 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     // staged diff for a plan-mode write): shown before the ask, absent on old
     // callers — the prompt is unchanged then.
     const preview = previewOf(req);
-    if (preview !== "") r.write(diffBlock(preview) + "\n");
+    if (preview !== "") {
+      r.write((keyMode ? richDiff(preview, { width: Math.min(terminalWidth(), 100), unicode: ui.unicode }).join("\n") : diffBlock(preview)) + "\n");
+    }
 
     let answer = "";
     try {

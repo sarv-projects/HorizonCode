@@ -12,6 +12,7 @@ import {
   FOLD_MIN, HEADER_FIRST_TOOLS, READ_ONLY_TOOLS, foldLine, resultLine, shellFooter, shellHeader, shellOutputLines,
   subagentGroupLines, subagentLine, toolCardLines, type CardStyle, type GroupRow,
 } from "./cards";
+import { richDiff } from "./diff";
 import { createMarkdownStream, type MarkdownStream } from "./markdown";
 import { pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
 import {
@@ -418,6 +419,19 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
         const files = typeof ev.files === "number" ? ev.files : 0;
         if (files < 1) break;
         emit(dim(`\u00b7 changed ${files} file${files === 1 ? "" : "s"}`), dim);
+        if (rich) {
+          const view = richDiff(typeof ev.diff === "string" ? ev.diff : "", {
+            width: terminalWidth(),
+            cap: TURN_DIFF_LINE_CAP,
+            unicode: unicodeLocale(),
+          });
+          if (view.length > 0) {
+            ensureLineStart();
+            write(view.join("\n") + "\n");
+          }
+          if (ev.truncated === true) emit("  " + dim("\u2026 diff truncated"), dim);
+          break;
+        }
         const lines = diffBlock(ev.diff).split("\n").filter((l) => l !== "");
         const shown = lines.slice(0, TURN_DIFF_LINE_CAP);
         if (shown.length > 0) {
@@ -454,7 +468,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
           if (richPreview !== "") {
             flushFold();
             ensureLineStart();
-            write(diffBlock(richPreview) + "\n");
+            write(richDiff(richPreview, { width: terminalWidth(), unicode: unicodeLocale() }).join("\n") + "\n");
           }
           break;
         }
