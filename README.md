@@ -28,7 +28,7 @@ The model can request an action; a Rust trust kernel decides whether it runs (`d
 
 ## Features
 
-Every item below is in this tree (pull requests #1 to #28) and covered by automated tests; the TUI part 3 items of PR #28 may not be on `main` yet. Items that are partial, opt-in or off by default say so.
+Every item below is in this tree (pull requests #1 to #28, all merged into `main`) and covered by automated tests. Items that are partial, opt-in or off by default say so.
 
 **Safety and evidence**
 
