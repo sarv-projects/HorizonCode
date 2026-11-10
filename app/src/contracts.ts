@@ -542,6 +542,15 @@ export interface ContextUsage {
   historyLimit: number;
 }
 
+/** Optional evidence on a finished `tool.card` (see the C1 note on the event). */
+export interface ToolCardDetail {
+  durationMs?: number;
+  output?: string;
+  exitCode?: number;
+  /** read: lines returned; grep: matching lines; glob: paths listed (notices excluded). */
+  count?: number;
+}
+
 export type RuntimeEvent =
   | { type: "assistant.delta"; text: string }
   | { type: "assistant.done"; text: string }
@@ -552,6 +561,11 @@ export type RuntimeEvent =
       args: Record<string, unknown>;
       status: "running" | "ok" | "error";
       summary?: string;
+      // ADDITIVE (TUI part 2, C1): evidence for the finished-card renderer.
+      // Present only on a final (ok|error) card: `durationMs` for every tool,
+      // `output` (bounded combined stdout/stderr, trailing `exit N` line
+      // removed) and `exitCode` for shell tools, `count` for read/grep/glob. Old consumers ignore it.
+      detail?: ToolCardDetail;
     }
   | { type: "notice"; message: string }
   | { type: "error"; message: string }

@@ -741,6 +741,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const renderer: Renderer = createRenderer({
     wrap: true,
+    rich: liveEnabled(),
     beforeWrite: () => {
       // The animated bottom region never ends up in the transcript.
       live?.erase();
@@ -784,6 +785,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     typed: () => String((rl as unknown as { line?: string }).line ?? "").length > 0,
     esc: canEsc,
     paused: () => answerWaiter !== null,
+    group: (tick, width) => renderer.liveLines?.(tick, width) ?? [],
   });
   const liveOn = live.enabled;
 
