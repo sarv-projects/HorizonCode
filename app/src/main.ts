@@ -23,6 +23,7 @@ import { liveStdin } from "./core/stdin-live";
 import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
+import { resolveCommandForMessage } from "./core/commands";
 
 const VERSION = "0.1.0";
 
@@ -306,6 +307,14 @@ async function main(): Promise<number> {
   }
 
   const workspace = path.resolve(opts.workspace);
+  // `hzcode run <name> [args]` runs a .hz/commands file as a print-mode turn.
+  // It only applies when such a command exists, so "run the tests" stays chat.
+  const runMatch = !opts.print ? /^run\s+(\S+)(?:\s+([\s\S]*))?$/.exec(opts.initialMessage ?? "") : null;
+  if (runMatch && resolveCommandForMessage(workspace, "/" + runMatch[1])) {
+    opts.print = true;
+    opts.printText = `/${runMatch[1]} ${runMatch[2] ?? ""}`.trim();
+    opts.initialMessage = undefined;
+  }
   try {
     if (!fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) {
       process.stderr.write(`hzcode: not a folder: ${workspace}\n`);
@@ -395,7 +404,9 @@ async function main(): Promise<number> {
       return await runInteractive({ runtime, workspace, version: VERSION, ui, initialMessage: opts.initialMessage });
     }
     if (opts.print) {
-      return await runPrint({ runtime, prompt: printPrompt.trim(), format: opts.outputFormat ?? "text" });
+      // `-p "/name args"` expands a custom command file; anything else is untouched.
+      const custom = resolveCommandForMessage(workspace, printPrompt.trim());
+      return await runPrint({ runtime, prompt: custom ? custom.prompt : printPrompt.trim(), format: opts.outputFormat ?? "text" });
     }
     return await runHeadless({ runtime, initialMessage: opts.initialMessage });
   } finally {
