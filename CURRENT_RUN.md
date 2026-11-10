@@ -316,3 +316,4 @@ Grok-derived deferred items, one commit each (docs/28 rulings 84+, docs/13 Part 
 - `thinking.test.ts` (4) and a rich PTY case: Thought line then `/think` (ruling 87).
 - `subagent-boundary.test.ts` (1) and `subagent-cells.test.ts` (4) (ruling 88).
 - `completion.test.ts` (6) and a rich PTY case: ghost bytes, Tab to `/plan`, `@READ` to README.md (ruling 89).
+- `theme.test.ts` (4) and a rich PTY case (ruling 90).
