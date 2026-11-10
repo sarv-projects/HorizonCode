@@ -30,7 +30,7 @@ import { complete, ghostFor, type CompletionContext } from "./completion";
 import { keyChoice, type KeyAnswer } from "./approval-card";
 import { PASTE_OFF, PASTE_ON, createPasteCollector, echoedRows, pasteLabel } from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
-import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
+import { activeTheme, bold, colorLevel, cyan, dim, errorMessage, sanitizeText, setThemeMode, strip, terminalWidth, themeMode, truncate, visibleWidth, wrapText, yellow } from "./style";
 
 const PROMPT = "\u276f ";
 const HISTORY_LIMIT = 500;
@@ -185,6 +185,7 @@ function printHelp(r: Renderer, workspace?: string): void {
     ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
     ["/rename <title>", "retitle this session"],
     ["/retry", "drop the last reply and ask the same question again"],
+    ["/theme [name]", "dark, light, auto or mono (NO_COLOR is always respected)"],
     ["/think", "show the last reasoning block (rich mode)"],
     ["/stats", "message, tool call and token counts for this chat"],
     ["/export [json|html]", "write the chat to .hz/exports (html shows the receipt chain status)"],
@@ -305,6 +306,34 @@ export function readPermissionMode(runtime: Runtime): PermissionMode {
  * written to config) and never a bypass: yolo/bypass names get the refusal.
  * Returns the mode now in force so the caller can redraw the badge.
  */
+/**
+ * `/theme [dark|light|auto|mono]`: switch the palette for this session. It only
+ * picks the palette: whether colour is used at all stays with the colour ladder,
+ * so NO_COLOR / TERM=dumb / a pipe keep it off whatever is asked for.
+ */
+export function runThemeCommand(arg: string, renderer: Renderer): void {
+  const want = arg.trim().toLowerCase();
+  const noColor = typeof process.env.NO_COLOR === "string" && process.env.NO_COLOR !== "";
+  if (want === "") {
+    const mode = themeMode();
+    const shown = mode === "auto" ? `auto (${activeTheme()})` : mode;
+    renderer.notice(`theme: ${shown}, colour level ${colorLevel()}${noColor ? " (NO_COLOR is set)" : ""}; /theme dark|light|auto|mono`);
+    return;
+  }
+  if (want !== "dark" && want !== "light" && want !== "auto" && want !== "mono") {
+    renderer.notice(`unknown theme "${truncate(sanitizeText(arg.trim()), 24)}" \u2014 use /theme dark, light, auto or mono`);
+    return;
+  }
+  setThemeMode(want);
+  renderer.notice(
+    noColor
+      ? `theme: ${want} \u2014 NO_COLOR is set, so colours stay off`
+      : want === "mono"
+        ? "theme: mono \u2014 no colours (bold and dim stay)"
+        : `theme: ${want === "auto" ? `auto (${activeTheme()})` : want}`,
+  );
+}
+
 export function runModeCommand(arg: string, runtime: Runtime, renderer: Renderer): PermissionMode {
   const extras = runtime as RuntimeWithExtras;
   const current = readPermissionMode(runtime);
@@ -1193,6 +1222,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break;
       case "context":
         showContext();
+        break;
+      case "theme":
+        runThemeCommand(arg, renderer);
         break;
       case "mode":
         runModeCommand(arg, runtime, renderer);

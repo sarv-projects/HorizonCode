@@ -280,13 +280,28 @@ export function detectTheme(env: Record<string, string | undefined> = process.en
   return "dark";
 }
 
+/** Session palette choice (`/theme`): auto follows detectTheme(); mono drops every colour. */
+export type ThemeMode = "auto" | "dark" | "light" | "mono";
+let themeModeValue: ThemeMode = "auto";
+
+export function setThemeMode(mode: ThemeMode): void {
+  themeModeValue = mode;
+}
+export function themeMode(): ThemeMode {
+  return themeModeValue;
+}
+/** The palette in use: the pinned dark/light, else what the terminal/env suggests. */
+export function activeTheme(): "dark" | "light" {
+  return themeModeValue === "dark" || themeModeValue === "light" ? themeModeValue : detectTheme();
+}
+
 function roleDef(role: Role): RoleDef {
-  return (detectTheme() === "light" ? LIGHT_OVERRIDES[role] : undefined) ?? DARK[role];
+  return (activeTheme() === "light" ? LIGHT_OVERRIDES[role] : undefined) ?? DARK[role];
 }
 
 /** The SGR parameter string that selects `role` as a foreground at `level` ("" = none). */
 export function fgCode(role: Role, level: ColorLevel = colorLevel()): string {
-  if (level === 0) return "";
+  if (level === 0 || themeModeValue === "mono") return "";
   const d = roleDef(role);
   if (level === 3) return `38;2;${d.rgb[0]};${d.rgb[1]};${d.rgb[2]}`;
   if (level === 2) return `38;5;${d.idx}`;
@@ -295,7 +310,7 @@ export function fgCode(role: Role, level: ColorLevel = colorLevel()): string {
 
 /** Background parameters; basic 16 drops backgrounds (they differ wildly per profile). */
 export function bgCode(role: Role, level: ColorLevel = colorLevel()): string {
-  if (level < 2) return "";
+  if (level < 2 || themeModeValue === "mono") return "";
   const d = roleDef(role);
   return level === 3 ? `48;2;${d.rgb[0]};${d.rgb[1]};${d.rgb[2]}` : `48;5;${d.idx}`;
 }

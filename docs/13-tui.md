@@ -813,7 +813,7 @@ Studied against Grok Build's minimal mode (`research/grok-tui-deep.md`). Everyth
 - **Contract (additive).** `tool.card.detail?: { durationMs?, output?, exitCode?, count? }` on finished cards: `durationMs` for every tool, `output` (bounded, trailing `exit N` line removed) and `exitCode` for shell tools, `count` for read/grep/glob. Old consumers ignore it; the kernel event catalogue is untouched.
 - **Fallbacks.** Non-UTF-8 locales get ASCII glyphs of the same width (`*`, `x`, `|`, `` ` ``, `~`); level 1 has no backgrounds (rail bars instead); `NO_COLOR`/`TERM=dumb` is the plain transcript.
 
-Deferred (follow-ups): P2 status-line rework with `used / window` and the contextual hint segment, tab completion and ghost text, bracketed paste, approval card and single-key mode, diff gutters with line numbers; P3 thinking display (needs `assistant.thinking`, C3), popup dropdown, `/theme`; contract C2 (`subagent.start|end` with a `callId`); a `/verbose` toggle for nested subagent lines; `Worked for` turn-footer wording; resize reprint of history (not needed on scrollback).
+Deferred (follow-ups; tab completion, paste, approval card, diff gutters, thinking, subagent cells and /theme landed in Part 3 below): P2 status-line rework with `used / window` and the contextual hint segment, tab completion and ghost text, bracketed paste, approval card and single-key mode, diff gutters with line numbers; P3 thinking display (needs `assistant.thinking`, C3), popup dropdown, `/theme`; contract C2 (`subagent.start|end` with a `callId`); a `/verbose` toggle for nested subagent lines; `Worked for` turn-footer wording; resize reprint of history (not needed on scrollback).
 
 ## Part 3 polish: Grok-derived deferred items (v0.1)
 
@@ -824,3 +824,4 @@ All rich-only unless noted; non-TTY output is unchanged.
 - **Thinking.** `assistant.thinking` (additive C3) from openai-compatible and anthropic streams, collapsed to `◆ Thought for Ns · N lines`, `/think` expands (ruling 87).
 - **Subagent cells.** `subagent.start`/`subagent.end` (additive C2) give exact outcome, time and tool count to the `◆ Subagent completed in 4.2s: “task” · 3 tools` cell (ruling 88).
 - **Completion.** Tab completes `/commands` (built-in and custom) and `@paths`, with a dim ghost suffix after the cursor (`completion.ts`, ruling 89). Ghost is rich TTY only; Tab itself works wherever readline has a terminal.
+- **/theme.** `dark|light|auto|mono` for the session via the role table; `NO_COLOR` always wins (`style.ts`, ruling 90).

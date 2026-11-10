@@ -315,5 +315,21 @@ if (SCRIPT) {
     },
     PTY_TIMEOUT_MS + 5_000,
   );
+
+  test(
+    "rich mode: /theme mono switches the palette and is acknowledged",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+      proc.write("/theme mono\n");
+      expect(await waitFor(proc, "theme: mono")).toBe(true);
+      proc.write("/theme\n");
+      expect(await waitFor(proc, "theme: mono, colour level")).toBe(true);
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
 }
 
