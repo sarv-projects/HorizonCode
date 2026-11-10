@@ -1023,7 +1023,7 @@ Each note gives: what is deferred, why, the upstream reference, whether to adopt
 #### I11. Cost operations: `prices.json`, `pricecheck`, cost dashboards
 
 - **What is deferred.** An append-only price table, a verification tool, cost lines per turn and a local dashboard. Shipped: run budgets and token estimates only.
-- **Why.** Prices change; stale numbers shown as cost would mislead. The models.dev catalogue seam (docs/07 K5) carries `cost` fields and is the natural source.
+- **Why.** Prices change; stale numbers shown as cost would mislead. The models.dev catalogue seam (docs/07 K1) carries `cost` fields and is the natural source.
 - **Upstream reference.** [`crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/24-monitoring-usage.md)
 - **Adopt as is or adapt.** idea only.
 - **Suggested design.** Read `cost` from the catalogue record (`catalog.ts` already decodes it) and show an ESTIMATE in `/stats` labelled with the catalogue date. No `pricecheck` until a full snapshot exists.
