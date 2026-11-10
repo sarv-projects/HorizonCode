@@ -7,7 +7,7 @@
 
 | Field | Value |
 |---|---|
-| Document | `/data/home/forge/HorizonCode/docs/10-cognition.md` |
+| Document | `10-cognition.md` |
 | Owner plane | Cognition (`_conventions.md` §2.3) |
 | Packages | `@horizoncode/provider`, `@horizoncode/context` (which holds the prompt library — `packages/context/prompts/` [planned]), `@horizoncode/tools` |
 | Crates | `hz_index`, `hz_ast` (through `hz_native`), `hz_kernel` (secret use, receipts) |
@@ -37,16 +37,16 @@ It deliberately excludes: authority and receipts (`docs/11-authority-safety.md`)
 
 | Subsystem | Design owner here | Nearest ancestor artifact |
 |---|---|---|
-| `models.dev` ingest + snapshot | `@horizoncode/provider/src/catalog/` [planned] | `/data/home/forge/repo-tour/opencode/packages/core/src/models-dev.ts`, snapshot `/data/home/forge/repo-tour/opencode/packages/core/src/models-dev/snapshot.txt` |
-| Wire codecs (~50) | `@horizoncode/provider/src/protocols/` [planned] | `/data/home/forge/repo-tour/opencode/packages/ai/src/protocols/` (52 files) |
-| Provider registry | `@horizoncode/provider/src/providers/` [planned] | `/data/home/forge/repo-tour/opencode/packages/ai/src/providers/` (73 entries) |
-| Credential affinity + account pools | `@horizoncode/provider/src/accounts/` [planned] | `/data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/session/credential-pin.ts`, `/data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/config/account-pools.ts` |
-| Cost gate / session-tree cost | `@horizoncode/provider/src/ledger/` [planned] | `/data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/session/cost-gate.ts` |
-| Repo index (lexical + symbols + freshness) | `hz_index` (crate) | `/data/home/forge/repo-tour/horizoncode/indexd/src/repo_intel.rs`, `/data/home/forge/repo-tour/horizoncode/indexd/src/generation_store.rs`, `/data/home/forge/repo-tour/horizoncode/indexd/src/watch.rs` |
-| Cache-stable prefix discipline | `@horizoncode/context/src/compiler.ts` [planned] | `/data/home/forge/repo-tour/DeepSeek-Reasonix/internal/assembly/boot/context_projection_test.go`, `/data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/system-prompt.ts` |
-| Memory tiers + provenance | `@horizoncode/context/src/memory/` [planned] | `/data/home/forge/repo-tour/DeepSeek-Reasonix/internal/state/memory/`, `/data/home/forge/repo-tour/DeepSeek-Reasonix/docs/SESSION_MEMORY_RETRIEVAL.md` |
-| Compaction strategies | `@horizoncode/context/src/compaction/` [planned] | `/data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/session/compaction-methods.ts`, `/data/home/forge/repo-tour/grok-build/crates/codegen/xai-compaction-transcript/` |
-| Snapcompact (vision-frame compression) | `@horizoncode/context/src/compaction/snapcompact.ts` [planned] | `/data/home/forge/repo-tour/oh-my-pi/packages/snapcompact/src/snapcompact.ts` |
+| `models.dev` ingest + snapshot | `@horizoncode/provider/src/catalog/` [planned] | [`opencode/packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts), snapshot [`opencode/packages/core/src/models-dev/snapshot.txt`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev/snapshot.txt) |
+| Wire codecs (~50) | `@horizoncode/provider/src/protocols/` [planned] | [`opencode/packages/ai/src/protocols/`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/protocols) (52 files) |
+| Provider registry | `@horizoncode/provider/src/providers/` [planned] | [`opencode/packages/ai/src/providers/`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers) (73 entries) |
+| Credential affinity + account pools | `@horizoncode/provider/src/accounts/` [planned] | [`oh-my-pi/packages/coding-agent/src/session/credential-pin.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/session/credential-pin.ts), [`oh-my-pi/packages/coding-agent/src/config/account-pools.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/config/account-pools.ts) |
+| Cost gate / session-tree cost | `@horizoncode/provider/src/ledger/` [planned] | [`oh-my-pi/packages/coding-agent/src/session/cost-gate.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/session/cost-gate.ts) |
+| Repo index (lexical + symbols + freshness) | `hz_index` (crate) | `indexd/src/repo_intel.rs` of the ancestor project (not cloned, path not verified), `indexd/src/generation_store.rs` of the ancestor project (not cloned, path not verified), `indexd/src/watch.rs` of the ancestor project (not cloned, path not verified) |
+| Cache-stable prefix discipline | `@horizoncode/context/src/compiler.ts` [planned] | `DeepSeek-Reasonix/internal/assembly/boot/context_projection_test.go` (repo not cloned, path not verified), [`oh-my-pi/packages/coding-agent/src/system-prompt.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/system-prompt.ts) |
+| Memory tiers + provenance | `@horizoncode/context/src/memory/` [planned] | `DeepSeek-Reasonix/internal/state/memory` (repo not cloned, path not verified), `DeepSeek-Reasonix/docs/SESSION_MEMORY_RETRIEVAL.md` (repo not cloned, path not verified) |
+| Compaction strategies | `@horizoncode/context/src/compaction/` [planned] | [`oh-my-pi/packages/coding-agent/src/session/compaction-methods.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/session/compaction-methods.ts), [`grok-build/crates/codegen/xai-compaction-transcript/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-compaction-transcript) |
+| Snapcompact (vision-frame compression) | `@horizoncode/context/src/compaction/snapcompact.ts` [planned] | [`oh-my-pi/packages/snapcompact/src/snapcompact.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/snapcompact/src/snapcompact.ts) |
 
 Every row is **DESIGNED** in HorizonCode unless §10 says otherwise.
 
@@ -98,7 +98,7 @@ R66) — not a terminal state.
 | R23 | An `AccountPoolV1` declares members, a `strategy`, an `affinity` mode and `rotation` triggers. Rotation MUST be recorded as `hz.provider.account.rotated` with a reason code and MUST NOT occur while a request is in flight. | `account-pool.test.ts` |
 | R24 | **Credential affinity is load-bearing**: for a given `(session, provider)` the account that served turn *N* serves turn *N+1*. Affinity breaks only on (a) two consecutive retryable failures, (b) an advertised quota exhaustion, (c) invalid credentials, (d) an explicit user command, or (e) an open circuit breaker — and a break MUST be reported with an estimated cache cost. | `affinity-pinning.test.ts`, `affinity-break-report.test.ts` |
 | R25 | A fork inherits the parent's affinity (it reuses the parent's prefix, so the parent's cache is still warm); `new_context` and a model switch reset it to unaffiliated. | `affinity-inheritance.test.ts` |
-| R26 | Secrets reach the provider only through the kernel (`secrets.read`), so every credential *use* is receipted (`source: /data/home/forge/repo-tour/horizoncode/kernel/src/secret_use.rs`). The cognition plane resolves per request and drops the value; it MUST NOT cache a credential in a long-lived structure. | `secret-lifetime.test.ts` |
+| R26 | Secrets reach the provider only through the kernel (`secrets.read`), so every credential *use* is receipted (source: `kernel/src/secret_use.rs` of the ancestor project, not cloned, path not verified). The cognition plane resolves per request and drops the value; it MUST NOT cache a credential in a long-lived structure. | `secret-lifetime.test.ts` |
 
 ### 2.C Request construction
 
@@ -137,10 +137,10 @@ R66) — not a terminal state.
 | R47 | Provider-reported usage is authoritative where reported. The local estimator exists for budgeting *before* a call and for providers that report nothing; every record states which was used (`usage.source ∈ {provider, estimated}`). | `usage-source.test.ts` |
 | R48 | The estimator is selected by the descriptor's `tokenizer`. An unknown tokenizer MUST use the conservative byte-based estimator and set `estimated_conservative = true`. | `tokenizer-selection.test.ts` |
 | R49 | Where a provider exposes a token-count endpoint, the compiler MAY use it to size the tail, cached per `(model, tail_digest)` and called at most once per step. | `count-tokens-cache.test.ts` |
-| R50 | The **price table is append-only** (`PriceRateV1`): a rate is superseded, never edited; lookup is `(provider_id, model_id, at_timestamp)`. A missing rate yields `cost = unknown` and is never recorded as `0`. | `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `/data/home/forge/repo-tour/DeepSeek-Reasonix/internal/contract/pricing/rates.go`) |
+| R50 | The **price table is append-only** (`PriceRateV1`): a rate is superseded, never edited; lookup is `(provider_id, model_id, at_timestamp)`. A missing rate yields `cost = unknown` and is never recorded as `0`. | `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `DeepSeek-Reasonix/internal/contract/pricing/rates.go` (repo not cloned, path not verified)) |
 | R51 | Cache pricing is explicit: `cache_read_per_mtok` and `cache_write_per_mtok` are separate rates. When the provider reports no cache counters, input is priced at the full input rate and the record sets `cache_measured = false` — conservative, never optimistic. | `cache-pricing.test.ts` |
 | R52 | Currency: the ledger stores the vendor's declared currency plus the id of the FX snapshot used for display. Reconciliation MAY convert for display; accounting MUST NOT convert. A display conversion never mutates a stored amount. | `currency-ledger.test.ts` |
-| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` — `dream` is the background-consolidation run defined in `/data/home/forge/HorizonCode/docs/08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
+| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` — `dream` is the background-consolidation run defined in `08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
 | R54 | Every provider call is preceded by a budget check against the enclosing run's token and cost budgets. A call that cannot fit is refused before any network effect, and the refusal is a receipted `denied` effect (RC-7), not a silent failure. | `budget-preflight.test.ts` |
 
 ### 2.F The context compiler in depth
@@ -246,7 +246,7 @@ Retrieval is local-first: the default configuration needs no network, and every 
 | R95 | Retrieval has exactly four sources: (1) BM25 lexical index over workspace text and session transcripts; (2) embeddings over record/chunk vectors (local model by default: a small GGUF encoder served by `hz_native`); (3) the symbol/reference index (tree-sitter via `hz_ast`); (4) the repo map. A fifth source requires a spec change. | `retrieval-sources.test.ts` |
 | R96 | The index lives outside the repository by default (`<user cache>/horizon/index/<workspace_digest>/`), with an opt-in in-repo location (`<workspace>/.hz/index/`) that is gitignored. The index MUST NOT be required for correctness: deleting it degrades quality, never breaks a run. | `index-optional.test.ts` |
 | R97 | Index maintenance is owned by `hz_index` (Rust) and driven over a versioned protocol (`status`, `query`, `symbols`, `references`, `repo_map`, `reindex`, `gc`) by `@horizoncode/context/src/index-client.ts` [planned]. The protocol carries `HZ_PROTO` and fails closed on mismatch, exactly as the kernel protocol does. | `index-protocol.test.ts`, `index-abi-mismatch.test.ts` |
-| R98 | Indexing is **incremental and atomic**: file-watch events accumulate into a batch that is applied to a new generation, and generations are swapped atomically (`source: /data/home/forge/repo-tour/horizoncode/indexd/src/generation_store.rs`). A query MUST never observe a partially built generation. | `generation-swap.test.ts` |
+| R98 | Indexing is **incremental and atomic**: file-watch events accumulate into a batch that is applied to a new generation, and generations are swapped atomically (source: `indexd/src/generation_store.rs` of the ancestor project, not cloned, path not verified). A query MUST never observe a partially built generation. | `generation-swap.test.ts` |
 | R99 | Every retrieval result carries `generation_id` and `index_age_ms`. If `index_age_ms` exceeds the freshness threshold (default 5000 ms *and* at least one pending write-behind batch), the result is marked `stale = true`, and any tool that needs exact content MUST re-read the file through the filesystem. | `freshness-marking.test.ts` |
 | R100 | Retrieval is never the authority for a mutation target: a path taken from an index result is resolved and re-verified by the kernel before any write (ADR-012). An index entry pointing at a path that no longer exists produces a normal "not found" outcome, never a blind write. | `index-not-authority.test.ts` |
 | R101 | Ranking is one formula, and it is testable: `score = w_bm25·BM25(q,d) + w_emb·cos(q,d) + w_sym·symbol_bonus + w_path·path_proximity + w_rec·recency_decay + w_auth·authority_prior − w_pen·penalty(path_class)` with defaults `w_bm25 = 1.0`, `w_emb = 0.8` (0 when embeddings are disabled), `w_sym = 1.5`, `w_path = 0.5`, `w_rec = 0.3` (half-life 30 days), `w_auth = 0.6`, `w_pen = 2.0` for ignored/vendored/generated/binary paths; BM25 uses `k1 = 1.2`, `b = 0.75`; when sparse and dense results are mixed they are fused with reciprocal rank fusion `k = 60`; ties break by `(path, start_line, id)`. Weights are data with a digest, and a change requires an eval run (§9). | `ranking-formula.test.ts`, `ranking-determinism.test.ts` |
@@ -258,7 +258,7 @@ Retrieval is local-first: the default configuration needs no network, and every 
 
 ### 2.I Compaction
 
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** — triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `/data/home/forge/HorizonCode/docs/12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** — triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
 
 The event log is never compacted. Compaction rewrites the *requested context* only.
 
@@ -296,7 +296,7 @@ The event log is never compacted. Compaction rewrites the *requested context* on
 - **Keep-alive during idle:** pause time is cache-expiry time — the harness pings the provider prefix cache before expiry so the next turn is a hit, not a full cache write.
 - **Append-only sync:** any in-place rewrite of the message log truncates to the longest byte-stable prefix (`syncMessages` semantics); append-only mode is gated **per provider from data** (`appendOnlyContext: auto`), never from a user preference — a provider that rewrites history between turns would be hurt by it.
 - **Output-budget fit (NF-074):** estimate prompt size from the provider's newest reported usage anchor plus a local count of the appended tail; fit the output cap to the remaining window with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed.
-- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here — `/data/home/forge/HorizonCode/docs/09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
+- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here — `09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
 
 ### 2.J Prompting
 
@@ -366,7 +366,7 @@ Code quality:
 
 ## 3. Interfaces
 
-Every name below is **`[planned]`** unless it is a schema. `[planned]` marks a name or path this document *reserves*: nothing in this section is implemented, and §10 claims no level above `DESIGNED`. Signatures are TypeScript shapes from `@horizoncode/protocol` (generated, `_conventions.md` §7) unless a crate is named. Field lists belong to `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; this document states only what the cognition plane requires of them.
+Every name below is **`[planned]`** unless it is a schema. `[planned]` marks a name or path this document *reserves*: nothing in this section is implemented, and §10 claims no level above `DESIGNED`. Signatures are TypeScript shapes from `@horizoncode/protocol` (generated, `_conventions.md` §7) unless a crate is named. Field lists belong to `05-domain-and-schemas.md`; this document states only what the cognition plane requires of them.
 
 ### 3.1 Provider interface — `@horizoncode/provider` [planned]
 
@@ -437,7 +437,7 @@ assertPrefixClean(prefix: PrefixV1): void        // R64 enforcement
 | `digestPrefix` | `sha256(canonical(P0 ‖ P1 ‖ P2))`, recorded per step together with `compiler_version` and the model-descriptor digest. | R57 |
 | `assertPrefixClean` | Throws on any forbidden prefix content and on any match of the volatile pattern set; the step does not start. | R60, R64 |
 
-`ContextPlanV1` is declared by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; the cognition plane requires it to carry at least `prefix_digest`, `compiler_version`, `declared` (including `stop_sequences`), `arm`, `degradations[]` and the single checkpoint reference.
+`ContextPlanV1` is declared by `05-domain-and-schemas.md`; the cognition plane requires it to carry at least `prefix_digest`, `compiler_version`, `declared` (including `stop_sequences`), `arm`, `degradations[]` and the single checkpoint reference.
 
 ### 3.5 Memory API [planned]
 
@@ -470,7 +470,7 @@ rerank(candidates: RankedCandidateV1[], query: RetrievalQueryV1): Promise<Ranked
 ```
 
 - Four sources only (BM25 lexical, local embeddings, AST symbol/reference index, repo map); every result carries `generation_id`, `index_age_ms` and `stale`. (R95, R99)
-- Index calls go to `hz_index` over the versioned protocol through `/data/home/forge/HorizonCode/packages/context/src/index-client.ts` [planned]; a query never observes a partially built generation, and a path from any result is re-resolved by the kernel before a mutation. (R97, R98, R100)
+- Index calls go to `hz_index` over the versioned protocol through `packages/context/src/index-client.ts` [planned]; a query never observes a partially built generation, and a path from any result is re-resolved by the kernel before a mutation. (R97, R98, R100)
 - `retrieveSymbols` is structural (AST), never substring matching; a reference's confidence class (`exact` / `heuristic`) is part of the result. (R102)
 - `retrieve` is refused without a budget rather than defaulted; the repo map is admitted at most once per session epoch. (R103, R104)
 
@@ -486,7 +486,7 @@ assertPrefixUnchanged(before: PrefixDigestV1, after: PrefixDigestV1): void
 | Function | Contract | Rule |
 |---|---|---|
 | `planCompaction` | Selects strategies by deterministic host policy, builds the **host digest** from events and receipts, and enforces the verbatim-tail floor (at least the last 2 user turns and at least 12 % of the context window, whichever is larger). A plan that would violate the floor is refused and reported. | R108, R109, R110 |
-| `applyCompaction` | Runs as its own step with its own prefix variant, budget label and receipts; it folds into the existing checkpoint chain instead of adding a second narrative block. Snapcompact lives at `/data/home/forge/HorizonCode/packages/context/src/compaction/snapcompact.ts` [planned] and is eligible only under R111. | R111, R113, R115 |
+| `applyCompaction` | Runs as its own step with its own prefix variant, budget label and receipts; it folds into the existing checkpoint chain instead of adding a second narrative block. Snapcompact lives at `packages/context/src/compaction/snapcompact.ts` [planned] and is eligible only under R111. | R111, R113, R115 |
 | `assertPrefixUnchanged` | Throws if compaction moved the prefix; the cache-guard test asserts the same property in CI. Only T4's content and the checkpoint may change. | R114 |
 
 ### 3.8 Token and cost accounting API [planned]
@@ -528,7 +528,7 @@ Two names used by §2 are now **ratified** (see `_conventions.md` §11 RC-10) an
 
 | Schema | R/W | Declared by | What the cognition plane requires of it | Rule |
 |---|---|---|---|---|
-| `ContextPlanV1` | W | `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` | `prefix_digest`, `compiler_version`, `declared` (with `stop_sequences`), `arm`, `degradations[]`, one checkpoint reference, block-order evidence | R32, R57, R69, R113, R127 |
+| `ContextPlanV1` | W | `05-domain-and-schemas.md` | `prefix_digest`, `compiler_version`, `declared` (with `stop_sequences`), `arm`, `degradations[]`, one checkpoint reference, block-order evidence | R32, R57, R69, R113, R127 |
 | `DeclaredConfigV1` | R/W | 05 | the closed P2 field set; no free-form fields; its digest is the cache-epoch key | R56, R57 |
 | `PrefixV1` / `PrefixDigestV1` | W | 05 | byte-stable P0–P2; both are components of the memo key | R61, R62 |
 | `CacheIntentV1` | W | 05 | `prefix_digest`, `provider_id`, `account_affinity_required: true`, provider cache controls; the runtime honours it or fails closed | R63 |
@@ -545,7 +545,7 @@ Two names used by §2 are now **ratified** (see `_conventions.md` §11 RC-10) an
 | `CompactionPlanV1` / `CompactionRecordV1` | W | 05 | strategy set and its inputs, tokens before/after, wall time, cost, cache-invalidation estimate | R108, R116 |
 | `AgentProfileV1` | R | agents plane | the active profile id is a P2 field; a profile cannot reorder blocks or widen authority | R55, R56, R125 |
 
-`ProviderConfigV1` and `ModelRefV1` are declared in `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`. This document references them and never restates their field lists; where a `V1` suffix differs between the two documents, the generated schema in `packages/protocol` (`_conventions.md` §7) is the single source.
+`ProviderConfigV1` and `ModelRefV1` are declared in `05-domain-and-schemas.md`. This document references them and never restates their field lists; where a `V1` suffix differs between the two documents, the generated schema in `packages/protocol` (`_conventions.md` §7) is the single source.
 
 ### 4.2 Memory persistence
 
@@ -555,7 +555,7 @@ Two names used by §2 are now **ratified** (see `_conventions.md` §11 RC-10) an
 | Vector sidecar | `<user state>/horizon/memory/<workspace_digest>.vec` [planned] | record_id ↔ vector id map plus the encoder id and dimension; a vector set is readable only together with a matching record digest chain | R95 |
 | Export | `hzcode memory export --format jsonl` output | records plus provenance plus the digest chain; import verifies digests and refuses a foreign `scope.workspace_digest` without `--retarget` | R91 |
 
-DDL and column names are owned by `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`. The cognition plane imposes three storage obligations regardless of DDL: `provenance` is non-null (a record without it is rejected at write), a tombstone digest is consulted before any write that could relearn a fact, and retention is applied by a pass that emits `hz.memory.expired` rather than deleting rows silently.
+DDL and column names are owned by `05-domain-and-schemas.md`. The cognition plane imposes three storage obligations regardless of DDL: `provenance` is non-null (a record without it is rejected at write), a tombstone digest is consulted before any write that could relearn a fact, and retention is applied by a pass that emits `hz.memory.expired` rather than deleting rows silently.
 
 ### 4.3 Index files and their location
 
@@ -576,25 +576,25 @@ The index is owned by `hz_index` (Rust) and driven over the versioned `status` /
 
 | Fixture | Path | Guards | Rule |
 |---|---|---|---|
-| Prefix pins | `/data/home/forge/HorizonCode/packages/context/test/golden/prefix/<family>.sha256` [planned] | byte-identical prefix per `(provider, prompt_family)`; a change requires an explicit `--update-golden` commit with a written rationale | R65f, RC-8 |
-| Recorded sessions | `/data/home/forge/HorizonCode/packages/context/test/fixtures/sessions/` [planned] | replay in a fresh process reproduces the identical prefix digest | R65b, R65g |
-| Codec fixtures | `/data/home/forge/HorizonCode/packages/provider/test/fixtures/<protocol>/` [planned] | streaming-first codecs; family parity | R12, R13 |
-| Tool-schema goldens | `/data/home/forge/HorizonCode/packages/provider/test/golden/tools/<family>/` [planned] | per-family transforms never add or widen a parameter | R28 |
-| Ranking weights | `/data/home/forge/HorizonCode/packages/context/src/ranking.weights.json` plus its digest [planned] | a weight change requires an eval run before merge | R101 |
+| Prefix pins | `packages/context/test/golden/prefix/<family>.sha256` [planned] | byte-identical prefix per `(provider, prompt_family)`; a change requires an explicit `--update-golden` commit with a written rationale | R65f, RC-8 |
+| Recorded sessions | `packages/context/test/fixtures/sessions/` [planned] | replay in a fresh process reproduces the identical prefix digest | R65b, R65g |
+| Codec fixtures | `packages/provider/test/fixtures/<protocol>/` [planned] | streaming-first codecs; family parity | R12, R13 |
+| Tool-schema goldens | `packages/provider/test/golden/tools/<family>/` [planned] | per-family transforms never add or widen a parameter | R28 |
+| Ranking weights | `packages/context/src/ranking.weights.json` plus its digest [planned] | a weight change requires an eval run before merge | R101 |
 
 ### 4.5 The `models.dev` snapshot and its refresh policy
 
 | Item | Value | Rule |
 |---|---|---|
 | Ingest output | `catalog.json` plus a snapshot blob carrying a content digest; the runtime reads the snapshot and never the network | R4 |
-| Path | `/data/home/forge/HorizonCode/packages/provider/src/catalog/` [planned] | §1.1 |
+| Path | `packages/provider/src/catalog/` [planned] | §1.1 |
 | Per-request evidence | the snapshot digest is recorded on every `hz.step.llm.requested`, so a run's model facts are reproducible | R4 |
 | Refresh command | `hzcode models refresh` — explicit, never during a live session | R5 |
 | Generation policy | a refresh writes a new generation and keeps the previous one readable while any archived session tree references it | R5 |
 | Capability downgrade | never applies inside a live session; takes effect at the next session start and is reported by `hzcode doctor` | R6 |
 | Discovery providers | race a 750 ms deadline, then fall back to the cached list; never block startup | R10 |
 
-`source: repo-tour opencode /data/home/forge/repo-tour/opencode/packages/core/src/models-dev.ts` and `source: repo-tour opencode /data/home/forge/repo-tour/opencode/packages/core/src/models-dev/snapshot.txt` — ancestor artifacts, cited as design input only; they are not part of this product.
+source: [`opencode/packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts) and source: [`opencode/packages/core/src/models-dev/snapshot.txt`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev/snapshot.txt) — ancestor artifacts, cited as design input only; they are not part of this product.
 
 ---
 
@@ -625,7 +625,7 @@ Cross-cutting: timeouts are connect 10 s, time-to-first-token 120 s, inter-token
 | R38 | Overflow is never answered by truncating the request. |
 | R41, R42 | A substitution is always an event; once a fallback serves a step the session continues on it for the turn unless `fallback.return = true`. |
 | RC-4 | Usage from a cancelled attempt is recorded under the cancelled step's `attribution.stepId`. |
-| RC-5 | Exit codes are owned by `/data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 and are referenced, never restated, here. |
+| RC-5 | Exit codes are owned by `14-surfaces.md` §2.2 and are referenced, never restated, here. |
 
 ### 5.2 Fail-closed points
 
@@ -720,7 +720,7 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 3. **Diagnose.** The failure names the offending block (`P0` / `P1` / `P2`), the byte range, the volatile pattern class, and the two digests that differ; the diagnosis is derived from a diff of the canonical serializations, never from a summary of them. (R57, R61)
 4. **Localise.** Three realistic causes, separated by the negative control: a fragment or tool description changed; a family transform or tool-schema transform changed; or a volatile value was introduced into P0–P2. (R28, R60)
 5. **Remediate.** A prompt, fragment or description change requires the full governance path: bump `compiler_version`, update the golden fixture in the same commit, include the eval delta (task success, tool-call validity, cache ratio) and obtain human-owner review. A change missing any of the four fails gate `prompt-governance`. (R120, R126)
-6. **Golden update.** Updating `/data/home/forge/HorizonCode/packages/context/test/golden/prefix/<family>.sha256` requires an explicit `--update-golden` commit containing a **written rationale**, under gate `cacheguard`; that path is the pin's only owner. (R65f, RC-8)
+6. **Golden update.** Updating `packages/context/test/golden/prefix/<family>.sha256` requires an explicit `--update-golden` commit containing a **written rationale**, under gate `cacheguard`; that path is the pin's only owner. (R65f, RC-8)
 7. **Ablation instead of a fix.** If the change is an experiment, it exists only as an explicit A/B ablation under `ablation.arm`, is recorded per step in `ContextPlanV1.arm`, and carries its own cache cost. Self-improvement may *propose* a variant; it cannot merge, enable or default one. (R127)
 8. **Verify.** Remediation is complete only when every leg of the gate passes and a replay reproduces the new digest; the fix is reported with the digest, the `compiler_version` bump and the eval delta. (R65, R70)
 
@@ -728,7 +728,7 @@ Each flow below is the event-and-decision sequence an implementation must reprod
 
 ## 7. Security and authority
 
-Authority is decided by the kernel (`/data/home/forge/HorizonCode/docs/11-authority-safety.md`), never by this plane. The cognition plane consumes capabilities and MUST NOT widen them.
+Authority is decided by the kernel (`11-authority-safety.md`), never by this plane. The cognition plane consumes capabilities and MUST NOT widen them.
 
 | Capability | Used for | Narrowing required here | Rule |
 |---|---|---|---|
@@ -787,7 +787,7 @@ Rule-level test names appear in §2; the table below is the matrix an implementa
 | Auth and secrets | `secret-egress.test.ts`, `auth-strategy-matrix.test.ts`, `oauth-loopback.test.ts`, `device-flow.test.ts`, `oauth-refresh.test.ts`, `copilot-token.test.ts`, `workload-identity.test.ts`, `credential-store.test.ts`, `account-pool.test.ts`, `affinity-pinning.test.ts`, `affinity-break-report.test.ts`, `affinity-inheritance.test.ts`, `secret-lifetime.test.ts`, `affinity-resolution.test.ts`, `cache-cold-report.test.ts`, `rotation-visibility.test.ts` | redaction gate | R16–R26, R71–R73 |
 | Request construction | `prompt-family.test.ts`, `tool-schema-golden.test.ts`, `tool-schema-narrowing.test.ts`, `thinking-map.test.ts`, `interleaved-thinking.test.ts`, `sampling-policy.test.ts`, `stop-sequences.test.ts`, `max-tokens.test.ts`, `media-budget.test.ts`, `request-determinism.test.ts`, `cache-intent.test.ts` | golden fixtures per family | R27–R35, R63 |
 | Fallback and errors | `error-taxonomy.test.ts`, `retry-policy.test.ts` (fake clock), `overflow-path.test.ts`, `content-filter.test.ts`, `partial-toolcall.test.ts`, `fallback-chain.test.ts`, `fallback-stickiness.test.ts`, `circuit-breaker.test.ts`, `breaker-not-durable.test.ts`, `timeout.test.ts`, `delta-replay.test.ts`, `delta-concat.test.ts`, `one-stream-per-step.test.ts` | boundary test: one stream per step | R36–R46 |
-| Token accounting and cost | `usage-source.test.ts`, `tokenizer-selection.test.ts`, `count-tokens-cache.test.ts`, `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `/data/home/forge/repo-tour/DeepSeek-Reasonix/internal/contract/pricing/rates.go`), `cache-pricing.test.ts`, `cache-measurement.test.ts`, `currency-ledger.test.ts`, `usage-fold-parity.test.ts`, `budget-preflight.test.ts` | ratchet: `hzcode budget` equals the `hz.usage.recorded` fold exactly | R47–R54, R66 |
+| Token accounting and cost | `usage-source.test.ts`, `tokenizer-selection.test.ts`, `count-tokens-cache.test.ts`, `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `DeepSeek-Reasonix/internal/contract/pricing/rates.go` (repo not cloned, path not verified)), `cache-pricing.test.ts`, `cache-measurement.test.ts`, `currency-ledger.test.ts`, `usage-fold-parity.test.ts`, `budget-preflight.test.ts` | ratchet: `hzcode budget` equals the `hz.usage.recorded` fold exactly | R47–R54, R66 |
 | Memory provenance and lifecycle | `memory-record-schema.test.ts`, `provenance-required.test.ts`, `episodic-from-receipts.test.ts`, `working-memory-projection.test.ts`, `tier-closure.test.ts`, `extraction-detached.test.ts`, `extraction-deadline.test.ts`, `extraction-status.test.ts`, `extraction-redaction.test.ts`, `reflection-bounds.test.ts`, `consolidation-gate.test.ts`, `team-promotion-requires-human.test.ts`, `review-decision-audit.test.ts`, `conflict-resolution.test.ts`, `contested-excluded.test.ts`, `policy-like-quarantine.test.ts`, `sensitivity-behaviour.test.ts`, `redaction-surfaces.test.ts`, `memory-export-import.test.ts`, `memory-delete-tombstone.test.ts`, `no-relearn.test.ts`, `retention-policy.test.ts`, `memory-events.test.ts` | ratchet: every write path emits `hz.memory.retained` | R74–R94 |
 | Retrieval and index | `retrieval-sources.test.ts`, `index-optional.test.ts`, `index-protocol.test.ts`, `index-abi-mismatch.test.ts`, `generation-swap.test.ts`, `freshness-marking.test.ts`, `index-not-authority.test.ts`, `ranking-formula.test.ts`, `ranking-determinism.test.ts`, `symbol-structural.test.ts`, `repo-map.test.ts`, `repo-map-budget.test.ts`, `retrieval-budget.test.ts`, `embeddings-egress.test.ts`, `retrieval-audit.test.ts` | ratchet: an unbudgeted retrieval is refused | R95–R106 |
 | Compaction | `compaction-trigger.test.ts`, `trigger-ratio-presets.test.ts`, `strategy-selection.test.ts`, `digest-authoritative.test.ts`, `digest-summary-conflict.test.ts`, `verbatim-tail-floor.test.ts`, `snapcompact-eligibility.test.ts`, `snapcompact-artifacts.test.ts`, `snapcompact-eval-gate.test.ts`, `compaction-preservation.test.ts`, `single-checkpoint.test.ts`, `compaction-step-isolation.test.ts`, `compaction-measurement.test.ts`, `compaction-thrash.test.ts` | golden `CompactionRecordV1` for the synthetic session | R107–R117 |
@@ -799,29 +799,29 @@ Harness requirements: a fake clock for every backoff and timeout test, recorded 
 
 ## 10. Status
 
-`_conventions.md` §8 forbids claiming a level above the evidence. **Every capability below is `DESIGNED`** *as a specification claim*, with one implemented slice: the provider layer — mock, Anthropic and OpenAI adapters with the shared SSE parser — exists and is TESTED (`app/src/core/providers/`, 72 tests; evidence in `docs/28-implementation-status.md`). The context compiler, cache guard, memory tiers, retrieval and compaction below remain spec-only. The ancestor artifacts cited in §1.1 are design input from other repositories under `/data/home/forge/repo-tour/`, not evidence about this product. `UNKNOWN` marks a question this document does not settle.
+`_conventions.md` §8 forbids claiming a level above the evidence. **Every capability below is `DESIGNED`** *as a specification claim*, with these implemented slices (levels in `28-implementation-status.md`): the provider layer (Anthropic, OpenAI, Google and Ollama adapters, the openai-compatible family, mock and scripted, the shared SSE parser, request-phase retry, fail-loud unknown-provider handling) in `app/src/core/providers/`; the models.dev catalog seam with a small curated snapshot in `app/src/core/catalog/`; the base system prompt as data with snapshot goldens (§2.J.1); the project-memory instruction hierarchy (`instructions.ts`); constraint-preserving compaction (`compaction.ts`); output-budget fitting and tool-result caps (`output-budget.ts`); and the NF-075 growth loop in reduced form (`review.ts`, `curator.ts`, `grow.ts`). The context compiler, cache guard, memory tiers, retrieval and index service, account pools, OAuth, cost ledger and the other compaction strategies below remain spec-only; each has a DEFERRED row with its reason and upstream reference in the Provenance section at the end of this document. The ancestor artifacts cited in §1.1 are design input from other repositories, not evidence about this product; their upstream locations are now GitHub URLs at pinned commits. `UNKNOWN` marks a question this document does not settle.
 
 | Capability | Level | Evidence |
 |---|---|---|
-| Provider descriptors and registry | DESIGNED | §2.A R1–R2; §3.1; no code |
-| Wire codecs (streaming, fixture-driven) | DESIGNED | §2.A R12–R15; §1.1 ancestry |
-| `models.dev` ingest, snapshot, generations | DESIGNED | §2.A R4–R6; §4.5 |
+| Provider descriptors and registry | DESIGNED (reduced: `providers/index.ts` and config entries) | §2.A R1–R2; §3.1; no code |
+| Wire codecs (streaming, fixture-driven) | DESIGNED (reduced: 4 native adapters plus openai-compatible) | §2.A R12–R15; §1.1 ancestry |
+| `models.dev` ingest, snapshot, generations | DESIGNED (reduced: curated snapshot and seam, no live refresh) | §2.A R4–R6; §4.5 |
 | Discovery providers (Ollama, LM Studio, vLLM, llama.cpp) | DESIGNED | §2.A R10 |
 | Apple Foundation Models provider | DESIGNED | §2.A R11 |
 | Auth strategies and credential lifecycle | DESIGNED | §2.B R16–R22; §3.2 |
 | Account pools, affinity, rotation | DESIGNED | §2.B R23–R25; §2.F.2 R71–R73 |
-| Request construction and declared-config hashing | DESIGNED | §2.C R27–R35; §3.3 |
-| Error taxonomy, retry, fallback, breakers | DESIGNED | §2.D R36–R46; §5.1 |
+| Request construction and declared-config hashing | DESIGNED (reduced: output-budget fit wired into requests; no declared-config hash) | §2.C R27–R35; §3.3 |
+| Error taxonomy, retry, fallback, breakers | DESIGNED (reduced: request-phase retry only) | §2.D R36–R46; §5.1 |
 | Context compiler (`compile`, prefix, tail, digest) | DESIGNED | §2.F R55–R70; §3.4 |
 | Cache guard (CI contract and runtime strict mode) | DESIGNED | R65; §5.2; §6.6 |
 | Token counting and estimate claims | DESIGNED | §2.E R47–R49; §3.8 |
 | Cost ledger, price table, session-tree fold | DESIGNED | §2.E R50–R54; §3.8 |
 | Memory tiers and record schema | DESIGNED | §2.G.1 R74–R78 |
-| Memory extraction, reflection, consolidation | DESIGNED | §2.G.2 R79–R85 |
+| Memory extraction, reflection, consolidation | DESIGNED (reduced NF-075 spec and editorial gate only) | §2.G.2 R79–R85 |
 | Memory conflict, privacy, export, delete, retention | DESIGNED | §2.G.3 R86–R94 |
 | Retrieval sources, ranking formula, budgets | DESIGNED | §2.H R95–R106 |
 | Index client protocol and freshness semantics | DESIGNED | R96–R99; §4.3 |
-| Compaction strategies (digest, summary, verbatim-tail) | DESIGNED | R107–R110, R112–R117 |
+| Compaction strategies (digest, summary, verbatim-tail) | DESIGNED (reduced: one windowed-view strategy with pinned constraints) | R107–R110, R112–R117 |
 | Snapcompact (vision-frame compression) | DESIGNED | R111, R117 |
 | Prompt library, fragments, `AGENTS.md` / `ZH.md` hierarchy | DESIGNED; reduced v1 (base prompt as data, peer instruction files, lazy nested injection, `/memory`, `/init`) IMPLEMENTED, see §2.J.1 | R118–R124 |
 | Prompt-change governance and CI gates | DESIGNED | R126–R127; §9 |
@@ -834,15 +834,72 @@ Harness requirements: a fake clock for every backoff and timeout test, recorded 
 
 ## 11. Related documents
 
-- `/data/home/forge/HorizonCode/docs/02-decisions.md` — the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
-- `/data/home/forge/HorizonCode/docs/03-hld.md` — the system map this plane sits in: planes, processes, package and crate layout.
-- `/data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` — the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
-- `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` — the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
-- `/data/home/forge/HorizonCode/docs/08-runtime.md` — the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
-- `/data/home/forge/HorizonCode/docs/09-tools.md` — tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
-- `/data/home/forge/HorizonCode/docs/11-authority-safety.md` — the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
-- `/data/home/forge/HorizonCode/docs/12-sessions-state.md` — the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
-- `/data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 — the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
-- `/data/home/forge/HorizonCode/docs/_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
+- `02-decisions.md` — the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
+- `03-hld.md` — the system map this plane sits in: planes, processes, package and crate layout.
+- `05-domain-and-schemas.md` — the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
+- `06-events-and-flows.md` — the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
+- `08-runtime.md` — the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
+- `09-tools.md` — tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
+- `11-authority-safety.md` — the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
+- `12-sessions-state.md` — the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
+- `14-surfaces.md` §2.2 — the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
+- `_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
 
 > Header reconciliation (applied): §1's dependency list previously used draft doc numbers. The references above now point at the files that exist — `03-hld.md`, `05-domain-and-schemas.md`, `08-runtime.md`, `09-tools.md`, `11-authority-safety.md`, `12-sessions-state.md` — and the draft-number mapping is closed.
+
+---
+
+## Provenance (what was taken from where)
+
+This section records, for the cognition plane, which designs and which bytes came from other repositories, with exact GitHub URLs at the commit that was read. It is a handoff aid and changes no status level; `docs/28-implementation-status.md` is the only place that may claim a level above DESIGNED.
+
+Reading the tables:
+
+- URLs point at a file at the full 40 character SHA from [`research/upstream-pins.md`](research/upstream-pins.md). Each path was checked with `git ls-files` in the read-only clone before it was written. Anything not checkable is written `path not verified`.
+- **Relation**: **copied verbatim**, **ported**, **adapted**, or **idea only**, as defined in the Provenance section of [`08-runtime.md`](08-runtime.md).
+- Judged from the header comments of the HorizonCode files, the docs/28 rulings and reading both sides.
+- Licences found: cline, codex, forgecode Apache-2.0; deepseek-harness, oh-my-pi, opencode MIT; grok-build and claude-code have their own `LICENSE` files not analysed here. The worktree has no `LICENSE` or `NOTICE`; attribution for any verbatim or ported row is an OPEN item for the human owner.
+- The ancestor project referred to as `horizoncode` / `repo-tour` in older text of this document is an earlier private codebase that is not available in this sandbox; its paths cannot be verified.
+- Wider context: [`research/`](research/README.md), [`research/compare-providers.md`](research/compare-providers.md) and [`30-steal-list.md`](30-steal-list.md).
+
+| # | HorizonCode file(s) | Upstream exact URL(s) at the pinned SHA | Relation | Notes |
+|---|---|---|---|---|
+| 1 | `app/src/core/providers/openai-compatible.ts`, `app/src/core/providers/openai.ts` (`streamOpenAiCompatible`), `app/src/core/config.ts` (provider registry entries) | [`packages/ai/src/providers/openai-compatible.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/openai-compatible.ts)<br>[`packages/ai/src/protocols`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/protocols) | adapted | One OpenAI-chat-shaped adapter parameterised by `{ name, baseUrl, credential }` so DeepSeek, Groq, Together, OpenRouter, xAI, vLLM and NVIDIA NIM are config, not code. The header says it mirrors opencode's `providers/openai-compatible.ts`; the returned `Provider.name` is the configured host id, and the Authorization header is rendered from the credential DATA, never from the provider id. opencode groups about 50 wire protocols; HorizonCode ships the OpenAI chat shape plus separate Anthropic, Google (Gemini `streamGenerateContent`) and Ollama adapters. License: MIT. Docs/28 rows 'Providers' and 'Providers +google/+ollama'. |
+| 2 | `app/src/core/providers/index.ts` (`unknownProviderProvider`, `missingKeyProvider`, `noModelProvider`) | [`packages/core/src/v1/config/provider.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/v1/config/provider.ts)<br>[`codex-rs/model-provider-info/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/model-provider-info/src/lib.rs) | idea only | Fail loud: an unknown provider id, a missing key, or a host with no model configured yields ONE `error` event naming the problem and a fix, then ends the turn cleanly, instead of silently falling back to the mock (the pre-fix behaviour was a documented weakness, `research/compare-providers.md` sections 5.1 and 5.5). codex embeds 'How to fix' text in removed-value errors; HorizonCode's messages are its own wording. Docs/28 row 'Provider fail-loud + Credential contract'. |
+| 3 | `app/src/contracts.ts` (`Credential`, `oauth` arm) | [`packages/core/src/plugin/provider/chatgpt.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/provider/chatgpt.ts) | idea only | The `Credential` union is additive and implements `apiKey` and `none`. The `oauth` arm is RESERVED and used by no code path; the contract comment cites opencode's ChatGPT provider plugin as the model for later PKCE loopback plus refresh. DEFERRED: no OAuth flow exists (docs/10 R16 to R22 auth strategies remain DESIGNED). |
+| 4 | `app/src/core/catalog/catalog.ts`, `app/src/core/catalog/models-dev.curated.json` | [`packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts)<br>[`packages/core/src/models-dev/snapshot.txt`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev/snapshot.txt)<br>models.dev: https://models.dev (website and data feed, not a pinned repo) | adapted (seam and floor concept), idea only (data) | A catalog seam replaces the 5-string `DEFAULT_MODELS` with a data-driven lookup: capabilities and limits are READ from the record, no `id.includes('claude')` in code. The curated snapshot is a small hand-curated slice of the models.dev normalised shape (5 providers; only the fields HorizonCode reads) and is NOT subject to the minimum-providers floor, which applies only to externally sourced snapshots (env override or live fetch), following the opencode rationale quoted in the header. Per-value provenance of the curated numbers is not recorded here; treat them as unverified against models.dev. DEFERRED, stated in the header and docs/28: the full ~8 MB snapshot bundle and the live refresh (ETag/digest, 5 minute poll) opencode ships; `fetchLiveCatalog` marks where it would hook in and is disabled in tests. Docs/28 row 'models.dev catalog seam'. |
+| 5 | `app/src/core/providers/anthropic.ts`, `app/src/core/providers/openai.ts`, `app/src/core/providers/google.ts`, `app/src/core/providers/ollama.ts`, `app/src/core/providers/sse.ts`, `app/src/core/providers/mock.ts`, `app/src/core/providers/scripted.ts` | none claimed | idea only (no specific upstream) | Wire adapters and the shared SSE parser are original and tested against canned localhost servers with byte-level chunk splitting. `scripted.ts` is a deterministic in-library model for evals (docs/30 section 4 item 8). The mock provider is only selected explicitly (`--mock`, `HZ_PROVIDER=mock`) or by the zero-config default. |
+| 6 | `app/src/core/compaction.ts` | [`crates/forge_domain/src/compact/summary.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_domain/src/compact/summary.rs)<br>[`crates/forge_app/src/transformers/compaction.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/transformers/compaction.rs) | adapted (summary shape), original (pinned constraints) | `summariseElided` lists what the elided turns DID: files touched with last operation, commands run, searches, todo changes, with hard caps (20 files, 8 commands, 6 searches, 5 todo items, 2500 chars total). That structured shape is the forgecode idea (take T-7); the code is HorizonCode's. PINNED CONSTRAINTS (first user message verbatim plus constraint-shaped lines, rebuilt from the transcript on every dispatch, so a crash cannot lose them) are original and stronger than forge. Compaction is a pure VIEW of (messages, limit); the SQLite transcript is never rewritten. Command lines are masked in the summary (ruling 79). Ruling 76. |
+| 7 | `app/src/core/compaction.ts` | [`packages/coding-agent/src/session/compaction-methods.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/session/compaction-methods.ts)<br>[`codex-rs/core/src/session/async_compaction.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/async_compaction.rs)<br>[`codex-rs/prompts/templates/compact/prompt.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/templates/compact/prompt.md)<br>[`crates/codegen/xai-compaction-transcript`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-compaction-transcript) | idea only | Named as design inputs in the docs/10 table. None of these strategies is implemented: HorizonCode has ONE compaction strategy (windowed view with labelled summary). See the deferral table for each missing strategy. |
+| 8 | `app/src/core/instructions.ts`, `app/src/core/loop.ts` (lazy nested fragments), `app/src/tui/interactive.ts` (`/memory`, `/init`) | [`mods/agents-md`](https://github.com/anthropics/claude-code/tree/0ed94698aa0aeee471465fc9c867c2e8434c4d68/mods/agents-md)<br>Cursor, Windsurf, Copilot, Gemini rule files: products, no repository read (path not verified) | idea only (convergent) | Project memory hierarchy: user files, workspace chain root to cwd, `.hz/AGENTS.md`, `ZH.md`, local overrides (`CLAUDE.local.md`). Peers per directory: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CONVENTIONS.md`; at the repo root `.github/copilot-instructions.md`, `.cursorrules`, `.cursor/rules/*.mdc` (only `alwaysApply: true`), `.windsurfrules`. 32 KB per file and 128 KB total, truncation always reported. A file whose real path leaves its tree is refused. Blocks are conventions, NOT authority (docs/11 threat T3). The header cites the docs/10 R121 to R123 design, not an upstream; Claude Code's published memory behaviour is the closest public reference. |
+| 9 | `app/src/core/prompt/sections.ts`, `app/src/core/prompt/environment.ts`, `app/src/core/prompt/index.ts` | [`codex-rs/core/gpt-5.2-codex_prompt.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/gpt-5.2-codex_prompt.md)<br>[`packages/coding-agent/src/system-prompt.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/system-prompt.ts)<br>[`packages/core/system-prompt/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/core/system-prompt/README.md)<br>opencode prompt text, cline `buildClineSystemPrompt`, grok-build approval framing: exact files not verified | idea only | The base prompt is DATA: short imperative sections joined in table order, byte-identical across sessions, models and days, so it can sit in a provider prompt cache; anything variable lives in the environment block rendered after it. The header lists the studied references. No sentence was copied. The snapshot goldens (`app/tests/core/fixtures/system-prompt.golden.txt`, `child-prompt.golden.txt`) and the 700 token cap in `app/tests/core/prompt.test.ts` pin it (section 2.J.1; a wording change updates the golden in the same commit; estimate 699, ruling 73). |
+| 10 | `app/src/core/prompt/sections.ts` (static prefix), `app/tests/tools/tool-schema-snapshot.test.ts` | [`packages/agent/src/append-only-context.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/agent/src/append-only-context.ts)<br>[`packages/ai/src/cache-policy.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/cache-policy.ts)<br>[`packages/core/system-prompt/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/core/system-prompt/README.md) | idea only | Cache-first design inputs for R55 to R70 and the R65 cache guard. WHAT EXISTS: a static byte-stable prompt prefix and a tool-schema snapshot test. WHAT DOES NOT: a context compiler, a cache guard, prefix digests, breakpoint planning, usage-based cache measurement. omp's frozen `StablePrefix` plus append-only log, opencode's up-to-4 breakpoint planner (`BREAKPOINT_CAP`) and dsh's `systemPromptUpdate: 'in-history'` are DEFERRED references. |
+| 11 | `app/src/core/curator.ts`, `app/src/core/review.ts`, `app/src/grow.ts` | hermes-agent: growth and memory family `docs/30` G-1 to G-7; `docs/audit/pass3/audit-hermes-report.md` (repo not cloned, path not verified)<br>[`crates/codegen/xai-grok-memory/src/v2_consolidation.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-memory/src/v2_consolidation.rs)<br>[`crates/codegen/xai-grok-memory/src/storage_v2.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-memory/src/storage_v2.rs)<br>[`crates/codegen/xai-grok-memory/src/mmr.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-memory/src/mmr.rs) | idea only | The only memory-adjacent code is the NF-075 reduced form: an editorial gate for proposals (one typed refusal per proposal: shape/kind, title and body budgets, authority-widening, do-not-capture list), a review-fork SPEC and a manual runner. It writes nothing automatically. docs/30 G-3 records an upstream 60 character description budget; NF-075 states no numeric budget, so the header documents the number HorizonCode chose. The grok memory crate (embeddings, BM25, MMR, background 'dream' consolidation) is a DEFERRED reference. Rulings 27 and 28. |
+| 12 | `app/src/tools/repo-map.ts` | aider: repo map ranking, `docs/30` B-1 / B-2 (repo not cloned, path not verified) | adapted | Cross-reference to docs/09 Provenance. This is the only retrieval-like capability that ships: lexical def/ref graph plus PageRank under a token budget. There is no BM25, embedding or symbol-index service. |
+
+
+### Sources that could not be linked
+
+aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix and opencode-v2 were audited from clones that are not in the current sandbox. See the 'Not cloned' table in [`research/upstream-pins.md`](research/upstream-pins.md). Their items stay as report pointers (`docs/audit/`, `docs/30-steal-list.md`) until the owner re-clones them and pins a SHA.
+
+
+### Deferred or not started, with reasons
+
+| Item | State and reason |
+|---|---|
+| Provider descriptors/registry as designed (R1 to R15), ~50 wire codecs, discovery providers (LM Studio, vLLM, llama.cpp), Apple Foundation Models | Shipped: Anthropic, OpenAI, Google and Ollama adapters, the openai-compatible family, and mock/scripted. References: [`packages/ai/src/protocols`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/protocols) and [`packages/ai/src/providers`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers). Not started. |
+| OAuth and auth strategies (R16 to R22) | Reserved `oauth` arm only, see row 3. |
+| Account pools, credential affinity, rotation (R23 to R25, R71 to R73) | DEFERRED. References: [`packages/coding-agent/src/session/credential-pin.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/session/credential-pin.ts), [`packages/coding-agent/src/config/account-pools.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/config/account-pools.ts). No code. |
+| Cost gate, price table, session-tree cost fold (R50 to R54) | DEFERRED. Reference: [`packages/coding-agent/src/session/cost-gate.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/session/cost-gate.ts); ancestor `DeepSeek-Reasonix internal/contract/pricing/rates.go` (repo not cloned, path not verified). Usage events exist; there is no append-only price table and a missing rate must yield `cost = unknown`, never 0. |
+| Stable provider failure codes and route-on-code (`RATE_LIMIT`, `CONTEXT_WINDOW_EXCEEDED`, ...) | DEFERRED. `grep` finds none of these names in `app/src`. Reference: [`packages/llm/llm/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/llm/llm/README.md). |
+| forgecode take T-8: provider quirk table | DEFERRED until a second real endpoint beyond NVIDIA NIM has been exercised. Reference transformers: [`crates/forge_app/src/dto/openai/transformers/mod.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/mod.rs), [`crates/forge_app/src/dto/openai/transformers/make_cerebras_compat.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/make_cerebras_compat.rs), [`crates/forge_app/src/dto/openai/transformers/trim_tool_call_ids.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/trim_tool_call_ids.rs), [`crates/forge_app/src/dto/openai/transformers/strip_thought_signature.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/strip_thought_signature.rs). Plan: `providers/quirks.ts`, a data table keyed by host or model pattern, applied as small pure functions, recorded in the event for reproducibility. Take the mechanism, not the volume (48 providers). |
+| forgecode take T-18: text tool protocol for models without native tools | DEFERRED, low priority. Parsed output MUST be treated exactly like any model-proposed call (guard, receipt). Only if local-model support becomes a pillar. |
+| forgecode take T-9: request-dump eval pack (`HZ_DEBUG_REQUESTS`) | DEFERRED. Pairs with `core/evals.ts`. Evidence and plan in `research/forgecode-deep.md`. |
+| Context compiler, cache guard, prefix digests, declared-config hashing (R27 to R35, R55 to R70, R65) | Spec only. The golden for the base prompt is the single cache-related artifact. References in row 10. |
+| Memory tiers, extraction, reflection, consolidation, conflict, privacy, retention (R74 to R94) | Spec only. The growth-loop slice is described in row 11. No `memory/` directory, no store, no recall tool. |
+| Retrieval and index service `hz_index` (R95 to R106, R97/R98/R103) | Spec only: there is no `indexd` crate in this tree (only `kernel/` is Rust). The design cites the ancestor project's `indexd/src/{repo_intel.rs,generation_store.rs,watch.rs}` and `kernel/src/secret_use.rs` (ancestor repo not cloned, path not verified). `repo_map` is the shipped stand-in. |
+| Compaction strategies beyond the windowed view: digest, verbatim-tail, hold-then-swap background compaction, tool-result pruner, image offload | DEFERRED. References: [`packages/core/src/session/compaction.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/compaction.ts), [`packages/compaction/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/compaction/README.md), [`codex-rs/core/src/session/async_compaction.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/async_compaction.rs). |
+| Snapcompact (vision-frame compression) | DEFERRED, no code. Reference: [`packages/snapcompact/src/snapcompact.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/snapcompact/src/snapcompact.ts). |
+| Server-hosted tools ANDed with model capability (grok `hosted_tools`) | DEFERRED, path not verified (docs/30 section 5.5 cites an `xai-grok-agent` path that was not re-checked). |
+| Prompt-change governance, CI cacheguard gate (R126, R127) | Not implemented. `ops/gate-catalogue.md` maps all 18 docs/24 gates; the cacheguard gate is a declared gap. |
+| Reload notice for a mid-session instruction file edit (R124) | Instruction files are read at the start of each run; there is no reload notice yet. |
