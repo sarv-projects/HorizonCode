@@ -20,7 +20,8 @@ import { historyFilePath } from "../core/paths";
 import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
-import { printBanner, printGreeting } from "./banner";
+import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
+import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, userBlock, type Live, type StatusInfo } from "./live";
 import { createRenderer, diffBlock, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
 
@@ -735,9 +736,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     resolveDone = resolve;
   });
 
+  let live: Live | undefined;
+  let contextPercent: number | undefined;
+
   const renderer: Renderer = createRenderer({
     wrap: true,
+    rich: liveEnabled(),
     beforeWrite: () => {
+      // The animated bottom region never ends up in the transcript.
+      live?.erase();
       // While an answer streams, anything typed into the chat bar stays on its own
       // line instead of being overwritten by the next chunk.
       if (!busy) {
@@ -755,6 +762,32 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return true;
     },
   });
+
+  // Esc cancels only where readline's raw keypress events are available.
+  const canEsc = Boolean(process.stdin.isTTY) && typeof process.stdin.setRawMode === "function";
+  let branchCache: { at: number; value: string | undefined } = { at: 0, value: undefined };
+  const statusInfo = (): StatusInfo => {
+    if (Date.now() - branchCache.at > 2000) branchCache = { at: Date.now(), value: readGitBranch(workspace) };
+    return {
+      badge: planState.on ? "PLAN" : modeBadge(readPermissionMode(runtime)),
+      model: runtime.model,
+      provider: runtime.providerName,
+      contextPercent,
+      path: shortenPath(workspace),
+      branch: branchCache.value,
+    };
+  };
+  live = createLive({
+    enabled: liveEnabled(),
+    write: (chunk) => void process.stdout.write(chunk),
+    status: statusInfo,
+    atLineStart: () => renderer.atLineStart(),
+    typed: () => String((rl as unknown as { line?: string }).line ?? "").length > 0,
+    esc: canEsc,
+    paused: () => answerWaiter !== null,
+    group: (tick, width) => renderer.liveLines?.(tick, width) ?? [],
+  });
+  const liveOn = live.enabled;
 
   // Wire the guard to this session: one line of the same chat bar is the answer.
   ui.renderer = renderer;
@@ -775,15 +808,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   loadHistory(historyFile, rl);
 
   const out = (chunk: string): void => renderer.write(chunk);
-  printBanner(
-    { version: opts.version, model: runtime.model, provider: runtime.providerName, workspace, kernel: runtime.kernelMode },
-    { out },
-  );
+  const bannerInfo = { version: opts.version, model: runtime.model, provider: runtime.providerName, workspace, kernel: runtime.kernelMode };
+  if (liveOn) printRichBanner(bannerInfo, { out, tip: pickTip() });
+  else printBanner(bannerInfo, { out });
   printGreeting({ out });
 
   const finish = (code: number): void => {
     if (exiting) return;
     exiting = true;
+    live?.dispose();
     try {
       runtime.abort();
     } catch {
@@ -808,6 +841,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (blank) renderer.write("\n");
     try {
       rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
+      if (renderer.atLineStart()) live?.showIdle();
       rl.prompt();
     } catch {
       /* terminal went away */
@@ -824,8 +858,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       /* ignore */
     }
     renderer.ensureLineStart();
+    live?.beginTurn();
     try {
-      const result = await runtime.send(text, { onEvent: (ev) => renderer.handle(ev) });
+      const result = await runtime.send(text, {
+        onEvent: (ev) => {
+          if (ev && typeof ev === "object") {
+            if (ev.type === "tool.card") {
+              if (ev.status === "running") live?.toolStart(String(ev.name), ev.args, String(ev.callId));
+              else live?.toolEnd(String(ev.callId));
+            } else if (ev.type === "context.usage") {
+              if (ev.window > 0) contextPercent = (ev.estimatedInput / ev.window) * 100;
+              live?.noteUsage(ev.estimatedInput);
+            }
+          }
+          renderer.handle(ev);
+        },
+      });
       const line = exitLine(result?.exit);
       if (line !== undefined) {
         renderer.ensureLineStart();
@@ -835,14 +883,28 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       renderer.error(`request failed: ${errorMessage(err)}`);
     } finally {
       busy = false;
+      const stats = live?.endTurn();
       renderer.ensureLineStart();
+      if (stats && liveOn) {
+        renderer.write(
+          turnFooter({ ms: stats.ms, tools: stats.tools, inputTokens: stats.inputTokens, time: clockTime(), width: terminalWidth() - 1 }) + "\n",
+        );
+      }
     }
+  };
+
+  const echoUser = (text: string): void => {
+    if (liveOn) {
+      renderer.write(userBlock(sanitizeText(text), terminalWidth(), clockTime()).join("\n") + "\n");
+      return;
+    }
+    renderer.write(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(text) + "\n");
   };
 
   const drainQueue = async (): Promise<void> => {
     while (!exiting && queued.length > 0) {
       const next = queued.shift() as string;
-      renderer.write(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(next) + "\n");
+      echoUser(next);
       await sendTurn(next);
     }
   };
@@ -1020,33 +1082,57 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return;
     }
     const text = (typeof raw === "string" ? raw : "").trim();
+    const wasIdle = !busy;
     if (text === "") {
       showPrompt();
       return;
     }
+    if (liveOn && wasIdle && !text.startsWith("/")) {
+      // Swap the plain echo for the shaded block (cursor sits just below the echo).
+      const cols = Math.max(1, terminalWidth());
+      const echoed = visibleWidth(planPrompt(planState.on, readPermissionMode(runtime))) + String(raw ?? "").length;
+      const rows = Math.max(1, Math.ceil(echoed / cols));
+      process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
+      echoUser(text);
+    }
     void handleUserLine(text);
   });
 
+  const abortTurn = (): void => {
+    if (answerWaiter) {
+      const waiter = answerWaiter;
+      answerWaiter = null;
+      waiter("n");
+    }
+    if (abortRequested) return;
+    abortRequested = true;
+    try {
+      runtime.abort();
+    } catch {
+      /* nothing in flight */
+    }
+    renderer.ensureLineStart();
+    renderer.line(dim("(aborted)"));
+  };
+
   rl.on("SIGINT", () => {
     if (busy) {
-      if (answerWaiter) {
-        const waiter = answerWaiter;
-        answerWaiter = null;
-        waiter("n");
-      }
-      if (abortRequested) return;
-      abortRequested = true;
-      try {
-        runtime.abort();
-      } catch {
-        /* nothing in flight */
-      }
-      renderer.ensureLineStart();
-      renderer.line(dim("(aborted)"));
+      abortTurn();
       return;
     }
     finish(0);
   });
+
+  if (liveOn) {
+    process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {
+      if (exiting) return;
+      if (busy && key?.name === "escape" && !key.ctrl && !key.meta) {
+        // Esc is a cancel only while a turn runs and no approval question is open.
+        if (!answerWaiter) abortTurn();
+        return;
+      }
+    });
+  }
 
   rl.on("close", () => finish(0));
 
@@ -1056,7 +1142,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const initial = (opts.initialMessage ?? "").trim();
   if (initial !== "") {
-    renderer.line(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(initial));
+    if (liveOn) echoUser(initial);
+    else renderer.line(planPrompt(planState.on, readPermissionMode(runtime)) + sanitizeText(initial));
     void handleUserLine(initial);
   } else {
     showPrompt();

@@ -7,8 +7,16 @@
  * screen, so the output stays scrollable, copyable and pipe-safe.
  */
 
-import type { RuntimeEvent } from "../contracts";
-import { bold, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText } from "./style";
+import type { RuntimeEvent, ToolCardDetail } from "../contracts";
+import {
+  FOLD_MIN, HEADER_FIRST_TOOLS, READ_ONLY_TOOLS, foldLine, resultLine, shellFooter, shellHeader, shellOutputLines,
+  subagentGroupLines, subagentLine, toolCardLines, type CardStyle, type GroupRow,
+} from "./cards";
+import { createMarkdownStream, type MarkdownStream } from "./markdown";
+import { pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
+import {
+  bold, colorLevel, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
+} from "./style";
 
 export interface RenderOptions {
   /** Wrap long lines to the terminal width (interactive mode). */
@@ -19,6 +27,16 @@ export interface RenderOptions {
    * a newline (used by the chat loop while the human is typing mid-stream).
    */
   beforeWrite?: () => boolean;
+  /**
+   * Rich (TTY) cards: one-line tool cards with durations, the shell output panel,
+   * folded read-only runs and the subagent group. Off by default so every pipe,
+   * headless run and test keeps the plain two-line form byte for byte.
+   */
+  rich?: boolean;
+  /** Pin the colour level / glyph set (tests); default: detected. */
+  level?: ColorLevel;
+  unicode?: boolean;
+  now?: () => number;
 }
 
 export interface Renderer {
@@ -29,6 +47,8 @@ export interface Renderer {
   notice(message: string): void;
   error(message: string): void;
   atLineStart(): boolean;
+  /** Live subagent group lines for the animated region (rich mode only). */
+  liveLines?(tick: number, width: number): string[];
 }
 
 /** Compact one-line rendering of tool arguments (never longer than 120 chars). */
@@ -157,6 +177,192 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     write(dim("  )") + "\n");
   };
 
+  /* ------------------------- rich cards (TTY only) ------------------------- */
+
+  const rich = opts.rich === true;
+  const now = opts.now ?? Date.now;
+  const cardStyle = (): CardStyle => ({
+    width: Math.max(20, terminalWidth() - 1),
+    level: opts.level ?? colorLevel(),
+    unicode: opts.unicode ?? unicodeLocale(),
+  });
+  interface Call { name: string; args: unknown; at: number }
+  const calls = new Map<string, Call>();
+  interface FoldCard { name: string; args: unknown; summary?: string; detail?: ToolCardDetail; ms: number; lines: string[] }
+  let fold: FoldCard[] = [];
+  interface Sub {
+    callId: string;
+    task: string;
+    profile?: string;
+    at: number;
+    agentId?: string;
+    state: "running" | "completed" | "failed";
+    activity: string;
+    endedAt?: number;
+  }
+  const subs: Sub[] = [];
+
+  /* Streaming markdown for assistant text: one stream per message, finished by any other event. */
+  let md: MarkdownStream | undefined;
+  let mdTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearMdTimer = (): void => {
+    if (mdTimer !== undefined) {
+      clearTimeout(mdTimer);
+      mdTimer = undefined;
+    }
+  };
+  /** Release the plain head of a slow line so prose never stalls waiting for its newline. */
+  const releasePartial = (): void => {
+    mdTimer = undefined;
+    const text = md?.flushPartial() ?? "";
+    if (text !== "") write(text);
+  };
+  const mdPush = (text: string): void => {
+    clearMdTimer();
+    if (!md) md = createMarkdownStream({ width: Math.max(20, terminalWidth() - 1), level: opts.level ?? colorLevel(), unicode: opts.unicode ?? unicodeLocale() });
+    const out = md.push(text);
+    if (out !== "") write(out);
+    mdTimer = setTimeout(releasePartial, 150);
+    (mdTimer as { unref?: () => void }).unref?.();
+  };
+  const mdFinish = (): void => {
+    clearMdTimer();
+    if (!md) return;
+    const out = md.end();
+    md = undefined;
+    if (out !== "") write(out);
+  };
+
+  const writeLines = (lines: string[]): void => {
+    if (lines.length === 0) return;
+    ensureLineStart();
+    write(lines.join("\n") + "\n");
+  };
+
+  /** Commit the buffered read-only run: one folded line when long, else each card. */
+  const flushFold = (): void => {
+    if (fold.length === 0) return;
+    const items = fold;
+    fold = [];
+    if (items.length >= FOLD_MIN) {
+      writeLines([foldLine(items.map((i) => ({ name: i.name, durationMs: i.ms })), cardStyle())]);
+      return;
+    }
+    for (const it of items) writeLines(it.lines);
+  };
+
+  const settle = (): void => {
+    mdFinish();
+    flushFold();
+  };
+
+  const subLabel = (sub: Sub): string => sub.task || sub.profile || "subagent";
+
+  const richCard = (ev: Extract<RuntimeEvent, { type: "tool.card" }>): void => {
+    const name = sanitizeText(ev.name) || "tool";
+    const style = cardStyle();
+    const id = String(ev.callId ?? "");
+    if (ev.status === "running") {
+      calls.set(id, { name, args: ev.args, at: now() });
+      if (READ_ONLY_TOOLS.has(name) || !HEADER_FIRST_TOOLS.has(name)) return;
+      flushFold();
+      if (name === "shell" || name === "shell_session") {
+        const cmd = typeof ev.args?.command === "string" ? ev.args.command : typeof ev.args?.cmd === "string" ? ev.args.cmd : name;
+        writeLines([shellHeader(cmd, style)]);
+      } else if (name === "agent") {
+        const a = (ev.args ?? {}) as Record<string, unknown>;
+        const pick = (k: string[]): string => {
+          for (const key of k) if (typeof a[key] === "string" && a[key] !== "") return a[key] as string;
+          return "";
+        };
+        const sub: Sub = {
+          callId: id,
+          task: pick(["description", "task", "prompt"]),
+          profile: pick(["profile"]) || undefined,
+          at: now(),
+          state: "running",
+          activity: "",
+        };
+        subs.push(sub);
+        writeLines([subagentLine({ state: "running", task: subLabel(sub), profile: sub.profile }, style)]);
+      } else {
+        writeLines(toolCardLines({ name, args: ev.args, status: "running" }, style));
+      }
+      return;
+    }
+    const call = calls.get(id) ?? { name, args: ev.args, at: now() };
+    calls.delete(id);
+    const status = ev.status === "ok" ? "ok" : "error";
+    const ms = ev.detail?.durationMs ?? Math.max(0, now() - call.at);
+    const input = { name, args: call.args, status, summary: ev.summary, detail: { ...ev.detail, durationMs: ms } } as const;
+    if (READ_ONLY_TOOLS.has(name)) {
+      const lines = toolCardLines(input, style);
+      if (status === "ok") {
+        fold.push({ name, args: call.args, summary: ev.summary, detail: input.detail, ms, lines });
+        return;
+      }
+      flushFold();
+      writeLines(lines);
+      return;
+    }
+    flushFold();
+    if (name === "shell" || name === "shell_session") {
+      if (ev.detail?.output !== undefined) writeLines(shellOutputLines(ev.detail.output, style));
+      writeLines([shellFooter({ status, exitCode: ev.detail?.exitCode, durationMs: ms, summary: ev.summary }, style)]);
+    } else if (name === "agent") {
+      const sub = subs.find((x) => x.callId === id) ?? subs.find((x) => x.state === "running");
+      if (sub) {
+        sub.state = status === "ok" ? "completed" : "failed";
+        sub.endedAt = now();
+        writeLines([
+          subagentLine(
+            { state: sub.state, task: subLabel(sub), ms, profile: undefined, reason: status === "error" ? firstLine(ev.summary, 40) : undefined },
+            style,
+          ),
+        ]);
+      }
+    } else if (HEADER_FIRST_TOOLS.has(name)) {
+      writeLines(resultLine(input, style));
+    } else {
+      writeLines(toolCardLines(input, style));
+    }
+  };
+
+  const richSubEvent = (agentId: string, inner: RuntimeEvent, profile?: string): void => {
+    let sub = subs.find((x) => x.agentId === agentId);
+    if (!sub) {
+      sub = subs.find((x) => x.agentId === undefined && x.state === "running");
+      if (sub) sub.agentId = agentId;
+      else {
+        sub = { callId: "", task: "", profile, at: now(), agentId, state: "running", activity: "" };
+        subs.push(sub);
+      }
+    }
+    if (profile && !sub.profile) sub.profile = profile;
+    if (!inner || typeof inner !== "object") return;
+    if (inner.type === "tool.card" && inner.status === "running") sub.activity = toolVerb(sanitizeText(inner.name), inner.args);
+    else if (inner.type === "assistant.done") sub.activity = "Responding";
+    else if (inner.type === "error") sub.activity = "error";
+  };
+
+  const liveLines = (tick: number, width: number): string[] => {
+    if (!rich || subs.length === 0) return [];
+    const t = now();
+    for (let i = subs.length - 1; i >= 0; i--) {
+      const e = subs[i]?.endedAt;
+      if (e !== undefined && t - e > 2000) subs.splice(i, 1);
+    }
+    const style = { ...cardStyle(), width };
+    const rows: GroupRow[] = subs.map((x) => ({
+      state: x.state,
+      label: subLabel(x),
+      activity: x.state === "running" ? x.activity : undefined,
+      ms: (x.endedAt ?? t) - x.at,
+    }));
+    const spin = pulseGlyph(spinnerFrame(tick, style.unicode), tick * 3, style.level);
+    return subagentGroupLines(rows, style, spin);
+  };
+
   const nestedCount = new Map<string, number>();
   const profileShown = new Set<string>();
 
@@ -201,9 +407,12 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
 
   const handle = (ev: RuntimeEvent): void => {
     if (!ev || typeof ev !== "object") return;
+    if (rich && ev.type !== "assistant.delta" && ev.type !== "context.usage") mdFinish();
+    if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "context.usage") flushFold();
     switch (ev.type) {
       case "subagent.event":
-        handleNested(String(ev.agentId), ev.event, ev.profile);
+        if (rich) richSubEvent(String(ev.agentId), ev.event, ev.profile);
+        else handleNested(String(ev.agentId), ev.event, ev.profile);
         break;
       case "turn.diff": {
         const files = typeof ev.files === "number" ? ev.files : 0;
@@ -222,17 +431,33 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       }
       case "assistant.delta": {
         sawDelta = true;
-        write(sanitizeText(ev.text));
+        if (rich) mdPush(sanitizeText(ev.text));
+        else write(sanitizeText(ev.text));
         break;
       }
       case "assistant.done": {
         // Some runtimes only emit the finished text: never swallow it.
-        if (!sawDelta && typeof ev.text === "string" && ev.text.trim() !== "") write(sanitizeText(ev.text));
+        if (!sawDelta && typeof ev.text === "string" && ev.text.trim() !== "") {
+          if (rich) {
+            mdPush(sanitizeText(ev.text));
+            mdFinish();
+          } else write(sanitizeText(ev.text));
+        }
         sawDelta = false;
         ensureLineStart();
         break;
       }
       case "tool.card": {
+        if (rich) {
+          richCard(ev);
+          const richPreview = previewOf(ev);
+          if (richPreview !== "") {
+            flushFold();
+            ensureLineStart();
+            write(diffBlock(richPreview) + "\n");
+          }
+          break;
+        }
         const name = sanitizeText(ev.name) || "tool";
         if (ev.status === "running") {
           emitArgs(name, ev.args);
@@ -258,6 +483,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
         break;
       case "turn.done":
         ensureLineStart();
+        subs.length = 0;
+        calls.clear();
         break;
       default:
         break;
@@ -266,11 +493,27 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
 
   return {
     handle,
-    write,
-    ensureLineStart,
-    line: (text: string) => emit(text),
-    notice: (message: string) => emit(dim("\u00b7 " + sanitizeText(message)), dim),
-    error: (message: string) => emit(red("\u26a0 " + sanitizeText(message)), red),
+    write: (chunk: string) => {
+      settle();
+      write(chunk);
+    },
+    ensureLineStart: () => {
+      settle();
+      ensureLineStart();
+    },
+    line: (text: string) => {
+      settle();
+      emit(text);
+    },
+    notice: (message: string) => {
+      settle();
+      emit(dim("\u00b7 " + sanitizeText(message)), dim);
+    },
+    error: (message: string) => {
+      settle();
+      emit(red("\u26a0 " + sanitizeText(message)), red);
+    },
     atLineStart: () => atStart,
+    ...(rich ? { liveLines } : {}),
   };
 }
