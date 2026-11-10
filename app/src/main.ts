@@ -23,6 +23,8 @@ import { liveStdin } from "./core/stdin-live";
 import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
+import { checkConfigFile, renderConfigCheck } from "./core/config";
+import { cleanCommitMessage, commitCommand, commitPrompt, stagedDiff, withReceiptTrailer } from "./core/commit";
 import { resolveCommandForMessage } from "./core/commands";
 
 const VERSION = "0.1.0";
@@ -32,6 +34,8 @@ const HELP = [
   "",
   "  hzcode [message]     start chatting (optionally with an opening message)",
   "  hzcode serve         run the single-attach server (NDJSON JSON-RPC on stdio)",
+  "  hzcode config check  report unknown and rejected keys in the config file",
+  "  hzcode commit        write a commit message for the staged diff and commit it through the guard (--preview, --receipt)",
   "  hzcode doctor        diagnose this install (OK/WARN/FAIL + a fix per problem; --json, --workspace <path>)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
@@ -261,10 +265,102 @@ function runDoctorCommand(args: string[]): number {
   return doctorExitCode(checks);
 }
 
+function runConfigCommand(args: string[]): number {
+  if (args[0] !== "check" || args.length > 2) {
+    process.stderr.write("usage: hzcode config check [file]\n");
+    return 2;
+  }
+  const check = args[1] !== undefined ? checkConfigFile(path.resolve(args[1])) : checkConfigFile();
+  process.stdout.write(renderConfigCheck(check) + "\n");
+  return check.unknown.length > 0 || check.rejected.length > 0 ? 1 : 0;
+}
+
+/** `hzcode commit [--preview] [--receipt] [--workspace <path>] [context...]` (T-16). */
+async function runCommitCommand(args: string[]): Promise<number> {
+  let preview = false;
+  let receipt = false;
+  let workspace = process.cwd();
+  let mock = false;
+  const context: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--preview") preview = true;
+    else if (arg === "--receipt") receipt = true;
+    else if (arg === "--mock") mock = true;
+    else if (arg === "--workspace" && args[i + 1] !== undefined) workspace = args[(i += 1)];
+    else if (arg.startsWith("--")) {
+      process.stderr.write(`hzcode: commit: unknown option ${arg}\nusage: hzcode commit [--preview] [--receipt] [context...]\n`);
+      return 2;
+    } else context.push(arg);
+  }
+  workspace = path.resolve(workspace);
+  const staged = stagedDiff(workspace);
+  if ("error" in staged) {
+    process.stderr.write(`hzcode: commit: ${staged.error}\n`);
+    return 1;
+  }
+  if (staged.diff.trim() === "") {
+    process.stderr.write("hzcode: commit: nothing is staged (git add something first)\n");
+    return 1;
+  }
+  const mod = core as unknown as CoreModule;
+  const createRuntime = typeof mod.createRuntime === "function" ? mod.createRuntime : mod?.default?.createRuntime;
+  if (typeof createRuntime !== "function") {
+    process.stderr.write("hzcode: the runtime is missing from this build (app/src/core)\n");
+    return 1;
+  }
+  let runtime: Runtime;
+  try {
+    runtime = await createRuntime({ workspace, mock, permissionMode: "default" });
+  } catch (err) {
+    process.stderr.write(`\u26a0 could not start a session: ${errorMessage(err)}\n`);
+    return 1;
+  }
+  const extras = runtime as Runtime & {
+    runGuardedShell?: (command: string) => Promise<{ ok: boolean; output: string }>;
+    receiptHead?: () => string | undefined;
+  };
+  try {
+    const ui = createApprovalUi(Boolean(process.stdin.isTTY));
+    ui.runtime = runtime;
+    installApprovalHandler(ui);
+    const res = await runtime.send(commitPrompt(staged.diff, staged.truncated, context.join(" ")), { onEvent: () => {} });
+    const message = cleanCommitMessage(res.text);
+    if (res.aborted || message === "") {
+      process.stderr.write("hzcode: commit: no message was produced\n");
+      return 1;
+    }
+    // The head named in the trailer is the chain as it stands when the commit
+    // is made; the commit's own receipt comes after it.
+    const head = receipt ? extras.receiptHead?.() : undefined;
+    const finalMessage = withReceiptTrailer(message, head);
+    if (receipt && head === undefined) process.stderr.write("hzcode: commit: no receipt chain head yet; no trailer added\n");
+    if (preview) {
+      process.stdout.write(finalMessage + "\n");
+      return 0;
+    }
+    if (typeof extras.runGuardedShell !== "function") {
+      process.stderr.write("hzcode: commit: this build cannot run a guarded command\n");
+      return 1;
+    }
+    const out = await extras.runGuardedShell(commitCommand(finalMessage));
+    process.stdout.write(out.output.trim() + "\n");
+    return out.ok ? 0 : 1;
+  } finally {
+    try {
+      await runtime.close();
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
 async function main(): Promise<number> {
   // Subcommand dispatch happens before the chat-first arg parse so no existing
   // flag behaviour changes: `serve` is additive, everything else is unchanged.
   const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "commit") return runCommitCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "config") return runConfigCommand(rawArgs.slice(1));
   if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
   if (rawArgs[0] === "serve") {
     const serveOpts = parseArgs(rawArgs.slice(1));

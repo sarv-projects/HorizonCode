@@ -83,6 +83,7 @@ import {
 import type { PermissionMode } from "./permission-mode";
 import { isPermissionMode, permissionModeError } from "./permission-mode";
 import { consumeChange, reloadFromDisk } from "../tools/change-journal";
+import { receiptHead, type ChainStatus } from "./convo";
 import { isRefused, writeAtomic } from "../tools/atomic-write";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
@@ -141,6 +142,18 @@ export interface HzRuntime extends Runtime {
   forkSession?(at?: number): Promise<SessionInfo>;
   /** Move this runtime onto an existing session of this workspace (resume). */
   switchSession?(sessionId: string): HzRuntime;
+  /** T-12: retitle the current session; returns the stored title. */
+  renameSession?(title: string): string;
+  /** T-12: drop the last reply and return the last user text to send again. */
+  retryLast?(): string | undefined;
+  /** T-12: the session title (for exports). */
+  sessionTitle?(): string;
+  /** T-16: run one shell command through the guard, approval and a receipt (hzcode commit). */
+  runGuardedShell?(command: string): Promise<{ ok: boolean; output: string }>;
+  /** T-16: the newest receipt hash, when the chain has one. */
+  receiptHead?(): string | undefined;
+  /** T-12: the receipt chain status for exports (verify + head hash). */
+  receiptChain?(): Promise<ChainStatus>;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -303,6 +316,72 @@ class HzRuntimeImpl implements HzRuntime {
 
   history(): ChatMsg[] {
     return this.store.history(this.session.id);
+  }
+
+  renameSession(title: string): string {
+    const next = typeof title === "string" ? title.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+    if (next === "") throw new Error("a title is required");
+    this.store.touchSession(this.session.id, next);
+    this.session = { ...this.session, title: next };
+    return next;
+  }
+
+  sessionTitle(): string {
+    return this.session.title;
+  }
+
+  retryLast(): string | undefined {
+    if (this.active || this.pendingSends > 0) throw new Error("cannot retry while a turn is running");
+    const rows = this.store.history(this.session.id);
+    let at = -1;
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      if (rows[i].role === "user" && (rows[i].content ?? "").trim() !== "") {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) return undefined;
+    const text = rows[at].content;
+    this.store.truncateMessages(this.session.id, at);
+    return text;
+  }
+
+  receiptHead(): string | undefined {
+    return receiptHead(this.kernel.stateDir);
+  }
+
+  async runGuardedShell(command: string): Promise<{ ok: boolean; output: string }> {
+    const shell = getTool("shell");
+    if (!shell) return { ok: false, output: "the shell tool is not available" };
+    const ctx: ToolContext = {
+      cwd: this.workspace,
+      workspace: this.workspace,
+      sessionId: this.session.id,
+      signal: new AbortController().signal,
+      guard: (action: GuardAction) =>
+        this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
+      approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),
+      receipt: (rec) => this.kernel.issueReceipt(rec),
+    };
+    const args = { command };
+    const result = await shell.execute(args, ctx);
+    const output = result.ok ? result.output : `${result.error ?? "failed"}\n${result.output ?? ""}`.trim();
+    try {
+      await this.kernel.issueReceipt({
+        action: "tool.execute",
+        tool: "shell",
+        argsDigest: sha256Hex(canonicalJson(args)),
+        resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+      });
+    } catch {
+      /* the commit already happened or was refused; a lost receipt is reported by verify */
+    }
+    return { ok: result.ok, output };
+  }
+
+  async receiptChain(): Promise<ChainStatus> {
+    const verdict = await this.kernel.verifyReceipts();
+    return { ...verdict, head: receiptHead(this.kernel.stateDir) };
   }
 
   contextUsage(): ContextUsage | undefined {
