@@ -600,6 +600,24 @@ export type RuntimeEvent =
   // caps the number of events per child; the TUI renders them nested under
   // the agent card and the server relays them as ordinary `session.event`s.
   | { type: "subagent.event"; agentId: string; name: string; depth: number; event: RuntimeEvent; profile?: string }
+  // ADDITIVE (TUI part 3, C2): explicit subagent boundaries, so a UI does not
+  // have to infer them from the `agent` tool card. Harness-side facade events
+  // like `subagent.event` (NOT kernel events; the catalogue is unchanged).
+  // `subagent.start` carries the delegated task; `subagent.end` the outcome,
+  // the child's wall time and how many tool calls it finished. Optional: an
+  // older runtime never emits them and the TUI falls back to the tool card.
+  | { type: "subagent.start"; agentId: string; name: string; depth: number; task: string; profile?: string }
+  | {
+      type: "subagent.end";
+      agentId: string;
+      name: string;
+      depth: number;
+      status: "completed" | "failed" | "cancelled";
+      durationMs: number;
+      tools?: number;
+      reason?: string;
+      profile?: string;
+    }
   | { type: "turn.done" };
 
 export interface RuntimeCallbacks {
