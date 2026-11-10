@@ -1,5 +1,5 @@
 # 09 — Tools: declarations, registry, pipeline and the full catalog
-> **Permission modes (`docs/28` ruling 58).** `read-only` refuses every `fs.write`, `shell.exec` and `mcp.invoke` admission (so `write`, `edit`, `apply_patch`, `undo`, `shell`, `shell_session`, `preview`); `accept-edits` answers an in-workspace `fs.write` ask. Tool code is unchanged: the mode acts in the shared guard gate.
+> **Permission modes (`docs/28` ruling 58).** `read-only` refuses every `fs.write`, `shell.exec` and `mcp.invoke` admission (so `write`, `edit`, `apply_patch`, `undo`, `shell`, `shell_session`, `preview`); `accept-edits` answers an in-workspace `fs.write` ask. Tool code is unchanged: the mode acts in the shared guard gate. The one-shot `shell` refuses invisible Unicode in its command before admission, so no approval prompt is raised for it (ruling 66).
 
 > **Print mode (`docs/28` ruling 57).** The print result counts distinct top-level tool calls (`toolCalls`) and lists files named by the turn diffs (`changedFiles`); no tool changes.
 
@@ -8,7 +8,7 @@
 >
 > Status: **DESIGNED** (see §12) as a specification of the full catalog — **94 tools in 91 entries** (§4.1–§4.8; §4.9's 92 rows because the `artifact_*` family spans two rows), a count this document owns and §11.2's coverage test verifies. **Implementation status (final audit, 2026-11-06):** a v0.1 tool set exists and is tested — `read`, `write`, `edit`, `grep`, `glob`, `shell`, `todo` plus `agent` (subagent delegation), `code_mode` (Bun-subprocess JS runner with the NDJSON tool bridge) and `preview` — under `/data/home/forge/HorizonCode/app/src/tools/`; levels and evidence in `28-implementation-status.md`. Everything else named here (the full catalog, deferred discovery, LSP/DAP tools) is still an artifact to be built; symbols without a working implementation are `[planned]`.
 >
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** The catalog below stays a specification. Eighteen tools ship in reduced form and are TESTED (§12 last row; `docs/28` §1): the base seven, `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch` (GPT/Codex grammar, model-routed), `shell_session` (interactive PTY), `lsp` (default off), `tool_search` (Deferred discovery), `ast_search` and `ast_edit`. `debug` (DAP), `multi_edit`, hashline-anchored edits and multi-dialect tool sets beyond `apply_patch` are NOT STARTED.
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** The catalog below stays a specification. Eighteen tools ship in reduced form and are TESTED (§12 last row; `docs/28` §1): the base seven, `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch` (GPT/Codex grammar, model-routed), `shell_session` (interactive PTY), `lsp` (default off), `tool_search` (Deferred discovery), `ast_search` and `ast_edit`. `debug` (DAP), `multi_edit` and multi-dialect tool sets beyond `apply_patch` are NOT STARTED. Hashline-anchored edits ship as an opt-in mode of `edit` (`docs/28` ruling 64): `read` takes `anchors?: boolean` (default false, default output unchanged) and `edit` takes `start_anchor` / `end_anchor` (`LINE:abc:def`) in place of `old`, this being the shipped form of the `lineRange` alternative addressing below.
 >
 > Templates and names follow `/data/home/forge/HorizonCode/docs/_conventions.md`.
 
@@ -1263,6 +1263,8 @@ model emits tool call (ToolCallV1)
 ```
 
 Steps 4–7 run before the effect; steps 8–12 after. Every boundary is a point where a crash leaves a *recorded*, reconcilable state: before step 7 nothing happened; after step 8 the outcome is either settled or `UNKNOWN`. There is no third state.
+
+**Cross-process serialization (as shipped, ruling 63 in `docs/28`).** `write`, `edit`, `apply_patch` and `ast_edit` take an advisory per-target-file lock (`core/file-lock.ts`) after approval and hold it across the final preimage check, the atomic write and the journal record. A second hzcode process that changed the file first is reported as `HZ_PRECONDITION_FAILED: ... preimage changed` and nothing is written; a second process that is mid-edit makes this call wait (bounded, `HZ_LOCK_TIMEOUT`), not interleave.
 
 ### 8.2 `edit` with a stale-preimage conflict
 

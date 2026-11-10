@@ -39,6 +39,7 @@ import type {
 } from "../contracts";
 import { DEFAULT_POLICY, hashEnvelope, hashReceipt, newId, nowIso } from "../contracts";
 import { canonicalJson, sha256Hex } from "./canon";
+import { withFileLock } from "./file-lock";
 import { kernelStateDir } from "./paths";
 
 /** Refuse a symlink walk after this many hops (a loop, or an absurd chain). */
@@ -493,7 +494,11 @@ export class LocalKernel {
   /** Serialize writers per stream so seq/prevHash can never interleave. */
   private withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(key) ?? Promise.resolve();
-    const run = previous.then(fn, fn);
+    // In-process queue first, then the cross-process lock (file-lock.ts) so a second
+    // hzcode process cannot interleave a seq/prevHash read-modify-append.
+    const locked = () =>
+      withFileLock(path.join(this.stateDir, "locks", `${key.replace(/[^A-Za-z0-9._-]/g, "_")}.lock`), fn);
+    const run = previous.then(locked, locked);
     const settled: Promise<unknown> = run.then(
       () => undefined,
       () => undefined,

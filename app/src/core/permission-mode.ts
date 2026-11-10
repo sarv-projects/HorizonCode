@@ -88,7 +88,7 @@ export function modeRefusal(mode: PermissionMode | undefined, action: GuardActio
  * Directory names (at ANY depth) accept-edits never auto-answers: repository and
  * harness state, and CI/hook directories whose files run later without a shell ask.
  */
-const SENSITIVE_DIRS: readonly string[] = [".git", ".hz", ".github", ".gitlab", ".husky", ".circleci", ".devcontainer", ".vscode"];
+const SENSITIVE_DIRS: readonly string[] = [".git", ".hz", ".github", ".gitlab", ".husky", ".circleci", ".devcontainer", ".vscode", ".cargo"];
 
 /**
  * File names (any depth, case-insensitive) that run or configure code later:
@@ -101,6 +101,8 @@ const SENSITIVE_FILES: readonly string[] = [
   "jenkinsfile", "makefile", "gnumakefile", "dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
   "lefthook.yml", ".pre-commit-config.yaml", "azure-pipelines.yml", "bitbucket-pipelines.yml", "setup.py", "conftest.py", "justfile", "taskfile.yml",
   "build.rs", "build.gradle", "pom.xml", ".env",
+  // Ruling 66(c): toolchain/build files that execute code or pick the binary run later.
+  "rust-toolchain.toml", "rust-toolchain", ".tool-versions", "pyproject.toml", "tox.ini", "noxfile.py", "rakefile", "rakefile.rb", "gemfile",
 ];
 
 function isSensitiveRel(rel: string): boolean {

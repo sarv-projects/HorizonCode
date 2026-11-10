@@ -71,6 +71,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { withFileLockSync } from "./file-lock";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { reloadFromDisk, type JournalEntry, type JournalLoad } from "../tools/change-journal";
@@ -288,8 +289,11 @@ function ensureStateDir(dir: string): void {
 /** One whole `record\n` append; owner-only mode applied after it. */
 function appendRecordToDisk(file: string, record: unknown): void {
   ensureStateDir(path.dirname(file));
-  appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
-  setOwnerOnly(file, 0o600);
+  // Cross-process: serialized against another process's append (file-lock.ts).
+  withFileLockSync(`${file}.lock`, () => {
+    appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+    setOwnerOnly(file, 0o600);
+  });
 }
 
 /** The persisted shape and key order of one checkpoint record. */

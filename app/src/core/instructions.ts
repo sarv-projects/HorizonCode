@@ -365,6 +365,10 @@ export const LAZY_TOTAL_CAP = 64 * 1024;
  */
 export class LazyInstructions {
   private readonly root: string;
+  // Dedup state derived from the EAGER pass is kept apart from what the lazy
+  // pass itself injected, so refreshEager can replace only the former.
+  private eagerReal = new Set<string>();
+  private eagerText = new Set<string>();
   private readonly seenReal = new Set<string>();
   private readonly seenText = new Set<string>();
   private readonly seenDirs = new Set<string>();
@@ -378,14 +382,30 @@ export class LazyInstructions {
     eager: readonly InstructionBlock[],
   ) {
     this.root = findRepoRoot(workspace);
+    this.refreshEager(eager);
+  }
+
+  /**
+   * Re-derive the eager dedup state from a fresh eager load (ruling 66(d)). The
+   * eager files are re-read each run, so an edit mid-session (root AGENTS.md
+   * changed from X to Z) must not leave X in the dedup set: a nested file that
+   * only looked like a duplicate of the OLD text would otherwise stay hidden
+   * forever, and one that now duplicates the NEW text would be injected twice.
+   * Directories are forgotten so a previously dropped file is reconsidered;
+   * fragments this lazy pass already injected stay protected (own sets).
+   */
+  refreshEager(eager: readonly InstructionBlock[]): void {
+    this.eagerReal = new Set<string>();
+    this.eagerText = new Set<string>();
     for (const block of eager) {
-      this.seenText.add(block.text.trim());
+      this.eagerText.add(block.text.trim());
       try {
-        this.seenReal.add(realpathSync(block.path));
+        this.eagerReal.add(realpathSync(block.path));
       } catch {
         /* lexical only */
       }
     }
+    this.seenDirs.clear();
   }
 
   /** Newly discovered fragments for a touched path; [] when nothing new. */
@@ -411,7 +431,7 @@ export class LazyInstructions {
         } catch {
           /* lexical */
         }
-        if (this.seenReal.has(real)) continue;
+        if (this.seenReal.has(real) || this.eagerReal.has(real)) continue;
         let text: string;
         try {
           text = readFileSync(file, "utf8");
@@ -422,7 +442,7 @@ export class LazyInstructions {
         // Identical text under another file is dropped: the first (least
         // specific) copy stays. Only attribution differs, never the content the
         // model sees, so precedence does not matter for identical text.
-        if (trimmed === "" || this.seenText.has(trimmed)) continue;
+        if (trimmed === "" || this.seenText.has(trimmed) || this.eagerText.has(trimmed)) continue;
         const cut = cutToCap(text, PER_FILE_CAP);
         const size = Buffer.byteLength(cut.text, "utf8");
         if (this.bytes + size > LAZY_TOTAL_CAP) {
@@ -471,7 +491,9 @@ const LAZY_SESSIONS_MAX = 64;
 export function lazyInstructionsFor(workspace: string, sessionId: string, eager: readonly InstructionBlock[]): LazyInstructions {
   const key = `${workspace}\0${sessionId}`;
   let lazy = LAZY_SESSIONS.get(key);
-  if (lazy === undefined) {
+  if (lazy !== undefined) {
+    lazy.refreshEager(eager);
+  } else {
     lazy = new LazyInstructions(workspace, eager);
     if (LAZY_SESSIONS.size >= LAZY_SESSIONS_MAX) {
       const oldest = LAZY_SESSIONS.keys().next().value;

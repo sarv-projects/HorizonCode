@@ -316,6 +316,8 @@ The schema below is the design; `06` §4.1 owns the log tables' semantics, this 
 
 The projection shape intentionally mirrors the reference's durable message/part/inbox/blob structure (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/sql.ts#L86-L215`) because that structure has the properties this design needs: a stable message/part split, a unique `(session, seq)` index, an inbox index that preserves enqueue order, and a blob-ref table that makes garbage collection a reachability question.
 
+**Cross-process writers (as shipped, ruling 63 in `docs/28`).** Two hzcode processes may share a workspace. SQLite serializes statements (`busy_timeout`), and the schema + ALTER migration at open runs under `<db>.migrate.lock`. The checkpoint and change-journal files are appended under `<file>.lock` (`core/file-lock.ts`: O_EXCL lockfile, pid-liveness stale reclaim, bounded wait); journal compaction re-reads the file under the lock before rewriting it.
+
 ### 4.3 Pragmas and WAL settings
 
 ```sql
