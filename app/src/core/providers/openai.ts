@@ -205,6 +205,8 @@ export async function* streamOpenAiCompatible(
       const choice = Array.isArray(event.choices) ? event.choices[0] : undefined;
       if (!choice) continue;
       const delta = choice.delta ?? {};
+      const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === "string" ? delta.reasoning : "";
+      if (reasoning !== "") yield { type: "thinking", text: reasoning };
       if (typeof delta.content === "string" && delta.content !== "") {
         yield { type: "text", text: delta.content };
       }

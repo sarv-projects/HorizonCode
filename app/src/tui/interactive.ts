@@ -11,7 +11,7 @@ import * as readline from "node:readline";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
-import { loadCommands, resolveCommandForMessage } from "../core/commands";
+import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
 import { getSkill } from "../core/skills";
 import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, osc52, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
@@ -25,9 +25,12 @@ import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
-import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, userBlock, type Live, type StatusInfo } from "./live";
+import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, unicodeLocale, userBlock, type Live, type StatusInfo } from "./live";
+import { complete, ghostFor, type CompletionContext } from "./completion";
+import { keyChoice, type KeyAnswer } from "./approval-card";
+import { PASTE_OFF, PASTE_ON, createPasteCollector, echoedRows, pasteLabel } from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
-import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
+import { activeTheme, bold, colorLevel, cyan, dim, errorMessage, sanitizeText, setThemeMode, strip, terminalWidth, themeMode, truncate, visibleWidth, wrapText, yellow } from "./style";
 
 const PROMPT = "\u276f ";
 const HISTORY_LIMIT = 500;
@@ -182,6 +185,8 @@ function printHelp(r: Renderer, workspace?: string): void {
     ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
     ["/rename <title>", "retitle this session"],
     ["/retry", "drop the last reply and ask the same question again"],
+    ["/theme [name]", "dark, light, auto or mono (NO_COLOR is always respected)"],
+    ["/think", "show the last reasoning block (rich mode)"],
     ["/stats", "message, tool call and token counts for this chat"],
     ["/export [json|html]", "write the chat to .hz/exports (html shows the receipt chain status)"],
     ["/copy", "copy the last answer to the clipboard (terminal OSC 52)"],
@@ -301,6 +306,34 @@ export function readPermissionMode(runtime: Runtime): PermissionMode {
  * written to config) and never a bypass: yolo/bypass names get the refusal.
  * Returns the mode now in force so the caller can redraw the badge.
  */
+/**
+ * `/theme [dark|light|auto|mono]`: switch the palette for this session. It only
+ * picks the palette: whether colour is used at all stays with the colour ladder,
+ * so NO_COLOR / TERM=dumb / a pipe keep it off whatever is asked for.
+ */
+export function runThemeCommand(arg: string, renderer: Renderer): void {
+  const want = arg.trim().toLowerCase();
+  const noColor = typeof process.env.NO_COLOR === "string" && process.env.NO_COLOR !== "";
+  if (want === "") {
+    const mode = themeMode();
+    const shown = mode === "auto" ? `auto (${activeTheme()})` : mode;
+    renderer.notice(`theme: ${shown}, colour level ${colorLevel()}${noColor ? " (NO_COLOR is set)" : ""}; /theme dark|light|auto|mono`);
+    return;
+  }
+  if (want !== "dark" && want !== "light" && want !== "auto" && want !== "mono") {
+    renderer.notice(`unknown theme "${truncate(sanitizeText(arg.trim()), 24)}": use /theme dark, light, auto or mono`);
+    return;
+  }
+  setThemeMode(want);
+  renderer.notice(
+    noColor
+      ? `theme: ${want}, NO_COLOR is set, so colours stay off`
+      : want === "mono"
+        ? "theme: mono, no colours (bold and dim stay)"
+        : `theme: ${want === "auto" ? `auto (${activeTheme()})` : want}`,
+  );
+}
+
 export function runModeCommand(arg: string, runtime: Runtime, renderer: Renderer): PermissionMode {
   const extras = runtime as RuntimeWithExtras;
   const current = readPermissionMode(runtime);
@@ -832,10 +865,33 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // /plan updates it through the optional hook when the core exposes one.
   const planState: PlanCommandState = { on: readPlanMode(runtime) };
 
+  // Tab completion (/commands and @paths). The command list is re-read at most
+  // every 2 s so a new .hz/commands file shows up without a restart.
+  let commandCache: { at: number; names: string[] } = { at: 0, names: [] };
+  const completionCtx = (): CompletionContext => {
+    if (Date.now() - commandCache.at > 2000) {
+      let custom: string[] = [];
+      try {
+        custom = loadCommands(workspace).commands.map((c) => c.name);
+      } catch {
+        /* a bad commands dir never breaks completion */
+      }
+      commandCache = { at: Date.now(), names: [...BUILTIN_COMMANDS, ...custom] };
+    }
+    return { workspace, commands: commandCache.names };
+  };
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
+    completer: (line: string): [string[], string] => {
+      try {
+        return complete(line, completionCtx());
+      } catch {
+        return [[], line];
+      }
+    },
     historySize: HISTORY_LIMIT,
     removeHistoryDuplicates: true,
   });
@@ -919,6 +975,47 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
     });
 
+  // Rich TTY: the approval question is a bordered card answered by one key (no
+  // Enter). Type-ahead can never approve: whatever was typed before the card is
+  // wiped, and keys in its first 250 ms are dropped. Enter and Esc deny.
+  if (liveOn && canEsc) {
+    ui.unicode = unicodeLocale();
+    const wipeLine = (): void => {
+      try {
+        rl.write(null as unknown as string, { ctrl: true, name: "u" });
+      } catch {
+        /* nothing to wipe */
+      }
+    };
+    ui.askKey = () =>
+      new Promise<KeyAnswer>((resolve) => {
+        const armedAt = Date.now() + 250;
+        let settled = false;
+        const settle = (answer: KeyAnswer): void => {
+          if (settled) return;
+          settled = true;
+          process.stdin.off("keypress", onKey);
+          answerWaiter = null;
+          wipeLine();
+          resolve(answer);
+        };
+        const onKey = (str: string | undefined, key: { name?: string; ctrl?: boolean } | undefined): void => {
+          // Pasted text is never a typed answer: a paste of "y" must not approve.
+          if (Date.now() < armedAt || paste.pasting() || key?.name === "paste-start" || key?.name === "paste-end") {
+            wipeLine();
+            return;
+          }
+          const choice = keyChoice(str, key);
+          if (choice !== undefined) settle(choice);
+          else wipeLine();
+        };
+        wipeLine();
+        // The line path (Enter, abort) is a denial; only a recognised key can say yes.
+        answerWaiter = () => settle("n");
+        process.stdin.on("keypress", onKey);
+      });
+  }
+
   const historyFile = historyFilePath(workspace);
   loadHistory(historyFile, rl);
 
@@ -932,6 +1029,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (exiting) return;
     exiting = true;
     live?.dispose();
+    try {
+      if (process.stdout.isTTY && process.stdin.isTTY) process.stdout.write(PASTE_OFF);
+    } catch {
+      /* terminal went away */
+    }
     try {
       runtime.abort();
     } catch {
@@ -1122,6 +1224,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "context":
         showContext();
         break;
+      case "theme":
+        runThemeCommand(arg, renderer);
+        break;
       case "mode":
         runModeCommand(arg, runtime, renderer);
         // /mode plan flips the runtime's plan flag: keep the badge in step.
@@ -1143,6 +1248,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           break;
         }
         await runForkCommand(name, arg, runtime, renderer);
+        break;
+      }
+      case "think": {
+        const text = renderer.lastThinking?.() ?? "";
+        if (text.trim() === "") {
+          renderer.notice("no reasoning block yet, only models that stream their thinking have one");
+          break;
+        }
+        for (const l of sanitizeText(text).trimEnd().split("\n")) renderer.line(dim("\u2503 " + l));
         break;
       }
       case "rename":
@@ -1239,7 +1353,24 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   };
 
+  const paste = createPasteCollector();
+  const pasteOn = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+  if (pasteOn) process.stdout.write(PASTE_ON);
+
   rl.on("line", (raw: string) => {
+    if (pasteOn && paste.active()) {
+      const pasted = paste.line(raw);
+      if (pasted === undefined) return;
+      if (pasted.lines > 1) {
+        // Replace the echoed lines by one collapsed stand-in, submit the whole paste once.
+        const promptW = visibleWidth(planPrompt(planState.on, readPermissionMode(runtime)));
+        const rows = echoedRows(pasted.raw, answerWaiter ? 0 : promptW, terminalWidth());
+        process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
+        handlePasted(pasted.text, pasteLabel(pasted.lines));
+        return;
+      }
+      raw = pasted.text;
+    }
     if (answerWaiter) {
       const waiter = answerWaiter;
       answerWaiter = null;
@@ -1268,6 +1399,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     void handleUserLine(text);
   });
 
+  const handlePasted = (text: string, label: string): void => {
+    if (answerWaiter) {
+      // A multi-line paste is never an approval answer: it denies.
+      const waiter = answerWaiter;
+      answerWaiter = null;
+      waiter("");
+      return;
+    }
+    const wasIdle = !busy;
+    if (wasIdle) echoUser(label);
+    void handleUserLine(text);
+  };
+
   const abortTurn = (): void => {
     if (answerWaiter) {
       const waiter = answerWaiter;
@@ -1292,6 +1436,43 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     finish(0);
   });
+
+  // Dim ghost text after the cursor: the rest of the first completion. It is
+  // erased BEFORE readline handles Enter (prepended listener) and redrawn after
+  // every other key; only drawn when the cursor is at the end of an idle line.
+  if (liveOn && canEsc) {
+    let ghostShown = false;
+    const eraseGhost = (): void => {
+      if (!ghostShown) return;
+      ghostShown = false;
+      process.stdout.write("\u001b[K");
+    };
+    process.stdin.prependListener("keypress", (_s: unknown, key: { name?: string } | undefined) => {
+      if (key?.name === "return" || key?.name === "enter") eraseGhost();
+    });
+    process.stdin.on("keypress", () => {
+      setImmediate(() => {
+        if (exiting) return;
+        eraseGhost();
+        if (busy || answerWaiter !== null) return;
+        const state = rl as unknown as { line?: string; cursor?: number };
+        const line = String(state.line ?? "");
+        if (line === "" || state.cursor !== line.length) return;
+        const ghost = ghostFor(line, completionCtx());
+        if (ghost === "") return;
+        const room = terminalWidth() - visibleWidth(planPrompt(planState.on, readPermissionMode(runtime))) - line.length - 1;
+        if (ghost.length > room) return;
+        ghostShown = true;
+        process.stdout.write(dim(ghost) + `\u001b[${ghost.length}D`);
+      });
+    });
+  }
+
+  if (pasteOn) {
+    process.stdin.on("keypress", (_s: unknown, key: { name?: string } | undefined) => {
+      paste.key(key?.name);
+    });
+  }
 
   if (liveOn) {
     process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {

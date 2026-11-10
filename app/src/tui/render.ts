@@ -12,8 +12,9 @@ import {
   FOLD_MIN, HEADER_FIRST_TOOLS, READ_ONLY_TOOLS, foldLine, resultLine, shellFooter, shellHeader, shellOutputLines,
   subagentGroupLines, subagentLine, toolCardLines, type CardStyle, type GroupRow,
 } from "./cards";
+import { richDiff } from "./diff";
 import { createMarkdownStream, type MarkdownStream } from "./markdown";
-import { pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
+import { formatDuration, pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
 import {
   bold, colorLevel, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
 } from "./style";
@@ -49,6 +50,8 @@ export interface Renderer {
   atLineStart(): boolean;
   /** Live subagent group lines for the animated region (rich mode only). */
   liveLines?(tick: number, width: number): string[];
+  /** The last finished reasoning block (rich mode; "" when there was none). */
+  lastThinking?(): string;
 }
 
 /** Compact one-line rendering of tool arguments (never longer than 120 chars). */
@@ -199,6 +202,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     state: "running" | "completed" | "failed";
     activity: string;
     endedAt?: number;
+    /** From `subagent.end` (C2): exact child wall time, tool count, failure reason. */
+    final?: { status: "completed" | "failed" | "cancelled"; ms: number; tools?: number; reason?: string };
   }
   const subs: Sub[] = [];
 
@@ -312,19 +317,67 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     } else if (name === "agent") {
       const sub = subs.find((x) => x.callId === id) ?? subs.find((x) => x.state === "running");
       if (sub) {
-        sub.state = status === "ok" ? "completed" : "failed";
-        sub.endedAt = now();
-        writeLines([
-          subagentLine(
-            { state: sub.state, task: subLabel(sub), ms, profile: undefined, reason: status === "error" ? firstLine(ev.summary, 40) : undefined },
-            style,
-          ),
-        ]);
+        if (sub.final !== undefined) {
+          // C2 gave the exact outcome: the card's completion line carries it.
+          writeLines([subEndLine(sub, sub.final, style)]);
+        } else {
+          sub.state = status === "ok" ? "completed" : "failed";
+          sub.endedAt = now();
+          writeLines([
+            subagentLine(
+              { state: sub.state, task: subLabel(sub), ms, profile: undefined, reason: status === "error" ? firstLine(ev.summary, 40) : undefined },
+              style,
+            ),
+          ]);
+        }
       }
     } else if (HEADER_FIRST_TOOLS.has(name)) {
       writeLines(resultLine(input, style));
     } else {
       writeLines(toolCardLines(input, style));
+    }
+  };
+
+  const subEndLine = (sub: Sub, f: NonNullable<Sub["final"]>, style: CardStyle): string =>
+    subagentLine(
+      {
+        state: f.status,
+        task: subLabel(sub),
+        ms: f.ms,
+        reason: f.reason,
+        activity: f.tools !== undefined && f.tools > 0 ? `${f.tools} tool${f.tools === 1 ? "" : "s"}` : undefined,
+      },
+      style,
+    );
+
+  /** C2 boundaries: bind the child id to its card, or draw the cells when no card exists. */
+  const richSubBoundary = (ev: Extract<RuntimeEvent, { type: "subagent.start" | "subagent.end" }>): void => {
+    const style = cardStyle();
+    let sub = subs.find((x) => x.agentId === ev.agentId);
+    if (!sub) sub = subs.find((x) => x.agentId === undefined && x.callId !== "" && x.state === "running");
+    if (ev.type === "subagent.start") {
+      if (sub) {
+        sub.agentId = ev.agentId;
+        if (sub.task === "") sub.task = sanitizeText(ev.task);
+        if (!sub.profile && ev.profile) sub.profile = ev.profile;
+        return;
+      }
+      sub = { callId: "", task: sanitizeText(ev.task), profile: ev.profile, at: now(), agentId: ev.agentId, state: "running", activity: "" };
+      subs.push(sub);
+      flushFold();
+      writeLines([subagentLine({ state: "running", task: subLabel(sub), profile: sub.profile }, style)]);
+      return;
+    }
+    if (!sub) return;
+    const final = { status: ev.status, ms: ev.durationMs, tools: ev.tools, reason: ev.reason };
+    sub.state = ev.status === "completed" ? "completed" : "failed";
+    sub.endedAt = now();
+    if (sub.callId === "") {
+      // No tool card to carry the completion: this event draws it.
+      flushFold();
+      writeLines([subEndLine(sub, final, style)]);
+    } else {
+      sub.final = final;
     }
   };
 
@@ -405,11 +458,41 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     write("  " + dim("\u2502") + " " + text + "\n");
   };
 
+  // Reasoning (assistant.thinking) is buffered and committed as ONE dim
+  // collapsed line when the next real event arrives; `/think` shows the text.
+  let thinkBuf = "";
+  let thinkStart = 0;
+  let thinkLast = "";
+  const flushThinking = (): void => {
+    if (thinkBuf === "") return;
+    const text = thinkBuf;
+    const ms = Math.max(0, Date.now() - thinkStart);
+    thinkBuf = "";
+    thinkStart = 0;
+    thinkLast = text;
+    const n = text.split("\n").filter((l) => l.trim() !== "").length;
+    emit(dim(`\u25c6 Thought for ${formatDuration(ms)} \u00b7 ${n} line${n === 1 ? "" : "s"} \u00b7 /think to expand`), dim);
+  };
+
   const handle = (ev: RuntimeEvent): void => {
     if (!ev || typeof ev !== "object") return;
+    if (ev.type === "assistant.thinking") {
+      // Additive event: ignored outside rich mode so the plain transcript is unchanged.
+      if (rich && typeof ev.text === "string" && ev.text !== "") {
+        if (thinkBuf === "") thinkStart = Date.now();
+        if (thinkBuf.length < 64_000) thinkBuf += sanitizeText(ev.text);
+      }
+      return;
+    }
+    if (rich && ev.type !== "context.usage") flushThinking();
     if (rich && ev.type !== "assistant.delta" && ev.type !== "context.usage") mdFinish();
-    if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "context.usage") flushFold();
+    if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "subagent.start" && ev.type !== "subagent.end" && ev.type !== "context.usage") flushFold();
     switch (ev.type) {
+      case "subagent.start":
+      case "subagent.end":
+        // Additive C2 events: drawn in rich mode only, ignored in the plain transcript.
+        if (rich) richSubBoundary(ev);
+        break;
       case "subagent.event":
         if (rich) richSubEvent(String(ev.agentId), ev.event, ev.profile);
         else handleNested(String(ev.agentId), ev.event, ev.profile);
@@ -418,6 +501,19 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
         const files = typeof ev.files === "number" ? ev.files : 0;
         if (files < 1) break;
         emit(dim(`\u00b7 changed ${files} file${files === 1 ? "" : "s"}`), dim);
+        if (rich) {
+          const view = richDiff(typeof ev.diff === "string" ? ev.diff : "", {
+            width: terminalWidth(),
+            cap: TURN_DIFF_LINE_CAP,
+            unicode: unicodeLocale(),
+          });
+          if (view.length > 0) {
+            ensureLineStart();
+            write(view.join("\n") + "\n");
+          }
+          if (ev.truncated === true) emit("  " + dim("\u2026 diff truncated"), dim);
+          break;
+        }
         const lines = diffBlock(ev.diff).split("\n").filter((l) => l !== "");
         const shown = lines.slice(0, TURN_DIFF_LINE_CAP);
         if (shown.length > 0) {
@@ -454,7 +550,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
           if (richPreview !== "") {
             flushFold();
             ensureLineStart();
-            write(diffBlock(richPreview) + "\n");
+            write(richDiff(richPreview, { width: terminalWidth(), unicode: unicodeLocale() }).join("\n") + "\n");
           }
           break;
         }
@@ -514,6 +610,6 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       emit(red("\u26a0 " + sanitizeText(message)), red);
     },
     atLineStart: () => atStart,
-    ...(rich ? { liveLines } : {}),
+    ...(rich ? { liveLines, lastThinking: () => thinkLast } : {}),
   };
 }

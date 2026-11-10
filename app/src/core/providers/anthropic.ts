@@ -224,6 +224,8 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
           const delta = event.delta ?? {};
           if (delta.type === "text_delta" && typeof delta.text === "string" && delta.text !== "") {
             yield { type: "text", text: delta.text };
+          } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking !== "") {
+            yield { type: "thinking", text: delta.thinking };
           } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
             const index = typeof event.index === "number" ? event.index : 0;
             args.set(index, (args.get(index) ?? "") + delta.partial_json);

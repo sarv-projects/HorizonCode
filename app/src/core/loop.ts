@@ -1420,6 +1420,9 @@ async function collectAssistant(
       if (event.type === "text") {
         turn.text += event.text;
         emit(deps.callbacks, { type: "assistant.delta", text: event.text });
+      } else if (event.type === "thinking") {
+        // Display only: reasoning never enters the transcript or the history.
+        if (typeof event.text === "string" && event.text !== "") emit(deps.callbacks, { type: "assistant.thinking", text: event.text });
       } else if (event.type === "tool_call") {
         turn.toolCalls.push({
           id: event.id && event.id !== "" ? event.id : `call_${turn.toolCalls.length + 1}`,

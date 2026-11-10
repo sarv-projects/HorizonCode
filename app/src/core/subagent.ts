@@ -150,6 +150,17 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   const title = subagentTitle(task);
   const session = opts.store.createSession(title);
   let forwarded = 0;
+  let childTools = 0;
+  const profileField = preset !== undefined ? { profile: preset.name } : {};
+  const emitBoundary = (ev: RuntimeEvent): void => {
+    if (opts.onEvent === undefined) return;
+    try {
+      opts.onEvent(ev);
+    } catch {
+      /* a sink failure must not fail the delegated run */
+    }
+  };
+  const startedAt = Date.now();
   const deps: LoopDeps = {
     workspace: opts.workspace,
     sessionId: session.id,
@@ -164,6 +175,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // the parent's stream.
     callbacks: {
       onEvent: (ev) => {
+        if (ev.type === "tool.card" && ev.status !== "running") childTools += 1;
         if (opts.onEvent === undefined) return;
         const bounded = boundChildEvent(ev);
         if (bounded === null) return;
@@ -210,7 +222,23 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     workspace: opts.workspace,
     detail: subagentDetail,
   });
+  emitBoundary({ type: "subagent.start", agentId: session.id, name: "agent", depth: 1, task: taskHead(task), ...profileField });
   const { text, aborted, exit } = await runTurn(deps, task);
+  {
+    const stopped = exit.terminal === "budget_exhausted" || exit.terminal === "timeout";
+    const empty = text.trim() === "";
+    emitBoundary({
+      type: "subagent.end",
+      agentId: session.id,
+      name: "agent",
+      depth: 1,
+      status: aborted ? "cancelled" : stopped || empty ? "failed" : "completed",
+      durationMs: Math.max(0, Date.now() - startedAt),
+      tools: childTools,
+      ...(stopped ? { reason: String(exit.terminal) } : empty && !aborted ? { reason: "no output" } : {}),
+      ...profileField,
+    });
+  }
   await runLifecycleHooks(hooks, {
     point: "subagentStop",
     sessionId: session.id,

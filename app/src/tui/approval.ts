@@ -10,8 +10,10 @@ import type { ApprovalHandler, ApprovalRequest, GuardAction, GuardKind, Lease, R
 import * as core from "../core";
 import { SESSION_LEASE_TTL_MS } from "../core/loop";
 import type { KernelClient } from "../core/kernel";
+import { richDiff } from "./diff";
+import { approvalCard, type KeyAnswer } from "./approval-card";
 import { createRenderer, diffBlock, previewOf, type Renderer } from "./render";
-import { bold, cyan, dim, errorMessage, sanitizeText, truncate, yellow } from "./style";
+import { bold, cyan, dim, errorMessage, sanitizeText, terminalWidth, truncate, yellow } from "./style";
 
 type RuntimeWithExtras = Runtime & {
   /** Optional: remember an approval decision as a lease for this session. */
@@ -23,6 +25,13 @@ export interface ApprovalUi {
   interactive: boolean;
   /** Reads one line from the chat bar; replaced by the running UI. */
   ask: (question: string) => Promise<string>;
+  /**
+   * Optional single-key mode (rich TTY): shows the card lines and resolves on
+   * one keypress without Enter. Absent => the line prompt below is used.
+   */
+  askKey?: (cardLines: string[]) => Promise<KeyAnswer>;
+  /** False selects ASCII card borders (non-UTF-8 locale). */
+  unicode?: boolean;
   /** Where notices go; replaced by the running UI's renderer. */
   renderer: Renderer;
   /** The runtime this UI is talking to right now (swapped by /new). */
@@ -146,19 +155,41 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     }
 
     r.ensureLineStart();
-    r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + (detail ? " " + detail : "") + "\n");
-    if (typeof req?.guardian === "string" && req.guardian !== "") {
-      r.write(escapeInvisible(sanitizeText(req.guardian)).replace(/\s+/g, " ").trim() + "\n");
+    const keyMode = typeof ui.askKey === "function";
+    const guardianLine =
+      typeof req?.guardian === "string" && req.guardian !== ""
+        ? escapeInvisible(sanitizeText(req.guardian)).replace(/\s+/g, " ").trim()
+        : "";
+    if (!keyMode) {
+      r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + (detail ? " " + detail : "") + "\n");
+      if (guardianLine !== "") r.write(guardianLine + "\n");
     }
     // An optional preview rides the request when the caller can produce one (a
     // staged diff for a plan-mode write): shown before the ask, absent on old
     // callers — the prompt is unchanged then.
     const preview = previewOf(req);
-    if (preview !== "") r.write(diffBlock(preview) + "\n");
+    if (preview !== "") {
+      r.write((keyMode ? richDiff(preview, { width: Math.min(terminalWidth(), 100), unicode: ui.unicode }).join("\n") : diffBlock(preview)) + "\n");
+    }
 
     let answer = "";
     try {
-      answer = await ui.ask(dim(" [y]es / [n]o / [a]lways ") + bold(cyan("\u276f ")));
+      if (keyMode) {
+        const tgt = typeof action?.target === "string" ? action.target : "";
+        const lines = approvalCard({
+          kind,
+          title,
+          detail,
+          guardian: guardianLine,
+          width: Math.min(terminalWidth(), 100),
+          unicode: ui.unicode,
+          canAlways: tgt !== "" && !tgt.endsWith("*") && kind !== "other",
+        });
+        r.write("\n" + lines.join("\n") + "\n");
+        answer = await (ui.askKey as NonNullable<ApprovalUi["askKey"]>)(lines);
+      } else {
+        answer = await ui.ask(dim(" [y]es / [n]o / [a]lways ") + bold(cyan("\u276f ")));
+      }
     } catch {
       answer = "";
     }
