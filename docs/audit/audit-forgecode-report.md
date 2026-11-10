@@ -1,7 +1,7 @@
 # Forge (forgecode) — Deep Audit Report
 
-**Audit target:** `/data/home/forge/repo-tour/forgecode` (reference clone, shallow: 1 commit `a22b492` "fix(deps): update dependency @types/node to v26 (#4095)", dated 2026-10-31; `git log --oneline -30` returns exactly one commit because the clone is shallow — noted as a coverage caveat, not a repo property).
-**Mode:** read-only. Nothing in the repo was modified. Scratch files were written to `/tmp/audit-scratch/` only. `/data/home/forge/HorizonCode` was not touched.
+**Audit target:** [`tailcallhq/forgecode`](https://github.com/tailcallhq/forgecode/tree/a22b49288856d5b3f3ca57e8532683d54a662c8c) (reference clone, shallow: 1 commit `a22b492` "fix(deps): update dependency @types/node to v26 (#4095)", dated 2026-10-31; `git log --oneline -30` returns exactly one commit because the clone is shallow - noted as a coverage caveat, not a repo property).
+**Mode:** read-only. Nothing in the repo was modified. Scratch files were written to `/tmp/audit-scratch/` only. `HorizonCode` was not touched.
 **Report written incrementally** to `/tmp/audit-forgecode-report.md`.
 
 ---
@@ -17,8 +17,8 @@ One-line identity: **a multi-provider terminal coding agent whose differentiator
 Key facts established from source and docs:
 
 - **Rust workspace, 25 crates** under `crates/` (`forge_main`, `forge_app`, `forge_domain`, `forge_repo`, `forge_services`, `forge_infra`, …), ≈174k lines of Rust excluding snapshots/tests data.
-- **Three usage modes** documented in `file:///data/home/forge/repo-tour/forgecode/README.md#L180-L227`: interactive TUI (`forge`), one-shot CLI (`-p`), and the ZSH plugin `:`-prefix mode (`forge setup` installs it).
-- **Agents** are first-class, defined as Markdown + YAML front-matter; three built-ins ship in-binary: `forge` (implementer), `sage` (read-only research), `muse` (planner) — `file:///data/home/forge/repo-tour/forgecode/crates/forge_repo/src/agents/forge.md`, `sage.md`, `muse.md`.
+- **Three usage modes** documented in [`forgecode/README.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/README.md#L180-L227): interactive TUI (`forge`), one-shot CLI (`-p`), and the ZSH plugin `:`-prefix mode (`forge setup` installs it).
+- **Agents** are first-class, defined as Markdown + YAML front-matter; three built-ins ship in-binary: `forge` (implementer), `sage` (read-only research), `muse` (planner) - [`forgecode/crates/forge_repo/src/agents/forge.md`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_repo/src/agents/forge.md), `sage.md`, `muse.md`.
 - **Skills** are also first-class: three built-ins (`create-skill`, `execute-plan`, `github-pr-description`) plus project (`./.forge/skills`) and global (`~/forge/skills`) precedence layers.
 - **Providers**: OpenAI-compatible, OpenAI Responses API, Anthropic, Google Vertex/Gemini, Amazon Bedrock, GitHub Copilot, plus a large set of OpenAI-compatible third parties (z.ai, Cerebras, Meta, OpenRouter, Requesty, x-ai, IO Intelligence, Neuralwatt, OrcaRouter, Minimax, Copilot…), and OAuth-based login flows (`forge_infra/src/auth`, `forge_main/src/oauth_callback.rs`).
 - **Config**: TOML (`~/.forge/.forge.toml`) + per-project YAML (`forge.yaml`) + a published JSON Schema `forge.schema.json` (31 KB) describing the YAML surface.

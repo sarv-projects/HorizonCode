@@ -2,7 +2,7 @@
 
 > **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-17 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
 >
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** Twelve feature branches are merged and TESTED on the integration branch (typecheck 0 errors; `bun test` 1267 tests: 1267 pass as a non-root user, 1259 pass / 8 skip as root; `cargo test` 49 + 50; selftest 25 checks; `ops/gates.sh` 7/7 as root and as non-root). Nothing is RELEASED. The per-feature map is `28-implementation-status.md` §1; the done / partial / not-started table is `../CURRENT_RUN.md` §5.0.
+> **Implementation note (2026-11-10, branch `docs/handoff` on top of `feat/tui-part3`, pull requests #1 to #28).** Measured on this tree as root: `bun run typecheck` 0 errors; `bun test` 1800 tests in 148 files, **1792 pass / 8 skip / 0 fail** (the 8 skips are chmod based tests that cannot bind for uid 0); `cargo test --locked` 49 unit + 50 integration pass; `hz-kernel --selftest` `SELFTEST OK (25 checks)`; `bash ops/gates.sh` **8/8** green. Nothing is RELEASED. The per-feature map and the 91 numbered rulings are in `28-implementation-status.md`; the done / partial / not-started table is `../CURRENT_RUN.md` §5.0; the hand-off for a new coding agent is [`33-handoff.md`](33-handoff.md).
 >
 > Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-17).
 
@@ -17,6 +17,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | — | [`../README.md`](../README.md) | Product overview: what runs today, how to build and use it, and its limits |
 | 31 | [`31-design-summary.md`](./31-design-summary.md) | The designed capability list (the former long README; cited elsewhere as "README §N") |
 | 32 | [`32-plan-files.md`](./32-plan-files.md) | The `.hz/plans/` plan-file convention and the built-in `execute-plan` skill |
+| 33 | [`33-handoff.md`](./33-handoff.md) | Hand-off for the next coding agent: repo map, build/test/gate commands and gotchas, invariants, PR history #1 to #28, the full deferred backlog (one entry per item with upstream URLs, design, files, priority), known gaps, where the research lives |
 | 01 | [`01-vision-and-superset.md`](./01-vision-and-superset.md) | Why it exists; the eight references grilled; what is inherited, superseded and new |
 | 02 | [`02-decisions.md`](./02-decisions.md) | ADR-001…ADR-016 — every binding architectural decision, incl. **terminal-first vs web** |
 | 03 | [`03-hld.md`](./03-hld.md) | High-level design: planes, processes, trust boundaries, interfaces, targets |
@@ -70,4 +71,4 @@ Every capability carries a level. Levels above `DESIGNED` exist only in `docs/28
 
 ## Relationship to upstream work
 
-HorizonCode inherits ideas and (where licensed) code from `anomalyco/opencode`, `openai/codex`, `xai-org/grok-build`, `esengine/DeepSeek-Reasonix`, `can1357/oh-my-pi`, `tailcallhq/forgecode`, `sarv-projects/horizoncode` and the leaked `codeaashu/claude-code` reference. Derivative work is tracked with attribution and a pinned upstream revision (ADR-014). Reference clones used for this design live under `/data/home/forge/repo-tour/`.
+HorizonCode inherits ideas and (where licensed) code from `anomalyco/opencode`, `openai/codex`, `xai-org/grok-build`, `esengine/DeepSeek-Reasonix`, `can1357/oh-my-pi`, `tailcallhq/forgecode`, `sarv-projects/horizoncode` and the leaked `codeaashu/claude-code` reference. Derivative work is tracked with attribution and a pinned upstream revision (ADR-014). The exact upstream repositories, pinned commits and URL patterns used for this design are recorded in [`research/upstream-pins.md`](research/upstream-pins.md); the eight cloned repositories link to GitHub at the pinned SHA, and the repositories that were audited from clones no longer available (aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix, opencode-v2, and the ancestor project) are cited as `repo-tour/<name>/<path> (not cloned; unverified)`.

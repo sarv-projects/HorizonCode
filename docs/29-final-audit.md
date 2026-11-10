@@ -1,8 +1,20 @@
 # 29 — Final Audit: twelve-repo completeness, optimization analysis, and the docs-staleness reconciliation
 
-> **What this document is.** The audit of record (RC-13) for the twelve reference clones under `/data/home/forge/repo-tour/`, plus the final pass over the spec set itself: every doc checked for stale claims, the sixteen insertions queued by `26-learning-synthesis-2.md` §5 carried **in full** in Part D, and a cross-analysis of where to optimise further (speed, capabilities, accuracy).
+> **What this document is.** The audit of record (RC-13) for the twelve reference clones in the original author's `repo-tour/` directory (pins and clone status: `research/upstream-pins.md`), plus the final pass over the spec set itself: every doc checked for stale claims, the sixteen insertions queued by `26-learning-synthesis-2.md` §5 carried **in full** in Part D, and a cross-analysis of where to optimise further (speed, capabilities, accuracy).
 >
 > **Status rules.** Parts A–C record facts read from the clones and analysis derived from them — no implementation claim is made here; implementation levels live in `28-implementation-status.md` (RC-13). Part D records the queued insertions in full; they were folded into their owner documents by the 2026-11-07 adoption revision (RC-15). Part E lists the staleness fixes applied in this audit. Nothing in this audit touched implementation code.
+
+## Handoff refresh (2026-11-10)
+
+This document is the audit of record as of 2026-11-06 and is kept as written. The following statements in it, and in the table rows it carries, are stale or were never true for the current tree; read them with these corrections.
+
+- **Repo count and clone status.** The audit counts twelve repositories. Only **eight** were re-cloned and pinned for the documentation pass: claude-code, cline, codex, deepseek-harness, forgecode, grok-build, oh-my-pi, opencode (pins and URL pattern: [`research/upstream-pins.md`](research/upstream-pins.md)). aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix and opencode-v2, and the ancestor `horizoncode` project, are NOT cloned, so any path into them cannot be verified and is cited as not cloned. The file counts and sizes in section 0 describe the 2026-11-06 snapshot of the original author's clones and were not re-measured.
+- **`/tmp/*.md` report paths in section 0.** Those raw reports were never committed and no longer exist. The preserved copies are under `docs/audit/pass2/` through `docs/audit/pass5/` and the delta reports `docs/audit/audit-*.md`.
+- **"No implementation claim is made here."** Still true of Parts A to C. For implementation reality read [`28-implementation-status.md`](28-implementation-status.md): as of 2026-11-10, 91 numbered rulings, pull requests #1 to #28, and measured results as root: `bun test` 1792 pass / 8 skip / 0 fail (1800 tests in 148 files), `cargo test --locked` 49 unit + 50 integration, `hz-kernel --selftest` 25 checks, `bash ops/gates.sh` 8/8. Nothing is RELEASED.
+- **Part D "queued insertions".** They were folded into the owner documents; they describe the DESIGN. Docs 06 to 16 now open with an "Implementation reality" banner and a Provenance section that say which rules are shipped (reduced) and which are DESIGN ONLY. Rule ids quoted from Part D do not imply code.
+- **Adoption queue.** The queue was `docs/30` section 4; it is now the per-row Status columns and the generated open-work register in [`30-steal-list.md`](30-steal-list.md) section 7, with detailed deferral entries in [`33-handoff.md`](33-handoff.md) section 5. Several items this audit lists as future work shipped: structured compaction (T-7), custom commands (T-13), skill folders (T-14), JSON repair (T-1), doctor (T-10), startup-latency gate (T-11), markdown and spinner (T-5, T-6), MCP client v1, hooks, plan mode, rewind, server mode, PTY exec, LSP loop, AST tools.
+- **Later audits.** Code-level audits after this one: `docs/audit/reaudit-2026-11-08.md`, `docs/audit/external-audit-2026-11-08.md`, `docs/audit/competitive-viability-audit-2026-11-08.md`, `docs/audit/triage-external-review-2026-11-07.md`.
+
 
 ---
 

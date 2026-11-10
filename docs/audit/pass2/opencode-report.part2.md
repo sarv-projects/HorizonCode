@@ -3,7 +3,7 @@
 
 ## 4. Entry points
 
-**CLI launcher (Node).** `packages/cli/package.json` declares `bin.opencode` → `./bin/opencode.cjs` (and `opencode2` → `./bin/opencode2.cjs`). The `.cjs` is a tiny Node shim that spawns the real Bun binary and forwards signals (`file:///data/home/forge/repo-tour/opencode/packages/cli/bin/opencode.cjs#L10-L24`):
+**CLI launcher (Node).** `packages/cli/package.json` declares `bin.opencode` → `./bin/opencode.cjs` (and `opencode2` → `./bin/opencode2.cjs`). The `.cjs` is a tiny Node shim that spawns the real Bun binary and forwards signals ([`opencode/packages/cli/bin/opencode.cjs`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/bin/opencode.cjs#L10-L24)):
 
 ```js
 function run(target) {
@@ -16,7 +16,7 @@ function run(target) {
   }
 ```
 
-**Real program.** `packages/cli/src/index.ts` — an Effect program wiring the command tree, signal handling, heap/CPU profiling, plugin runtime, and `NodeRuntime.runMain` teardown (`file:///data/home/forge/repo-tour/opencode/packages/cli/src/index.ts#L44-L99`):
+**Real program.** `packages/cli/src/index.ts` - an Effect program wiring the command tree, signal handling, heap/CPU profiling, plugin runtime, and `NodeRuntime.runMain` teardown ([`opencode/packages/cli/src/index.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/index.ts#L44-L99)):
 
 ```ts
 const Handlers = Runtime.handlers(Commands, {
@@ -36,7 +36,7 @@ const Handlers = Runtime.handlers(Commands, {
 
 `package.json` `dev` = `bun run --cwd packages/cli src/index.ts`; `dev:live` connects a dev TUI to the elected background server; `dev:desktop`/`dev:web`/`dev:console`/`dev:site` target other surfaces.
 
-**TUI launch.** `packages/cli/src/commands/handlers/default.ts` resolves or starts the background server via `ServerConnection.resolve`, then calls `run(...)` from `@opencode/tui` (`file:///data/home/forge/repo-tour/opencode/packages/cli/src/commands/handlers/default.ts#L96-L120`):
+**TUI launch.** `packages/cli/src/commands/handlers/default.ts` resolves or starts the background server via `ServerConnection.resolve`, then calls `run(...)` from `@opencode/tui` ([`opencode/packages/cli/src/commands/handlers/default.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/commands/handlers/default.ts#L96-L120)):
 
 ```ts
 yield* run({
@@ -51,7 +51,7 @@ yield* run({
 })
 ```
 
-**Server entry.** `packages/cli/src/commands/handlers/serve.ts` → `ServerProcess.run({ mode: service|stdio|default, hostname, port, cors })` (`file:///data/home/forge/repo-tour/opencode/packages/cli/src/commands/handlers/serve.ts#L6-L16`).
+**Server entry.** `packages/cli/src/commands/handlers/serve.ts` → `ServerProcess.run({ mode: service|stdio|default, hostname, port, cors })` ([`opencode/packages/cli/src/commands/handlers/serve.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/commands/handlers/serve.ts#L6-L16)).
 
 **Other surface entries:** `packages/tui/src/index.tsx` (TUI root; dev entry `packages/cli/dev/entry.ts` wraps it for Vite HMR), `packages/desktop/src/main/index.ts` + `renderer/index.tsx` (Electron), `packages/sdk/src/index.ts`, `packages/app/src` (web), `sdks/vscode/src/extension.ts`, `services/*` Workers, `packages/console/app`, `packages/stats/*`, `packages/web`.
 
@@ -60,7 +60,7 @@ yield* run({
 ## 5. Core subsystems (file paths)
 
 ### 5.1 Agent system
-Agents are **runtime data**, not Markdown files. `packages/core/src/agent.ts` is a Location-scoped `State`-backed service with `get/resolve/select/list` plus a mutable `Editor` for plugins (`file:///data/home/forge/repo-tour/opencode/packages/core/src/agent.ts#L40-L47`):
+Agents are **runtime data**, not Markdown files. `packages/core/src/agent.ts` is a Location-scoped `State`-backed service with `get/resolve/select/list` plus a mutable `Editor` for plugins ([`opencode/packages/core/src/agent.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/agent.ts#L40-L47)):
 
 ```ts
 export interface Interface extends State.Transformable<Editor> {
@@ -72,7 +72,7 @@ export interface Interface extends State.Transformable<Editor> {
 export class Service extends Context.Service<Service, Interface>()("@opencode/Agent") {}
 ```
 
-Built-ins are declared by the internal `AgentPlugin` at `packages/core/src/plugin/agent.ts`: **build** (`Agent.defaultID`, default), **general** (subagent), **explore** (subagent; read-only search specialist with `PROMPT_EXPLORE`), **compaction** (hidden), **title** (hidden, `PROMPT_TITLE`), **summary** (hidden, `PROMPT_SUMMARY`) — registered through `ctx.agent.transform(editor => editor.update(...))` (`file:///data/home/forge/repo-tour/opencode/packages/core/src/plugin/agent.ts#L52-L117`):
+Built-ins are declared by the internal `AgentPlugin` at `packages/core/src/plugin/agent.ts`: **build** (`Agent.defaultID`, default), **general** (subagent), **explore** (subagent; read-only search specialist with `PROMPT_EXPLORE`), **compaction** (hidden), **title** (hidden, `PROMPT_TITLE`), **summary** (hidden, `PROMPT_SUMMARY`) - registered through `ctx.agent.transform(editor => editor.update(...))` ([`opencode/packages/core/src/plugin/agent.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/agent.ts#L52-L117)):
 
 ```ts
 export const Plugin = define({
@@ -90,7 +90,7 @@ export const Plugin = define({
 })
 ```
 
-`PlanPlugin` (`packages/core/src/plugin/plan.ts`) adds **plan**: `mode: "primary"`, denies `edit` except in `~/.opencode/plan`, and maintains an enter/leave `<system-reminder>` via `session.context` + `session.created`/`agent.selected` hooks (`file:///data/home/forge/repo-tour/opencode/packages/core/src/plugin/plan.ts#L27-L53`).
+`PlanPlugin` (`packages/core/src/plugin/plan.ts`) adds **plan**: `mode: "primary"`, denies `edit` except in `~/.opencode/plan`, and maintains an enter/leave `<system-reminder>` via `session.context` + `session.created`/`agent.selected` hooks ([`opencode/packages/core/src/plugin/plan.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/plan.ts#L27-L53)).
 
 ```ts
 export const Plugin = define({
@@ -114,8 +114,8 @@ Runtime agent and command `.md` files exist only for this repo's own config unde
 ### 5.2 Session loop / run
 The core is a durable, event-sourced, step-based loop:
 
-- `packages/core/src/session/runner/llm.ts` — the **drain loop** (`SessionRunner.drain`). It promotes inbox input, handles `compaction`/`move` controls, then loops `advanceToStep` → `runStep`. Each `runStep` reloads context, estimates/compacts, builds the transcript, and calls `steps.attempt` (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/runner/llm.ts#L233-L315`).
-- `packages/core/src/session/runner/step.ts` — **one logical step = one `llm.stream` call**. Streams provider events, spawns local tool fibers eagerly, classifies tool exits, and publishes durable `Step.Ended`/failure (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/runner/step.ts#L64-L135`).
+- `packages/core/src/session/runner/llm.ts` - the **drain loop** (`SessionRunner.drain`). It promotes inbox input, handles `compaction`/`move` controls, then loops `advanceToStep` → `runStep`. Each `runStep` reloads context, estimates/compacts, builds the transcript, and calls `steps.attempt` ([`opencode/packages/core/src/session/runner/llm.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/runner/llm.ts#L233-L315)).
+- `packages/core/src/session/runner/step.ts` - **one logical step = one `llm.stream` call**. Streams provider events, spawns local tool fibers eagerly, classifies tool exits, and publishes durable `Step.Ended`/failure ([`opencode/packages/core/src/session/runner/step.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/runner/step.ts#L64-L135)).
 - `packages/core/src/session/runner/{model,retry,to-llm-message,publish-llm-event,max-steps}.ts` — model resolution, retry policy, transcript conversion, event publishing, step-limit prompt.
 
 ```ts
@@ -170,7 +170,7 @@ const providerStream = llm.stream(input.prepared.request, input.prepared.options
 `packages/core/src/session/runner/index.ts` defines the `Service`/`DrainResult`/`RunError`; `packages/core/src/session/model-request.ts` builds the provider request; `packages/core/src/session/model-transport.ts` owns WebSocket/continuation transport.
 
 ### 5.3 Execution ownership & coordination
-- `packages/core/src/session/execution.ts` — process-global, Session-ID keyed `SessionExecution`. Commits a **write-ahead execution claim** at busy-period start, releases it on success/failure/user-interrupt, and *preserves it on shutdown* so the next start resumes work (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/execution.ts#L73-L83`):
+- `packages/core/src/session/execution.ts` - process-global, Session-ID keyed `SessionExecution`. Commits a **write-ahead execution claim** at busy-period start, releases it on success/failure/user-interrupt, and *preserves it on shutdown* so the next start resumes work ([`opencode/packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts#L73-L83)):
 
 ```ts
 // Write-ahead claim: starting records the durable intent that a turn is in flight, in the same
@@ -182,7 +182,7 @@ const claimOnCommit = (sessionID) => ({ commit: () => store.claim(sessionID) })
 const releaseOnCommit = (sessionID) => ({ commit: () => store.release(sessionID) })
 ```
 
-- `packages/core/src/session/run-coordinator.ts` — `SessionRunCoordinator`: joins same-Session resumes, coalesces prompt wakeups ("doorbell"), lets different Sessions run concurrently, implements interrupt/`awaitIdle` (`file:///data/home/forge/repo-tour/opencode/packages/core/src/session/run-coordinator.ts#L27-L54`):
+- `packages/core/src/session/run-coordinator.ts` - `SessionRunCoordinator`: joins same-Session resumes, coalesces prompt wakeups ("doorbell"), lets different Sessions run concurrently, implements interrupt/`awaitIdle` ([`opencode/packages/core/src/session/run-coordinator.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/run-coordinator.ts#L27-L54)):
 
 ```ts
 /**

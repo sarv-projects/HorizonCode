@@ -1,5 +1,14 @@
 # AUDIT — re-audit of the HorizonCode specification set
 
+> **Handoff refresh (2026-11-10). This file is a dated record of the 2026-11-06 specification audit and is kept as written; the corrections below supersede it where the world has moved.**
+>
+> - **Scope has grown.** The document set is now `docs/00-index.md` through `docs/33-handoff.md` (docs 17 to 23 are still unwritten reserved numbers; 26 to 33 exist), `docs/_conventions.md`, `docs/audit/`, and the imported upstream research notes in `docs/research/` with pinned commits in `docs/research/upstream-pins.md`.
+> - **"Every capability is DESIGNED" is no longer true.** A reduced runtime exists and is measured: 18 registered tools, 11 kernel protocol methods, 7 server protocol methods, 91 numbered rulings, 8 CI gates. On 2026-11-10 as root: `bun test` 1792 pass / 8 skip / 0 fail (1800 tests, 148 files), `cargo test --locked` 49 unit + 50 integration, `hz-kernel --selftest` 25 checks, `bash ops/gates.sh` 8/8. Per-feature status (DESIGNED, CODE_PRESENT, WIRED, TESTED, VERIFIED, RELEASED; nothing is RELEASED) lives only in `docs/28-implementation-status.md`.
+> - **Ranges quoted below changed.** NF ids now run NF-001 to NF-075 (the V2 additions NF-069 to NF-075 were added in `docs/24`); the event count of 44 is the DESIGNED `hz.*` catalogue only: the shipped runtime writes 20 durable event types and none is an `hz.*` name (see `docs/06` "Implementation reality").
+> - **The "no blockers" verdict was about internal consistency of the design, not about the code.** The code was audited separately: `docs/29-final-audit.md`, `docs/audit/reaudit-2026-11-08.md`, `docs/audit/external-audit-2026-11-08.md` and `docs/audit/competitive-viability-audit-2026-11-08.md`. Open items are tracked in `docs/33-handoff.md` sections 5 and 6 and `docs/30-steal-list.md` section 7.
+> - **Raw audit outputs** referenced as `/tmp/audit-*.md` were never committed and no longer exist; the curated per-audit reports are under `docs/audit/`.
+
+
 Date: 2026-11-06. Scope: `README.md` + `docs/` (00–16, 24, 25, `_conventions.md`) — 21 files, ~19k lines.
 
 Five audits were run after the documents were written: requirements traceability, cross-document consistency, competitive-parity completeness, and two adversarial technical hole-hunts. Where a sub-agent died (provider failures), the audit was completed directly with scripted checks; raw outputs are kept outside the repo (per-audit reports under `/tmp/audit-*.md` at the time of writing).

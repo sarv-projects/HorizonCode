@@ -10,7 +10,7 @@ This pass answers the brief: *speed, capability, low token consumption without c
 
 ## 1. Method and sources
 
-Five read-only deep dives were run against the full clones under `/data/home/forge/repo-tour/` (the eight repositories of the first tour, plus `wshobson/agents`, `OpenHands` Agent Canvas, and `SWE-agent`). Reports (in-repo copies): `/data/home/forge/HorizonCode/docs/audit/pass2/deep-wshobson-report.md` (937 lines), `…/deep-openhands-report.md` (173), `…/deep-sweagent-aci-report.md` (256), `…/deep-codemode-report.md` (195), `…/deep-opencode-v2-report.md` (101) — ~1.7k lines of extracted, path-cited facts. Each section of each report was verified against the tree (the three agents that died mid-run were completed by direct reads; every fact retained here has a path or a command behind it).
+Five read-only deep dives were run against the full `repo-tour/` reference clones (not in this repository; see `research/upstream-pins.md`) (the eight repositories of the first tour, plus `wshobson/agents`, `OpenHands` Agent Canvas, and `SWE-agent`). Reports (in-repo copies): `audit/pass2/deep-wshobson-report.md` (937 lines), `…/deep-openhands-report.md` (173), `…/deep-sweagent-aci-report.md` (256), `…/deep-codemode-report.md` (195), `…/deep-opencode-v2-report.md` (101) - ~1.7k lines of extracted, path-cited facts. Each section of each report was verified against the tree (the three agents that died mid-run were completed by direct reads; every fact retained here has a path or a command behind it).
 
 The operating rule for the whole pass: **learn first, decide second, plan third.** This document is the learned part and the decisions; doc 27 is the plan.
 

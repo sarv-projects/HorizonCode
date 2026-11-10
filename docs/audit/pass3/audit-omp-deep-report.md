@@ -1,6 +1,6 @@
 # oh-my-pi — Deep Verification + Residual Deep-Dive
 
-_Read-only audit. Nothing under `/data/home/forge/repo-tour/oh-my-pi` was modified; `/data/home/forge/HorizonCode` was not touched. Companion to `/tmp/oh-my-pi-report.md` (413-line overview) and `/tmp/audit-grok-ds-ompi-delta.md` (§1.3/3.3/4/5)._
+_Read-only audit. Nothing under [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296) was modified; `HorizonCode` was not touched. Companion to `/tmp/oh-my-pi-report.md` (413-line overview) and `/tmp/audit-grok-ds-ompi-delta.md` (§1.3/3.3/4/5)._
 
 Snapshot: 2026-11-07. Repo HEAD state as on disk.
 
@@ -293,6 +293,6 @@ Ordered by *value per unit of adoption cost*, not by size. Each item is somethin
 
 **Not re-read in this pass** (already covered by the two prior reports and not load-bearing for either half): `packages/{ai,tui,natives,omptype,mnemopi,snapcompact,stats,utils,wire,browser-relay,collab-web}/**` internals, `python/robomp/**`, `sdk/**` (other than the wire-schema reference), `nix/`, `bazel/`, `infra/`, `patches/`, `.github/workflows/`, `Dockerfile*`.
 
-Read-only: no file under `/data/home/forge/repo-tour/` was modified; `/data/home/forge/HorizonCode` was not touched.
+Read-only: no file under `repo-tour/` was modified; `HorizonCode` was not touched.
 
 _End of report._

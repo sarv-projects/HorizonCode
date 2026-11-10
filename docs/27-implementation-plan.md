@@ -409,7 +409,7 @@ The plan itself was verified by the five-audit pass recorded in `AUDIT.md` and b
 | Capability | Status | Evidence |
 |---|---|---|
 | Runtime viability of the toolchain (Bun + Rust) on the build machine | **VERIFIED** | install log + smoke tests (§6.2) |
-| Source availability of all fifteen reference repositories | **VERIFIED** | clones present under `/data/home/forge/repo-tour/` |
+| Source availability of all fifteen reference repositories | **VERIFIED** | clones present in the original author's `repo-tour/` directory (eight are re-cloned for the pins in `research/upstream-pins.md`; the rest are not cloned here) |
 | Learning corpus (deep-dive reports) for this pass | **VERIFIED** | `docs/audit/pass2/deep-*-report.md` (5 reports, ~1.5k lines total; the reports were preserved in-repo after they had lived only in `/tmp`) |
 
 ### Related documents

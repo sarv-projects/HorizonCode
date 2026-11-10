@@ -28,7 +28,7 @@ The model can request an action; a Rust trust kernel decides whether it runs (`d
 
 ## Features
 
-Every item below is on `main` and covered by automated tests. Items that are partial, opt-in or off by default say so.
+Every item below is in this tree (pull requests #1 to #28, all merged into `main`) and covered by automated tests. Items that are partial, opt-in or off by default say so.
 
 **Safety and evidence**
 
@@ -62,10 +62,14 @@ Every item below is on `main` and covered by automated tests. Items that are par
 - **Code mode**: a JavaScript subprocess calls tools over a bridge; each call is still admitted individually.
 - **MCP client**: stdio servers declared in user config only; a workspace file cannot add one.
 - **Repo map**: a ranked structural map of the repository.
+- **Tolerant tool arguments**: malformed tool-call JSON is repaired when the repair is syntax-only and refused for side-effecting tools when the arguments were truncated.
+- **Skills and custom commands**: `SKILL.md` folders with resources (plus read-only `~/.claude/skills` and `~/.agents/skills` sources), a built-in `execute-plan` skill for `.hz/plans/` files, and markdown prompt templates as slash commands.
+- **Structured compaction**: older turns are summarised with files touched (last operation), commands run (secret-like values masked) and todo changes.
 
 **Interfaces**
 
 - **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering, a single-key bordered approval card (`y`/`n`/`a`, Enter/Esc deny; paste and type-ahead can never approve), bracketed paste, diff gutters, collapsed reasoning (`/think`), Tab completion with ghost text for `/commands` and `@paths`, and `/theme`; there is no fullscreen mode.
+- **Install and config checks**: `hzcode doctor` (diagnose-only), `hzcode config check` (keys the loader ignores) and `hzcode commit` (a commit message drafted from the staged diff, committed through the guarded shell path).
 - **Headless mode**: `hzcode -p` prints one turn as `text`, `json` or `stream-json` with canonical exit codes; approvals fail closed.
 - **Server mode (single client)**: `hzcode serve` speaks NDJSON JSON-RPC on stdio with `session.create`, `list`, `subscribe`, `prompt`, `rewind` and `fork`.
 - **Hooks**: lifecycle hooks read from `hooks.json`; a malformed file refuses to run hooks rather than silently skipping them.
@@ -130,6 +134,8 @@ cd HorizonCode
 ./bin/hzcode --continue               # resume the last session
 ./bin/hzcode serve                    # single-client NDJSON JSON-RPC on stdio
 ./bin/hzcode doctor                   # check this install: OK/WARN/FAIL with a fix per problem
+./bin/hzcode config check             # report config keys the loader would silently ignore
+./bin/hzcode commit --preview         # draft a commit message from the staged diff (no commit)
 ```
 
 The mock model needs no key and exercises the whole path: tool call, guard, receipt. A JSON turn looks like this:
@@ -202,12 +208,19 @@ These are the commands in the chat bar, as printed by `/help`.
 | `/discard` | drop the staged changes |
 | `/fork [n]` | branch this chat into a new session (n = checkpoint number, else everything so far) |
 | `/sessions` | recent sessions with fork lineage (resume a fork with `hzcode --resume <id>`) |
+| `/rename <title>` | retitle this session |
+| `/retry` | drop the last reply and ask the same question again |
+| `/theme [name]` | dark, light, auto or mono (`NO_COLOR` is always respected) |
+| `/think` | show the last reasoning block (rich mode) |
+| `/stats` | message, tool call and token counts for this chat |
+| `/export [json\|html]` | write the chat to `.hz/exports` (html shows the receipt chain status; secret-like values are masked) |
+| `/copy` | copy the last answer to the clipboard (terminal OSC 52) |
 | `/rewind [n]` | list checkpoints; n restores the files changed since one |
 | `/memory` | which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias `/instructions`) |
 | `/init` | draft an AGENTS.md for this repo (staged; you review it, then `/apply`) |
 | `/exit` | leave (Ctrl+D also works) |
 
-Ctrl+C stops the current answer (again to leave), Ctrl+D leaves, and the up and down arrows recall earlier messages.
+Prompt templates in `<workspace>/.hz/commands/*.md` (or `~/.config/horizon/commands/`) add custom `/name args` commands; they are listed under `/help`, can also run as `hzcode run <name> [args]`, and never shadow a built-in. Tab completes `/commands` and `@paths`. Ctrl+C stops the current answer (again to leave), Ctrl+D leaves, and the up and down arrows recall earlier messages.
 
 Plan mode stages every write instead of performing it. `/changes` shows the staged diffs, `/apply` writes them, `/discard` drops them.
 
@@ -247,7 +260,7 @@ Add your own as Markdown files with front-matter (`name`, `description`, `tools`
 
 ## Performance
 
-Measured on this tree on 2026-11-09. Environment: x86_64, 8 cores, Linux, Bun 1.2.14, Rust 1.92.0, running as root in a sandbox container. These are single-machine numbers, not a benchmark suite, and they exclude model latency.
+Source line counts and the kernel binary size were re-measured on 2026-11-10; the timing and memory rows were measured on 2026-11-09 and not repeated (the startup medians in the gate table below are from the same day). Environment: x86_64, 8 cores, Linux, Bun 1.2.14, Rust 1.92.0, running as root in a sandbox container. These are single-machine numbers, not a benchmark suite, and they exclude model latency.
 
 | Metric | Value | How it was measured |
 |---|---|---|
@@ -255,8 +268,8 @@ Measured on this tree on 2026-11-09. Environment: x86_64, 8 cores, Linux, Bun 1.
 | Kernel self-test | 4 ms for 25 checks | `hz-kernel --selftest --state-dir <tmp>`, wall time |
 | Kernel binary | 1,156,816 bytes (1.1 MiB) | `ls -l kernel/target/release/hz-kernel`, release profile |
 | Idle memory of the chat bar | 85 MB RSS for the Bun process, plus 1 MB for the kernel child | `hzcode --mock` in a PTY, VmRSS from `/proc/<pid>/status` three seconds after the banner; 87 MB after running `/help`, `/files`, `/mode`, `/memory`, `/rewind` and `/sessions` |
-| TypeScript source | 37,827 lines | all `*.ts` under `app/src` (tests live in `app/tests`), comments and blank lines included |
-| Rust source | 5,866 lines (7,070 with inline unit tests) | `kernel/src/*.rs`, counting up to the first `#[cfg(test)]` in each file for the first figure |
+| TypeScript source | 40,813 lines | all `*.ts` under `app/src` (tests live in `app/tests`), comments and blank lines included |
+| Rust source | 4,256 lines before inline unit tests (7,070 with them) | `kernel/src/*.rs`, counting up to the first `#[cfg(test)]` in each file for the first figure; re-counted 2026-11-10 |
 | Runtime dependencies | 0 | `app/package.json` has only `devDependencies` (type definitions and the TypeScript compiler) |
 
 No comparison with other agents is made here, because none was measured on the same machine with the same model.
@@ -276,11 +289,11 @@ The eight gates run through one entry point, `bash ops/gates.sh`, which CI also 
 | `e2e-usage-error` | a bad flag exits with the usage error |
 | `startup-latency` | median of 5 runs of `hzcode --version` (500 ms ceiling) and of a mock turn (1000 ms ceiling); measured medians are 96 ms and 198 ms |
 
-Results from a run on 2026-11-09 on this tree:
+Results from a run on 2026-11-10 on this tree (as root in a sandbox container):
 
 - `cd kernel && cargo build --release --locked && cargo test --locked`: 49 unit tests and 50 integration tests pass.
 - `hz-kernel --selftest`: `SELFTEST OK (25 checks)`.
-- `cd app && bun install && bun test`: 1,597 tests in 128 files; 1,589 pass, 8 skip, 0 fail.
+- `cd app && bun run typecheck && bun test`: typecheck 0 errors; 1,800 tests in 148 files; 1,792 pass, 8 skip, 0 fail.
 - `bash ops/gates.sh`: all 8 gates pass (to be re-run at release).
 
 The 8 skips are chmod-based tests that cannot bind when the process runs as root, so they skip by design; the run above was as root. The same suite also runs on hosted CI as a non-root user, where they execute.
@@ -311,6 +324,9 @@ Start at [`docs/00-index.md`](./docs/00-index.md).
 |---|---|
 | [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) | what is implemented, with evidence commands |
 | [`CURRENT_RUN.md`](./CURRENT_RUN.md) | current state, open work and exact continuation steps |
+| [`docs/research/README.md`](./docs/research/README.md) | the upstream research notes and the pinned upstream commits ([`upstream-pins.md`](./docs/research/upstream-pins.md)) behind the steal list |
+| [`docs/30-steal-list.md`](./docs/30-steal-list.md) | every borrowed idea with its upstream URL, status and what is deferred |
+| [`docs/33-handoff.md`](./docs/33-handoff.md) | hand-off for a new maintainer or coding agent: repo map, commands, invariants, PR history, the full deferred backlog with upstream links |
 | [`docs/11-authority-safety.md`](./docs/11-authority-safety.md) | threat model, guard, leases, receipts |
 | [`docs/09-tools.md`](./docs/09-tools.md) | the tool catalogue (designed superset; `/files` shows what is registered) |
 | [`docs/13-tui.md`](./docs/13-tui.md) | the terminal UI |

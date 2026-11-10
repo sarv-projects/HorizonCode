@@ -2,7 +2,7 @@
 
 _Read-only research report. Generated 2026-11-06 from commit `b1106b9` on branch `studio` (clean working tree). No repository file was modified._
 
-All paths below are absolute and rooted at `/data/home/forge/repo-tour/DeepSeek-Reasonix`.
+All paths below are absolute and rooted at `DeepSeek-Reasonix` (repo not cloned, path not verified).
 
 ---
 
