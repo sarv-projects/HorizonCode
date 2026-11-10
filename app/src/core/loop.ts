@@ -115,6 +115,7 @@ import type { KernelClient } from "./kernel";
 import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import type { PermissionMode } from "./permission-mode";
 import { modeAutoApproves, modeRefusal } from "./permission-mode";
+import { invisibleUnicodeError } from "../tools/helpers";
 import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
@@ -808,7 +809,13 @@ export class GuardGate {
         const line = guardianLine(review);
         if (line !== undefined) req = { ...req, guardian: line };
       } catch {
-        // advisory only: a guardian failure never changes the decision
+        // Advisory mode is fail-open: a guardian failure never changes the
+        // decision. ENFORCE mode is fail-CLOSED (ruling 66(b)): the guardian
+        // could not judge the action, so the ask is refused, not waved on.
+        if (guardianModeFromEnv() === "enforce") {
+          if (this.pending !== null && this.pending === waiting) this.pending = null;
+          return false;
+        }
       }
     }
     // accept-edits answers an in-workspace fs.write ask. Reached only after the
@@ -1535,6 +1542,14 @@ async function executeTool(
   if (deps.planMode === true) {
     const planned = planModeOutcome(call.name, parsed.args, deps);
     if (planned !== undefined) return planned;
+  }
+
+  // Ruling 66(a): the one-shot shell refuses invisible Unicode in its command
+  // BEFORE admission, so no guard ask or approval prompt is raised for a
+  // command the tool will refuse anyway. The tool keeps its own check too.
+  if (call.name === "shell" && typeof parsed.args.command === "string") {
+    const invisible = invisibleUnicodeError(parsed.args.command, "a shell command");
+    if (invisible !== undefined) return { result: { ok: false, output: invisible, error: invisible }, expected: true };
   }
 
   const admission = admissionFor(call.name, parsed.args, deps.workspace);
