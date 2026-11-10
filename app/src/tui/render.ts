@@ -202,6 +202,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     state: "running" | "completed" | "failed";
     activity: string;
     endedAt?: number;
+    /** From `subagent.end` (C2): exact child wall time, tool count, failure reason. */
+    final?: { status: "completed" | "failed" | "cancelled"; ms: number; tools?: number; reason?: string };
   }
   const subs: Sub[] = [];
 
@@ -315,19 +317,67 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     } else if (name === "agent") {
       const sub = subs.find((x) => x.callId === id) ?? subs.find((x) => x.state === "running");
       if (sub) {
-        sub.state = status === "ok" ? "completed" : "failed";
-        sub.endedAt = now();
-        writeLines([
-          subagentLine(
-            { state: sub.state, task: subLabel(sub), ms, profile: undefined, reason: status === "error" ? firstLine(ev.summary, 40) : undefined },
-            style,
-          ),
-        ]);
+        if (sub.final !== undefined) {
+          // C2 gave the exact outcome: the card's completion line carries it.
+          writeLines([subEndLine(sub, sub.final, style)]);
+        } else {
+          sub.state = status === "ok" ? "completed" : "failed";
+          sub.endedAt = now();
+          writeLines([
+            subagentLine(
+              { state: sub.state, task: subLabel(sub), ms, profile: undefined, reason: status === "error" ? firstLine(ev.summary, 40) : undefined },
+              style,
+            ),
+          ]);
+        }
       }
     } else if (HEADER_FIRST_TOOLS.has(name)) {
       writeLines(resultLine(input, style));
     } else {
       writeLines(toolCardLines(input, style));
+    }
+  };
+
+  const subEndLine = (sub: Sub, f: NonNullable<Sub["final"]>, style: CardStyle): string =>
+    subagentLine(
+      {
+        state: f.status,
+        task: subLabel(sub),
+        ms: f.ms,
+        reason: f.reason,
+        activity: f.tools !== undefined && f.tools > 0 ? `${f.tools} tool${f.tools === 1 ? "" : "s"}` : undefined,
+      },
+      style,
+    );
+
+  /** C2 boundaries: bind the child id to its card, or draw the cells when no card exists. */
+  const richSubBoundary = (ev: Extract<RuntimeEvent, { type: "subagent.start" | "subagent.end" }>): void => {
+    const style = cardStyle();
+    let sub = subs.find((x) => x.agentId === ev.agentId);
+    if (!sub) sub = subs.find((x) => x.agentId === undefined && x.callId !== "" && x.state === "running");
+    if (ev.type === "subagent.start") {
+      if (sub) {
+        sub.agentId = ev.agentId;
+        if (sub.task === "") sub.task = sanitizeText(ev.task);
+        if (!sub.profile && ev.profile) sub.profile = ev.profile;
+        return;
+      }
+      sub = { callId: "", task: sanitizeText(ev.task), profile: ev.profile, at: now(), agentId: ev.agentId, state: "running", activity: "" };
+      subs.push(sub);
+      flushFold();
+      writeLines([subagentLine({ state: "running", task: subLabel(sub), profile: sub.profile }, style)]);
+      return;
+    }
+    if (!sub) return;
+    const final = { status: ev.status, ms: ev.durationMs, tools: ev.tools, reason: ev.reason };
+    sub.state = ev.status === "completed" ? "completed" : "failed";
+    sub.endedAt = now();
+    if (sub.callId === "") {
+      // No tool card to carry the completion: this event draws it.
+      flushFold();
+      writeLines([subEndLine(sub, final, style)]);
+    } else {
+      sub.final = final;
     }
   };
 
@@ -436,8 +486,13 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     }
     if (rich && ev.type !== "context.usage") flushThinking();
     if (rich && ev.type !== "assistant.delta" && ev.type !== "context.usage") mdFinish();
-    if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "context.usage") flushFold();
+    if (rich && ev.type !== "tool.card" && ev.type !== "subagent.event" && ev.type !== "subagent.start" && ev.type !== "subagent.end" && ev.type !== "context.usage") flushFold();
     switch (ev.type) {
+      case "subagent.start":
+      case "subagent.end":
+        // Additive C2 events: drawn in rich mode only, ignored in the plain transcript.
+        if (rich) richSubBoundary(ev);
+        break;
       case "subagent.event":
         if (rich) richSubEvent(String(ev.agentId), ev.event, ev.profile);
         else handleNested(String(ev.agentId), ev.event, ev.profile);
