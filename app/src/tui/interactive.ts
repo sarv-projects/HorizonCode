@@ -25,7 +25,8 @@ import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
-import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, userBlock, type Live, type StatusInfo } from "./live";
+import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, unicodeLocale, userBlock, type Live, type StatusInfo } from "./live";
+import { keyChoice, type KeyAnswer } from "./approval-card";
 import { PASTE_OFF, PASTE_ON, createPasteCollector, echoedRows, pasteLabel } from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, strip, terminalWidth, visibleWidth, wrapText, yellow } from "./style";
@@ -919,6 +920,46 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         resolve("");
       }
     });
+
+  // Rich TTY: the approval question is a bordered card answered by one key (no
+  // Enter). Type-ahead can never approve: whatever was typed before the card is
+  // wiped, and keys in its first 250 ms are dropped. Enter and Esc deny.
+  if (liveOn && canEsc) {
+    ui.unicode = unicodeLocale();
+    const wipeLine = (): void => {
+      try {
+        rl.write(null as unknown as string, { ctrl: true, name: "u" });
+      } catch {
+        /* nothing to wipe */
+      }
+    };
+    ui.askKey = () =>
+      new Promise<KeyAnswer>((resolve) => {
+        const armedAt = Date.now() + 250;
+        let settled = false;
+        const settle = (answer: KeyAnswer): void => {
+          if (settled) return;
+          settled = true;
+          process.stdin.off("keypress", onKey);
+          answerWaiter = null;
+          wipeLine();
+          resolve(answer);
+        };
+        const onKey = (str: string | undefined, key: { name?: string; ctrl?: boolean } | undefined): void => {
+          if (Date.now() < armedAt) {
+            wipeLine();
+            return;
+          }
+          const choice = keyChoice(str, key);
+          if (choice !== undefined) settle(choice);
+          else wipeLine();
+        };
+        wipeLine();
+        // The line path (Enter, abort) is a denial; only a recognised key can say yes.
+        answerWaiter = () => settle("n");
+        process.stdin.on("keypress", onKey);
+      });
+  }
 
   const historyFile = historyFilePath(workspace);
   loadHistory(historyFile, rl);

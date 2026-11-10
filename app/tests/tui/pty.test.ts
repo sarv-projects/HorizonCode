@@ -50,7 +50,7 @@ afterAll(() => {
 });
 
 /** Start `hzcode` inside a pty, with the pty's input coming from our pipe. */
-function startChat(workspace: string) {
+function startChat(workspace: string, env: Record<string, string> = { NO_COLOR: "1" }) {
   const command = [
     "exec",
     shellQuote(BUN_BIN),
@@ -64,7 +64,7 @@ function startChat(workspace: string) {
     file: SCRIPT as string,
     args: ["-qec", command, "/dev/null"],
     cwd: APP_DIR,
-    env: { NO_COLOR: "1", TERM: "xterm-256color" },
+    env: { ...env, TERM: "xterm-256color" },
     timeoutMs: PTY_TIMEOUT_MS,
   });
 }
@@ -239,4 +239,36 @@ if (SCRIPT) {
     },
     PTY_TIMEOUT_MS + 5_000,
   );
+
+  test(
+    "rich mode: the approval card is answered by one key, Enter and type-ahead never approve",
+    async () => {
+      const ws = pool.make({ "alpha.txt": "alpha\n", ".hzcode/kernel/policy.json": ASK_POLICY });
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+
+      proc.write("list files\n");
+      expect(await waitFor(proc, "Approve read")).toBe(true);
+      expect(await waitFor(proc, "always this session")).toBe(true);
+      // Enter is a denial, not a yes
+      await new Promise((r) => setTimeout(r, 400));
+      proc.write("\r");
+      expect(await waitFor(proc, "DECLINED by the user")).toBe(true);
+
+      proc.write("list files\n");
+      expect(await waitFor(proc, "Approve read", { count: 2 })).toBe(true);
+      await new Promise((r) => setTimeout(r, 400));
+      proc.write("y"); // no Enter
+      expect(await waitFor(proc, "\u00b7 approved (this time)")).toBe(true);
+      expect(await waitFor(proc, "1 tool")).toBe(true);
+
+      proc.write("\u0004");
+      const run = await proc.done;
+      const out = flatten(run.stdout);
+      expect(run.code).toBe(0);
+      expect(out).toContain("\u256d"); // the card border
+      expect(out).toContain("risk");
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
 }
+

@@ -819,3 +819,4 @@ Deferred (follow-ups): P2 status-line rework with `used / window` and the contex
 
 All rich-only unless noted; non-TTY output is unchanged.
 - **Bracketed paste.** A multi-line paste is one input shown as `[pasted N lines]` (`src/tui/paste.ts`, ruling 84). Mode `ESC[?2004h` is on only with a TTY and off again on exit.
+- **Approval card.** Bordered `⚠ Approve …?` card with tool, args, risk and keys; `y`/`n`/`a`/`Esc` without Enter (`approval-card.ts`, ruling 85). Rich TTY only; the line prompt remains the fallback.
