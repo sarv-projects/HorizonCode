@@ -37,6 +37,7 @@ import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
 import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
+import { openTodos } from "../tools/todo";
 import { presetCatalog } from "./agent-profiles";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
@@ -1189,6 +1190,32 @@ export class RunFaults {
 const VERIFICATION_SHAPE =
   /(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun|deno|npx)\s+(?:run\s+)?(?:test|tests|lint|typecheck|type-check|check|build|tsc)|(?:^|[\s;&|(])(?:pytest|jest|vitest|mocha|cargo|go\s+test|make|tsc|eslint|ruff|mypy|flake8)\b/;
 
+/** Audit-trail event: the turn ended with todo items open and was re-opened once (T-3). */
+export const PENDING_TODOS_EVENT = "run.pending_todos_reminder";
+
+/** Most open items named in the reminder, and the longest text kept per item. */
+const TODO_REMINDER_MAX_ITEMS = 5;
+const TODO_REMINDER_MAX_TEXT = 80;
+
+/**
+ * The one-shot reminder for a turn that ended while the session todo list still
+ * has open items, or undefined when nothing is open (no todos, or all done).
+ * Pure text over the session's own list: no authority, no tool call.
+ */
+export function pendingTodosReminder(sessionId: string): { text: string; open: number } | undefined {
+  const open = openTodos(sessionId);
+  if (open.length === 0) return undefined;
+  const shown = open
+    .slice(0, TODO_REMINDER_MAX_ITEMS)
+    .map((t) => `${t.id} ${t.text.length > TODO_REMINDER_MAX_TEXT ? `${t.text.slice(0, TODO_REMINDER_MAX_TEXT - 3)}...` : t.text}`);
+  const more = open.length > shown.length ? `; and ${open.length - shown.length} more` : "";
+  const noun = open.length === 1 ? "todo item is" : "todo items are";
+  return {
+    open: open.length,
+    text: `[pending-todos-reminder] ${open.length} ${noun} still open: ${shown.join("; ")}${more}. Finish them, or mark them done with the todo tool, before ending your turn.`,
+  };
+}
+
 /** Audit-trail event: a run changed files and ran nothing that verifies them. */
 export const UNVERIFIED_COMPLETION_EVENT = "run.unverified_completion";
 
@@ -2058,6 +2085,8 @@ export async function runTurn(
     // so the format-error corrective reset cannot clear it. It rides the next
     // step's system rail alongside `corrective`.
     let loopNudge: string | undefined;
+    // T-3: the end-of-turn pending-todos reminder fires at most once per run.
+    let todoReminderSent = false;
     // One report per run, not one per dispatch: the compaction numbers describe
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
@@ -2210,7 +2239,25 @@ export async function runTurn(
       if (turn.stopReason === "max_tokens") {
         emit(deps.callbacks, { type: "notice", message: "the model hit its output limit for this turn" });
       }
-      if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) break;
+      if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
+        // T-3: the model is ending its turn. If the session todo list still has
+        // open items, give it ONE more step with a bounded reminder before the
+        // run settles (the exit-status gate below keeps `unknown` as the
+        // terminal if it stops again). Budgets and abort are re-checked at the
+        // top of the loop, so the extra step is never free.
+        const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId);
+        if (pending === undefined) break;
+        todoReminderSent = true;
+        try {
+          deps.store.appendMessage(deps.sessionId, { role: "user", content: pending.text });
+        } catch (err) {
+          faults.noteTranscript("todo", err);
+          break;
+        }
+        emit(deps.callbacks, { type: "notice", message: `${pending.open} todo item(s) still open: giving the model one more step` });
+        await logEvent(deps, faults, PENDING_TODOS_EVENT, { open: pending.open }, { kind: "system", id: "hz-loop" });
+        continue;
+      }
 
       // SAFETY-RAILS (rail 1): identical-tool-call loop detection, BEFORE the
       // batch is dispatched. A soft verdict (the 3rd identical call) adds a

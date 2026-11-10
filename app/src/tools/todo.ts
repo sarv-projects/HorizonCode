@@ -24,6 +24,14 @@ function items(sessionId: string): Todo[] {
   return list;
 }
 
+/**
+ * The session's items not yet done, in order. Read-only and allocation-light:
+ * the loop's end-of-turn todo re-check (T-3) uses it and never creates a list.
+ */
+export function openTodos(sessionId: string): Array<{ id: string; text: string }> {
+  return (STORE.get(sessionId) ?? []).filter((t) => !t.done).map((t) => ({ id: t.id, text: t.text }));
+}
+
 function checklist(list: Todo[]): string {
   if (list.length === 0) return "No todos.";
   return list.map((t) => `[${t.done ? "x" : " "}] ${t.id} ${t.text}`).join("\n");
