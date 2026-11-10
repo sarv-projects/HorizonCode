@@ -1036,7 +1036,8 @@ export interface LoopDeps {
    * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
    * YET READ by the turn path. The field and the `buildSpeculationHost` /
    * `speculativeCandidatesFor` helpers are primitives for a future consumer;
-   * today the flag changes nothing. The ordinary NF-072 batch is unchanged.
+   * today the flag changes nothing (ruling 65 records why it stays unwired).
+   * The ordinary NF-072 batch is unchanged.
    */
   speculativeExecution?: boolean;
 }
