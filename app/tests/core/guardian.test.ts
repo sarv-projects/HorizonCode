@@ -47,11 +47,18 @@ describe("advisory by default", () => {
     expect(guardianModeFromEnv({})).toBe("advisory");
   });
 
-  test("a throwing classifier never blocks, even when enforcing", async () => {
+  test("a throwing classifier fails OPEN in advisory mode and CLOSED in enforce mode (ruling 66)", async () => {
     const boom = { name: "boom", classify: () => { throw new Error("x"); } };
-    const r = await reviewAction(shell("ls"), "t", boom, { mode: "enforce" });
-    expect(r.blocked).toBe(false);
-    expect(r.judgment.verdict).toBe("flag");
+    const adv = await reviewAction(shell("ls"), "t", boom, { mode: "advisory" });
+    expect(adv.blocked).toBe(false);
+    expect(adv.judgment.verdict).toBe("flag");
+    const unset = await reviewAction(shell("ls"), "t", boom);
+    expect(unset.blocked).toBe(false);
+    const enf = await reviewAction(shell("ls"), "t", boom, { mode: "enforce" });
+    expect(enf.blocked).toBe(true);
+    expect(enf.judgment.verdict).toBe("deny");
+    expect(enf.judgment.reason).toContain("classifier-error:unexpected");
+    expect(enf.judgment.reason).toContain("fails closed");
   });
 
   test("invalid input raises a typed error", async () => {
@@ -85,11 +92,14 @@ describe("capability-detected factory", () => {
     expect(r.blocked).toBe(true);
   });
 
-  test("malformed model output surfaces as a flag, not a veto", async () => {
+  test("malformed model output is a flag in advisory mode and a closed deny in enforce mode", async () => {
     const c = createGuardianClassifier({ model: { complete: async () => "nope" } });
+    const adv = await reviewAction(shell("ls"), "t", c, { mode: "advisory" });
+    expect(adv.judgment.reason).toBe("classifier-error:invalid-model-output");
+    expect(adv.blocked).toBe(false);
     const r = await reviewAction(shell("ls"), "t", c, { mode: "enforce" });
-    expect(r.judgment.reason).toBe("classifier-error:invalid-model-output");
-    expect(r.blocked).toBe(false);
+    expect(r.judgment.reason).toContain("classifier-error:invalid-model-output");
+    expect(r.blocked).toBe(true);
     expect(new GuardianError("capability-absent", "d").reason).toBe("capability-absent");
   });
 });

@@ -14,8 +14,9 @@
  *  - ENFORCING only when EXPLICITLY configured: `{ mode: "enforce" }` (or the
  *    `HORIZON_GUARDIAN=enforce` env flag via `guardianModeFromEnv`). Then, and
  *    only then, a `deny` sets `blocked: true`. `flag` never blocks.
- *  - A classifier that throws never blocks, even when enforcing: the failure
- *    is surfaced as a `flag` with reason `classifier-error:<code>`.
+ *  - A classifier that throws is surfaced as a `flag` with reason
+ *    `classifier-error:<code>` in advisory mode (fail OPEN). In ENFORCE mode it
+ *    fails CLOSED: the verdict is a `deny` (blocked) with that reason (ruling 66).
  *  - The guardian only judges. It does not replace the kernel guard
  *    (`GuardAction` admission), never widens authority, and performs no I/O.
  *
@@ -226,7 +227,12 @@ export async function reviewAction(
     judgment = await classifier.classify(proposed, instructions);
   } catch (err) {
     const code = err instanceof GuardianError ? err.reason : "unexpected";
-    judgment = { verdict: "flag", reason: `classifier-error:${code}` };
+    // Advisory: fail open (a flag). Enforce: fail CLOSED (a deny, so `blocked`),
+    // because an enforcing guardian that could not judge must not wave it on.
+    judgment =
+      mode === "enforce"
+        ? { verdict: "deny", reason: `classifier-error:${code} (guardian enforce mode fails closed)` }
+        : { verdict: "flag", reason: `classifier-error:${code}` };
   }
   return {
     judgment,
