@@ -17,6 +17,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | — | [`../README.md`](../README.md) | Product overview: what runs today, how to build and use it, and its limits |
 | 31 | [`31-design-summary.md`](./31-design-summary.md) | The designed capability list (the former long README; cited elsewhere as "README §N") |
 | 32 | [`32-plan-files.md`](./32-plan-files.md) | The `.hz/plans/` plan-file convention and the built-in `execute-plan` skill |
+| 33 | [`33-handoff.md`](./33-handoff.md) | Hand-off for the next coding agent: repo map, build/test/gate commands and gotchas, invariants, PR history #1 to #28, the full deferred backlog (one entry per item with upstream URLs, design, files, priority), known gaps, where the research lives |
 | 01 | [`01-vision-and-superset.md`](./01-vision-and-superset.md) | Why it exists; the eight references grilled; what is inherited, superseded and new |
 | 02 | [`02-decisions.md`](./02-decisions.md) | ADR-001…ADR-016 — every binding architectural decision, incl. **terminal-first vs web** |
 | 03 | [`03-hld.md`](./03-hld.md) | High-level design: planes, processes, trust boundaries, interfaces, targets |

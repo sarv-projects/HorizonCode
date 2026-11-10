@@ -311,6 +311,7 @@ Start at [`docs/00-index.md`](./docs/00-index.md).
 |---|---|
 | [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) | what is implemented, with evidence commands |
 | [`CURRENT_RUN.md`](./CURRENT_RUN.md) | current state, open work and exact continuation steps |
+| [`docs/33-handoff.md`](./docs/33-handoff.md) | hand-off for a new maintainer or coding agent: repo map, commands, invariants, PR history, the full deferred backlog with upstream links |
 | [`docs/11-authority-safety.md`](./docs/11-authority-safety.md) | threat model, guard, leases, receipts |
 | [`docs/09-tools.md`](./docs/09-tools.md) | the tool catalogue (designed superset; `/files` shows what is registered) |
 | [`docs/13-tui.md`](./docs/13-tui.md) | the terminal UI |
