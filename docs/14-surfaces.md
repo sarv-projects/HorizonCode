@@ -1,12 +1,14 @@
 # 14 — Surfaces (headless, server, web, desktop, IDE/ACP, MCP server, SDKs)
 
+> **Implementation reality (read first).** Four surfaces have code: the scrollback TUI ([`13-tui.md`](13-tui.md)), print mode (`hzcode -p`, VERIFIED, ruling 57), the line-per-message headless pipe mode, and `hzcode serve` (single-attach NDJSON JSON-RPC v1 over stdio, seven methods, TESTED, rulings 53 and 54). **Everything else in this document is DESIGN ONLY: NOT IMPLEMENTED**: UDS, TCP, HTTP, SSE and WebSocket transports; the discovery file; server authentication and pairing; multi-client coordination; the web app; the desktop app; the IDE bridge and ACP; MCP server mode; generated SDKs; mobile supervision; sharing and presence; the parity ratchet; the `exec` subcommand and `ExecResultV1`; CI recipes. The Provenance section at the end of this document lists, per surface, what exists, where the design came from (exact upstream URLs at pinned commits), and a detailed deferral note (G1 to G13) for each missing piece.
+
 > **Permission modes (`docs/28` ruling 58).** `hzcode --permission-mode <m>` works with chat, pipes and `-p` (a non-default mode prints one stderr line; stdout stays clean). `hzcode serve` does not take a mode yet.
 >
 > **Headless print mode (`docs/28` ruling 57).** `hzcode -p [text] --output-format text|json|stream-json` runs one non-interactive turn (prompt from stdin when `-p` has no text). `json` prints one result object `{type:"result", result, sessionId, exit:{terminal,detail?,code}, usage, toolCalls, changedFiles}`; `stream-json` prints one RuntimeEvent per line then that object. The exit code is `exitCodeFor` (0/1/3/4/5/130/143; a missing prompt or bad format is 2). The line-per-message mode is unchanged.
 >
 > **Agent presets (stage 3, `docs/28` ruling 56).** `subagent.event` frames, relayed as `session.event` in server mode, carry an optional `profile` string (additive) when the child ran under a preset.
 >
-> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: a single-attach server mode speaking NDJSON JSON-RPC v1 over stdio (`docs/28` §1 server row; resume by id, read-only `session.list`), reusing `createRuntime` recovery. Headless remains line-in / text-out (a `turn.diff` is summarised on stderr as `· changed N file(s)`, never printed to stdout; `subagent.event` frames are relayed to server clients as ordinary `session.event` notifications, `docs/28` ruling 54). Stage 1 (2026-11-09): the server answers each line while stdin is open (a Worker reads fd 0 because Bun batches pipe stdin until EOF) and `server.hello` reports the real `kernelMode` before any session (`docs/28` ruling 53). NOT STARTED: headless `-p` with JSON/JSONL output, UDS/TCP/HTTP+SSE transports, SDKs, web, desktop and IDE surfaces, the fullscreen TUI renderer.
+> **Implementation note (2026-11-09, integration branch `integration/superset`).** Shipped and TESTED: a single-attach server mode speaking NDJSON JSON-RPC v1 over stdio (`docs/28` §1 server row; resume by id, read-only `session.list`), reusing `createRuntime` recovery. Headless remains line-in / text-out (a `turn.diff` is summarised on stderr as `· changed N file(s)`, never printed to stdout; `subagent.event` frames are relayed to server clients as ordinary `session.event` notifications, `docs/28` ruling 54). Stage 1 (2026-11-09): the server answers each line while stdin is open (a Worker reads fd 0 because Bun batches pipe stdin until EOF) and `server.hello` reports the real `kernelMode` before any session (`docs/28` ruling 53). Headless `-p` with JSON/JSONL output has since shipped (ruling 57, see the print-mode note above). STILL NOT STARTED: UDS/TCP/HTTP+SSE transports, SDKs, web, desktop and IDE surfaces, the fullscreen TUI renderer.
 
 > ADR-001 makes the TUI the product and the protocol the API; ADR-005 makes every surface a client of one Controller. This document fixes each non-TUI surface: its architecture, protocol usage, auth, capabilities and limits — plus the parity ratchet that stops them drifting apart.
 
@@ -22,7 +24,7 @@ This document decides:
 4. The web app, desktop app, IDE/ACP bridge, MCP server mode, SDKs, mobile supervision and collaboration, each with capabilities and limits.
 5. The parity ratchet: how it is computed, what fails the build, and how exceptions are granted and expired.
 
-Sources: `source: /data/home/forge/HorizonCode/README.md` (§3.6 interface surfaces); `source: /data/home/forge/HorizonCode/docs/02-decisions.md` (ADR-001, ADR-003, ADR-005, ADR-006, ADR-008, ADR-013); synthesis from `source: /data/home/forge/HorizonCode/docs/audit/pass2/grok-build-report.md`, `source: /data/home/forge/HorizonCode/docs/audit/pass2/codex-report.md`, `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part1.md`, `source: /data/home/forge/HorizonCode/docs/audit/pass2/oh-my-pi-report.md`, `source: /data/home/forge/HorizonCode/docs/audit/pass2/DeepSeek-Reasonix-report.md`; reference implementations at `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs` (leader + ACP replay), `source: /data/home/forge/repo-tour/opencode/packages/cli/src/services/service-registration.ts` (registration file), `source: /data/home/forge/repo-tour/opencode/packages/server/src/pairing.ts` and `auth.ts` (pairing codes, session tokens), `source: /data/home/forge/repo-tour/codex/codex-rs/app-server` (code-generated JSON-RPC app-server), `source: /data/home/forge/repo-tour/DeepSeek-Reasonix/desktop` (desktop as a nested module), `source: /data/home/forge/repo-tour/oh-my-pi/packages/coding-agent/src/modes/acp` (ACP agent mode).
+Sources: `source: ../README.md` (§3.6 interface surfaces); `source: 02-decisions.md` (ADR-001, ADR-003, ADR-005, ADR-006, ADR-008, ADR-013); synthesis from `source: audit/pass2/grok-build-report.md`, `source: audit/pass2/codex-report.md`, `source: audit/pass2/opencode-report.part1.md`, `source: audit/pass2/oh-my-pi-report.md`, `source: audit/pass2/DeepSeek-Reasonix-report.md`; reference implementations at source: [`grok-build/crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs) (leader + ACP replay), source: [`opencode/packages/cli/src/services/service-registration.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/service-registration.ts) (registration file), source: [`opencode/packages/server/src/pairing.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/pairing.ts) and `auth.ts` (pairing codes, session tokens), source: [`codex/codex-rs/app-server/`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server) (code-generated JSON-RPC app-server), source: `DeepSeek-Reasonix/desktop` (repo not cloned, path not verified) (desktop as a nested module), source: [`oh-my-pi/packages/coding-agent/src/modes/acp/`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/modes/acp) (ACP agent mode).
 
 ### 1.1 The eight surfaces
 
@@ -306,6 +308,8 @@ Rule numbering is stable and testable. `MUST` fails a gate; `SHOULD` is reported
 
 ### 3.1 Surface capability matrix
 
+> **DESIGN TARGET, not a description of the product.** Only the TUI, print and server columns correspond to any code, and each is partial (see the table in the Provenance section). Commands named in cells (`session diff --json`, `receipt show`, `session verify`, `policy list`, `parity check --json`, `session tree --json`, `share create`, `usage`) are not implemented. In particular the print column's `partial (--resume, --continue)` is only `--continue`/`--resume` for chat, and `-p` does not take a session id.
+
 Legend: **full** = native affordance; **partial** = available in a constrained form (see the reason); **deleg.** = reachable by delegating to another surface (e.g. MCP exposes a resource instead of a UI); **none** = deliberately absent, with the reason given; **n/a** = not meaningful for that surface. All rows are `DESIGNED`; the ratchet (§2.11) is what keeps them honest.
 
 | Capability | TUI | print | server | web | desktop | IDE | MCP | SDK |
@@ -404,6 +408,8 @@ Codes `3` and `4` are deliberately distinct: `3` means *the tool cannot prove wh
 
 ### 3.3 `ExecResultV1`
 
+> **DESIGN ONLY: NOT IMPLEMENTED.** `hzcode -p --output-format json` prints a different, smaller object, `PrintResult` in `app/src/tui/print.ts`: `{type:"result", result, sessionId, exit:{terminal, detail?, code}, usage, toolCalls, changedFiles}`. `ExecResultV1` below describes ONE shell execution; the two must not be confused. Deferral note G13.
+
 | Field | Type | Notes |
 |---|---|---|
 | `command` | string (normalized argv) | The normalized form the kernel evaluated, not the raw string |
@@ -426,7 +432,7 @@ Codes `3` and `4` are deliberately distinct: `3` means *the tool cannot prove wh
   "version": "0.1.0",
   "proto": 1,
   "abi": 1,
-  "workspace": "/data/home/forge/repo-tour/repo",
+  "workspace": "`repo` (repo not cloned, path not verified)",
   "pid": 41231,
   "leaderPid": 41231,
   "startedAt": "2026-11-06T10:41:07Z",
@@ -595,6 +601,8 @@ Three vocabularies meet in the table above and MUST stay distinct. **Guard decis
 
 ## 9. Tests
 
+> **No `surfaces/*` gate below exists.** The tests that do exist for the shipped surfaces are `app/tests/core/server.test.ts`, `s1-serve-files-exit.test.ts`, `session-fork.test.ts`, `rewind-conversation.test.ts`, `app/tests/tui/print.test.ts`, `headless.test.ts` and the e2e steps of `ops/gates.sh` (`e2e-headless-smoke`, `e2e-budget-rail`, `e2e-usage-error`). The table is the plan for the designed surfaces.
+
 | Gate | Proves | Kind |
 |---|---|---|
 | `surfaces/parity.ratchet` | S163–S172: every capability has projections or an owned, expiring reason; debt only decreases; no orphan methods | linter + registry |
@@ -632,13 +640,13 @@ Every capability below starts at **DESIGNED**, except the rows `28-implementatio
 | Capability | Surface(s) | Level | Evidence required to advance |
 |---|---|---|---|
 | Print/exec CLI path (schemas, exit codes, approvals fail closed) | print | VERIFIED (`28-implementation-status.md` §1: `bin/hzcode`, `--output` modes, headless approvals fail closed, exit-code e2e) | `surfaces/headless.schema`, `surfaces/headless.redaction` |
-| CI recipes and gate wiring (documented recipes run green in CI) | print | DESIGNED | `surfaces/ci.recipes` |
-| Local server transports (stdio/UDS/TCP/HTTP/SSE/WS) | server | DESIGNED | `surfaces/server.transports` |
+| CI recipes and gate wiring (documented recipes run green in CI) | print | DESIGNED for the recipes; the repository's own gate runner `ops/gates.sh` (8 gates) and `.github/workflows/ci.yml` exist, see [`16-operations.md`](16-operations.md) | `surfaces/ci.recipes` |
+| Local server transports (stdio/UDS/TCP/HTTP/SSE/WS) | server | DESIGNED for UDS/TCP/HTTP/SSE/WS; the stdio single-attach subset is TESTED per `28-implementation-status.md` (server row) | `surfaces/server.transports` |
 | Discovery + leader arbitration | server | DESIGNED | `surfaces/server.discovery` |
 | Auth (token, pairing, session token, roles) | server | DESIGNED | `surfaces/server.auth` |
 | Multi-client coordination (cursors, driver lease, ask routing) | server | DESIGNED | `surfaces/server.multiclient` |
 | Remote exposure safety | server | DESIGNED | `surfaces/server.remote` |
-| Graceful shutdown and resumability | server | DESIGNED | `surfaces/server.shutdown` |
+| Graceful shutdown and resumability | server | DESIGNED for the drain protocol; resume by id and crash recovery on attach ship in the stdio subset (`createRuntime` runs both recoveries) | `surfaces/server.shutdown` |
 | Web app as thin client | web | DESIGNED | `surfaces/web.thin`, `surfaces/web.parity` |
 | Web diff review and approvals | web | DESIGNED | `surfaces/web.parity` |
 | Web PTY bridge | web | DESIGNED | `surfaces/web.pty` |
@@ -658,10 +666,193 @@ Every capability below starts at **DESIGNED**, except the rows `28-implementatio
 
 Known limitations this document MUST NOT paper over:
 
-1. The ancestor's subagent dispatch lane is reported closed by a flag and its completion gate accepts an arbitrary string (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`); therefore no surface may claim that a child session's completion was verified until the evidence gate is wired (S9, S26).
+1. The ancestor's subagent dispatch lane is reported closed by a flag and its completion gate accepts an arbitrary string (source: `HANDOFF.md` of the ancestor project (not cloned, path not verified)); therefore no surface may claim that a child session's completion was verified until the evidence gate is wired (S9, S26).
 2. The ancestor refuses two edits to the same file in one message (`stale_preimage`), so the web/IDE hunk flows MUST apply sequentially with recomputed preimages rather than bulk-applying (S57, S93).
 3. Cross-platform sandbox residuals are typed, not absent: a surface MUST render the residual vector rather than imply confinement it does not have (`docs/02-decisions.md`, ADR-002 and P6).
 
 > **Session fork (`docs/28` ruling 59).** `session.fork {sessionId, at?}` returns `{sessionId, uri, forkedFrom{uri,sessionId,messageIndex,parentSeq}, model, providerName, kernelMode}`; the child is live and promptable. `session.list` rows carry `forkedFrom` only for forks. Bad `at` or an unknown session is INVALID_PARAMS.
 
 > **Guardian surfacing (`docs/28` ruling 60).** `ApprovalRequest` gains an optional `guardian` string (additive); `HORIZON_GUARDIAN=enforce` is the only env switch.
+
+---
+
+## Provenance (surfaces: what ships, what is design only, where it came from)
+
+This section records, for the non-TUI surfaces, which designs and which bytes came from other repositories, with exact GitHub URLs at the commit that was read, which parts of this document are design only, and a detailed deferral note for every missing piece. It is a handoff aid and changes no status level; `docs/28-implementation-status.md` is the only place that may claim a level above DESIGNED.
+
+Reading the tables:
+
+- URLs point at a file at the full 40 character SHA from [`research/upstream-pins.md`](research/upstream-pins.md). Each path was checked with `git ls-files` in the read-only clone before it was written. Anything not checkable is written `path not verified`.
+- **Relation**: **copied verbatim**, **ported**, **adapted**, or **idea only**, as defined in the Provenance section of [`08-runtime.md`](08-runtime.md). In this document nothing is copied verbatim and nothing is ported. The shipped surfaces are original TypeScript written against the designs; upstream repositories supplied flag names, output shapes and architecture ideas.
+- Judged from the header comments of the HorizonCode files, the docs/28 rulings and reading both sides.
+- Licences: cline and codex Apache-2.0; oh-my-pi and opencode MIT; grok-build and claude-code carry their own `LICENSE` files that were not analysed. The worktree has no `LICENSE` or `NOTICE`; any future verbatim or ported row would owe attribution (OPEN item for the human owner). Nothing here is copied, so nothing is owed today.
+- The ancestor project referred to in older text (`horizoncode` / `repo-tour`) is an earlier private codebase that is not available in this sandbox; its paths cannot be verified. aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix and opencode-v2 are not cloned; see the 'Not cloned' table in [`research/upstream-pins.md`](research/upstream-pins.md).
+- Research: [`research/compare-codex-grok.md`](research/compare-codex-grok.md), [`research/steal-ohmypi-codex.md`](research/steal-ohmypi-codex.md), [`research/steal-opencode-cline.md`](research/steal-opencode-cline.md), [`30-steal-list.md`](30-steal-list.md).
+
+### Implemented surfaces versus the capability matrix (read this first)
+
+The capability matrix in section 3.1 is a **design target for eight surfaces**. Four surfaces have any code at all, and each is narrower than its column:
+
+| Surface | Shipped | Not shipped (see the deferral note) |
+|---|---|---|
+| TUI | the scrollback chat of [`13-tui.md`](13-tui.md) | fullscreen mode, palette, keymap (docs/13 D1 to D18) |
+| print | `-p` with `text`, `json`, `stream-json`; exit codes; fail-closed approvals | `exec` subcommand, `ExecResultV1`, `--on-client-gone` (G12, G13) |
+| headless pipe | one turn per stdin line, plain text out | machine-readable output on this path (use `-p`), parity spec (G12) |
+| server | `hzcode serve`: stdio, single-attach, 7 methods, resume by id, fork, rewind, crash recovery on attach | other transports, discovery, auth, multi-client, approvals, permission mode (G1 to G4, G11) |
+| web, desktop, IDE/ACP, MCP server, SDKs, mobile, sharing | nothing | G5 to G9 |
+
+Every cell of the section 3.1 matrix outside the four rows above is a **claim about a future surface**, including the printed commands such as `session diff --json`, `receipt show`, `session verify`, `policy list`, `parity check --json`, `session tree --json` and `share create`. None of those subcommands exists in `app/src/main.ts`; the subcommands that exist are `serve`, `doctor`, `config check` and `commit`, and `run <name>` for custom commands.
+
+### What shipped, and where it came from
+
+| # | HorizonCode file(s) | Upstream exact URL(s) at the pinned SHA | Relation | Notes |
+|---|---|---|---|---|
+| 1 | `app/src/tui/print.ts`, `app/src/main.ts` (`-p`, `--output-format`) | [`crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)<br>[`codex-rs/exec/src/cli.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/src/cli.rs)<br>Claude Code `-p --output-format json\|stream-json`: product behaviour, the pinned claude-code clone has no CLI source (path not verified) | idea only (flag names and output shapes) | Ruling 57, VERIFIED. `text`, `json` (one result object) and `stream-json` (one `RuntimeEvent` per line, then the result object). Exit code from `exitCodeFor` in `app/src/core/loop.ts`. **The printed object is `PrintResult`, NOT the `ExecResultV1` of section 3.3**: `ExecResultV1` describes one shell execution (stdout refs, signal, sandbox residuals) and is DESIGN ONLY; `PrintResult` describes a whole turn (`result`, `sessionId`, `exit{terminal,detail,code}`, `usage`, `toolCalls`, `changedFiles`). Do not conflate them. |
+| 2 | `app/src/tui/headless.ts`, `app/src/main.ts` (stdin is a pipe) | [`codex-rs/exec/src/cli.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/src/cli.rs)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md) | idea only | Line-per-message pipe mode: each stdin line is one turn, plain text out, a `turn.diff` is summarised on stderr as `. changed N file(s)`, headless approvals fail closed (nothing prompts). Not the S11 `--on-client-gone` behaviour: an EPIPE is not handled specially. |
+| 3 | `app/src/core/server.ts`, `app/src/contracts.ts` (`HZ_PROTO`, `ServerRequest`, `ServerResponse`, `ServerNotification`, `SERVER_METHODS`), `app/src/core/stdin-worker.ts`, `app/src/core/stdin-live.ts`, `app/src/main.ts` (`serve`) | [`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs)<br>[`packages/server/src/api.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/api.ts) | idea only (single-attach NDJSON JSON-RPC over stdio), original implementation | `hzcode serve`, TESTED (`app/tests/core/server.test.ts`, `s1-serve-files-exit.test.ts`, `session-fork.test.ts`). Seven methods: `server.hello`, `session.create`, `session.list`, `session.subscribe`, `session.prompt`, `session.rewind`, `session.fork`. Every session opens through `createRuntime`, so both crash recoveries (`repairDanglingToolCalls`, `recoverInterrupted`) run before the next turn. `server.hello` reports `capabilities {methods, transports:["stdio"], singleAttach:true}` and the real `kernelMode`. The transport is injected (`{input, output}`), which is how tests run it over in-memory pipes. `stdin-worker.ts` exists because Bun 1.2.x delivers pipe stdin only at EOF; a Worker doing blocking `readSync` on fd 0 makes the server answer each line while stdin stays open (ruling 53). The code header names codex `app-server` `daemon_recovery` and `rollout_reconstruction` as the pattern; codex is Rust, HorizonCode's server is a 464-line TypeScript file written from scratch. |
+| 4 | `app/src/core/server.ts` (`session.event` notification relay of `subagent.event`), `app/src/contracts.ts` (`RuntimeEvent`) | [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol) | idea only (notification shape) | Streamed turn events are `session.event` notifications that carry a `RuntimeEvent` tagged with the owning `sessionId`; `subagent.event` frames are relayed as ordinary `session.event`s (ruling 54). Last subscriber wins per session; this is the single-attach stand-in for S41 to S44. |
+| 5 | `app/src/core/permission-mode.ts`, `app/src/main.ts` (`--permission-mode`) | [`crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/19-plan-mode.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/19-plan-mode.md) | idea only (mode names), original policy layer | Ruling 58. Works with chat, pipes and `-p`. `hzcode serve` does NOT take a mode yet (named gap G11). |
+| 6 | `ops/gates.sh`, `ops/ci/github-actions.yml`, `.github/workflows/ci.yml` | [`.github/workflows/ci.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/.github/workflows/ci.yml) | idea only | The only CI recipe that exists is the repository's own gate runner (see Provenance in [`16-operations.md`](16-operations.md)). The documented `surfaces/ci.recipes` (section 2.2, flow 6.1) are NOT written. |
+
+
+### Where each design family came from (all DESIGN ONLY unless marked)
+
+| Family | Upstream exact URL(s) at the pinned SHA | Status | Notes |
+|---|---|---|---|
+| S-universal (section 2.1): one Controller, every surface a client, parity ratchet inputs | [`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)<br>[`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs) | PARTIAL: TUI, print, headless and serve all go through `createRuntime`; no Controller object, no capability matrix | The shipped surfaces share the runtime facade (`Runtime.send`, `RuntimeEvent`). There is no `CapabilityRecordV1`, no machine-readable matrix and no ratchet (`gate:parity-ratchet` and `gate:frontend-parity` are declared gaps in `ops/gate-catalogue.md`). |
+| Section 2.2 headless, print, exec and CI (S9 to S16) | [`crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)<br>[`codex-rs/exec/src/cli.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/src/cli.rs) | PARTIAL: print and headless ship; `ExecResultV1`, `exec` subcommand, `--on-client-gone`, the redaction schema, CI recipes do not | Exit codes (0/1/2/3/4/5/130/143) are implemented by `exitCodeFor`; a missing prompt or bad format is 2. See G12 and G13. |
+| Section 2.3 local server: transports, discovery, auth, multi-client, remote exposure (S30 to S50) | [`packages/server/src/api.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/api.ts)<br>[`packages/server/src/auth.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/auth.ts)<br>[`packages/server/src/pairing.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/pairing.ts)<br>[`packages/cli/src/services/service-registration.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/service-registration.ts)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs)<br>[`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md) | PARTIAL: stdio, single-attach, 7 methods; everything else NOT IMPLEMENTED | See G1 to G4. |
+| Section 2.4 web app (S51 to S62) | [`packages/app`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/app)<br>[`packages/server/src/event-feed.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/event-feed.ts)<br>DeepSeek-Reasonix web frontend: repo not cloned, path not verified | NOT IMPLEMENTED (design only) | No browser surface exists. See G8. |
+| Section 2.5 desktop app (S63 to S72) | [`packages/desktop`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/desktop)<br>DeepSeek-Reasonix `desktop`: repo not cloned, path not verified | NOT IMPLEMENTED (design only) | See G8. |
+| Section 2.6 IDE bridge and ACP (S86 to S96) | [`crates/codegen/xai-acp-lib/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-acp-lib/src/lib.rs)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs)<br>[`packages/cli/src/acp`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/acp)<br>[`packages/coding-agent/src/modes/acp`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/modes/acp)<br>DeepSeek-Reasonix `internal/frontend/acp`: repo not cloned, path not verified | NOT IMPLEMENTED (design only); `server.ts` rejects unknown methods with a typed METHOD_NOT_FOUND | No ACP agent. See G5. |
+| Section 2.7 MCP server mode (S97 to S103) | [`codex-rs/codex-mcp`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/codex-mcp)<br>[`codex-rs/rmcp-client`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/rmcp-client)<br>codex `codex-rs/mcp-server`: path not present in the pinned clone, not verified | NOT IMPLEMENTED (design only); the MCP CLIENT ships (see [`15-extensibility.md`](15-extensibility.md)) | Do not confuse the two: HorizonCode can consume MCP servers (stdio, user config) but does not expose itself as one. See G6. |
+| Section 2.8 SDKs (S104 to S110) | [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`packages/sdk`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/sdk)<br>[`docs/sdk.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/sdk.md)<br>[`docs/rpc.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/rpc.md) | NOT IMPLEMENTED (design only); nothing generated | `contracts.ts` is hand-written TypeScript, not generated from a schema. See G7. |
+| Sections 2.9 and 2.10 mobile supervision, collaboration and sharing (S111 to S125) | [`docs/collab.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/collab.md)<br>[`infra/share.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/infra/share.ts)<br>[`packages/cli/src/services/remote-tunnel.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/remote-tunnel.ts) | NOT IMPLEMENTED (design only) | See G9. |
+| Section 2.11 parity ratchet (S126 to S130) | idea only: no upstream reference for a capability-matrix ratchet was found in the pinned clones | NOT IMPLEMENTED (design only); `gate:parity-ratchet` is a declared gap | See G10. |
+
+
+### Sources that could not be linked
+
+`HANDOFF.md` of the ancestor project (the closed subagent lane and the `stale_preimage` limitation cited in section 10) and the other 'ancestor' paths belong to an earlier private codebase that is not cloned here; they stay as text and are marked 'path not verified'. The DeepSeek-Reasonix web, desktop and ACP frontends cited in section 1 are in a repository that is not cloned. The pinned claude-code repository contains plugins, examples and a changelog but no CLI or SDK source, so Claude Code behaviours (`-p`, `--output-format`, the SDK) are product behaviour with no file link.
+
+
+### Deferred or not started: detailed notes for the next agent
+
+Each note gives: what is deferred, why, the upstream reference, whether to adopt as is or adapt, a suggested design, and the files to touch. 'Adapt' is the default because the references are Rust or framework-specific TypeScript. No note changes a status level. Paths are from the repository root.
+
+#### G1. Transports beyond stdio: UDS or named pipe, TCP loopback, HTTP with SSE, WebSocket (S30 to S33)
+
+- **What is deferred.** Everything in section 3.2 other than the stdio NDJSON framing. `server.hello` reports `transports: ["stdio"]` and nothing else.
+- **Why.** One client per process over stdio proves the method set and the crash-recovery seam without opening a network surface. A listening socket needs auth (G3) first, otherwise it is an unauthenticated local authority.
+- **Upstream reference.** [`packages/server/src/api.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/api.ts)<br>[`packages/server/src/fetch.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/fetch.ts)<br>[`packages/server/src/event-feed.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/event-feed.ts)<br>[`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)
+- **Adopt as is or adapt.** ADAPT. Take opencode's split (a transport-neutral `handlers` layer plus a thin fetch/SSE adapter) and the idea from codex of one protocol over several transports. Do not copy: both are built on their own frameworks.
+- **Suggested design.** Keep `createServer` transport-injected (it already is). Add `transports/uds.ts` first (Unix domain socket under `<state root>/server.sock`, mode 0600, `SO_PEERCRED` check not available in Bun so rely on directory mode 0700), then loopback TCP bound to `127.0.0.1` only. Only after G3 (auth) add HTTP+SSE. Each transport must reuse `dispatch` unchanged and be tested by running the existing `server.test.ts` cases through it.
+- **Files to touch.** `app/src/core/server.ts` (no change to dispatch), new `app/src/core/server-transports/*.ts`, `app/src/main.ts` (`--listen` flag), `app/tests/core/server-uds.test.ts`, `app/src/contracts.ts` (additive: `transports` values only).
+
+#### G2. Discovery file and leader arbitration (S34 to S37)
+
+- **What is deferred.** A registration file that tells a second client where the running leader is, and a rule for what happens when two `hzcode serve` start for one workspace. Not built; a second `serve` simply runs a second server on its own stdio.
+- **Why.** Meaningless without a non-stdio transport (G1).
+- **Upstream reference.** [`packages/cli/src/services/service-registration.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/service-registration.ts)<br>[`packages/cli/src/services/port-owner.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/port-owner.ts)<br>[`packages/cli/src/services/server-connection.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/server-connection.ts)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs)
+- **Adopt as is or adapt.** ADAPT. opencode's registration file and port-owner check are the closest shape; Grok's leader plus replay of the ACP handshake is the reference for takeover.
+- **Suggested design.** Write `<state root>/server.json` `{pid, startedAt, transport, address, protoVersion}` atomically (temp file plus rename, 0600). A starting server reads it, probes the pid and the address, and either refuses with exit 2 and the existing address or replaces a stale file. Add a test that kills the leader with SIGKILL and asserts the next start replaces the file and runs both crash recoveries.
+- **Files to touch.** new `app/src/core/server-registration.ts`, `app/src/core/server.ts`, `app/src/main.ts`, `app/tests/core/server-registration.test.ts`.
+
+#### G3. Server authentication: token, pairing codes, session tokens, roles (S38 to S40)
+
+- **What is deferred.** Any form of authentication on the server. Today the only protection is that the transport is the parent process's stdio.
+- **Why.** Required before any network transport (G1). The design says pairing codes and short-lived session tokens, never a long-lived secret in a URL.
+- **Upstream reference.** [`packages/server/src/pairing.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/pairing.ts)<br>[`packages/server/src/auth.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/auth.ts)<br>[`packages/server/src/cors.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/cors.ts)
+- **Adopt as is or adapt.** ADAPT. Read `pairing.ts` and `auth.ts` for the code-to-token exchange and expiry rules; reimplement with `node:crypto` (zero runtime dependencies).
+- **Suggested design.** A 0600 `server-token` file created at first start; `server.hello` accepts `{token}`; for remote pairing add a six-digit code valid for 120 seconds, single use, exchanged for a session token bound to a client id and role (`viewer|driver`). Compare in constant time. Reject any request before `server.hello` with a typed error. Tests: wrong token, expired code, reused code, role escalation attempt.
+- **Files to touch.** `app/src/core/server.ts`, new `app/src/core/server-auth.ts`, `app/src/contracts.ts` (additive `server.auth` method), `app/tests/core/server-auth.test.ts`.
+
+#### G4. Multi-client coordination: roles, per-client cursors, driver lease, ask routing (S41 to S50)
+
+- **What is deferred.** Several clients on one session with one driver at a time. Today a new `session.subscribe` replaces the previous subscriber for that session (last wins).
+- **Why.** Needs auth (G3) for roles and the event-log cursor model of docs/06 (`hz.subscribe` with a resume cursor), which the TS runtime does not implement.
+- **Upstream reference.** [`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)<br>[`packages/server/src/event-feed.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/event-feed.ts)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** Add a per-session subscriber set with a client id and role, a driver lease (one holder, renewed by activity, expires after N seconds idle) and routing of `ApprovalRequest` to the driver only. Replay from a cursor by reading the kernel `log.read` for the session stream (`fromSeq`), which already exists in `KernelRequestMap`.
+- **Files to touch.** `app/src/core/server.ts`, `app/src/core/index.ts` (approval handler injection), `app/src/contracts.ts` (additive), `app/tests/core/server-multiclient.test.ts`.
+
+#### G5. ACP agent and IDE bridge (S86 to S96)
+
+- **What is deferred.** An Agent Client Protocol endpoint (`hzcode acp`) so editors can attach, with permission proxying and replay after a leader crash. The `session/request_permission` flow must resolve a normal guard challenge. Nothing exists; `server.ts` header marks it S89.
+- **Why.** A large surface that depends on the server being stable first (G1 to G4) and on the approval card contract.
+- **Upstream reference.** [`crates/codegen/xai-acp-lib/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-acp-lib/src/lib.rs)<br>[`crates/codegen/xai-acp-lib/src/gateway.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-acp-lib/src/gateway.rs)<br>[`crates/codegen/xai-grok-pager-bin/src/main.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager-bin/src/main.rs)<br>[`packages/cli/src/acp/agent.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/acp/agent.ts)<br>[`packages/cli/src/acp/capabilities.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/acp/capabilities.ts)<br>[`packages/coding-agent/src/modes/acp`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/modes/acp)<br>DeepSeek-Reasonix `internal/frontend/acp` (handshake, clientio, session, dispatch): repo not cloned, path not verified
+- **Adopt as is or adapt.** ADAPT. opencode's `packages/cli/src/acp` is TypeScript and the nearest shape; Grok's stdio replay (cached initialize and session attach re-sent to a new leader, responses swallowed) is the reference for crash replay. Pin one ACP revision first (open item 7 of docs/07).
+- **Suggested design.** `hzcode acp` runs `createServer`-like dispatch over stdio speaking ACP: map `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel` to `createRuntime`/`Runtime.send`/`abort`; map `RuntimeEvent` to `session/update`; map an `ApprovalRequest` to `session/request_permission` and treat a digest mismatch or malformed answer as deny (test X16 in docs/15). Extension methods under `_hzcode/*` only.
+- **Files to touch.** new `app/src/core/acp/*.ts`, `app/src/main.ts`, `app/tests/core/acp-*.test.ts`, docs/07 section 4.5 revision pin.
+
+#### G6. MCP server mode: expose HorizonCode as an MCP server (S97 to S103)
+
+- **What is deferred.** Tools, resources and prompts exposed to another agent, with posture defaults (read-only by default). Not built. The MCP CLIENT does ship.
+- **Why.** An inbound authority path; it must be designed with the same guard and receipt pipeline and a conservative default.
+- **Upstream reference.** [`codex-rs/codex-mcp`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/codex-mcp)<br>[`codex-rs/rmcp-client`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/rmcp-client)<br>[`docs/mcp-protocol-transports.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/mcp-protocol-transports.md)<br>[`docs/mcp-server-tool-authoring.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/mcp-server-tool-authoring.md)<br>codex `codex-rs/mcp-server`: not present in the pinned clone, path not verified
+- **Adopt as is or adapt.** ADAPT the protocol handling; the authority rules are HorizonCode's own (section 3.5).
+- **Suggested design.** `hzcode mcp serve` over stdio: `initialize`, `tools/list` (read-only tools only by default: `read`, `grep`, `glob`, `repo_map`), `tools/call` routed through the same `executeToolCall` path so every call is guarded and receipted. Reuse the framing code in `app/src/core/mcp/client.ts` for newline-delimited JSON-RPC.
+- **Files to touch.** new `app/src/core/mcp/server.ts`, `app/src/main.ts`, `app/tests/core/mcp-server.test.ts`.
+
+#### G7. Generated SDKs and a schema-exported protocol (S104 to S110)
+
+- **What is deferred.** A JSON schema for the server protocol and SDKs generated from it (TS, Python, Go, Rust). Today `contracts.ts` is the hand-written source and `kernel/src/protocol.rs` is aligned to it by the interop suites.
+- **Why.** `gate:wire-parity` is a declared gap precisely because no generator exists. Generating is only worth it once there is more than one consumer.
+- **Upstream reference.** [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`packages/sdk`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/sdk)<br>[`docs/sdk.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/sdk.md)
+- **Adopt as is or adapt.** ADAPT the idea (one schema, generated TypeScript types and JSON schema, a checked-in snapshot test). Do not adopt codex's Rust `ts-rs` pipeline.
+- **Suggested design.** Write `app/scripts/gen-protocol-schema.ts` that derives a JSON schema from the exported contract types (a small hand-written table is acceptable for 7 methods), commit the output under `app/schema/`, and add a test that fails when `contracts.ts` changes without regenerating. Keep `contracts.ts` additive-only.
+- **Files to touch.** `app/src/contracts.ts` (comments only), new `app/scripts/gen-protocol-schema.ts`, `app/schema/*.json`, `app/tests/contracts/schema-snapshot.test.ts`.
+
+#### G8. Web app and desktop app (S51 to S72)
+
+- **What is deferred.** A browser client and an Electron or Tauri shell. Not started; design lives in sections 2.4 and 2.5.
+- **Why.** Both are thin clients over the server (G1 to G4) and add a large dependency surface, which conflicts with the zero-runtime-dependency rule for `app/`. They would live in separate packages.
+- **Upstream reference.** [`packages/app`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/app)<br>[`packages/desktop`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/desktop)<br>[`packages/server/src/event-feed.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/event-feed.ts)<br>DeepSeek-Reasonix `desktop` (nested module): repo not cloned, path not verified
+- **Adopt as is or adapt.** ADAPT the architecture (web client of the server protocol, desktop as a supervisor of the same binary). Do not copy code: it is SolidJS and Electron specific.
+- **Suggested design.** Do not start before G1 to G4. Then a `web/` package with its own `package.json`, outside `app/`, consuming the generated schema (G7) and nothing from `app/src/core`.
+- **Files to touch.** new top-level `web/` and `desktop/` packages; `ops/gate-catalogue.md` row for `gate:layering` once packages exist.
+
+#### G9. Mobile supervision, collaboration, sharing links, presence, team memory sync (S111 to S125)
+
+- **What is deferred.** All of sections 2.9 and 2.10.
+- **Why.** Needs the web surface (G8) and a redaction pipeline for shared transcripts; sharing a transcript without redaction would leak secrets.
+- **Upstream reference.** [`docs/collab.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/collab.md)<br>[`infra/share.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/infra/share.ts)<br>[`packages/cli/src/services/remote-tunnel.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/services/remote-tunnel.ts)
+- **Adopt as is or adapt.** idea only. Study, then design against HorizonCode's redaction rules.
+- **Suggested design.** First the local-only part: `/export html` already writes a static page with the receipt chain verdict (ruling 80). A share link is that page uploaded by an explicit user action after a redaction pass; keep it opt-in and off by default.
+- **Files to touch.** `app/src/core/convo.ts` (export), a new redaction module, docs/14 section 2.10.
+
+#### G10. Parity ratchet and capability matrix (S126 to S130)
+
+- **What is deferred.** A machine-readable capability matrix, a computed parity score and `baseline.json` that fails the build when a surface regresses.
+- **Why.** Only four small surfaces exist and they share one runtime; a ratchet over them would be ceremony. `gate:parity-ratchet` and `gate:frontend-parity` stay declared gaps.
+- **Upstream reference.** idea only: no upstream reference was found in the pinned clones.
+- **Adopt as is or adapt.** Original design.
+- **Suggested design.** When a second non-TUI surface (G1 or G5) lands, add `app/src/surfaces/matrix.ts` listing each capability by surface, and a test that compares it with a committed baseline.
+- **Files to touch.** new `app/src/surfaces/matrix.ts`, `app/tests/surfaces/parity.test.ts`, `ops/gate-catalogue.md`.
+
+#### G11. Permission mode on `hzcode serve` (named gap)
+
+- **What is deferred.** `hzcode serve` ignores `--permission-mode`. A server session always runs in the `default` mode, and approvals for `ask` decisions have no client route (single-attach has no approval method).
+- **Why.** Approval routing needs the multi-client design (G4); a mode flag alone would give a client no way to answer an ask.
+- **Upstream reference.** [`crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md)<br>[`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** Add `session.create {permissionMode}` (additive), default `read-only` for server sessions until an approval method exists, and an `approval.request` notification plus `approval.answer` request. Fail closed: no answer within the deadline is a deny.
+- **Files to touch.** `app/src/core/server.ts`, `app/src/core/permission-mode.ts`, `app/src/contracts.ts`, `app/tests/core/server.test.ts`.
+
+#### G12. CI recipes and `hzcode exec` (section 2.2, flow 6.1)
+
+- **What is deferred.** Documented recipes for GitHub Actions and others, an `exec` subcommand with an explicit non-interactive contract and `--on-client-gone`, and a headless parity spec.
+- **Why.** `-p` covers the practical need; recipes are documentation and a conformance test of them is not written (`surfaces/ci.recipes`).
+- **Upstream reference.** [`crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)<br>[`codex-rs/exec/src/cli.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/src/cli.rs)<br>[`.github/workflows/ci.yml`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/.github/workflows/ci.yml)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** Write `docs/recipes/ci.md` with a tested example that runs `hzcode -p ... --output-format json` against the mock provider (`--mock`) and asserts the exit code and the `PrintResult` fields. Add a headless parity fixture that runs the same script through `-p` and the pipe mode.
+- **Files to touch.** new docs recipe, `app/tests/tui/print-recipe.test.ts`, `app/src/tui/print.ts` (no change expected).
+
+#### G13. `ExecResultV1` (section 3.3) is not what print mode emits
+
+- **What is deferred.** The designed per-execution result (`command`, `exitCode`, `signal`, `stdoutRef`, `truncated`, `receiptId`, `terminalState`, `sandbox`) is not produced anywhere. Print mode emits `PrintResult` per turn.
+- **Why.** The shell tool returns a bounded text result and a receipt id; artifact refs (`hz://artifact/<sha256>`) do not exist yet.
+- **Upstream reference.** idea only: codex `exec` JSONL item events are the nearest upstream shape, see [`codex-rs/exec/src/cli.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/exec/src/cli.rs).
+- **Adopt as is or adapt.** Original shape; keep it separate from `PrintResult` and say so in the contract.
+- **Suggested design.** If wanted, add an additive `tool.card.detail` extension (the `ToolCardDetail` already carries `durationMs`, `output`, `exitCode`) rather than a new top-level type, and add `receiptId` to it.
+- **Files to touch.** `app/src/contracts.ts` (additive), `app/src/core/loop.ts`, `app/tests/core/*`.
