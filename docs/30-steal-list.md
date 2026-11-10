@@ -510,6 +510,22 @@ Source: the public Freebuff README (github.com/CodebuffAI/codebuff, read 2026-11
 
 Status: NOT STARTED. Presets may only narrow authority; a preset can never add a tool the parent run cannot use. CURRENT_RUN §5.0.1 has the analysis.
 
+### 5.12 Third TUI wave: Grok Build minimal-mode behaviours (added with TUI part 3)
+
+Provenance. Source: Grok Build minimal mode (`externals/grok-build`, upstream org `xai-org`; notes in `research/grok-tui-deep.md`). Those paths belong to the original author's sandbox and are not in every worktree, so no upstream URL or file path is asserted here beyond what section 5.0 already records; the next agent should resolve the exact upstream links from the clone. Disposition for every row is ADAPT (behaviour reimplemented in zero-dependency TypeScript, no code copied).
+
+| Item | HorizonCode implementation | Ruling | Disposition |
+|---|---|---|---|
+| Bracketed paste collapsed to one input | `app/src/tui/paste.ts` | 84 | adapt (xterm mode 2004 standard) |
+| Single-key bordered approval card | `app/src/tui/approval-card.ts`, `approval.ts`, `interactive.ts` | 85, 91 | adapt, plus type-ahead and paste guards that are HorizonCode additions |
+| Diff gutters with line numbers | `app/src/tui/diff.ts` | 86 | adapt |
+| Thinking display | provider `thinking`, runtime `assistant.thinking` (C3), `render.ts` | 87 | adapt; the fold wording is ours |
+| Subagent boundary events | `subagent.start`/`subagent.end` (C2), `core/subagent.ts`, `render.ts` | 88 | adapt |
+| Tab completion and ghost text | `app/src/tui/completion.ts` | 89, 91 | adapt |
+| `/theme` | `app/src/tui/style.ts`, `interactive.ts` | 90 | adapt |
+
+Still deferred from this source: popup completion dropdown, status line `used / window` with hint segment, `/verbose` nested-subagent toggle, persisted `/theme`.
+
 ## Related documents
 
 - `audit/pass3/` — the four reports this shortlist consolidates (historical class)
