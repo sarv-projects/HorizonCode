@@ -1,6 +1,6 @@
 # SWE-agent ACI Deep-Dive Report
 
-Repo: `/data/home/forge/repo-tour/SWE-agent` (SWE-agent 1.x, bundle-based ACI). Every statement below was read out of the tree; line-level anchors are given per section.
+Repo: `SWE-agent` (repo not cloned, path not verified) (SWE-agent 1.x, bundle-based ACI). Every statement below was read out of the tree; line-level anchors are given per section.
 
 ## 1. Repo map
 
@@ -175,7 +175,7 @@ bash-$
 
 **Task-level instructions that make the ACI usable** (same templates): "If you open a file and need to get to an area around a specific line that is not in the first 100 lines, say line 583, don't just use the scroll_down command multiple times. Instead, use the goto 583 command. It's much quicker."; "Always make sure to look at the currently open file and the current working directory … The currently open file might be in a different directory than the working directory!"; "When editing files, it is easy to accidentally write code with incorrect indentation … Always check the code after you issue an edit". Demonstrations (`put_demos_in_history: true`) show a full solved trajectory as examples of the interface.
 
-## 5. Comparison with HorizonCode doc 09 (`/data/home/forge/HorizonCode/docs/09-tools.md`)
+## 5. Comparison with HorizonCode doc 09 (`09-tools.md`)
 
 Doc 09 is the reference surface: 91 catalog rows, model-facing caps of **16 KiB / 4,000 tokens** per result (`R-tools-42`), explicit `truncated` descriptors with `nextOffset` + artifact pointers (`R-tools-43/44`), declared bounds for every search tool (`R-tools-55`), and the deliberate absence of a persistent-editor/cursor tool family.
 

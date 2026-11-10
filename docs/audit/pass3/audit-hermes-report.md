@@ -1,6 +1,6 @@
 # Hermes Agent — Deep-Dive Audit Report
 
-**Repo:** `/data/home/forge/repo-tour/hermes-agent` (NousResearch/hermes-agent)
+**Repo:** `hermes-agent` (repo not cloned, path not verified) (NousResearch/hermes-agent)
 **Tagline:** "The self-improving AI agent built by Nous Research" / "The agent that grows with you"
 **Audit date:** 2026-11-07 · **Report-only — nothing in the repo was modified.**
 **Frame:** reference implementation of a *Managed VPS Loop* agent: it runs persistently in a managed
@@ -858,6 +858,6 @@ providers                3     native                   5
 
 - Nothing in the repository was written to, moved, or executed in a mutating way; all commands were
   read-only (`ls`, `find`, `du`, `wc`, `git log`, `git rev-list`).
-- `/data/home/forge/HorizonCode` was not accessed at any point.
+- `HorizonCode` was not accessed at any point.
 - `git log --oneline -10` and `git rev-list --count HEAD` were run; both confirm a single-commit
   shallow clone, which is recorded above as a limitation of the evidence base.

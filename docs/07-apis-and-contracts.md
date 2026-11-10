@@ -1,22 +1,24 @@
 # 07 — APIs & Contracts
 
+> **Implementation reality (read first).** Three contracts exist, all in `app/src/contracts.ts`, which is additive-only: the 11-method NDJSON **kernel protocol** (matched by `kernel/src/protocol.rs`), the 7-method NDJSON **server protocol** (`hzcode serve`, `HZ_PROTO = 1`) and the in-process **runtime facade** (`Runtime`, `RuntimeEvent`, `Provider`, `Tool`). **The `hz.*` Controller catalogue, the `hzk` frame ABI, REST and SSE, ACP, the MCP server, the plugin API, SDKs, feature flags, `HZ_ABI` negotiation, `TypedErrorV1` and contract tests CT1 to CT50 are DESIGN ONLY: NOT IMPLEMENTED.** Provider credentials: `apiKey` and `none` are implemented; the `oauth` arm exists as a type and is produced by nothing; OAuth acquisition flows, the full models.dev snapshot and the live catalogue refresh are deferred. The Provenance section at the end of this document lists what exists, where designs came from (exact upstream URLs at pinned commits), and detailed deferral notes (K1 to K11).
+
 > Every surface HorizonCode exposes, the exact call shapes on each, the versioning rules that keep them compatible, and the contract tests that prove the contracts. `packages/protocol` and `crates/hz_abi` are generated from one schema; this document is the human authority for that schema and for the behaviour behind it.
 
-- **Status:** `DESIGNED` for every surface in this document. Two slices exist and are recorded in `docs/28-implementation-status.md` (RC-13): the 8-method NDJSON kernel protocol and the provider adapters — both are *narrower and different in framing* from §4.2/§4.9 below. Primitives that exist in the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
+- **Status:** `DESIGNED` for every surface in this document. Three slices exist and are recorded in `docs/28-implementation-status.md` (RC-13): the 11-method NDJSON kernel protocol, the 7-method NDJSON server protocol of `hzcode serve` and the provider adapters; all three are *narrower and different in framing* from §4.1/§4.2/§4.9 below. Primitives that exist in the pinned ancestor are marked `CODE_PRESENT (ancestor)` with the file that carries them; everything else is `[planned]`.
 - **Sources** (read for this document):
-  - `source: /data/home/forge/HorizonCode/README.md`
-  - `source: /data/home/forge/HorizonCode/docs/01-vision-and-superset.md`
-  - `source: /data/home/forge/HorizonCode/docs/02-decisions.md`
-  - `source: /data/home/forge/HorizonCode/docs/_conventions.md`
-  - `source: /data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`
-  - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs` (`HzKernelRpcV1`, `RpcRequestV1`, `RpcResponseV1`, `RpcEventV1`, `RpcControlV1`, `KernelHelloV1`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`)
-  - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/rpc_handshake.rs`
-  - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs` (dotted operation dispatch: `artifacts.read_range`, `host_run.bind`, `managed_provider.settle`, `managed_message.claim_wake`, `automations.create`, …)
-  - `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs`
-  - `source: /data/home/forge/repo-tour/horizoncode/specs/v2/session.md`
-  - `source: /data/home/forge/HorizonCode/docs/audit/pass2/codex-report.md` (code-generated, schema-exported JSON-RPC shared by CLI, app-server and SDKs)
-  - `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part1.md` and `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part3.md` (contract-separated monorepo, ACP server files, plugin surface)
-- **Related documents:** `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` owns every payload shape named here; `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md` owns the event catalog and projector semantics; `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md` owns the concrete storage layout. On a shape conflict, 05 wins; on a framing conflict, this document wins; on physical layout, 12 wins.
+  - `source: ../README.md`
+  - `source: 01-vision-and-superset.md`
+  - `source: 02-decisions.md`
+  - `source: _conventions.md`
+  - `source: 05-domain-and-schemas.md`
+  - source: `kernel/src/protocol.rs` of the ancestor project (not cloned, path not verified) (`HzKernelRpcV1`, `RpcRequestV1`, `RpcResponseV1`, `RpcEventV1`, `RpcControlV1`, `KernelHelloV1`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`)
+  - source: `kernel/src/rpc_handshake.rs` of the ancestor project (not cloned, path not verified)
+  - source: `kernel/src/host_kernel.rs` of the ancestor project (not cloned, path not verified) (dotted operation dispatch: `artifacts.read_range`, `host_run.bind`, `managed_provider.settle`, `managed_message.claim_wake`, `automations.create`, …)
+  - source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified)
+  - source: `specs/v2/session.md` of the ancestor project (not cloned, path not verified)
+  - `source: audit/pass2/codex-report.md` (code-generated, schema-exported JSON-RPC shared by CLI, app-server and SDKs)
+  - `source: audit/pass2/opencode-report.part1.md` and `source: audit/pass2/opencode-report.part3.md` (contract-separated monorepo, ACP server files, plugin surface)
+- **Related documents:** `05-domain-and-schemas.md` owns every payload shape named here; `06-events-and-flows.md` owns the event catalog and projector semantics; `12-sessions-state.md` owns the concrete storage layout. On a shape conflict, 05 wins; on a framing conflict, this document wins; on physical layout, 12 wins.
 
 ---
 
@@ -35,7 +37,7 @@ This document decides:
 9. **Versioning and compatibility** rules for `HZ_PROTO`, `HZ_ABI`, deprecation and generated code (i).
 10. The **error model** — codes, retryability and fail-closed classes (j).
 
-Out of scope: the field-level definitions of payload objects, which live in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md`; the event type catalogue, which lives in `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md`; the on-disk layout, which lives in `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md`; and CLI exit codes, which are owned by `file:///data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 (RC-5) and are referenced, never restated, here. This document names those objects and constrains how they travel; it does not restate their fields.
+Out of scope: the field-level definitions of payload objects, which live in `05-domain-and-schemas.md`; the event type catalogue, which lives in `06-events-and-flows.md`; the on-disk layout, which lives in `12-sessions-state.md`; and CLI exit codes, which are owned by `14-surfaces.md` §2.2 (RC-5) and are referenced, never restated, here. This document names those objects and constrains how they travel; it does not restate their fields.
 
 ---
 
@@ -49,7 +51,7 @@ Numbered, individually testable. `MUST` violations are contract-test failures (�
 |---|---|
 | **C1** | The Controller protocol MUST be JSON-RPC 2.0. Canonical method names MUST be `hz.<noun>.<verb>`. Short aliases (for example `session.create`) MAY exist in CLI and SDK ergonomics and MUST NOT be accepted on the wire. |
 | **C2** | Every connection MUST begin with `hz.initialize`, exchanging `{hzProto, hzAbi, features: {required: [], optional: []}, client: {name, version, surface}}`. A peer that requires a feature the other side does not support MUST be rejected with `HZ_UNSUPPORTED_FEATURE` (fail closed); unknown *optional* features MUST be ignored. |
-| **C3** | Integers above 2^53 MUST travel as canonical decimal strings, matching `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.1. A JSON number in a `u64`/`i64` position MUST be rejected (`Validation`). Canonical-JSON number form — including the refusal of `NaN`, `±Infinity` and unsafe decimal integers — is owned by `docs/05` D40. |
+| **C3** | Integers above 2^53 MUST travel as canonical decimal strings, matching `05-domain-and-schemas.md` §4.1. A JSON number in a `u64`/`i64` position MUST be rejected (`Validation`). Canonical-JSON number form - including the refusal of `NaN`, `±Infinity` and unsafe decimal integers - is owned by `docs/05` D40. |
 | **C4** | One request per frame. JSON-RPC batch arrays MUST NOT be accepted: per-session ordering and per-request deadlines are contractual, and batching defeats both. |
 | **C5** | Every mutating call MUST accept an idempotency key (`idempotencyKey` in params, or the `Idempotency-Key` header on REST). An exact replay MUST return the original result with `replayed: true` and MUST NOT perform the mutation twice. |
 | **C6** | Ordering is contractual per session: events carry a gap-free `seq` (doc 05 §2.2 D10) and a transport MUST NOT reorder events of one session. Cross-session ordering MUST NOT be assumed. |
@@ -157,13 +159,15 @@ One Controller, eight surfaces (ADR-005). The table below is the surface registr
 | Plugin API | JSON-RPC 2.0 over a dedicated IPC channel | plugin host | `hzplugin/1` | `@horizoncode/plugin` | — | §4.7 |
 | SDKs | generated clients | `@horizoncode/sdk`, `-python`, `-go`, `-rust` | `HZ_PROTO=1` | `@horizoncode/sdk*` | `hz_sdk` (name registered; code `[planned]`) | §4.8 |
 
-Cross-cutting interfaces used by every surface: `hz.initialize` (§4.1.2), `hz.subscribe` (§4.4.1), the typed error carrier (§4.10), and the `hz://` resource resolver (`file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.2).
+Cross-cutting interfaces used by every surface: `hz.initialize` (§4.1.2), `hz.subscribe` (§4.4.1), the typed error carrier (§4.10), and the `hz://` resource resolver (`05-domain-and-schemas.md` §4.2).
 
 ---
 
 ## 4. Data
 
 ### 4.1 (a) The Controller protocol
+
+> **DESIGN ONLY: NOT IMPLEMENTED.** The shipped server protocol has 7 methods (`server.hello`, `session.create`, `session.list`, `session.subscribe`, `session.prompt`, `session.rewind`, `session.fork`) and none of the `hz.*` names below. See the Provenance section and deferral note K7.
 
 #### 4.1.1 Envelope
 
@@ -257,7 +261,7 @@ Two rules bound this group. (1) `hz.permission.asked` (and therefore an `hz.appr
 | Method | Params | Result | Notes |
 |---|---|---|---|
 | `hz.agent.list` | `{parentSessionId?, teamId?, state?, limit?}` | `{agents[]{sessionId, profileId, kind, state, depth, budgetRemaining, lastHeartbeatAtMs}}` | |
-| `hz.agent.get` | `{sessionId}` | `{session, profile, grantGist{capabilityCount, narrowingDigest}, budget, resultContract}` | the full capability list requires `session.manage` | |
+| `hz.agent.get` | `{sessionId}` | `{session, profile, grantGist{capabilityCount, narrowingDigest}, budget, resultContract}` | the full capability list requires `session.manage` |
 | `hz.agent.spawn` | `{parentSessionId, kind, objective, agentProfileId, capabilityGrant?{capabilities[],toolAllowlist[]}, budgetLimits?, limits?, contextCapsule?{sources[],includes[],tokenBudget}, resultContract?, isolation?, joinPolicy?, failurePolicy?, idempotencyKey}` | `{session: SessionV1, spec: SubagentSpecV1, specDigest}` | a widening grant or an over-budget request MUST be rejected before the child exists (ADR-016) |
 | `hz.agent.cancel` | `{sessionId, mode, cascade?}` | `{cancelledSessionIds[]}` | |
 | `hz.agent.wait` | `{sessionIds[], until: OneOf{any,all}, timeoutMs}` | `{settled[]{sessionId,state,resultSummary?}, timedOut: bool}` | waiting MUST NOT consume budget |
@@ -318,7 +322,7 @@ Two rules bound this group. (1) `hz.permission.asked` (and therefore an `hz.appr
 
 #### 4.1.4 Worked exchanges (Controller protocol)
 
-All examples use the ids and digests from `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.2/D3. Digests are shortened with `…` **for readability only**; on the wire a partial digest MUST be rejected (doc 05 D3).
+All examples use the ids and digests from `05-domain-and-schemas.md` §4.2/D3. Digests are shortened with `…` **for readability only**; on the wire a partial digest MUST be rejected (doc 05 D3).
 
 **Example 1 — `hz.initialize` (capability and feature negotiation, C2/C40)**
 
@@ -562,6 +566,8 @@ The client's `required` entry is satisfied, `acp.sessionModes` is reported unava
 
 ### 4.2 (b) The kernel ABI (`hzk`)
 
+> **DESIGN ONLY: NOT IMPLEMENTED as written.** The shipped kernel protocol is NDJSON `{id, method, params}` with 11 methods (`ping`, `log.append`, `log.read`, `log.verify`, `receipt.issue`, `receipt.verify`, `guard.check`, `guard.lease`, `guard.grant`, `guard.allowlist.amend`, `sandbox.report`), no frame types, no `HZ_ABI`, errors as `{message}`. Deferral notes K7 and K10.
+
 The kernel is a separate process (ADR-003) with its own versioned protocol. It is not a JSON surface (C13): frames are canonical MessagePack, shown below as JSON **for readability only**. Types are inherited from the ancestor (`HzKernelRpcV1`).
 
 #### 4.2.1 Frame envelope
@@ -617,7 +623,7 @@ Handshake states: `hello` → `hello_result` → `startup_status: Starting` … 
 | `subscription.open` / `.ack` / `.close` | `{ownerKind, ownerId, after?}` | `{subscriptionId, cursor}` | kernel event stream mirroring the doc 05 `RpcControlV1` set |
 | `health.status` | `{}` | `{state, buildDigest, ownerEpoch, degradations[]}` | MUST NOT be used as a readiness signal before `Ready` |
 
-**Terminal vocabulary (RC-7) applied to the ABI.** `_conventions.md` RC-7 fixes one protocol-wide outcome enum — `succeeded | failed | denied | cancelled | budget_exhausted | timeout | interrupted | unknown` — and forbids any component from inventing its own terminal word. In this ABI: `effect.settle` carries a **receipt terminal** (`SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`) because a receipt answers only *did the world change and can we prove it*; the wider RC-7 outcome travels in the body as `outcomeReason` and is mapped to a terminal state by the writer using the total mapping table in `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.11. A settle request that supplies an `outcomeReason` without a terminal state, or a terminal state inconsistent with its reason, MUST be refused with `HZ_INVALID_PARAMS`. Kernel *event* payloads (statuses such as `budget_exhausted`, `timeout`, `cancelled`, `interrupted` on `hz.agent.completed`, `hz.session.claim.released`, `hz.session.busy.left`) use the RC-7 vocabulary verbatim, as catalogued in `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md`.
+**Terminal vocabulary (RC-7) applied to the ABI.** `_conventions.md` RC-7 fixes one protocol-wide outcome enum - `succeeded | failed | denied | cancelled | budget_exhausted | timeout | interrupted | unknown` - and forbids any component from inventing its own terminal word. In this ABI: `effect.settle` carries a **receipt terminal** (`SUCCEEDED`, `FAILED`, `DENIED`, `UNKNOWN`) because a receipt answers only *did the world change and can we prove it*; the wider RC-7 outcome travels in the body as `outcomeReason` and is mapped to a terminal state by the writer using the total mapping table in `05-domain-and-schemas.md` §4.11. A settle request that supplies an `outcomeReason` without a terminal state, or a terminal state inconsistent with its reason, MUST be refused with `HZ_INVALID_PARAMS`. Kernel *event* payloads (statuses such as `budget_exhausted`, `timeout`, `cancelled`, `interrupted` on `hz.agent.completed`, `hz.session.claim.released`, `hz.session.busy.left`) use the RC-7 vocabulary verbatim, as catalogued in `06-events-and-flows.md`.
 
 **Naming note.** The operation strings in §4.2.2 follow the ancestor's dotted `service.operation` dispatch style (`artifacts.read_range`, `host_run.bind`, `managed_provider.settle`, `automations.create`) and normalize the guard/lease/effect path to `effect.*`. That normalization is a HorizonCode naming decision, not a rename of shipped behaviour; see §10 item 2 for the compatibility consequence.
 
@@ -682,6 +688,8 @@ A second `effect.settle` for the same `eff_…` with `terminal: "FAILED"` return
 No retry follows automatically (ADR-012). The orchestrator must call `effect.reconcile` (Example 7) and the session cannot reach `completed` while `openUnknownEffectCount > 0`.
 
 ### 4.3 (c) The HTTP/SSE REST surface
+
+> **DESIGN ONLY: NOT IMPLEMENTED.** No HTTP server exists. Deferral note K8.
 
 Base path `/v1` on the server listener `[planned]` (`hzcode serve --listen 127.0.0.1:7777`). Every REST route is a projection of a Controller method (C24); the mapping column below is normative and is checked by the parity ratchet.
 
@@ -783,7 +791,7 @@ Base path `/v1` on the server listener `[planned]` (`hzcode serve --listen 127.0
 | `503` | kernel unavailable or ABI mismatch (`Unavailable`) | error body, `HZ_KERNEL_UNAVAILABLE` + `Retry-After`; the app is in `degraded_read_only` |
 | `504` | deadline exceeded (`Deadline`) | error body, `HZ_DEADLINE_EXCEEDED` |
 
-**Rate limits are a named shape, not an ad-hoc limiter.** The entitlement model behind `429` is `RateLimitPolicyV1`, owned by `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.9 (per-principal, per-provider, per-budget scopes, their meet-combination and precedence). This surface MUST NOT define its own limiter: a `429` response MUST name the effective policy in `details.rateLimitPolicyId`, carry `windowMs` and a `Retry-After` derived per the policy's `retryAfterMode`, and the choice between refusing, queueing, degrading and asking belongs to the policy's `onExceeded` value, applied by the owning layer (the provider path, the budget guard, or the server's per-principal limiter). When several policies match, the numeric limit is the meet and the *reported* policy is the most specific scope; the `retryClass` MUST match the call's idempotency rather than defaulting to `SafeQueryRetry` (doc 05 D39).
+**Rate limits are a named shape, not an ad-hoc limiter.** The entitlement model behind `429` is `RateLimitPolicyV1`, owned by `05-domain-and-schemas.md` §4.9 (per-principal, per-provider, per-budget scopes, their meet-combination and precedence). This surface MUST NOT define its own limiter: a `429` response MUST name the effective policy in `details.rateLimitPolicyId`, carry `windowMs` and a `Retry-After` derived per the policy's `retryAfterMode`, and the choice between refusing, queueing, degrading and asking belongs to the policy's `onExceeded` value, applied by the owning layer (the provider path, the budget guard, or the server's per-principal limiter). When several policies match, the numeric limit is the meet and the *reported* policy is the most specific scope; the `retryClass` MUST match the call's idempotency rather than defaulting to `SafeQueryRetry` (doc 05 D39).
 
 #### 4.3.3 Authentication modes
 
@@ -843,6 +851,8 @@ Accept: text/event-stream
 ```
 
 ### 4.4 (d) The event subscription stream
+
+> **DESIGN ONLY: NOT IMPLEMENTED.** The server relays `RuntimeEvent`s as `session.event` notifications with no cursor or replay. Deferral note K8.
 
 #### 4.4.1 `hz.subscribe`
 
@@ -917,6 +927,8 @@ The canonical names are fixed by `_conventions.md` §6 and are not restated here
 
 ### 4.5 (e) The ACP surface
 
+> **DESIGN ONLY: NOT IMPLEMENTED.** Deferral note K9 (owned by G5 in docs/14).
+
 `hzcode acp` `[planned]` runs a HorizonCode agent over ACP for editors, and the IDE bridge runs HorizonCode as an ACP *client* for other agents. Both directions matter (the oh-my-pi lesson, vision §2.6).
 
 #### 4.5.1 Methods (agent direction)
@@ -966,6 +978,8 @@ The canonical names are fixed by `_conventions.md` §6 and are not restated here
 `{loadSession: true, promptCapabilities: {image: true, audio: true, embeddedContext: true}, mcpCapabilities: {http: true, sse: true}, sessionModes: true, sessionModels: true, terminal: true, fs: {readTextFile: true, writeTextFile: true}, elicitation: true, usageUpdate: true}`. A capability is advertised **only** when the corresponding Controller feature is enabled in this build; advertising an unavailable capability is a contract violation (it teaches clients to rely on something that fails closed).
 
 ### 4.6 (f) The MCP server surface (and the client counterpart)
+
+> **Server: DESIGN ONLY: NOT IMPLEMENTED. Client: a reduced stdio, tools-only client ships** (`app/src/core/mcp/`, protocol revision `2024-11-05`, user config only); see docs/15 H7.
 
 #### 4.6.1 Exposed tools
 
@@ -1026,6 +1040,8 @@ A capability refusal is a *successful* MCP call whose content explains the refus
 HorizonCode also consumes MCP servers (`McpServerConfigV1`, doc 05 §4.12). Client rules that belong to this contract: (1) tool discovery is bounded by `tools.allowedPatterns`/`deniedPatterns` and `maxTools`; (2) a deferred-discovery server's tools appear only through `hz.tool.search`, and a search hit MUST NOT bypass policy; (3) every MCP tool invocation is an `mcp.invoke` effect with the ordinary Guard/lease/receipt path — a server MUST NOT be trusted to self-report success; (4) OAuth tokens live in the keychain and are never written to config, logs, transcripts or receipts; (5) an `untrusted` server's tools are not listed to the model at all until a trust decision exists (doc 05 D31).
 
 ### 4.7 (g) The plugin API
+
+> **DESIGN ONLY: NOT IMPLEMENTED.** Deferral note K9 (owned by H5 in docs/15).
 
 A plugin runs in a sandboxed host (worker, process or wasm) and talks to the host over a dedicated JSON-RPC 2.0 channel with its own revision, `hzplugin/1`. Both directions are specified: the host calls into the plugin (invocations), and the plugin calls into the host (registrations, requests). The plugin NEVER gets a kernel connection (C35).
 
@@ -1117,6 +1133,8 @@ Two properties are visible here: the denial is receipted (`rcp_…`), and the re
 
 ### 4.8 (h) The SDK surface
 
+> **DESIGN ONLY: NOT IMPLEMENTED.** Nothing is generated. Deferral note K9 (owned by G7 in docs/14).
+
 Four generated SDKs share one schema. No SDK hand-writes a transport method (C39).
 
 | SDK | Package | Crate/folder | Style | Notes |
@@ -1147,6 +1165,8 @@ Every SDK exposes exactly: (1) a transport layer (stdio, UDS, TCP, WS); (2) gene
 
 #### 4.9.2 `HZ_ABI` (agent ↔ kernel)
 
+> **DESIGN ONLY.** `HZ_ABI` is not defined in code. `HZ_PROTO = 1` is, and `server.hello` returns it.
+
 Same rules applied to the kernel envelope, the operation strings, and kernel-side payloads. Additional kernel-specific rules: (1) the handshake negotiates `minProtocol`/`maxProtocol` and feature lists before any application request (C14); (2) an agent that cannot meet the kernel's minimum MUST enter `degraded_read_only`, never attempt unguarded execution; (3) a kernel that cannot meet the agent's minimum MUST reject the handshake with `HZ_PROTO_TOO_OLD` and stay in a refusing state rather than serve partial authority; (4) the kernel build digest is reported in `hello_result` and copied into every receipt, so a receipt is tied to the exact kernel that produced it.
 
 #### 4.9.3 Deprecation policy
@@ -1166,6 +1186,8 @@ Same rules applied to the kernel envelope, the operation strings, and kernel-sid
 5. A schema change MUST regenerate all four SDKs and the Rust ABI types in the same change; the `proto-lock.json` digest MUST be updated and reviewed in that diff.
 
 ### 4.10 (j) The error model
+
+> **PARTIAL.** Server errors use JSON-RPC numbers (`-32601`, `-32602`, `-32603`); kernel errors are `{message}`; refusals carry stable string markers. The `TypedErrorV1` carrier, code registry and retry classes are design only. Deferral note K10.
 
 #### 4.10.1 The carrier
 
@@ -1404,6 +1426,8 @@ Protocol-level targets. All are **targets**, not measurements. A subset of the r
 
 ## 9. Tests
 
+> **No test named CT1 to CT50 exists.** Related tests that do: `app/tests/core/interop.test.ts`, `canon-numbers.test.ts`, `framing.test.ts`, `server.test.ts`, `kernel-trusted.test.ts`, `kernel-hardening.test.ts`, `providers-expansion.test.ts`, `catalog.test.ts`. Deferral note K11.
+
 Contract tests. `Gate = yes` means CI fails the build on violation. The last column names what the test proves; rule ids refer to §2.
 
 | # | Contract test | How it is performed | Proves | Gate |
@@ -1467,22 +1491,22 @@ Contract tests. `Gate = yes` means CI fails the build on violation. The last col
 
 | Capability | Level | Evidence |
 |---|---|---|
-| Controller protocol (method catalogue, envelope, admission/claim/approval shapes) | `DESIGNED` | this document; semantic basis `source: /data/home/forge/repo-tour/horizoncode/specs/v2/session.md` |
-| Kernel ABI envelope (`hello`, `request`, `response`, `event`, `control`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`) | `DESIGNED`; types `CODE_PRESENT (ancestor)` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/rpc_handshake.rs` |
-| Kernel effect operations (`effect.authorize`/`lease_issue`/`execute`/`observe`/`settle`/`reconcile`) | `DESIGNED`; underlying primitives `CODE_PRESENT (ancestor)` as `guard::authorize`, `EffectHost::handle_request`, `EffectHost::reconcile_effect` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs#L1289`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L4790`, `source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs#L5801` |
-| Managed-domain and worktree operations | `DESIGNED`; ancestor operations exist under different names | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/host_kernel.rs` (dotted dispatch table), `source: /data/home/forge/repo-tour/horizoncode/kernel/src/worktree_lifecycle.rs` |
-| REST + SSE surface, auth modes, status mapping | `DESIGNED` — no server exists | this document; parity approach from `source: /data/home/forge/HorizonCode/docs/audit/pass2/codex-report.md` |
+| Controller protocol (method catalogue, envelope, admission/claim/approval shapes) | `DESIGNED`; a 7-method server protocol (`hzcode serve`) is TESTED per `28-implementation-status.md` | this document; semantic basis source: `specs/v2/session.md` of the ancestor project (not cloned, path not verified) |
+| Kernel ABI envelope (`hello`, `request`, `response`, `event`, `control`, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`) | `DESIGNED`; the 11-method NDJSON kernel protocol is VERIFIED per docs/28; the types named here are `CODE_PRESENT (ancestor)` only | source: `kernel/src/protocol.rs` of the ancestor project (not cloned, path not verified), source: `kernel/src/rpc_handshake.rs` of the ancestor project (not cloned, path not verified) |
+| Kernel effect operations (`effect.authorize`/`lease_issue`/`execute`/`observe`/`settle`/`reconcile`) | `DESIGNED`; underlying primitives `CODE_PRESENT (ancestor)` as `guard::authorize`, `EffectHost::handle_request`, `EffectHost::reconcile_effect` | source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified), source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified), source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified) |
+| Managed-domain and worktree operations | `DESIGNED`; ancestor operations exist under different names | source: `kernel/src/host_kernel.rs` of the ancestor project (not cloned, path not verified) (dotted dispatch table), source: `kernel/src/worktree_lifecycle.rs` of the ancestor project (not cloned, path not verified) |
+| REST + SSE surface, auth modes, status mapping | `DESIGNED` - no server exists | this document; parity approach from `source: audit/pass2/codex-report.md` |
 | Event framing (SSE/NDJSON/JSON-RPC) and cursors | `DESIGNED` | this document; cursor honesty rules derived from the ancestor's owner-cursor and resnapshot semantics |
-| ACP surface | `DESIGNED` — no ACP agent is implemented | this document; mapping discipline informed by `source: /data/home/forge/HorizonCode/docs/audit/pass2/opencode-report.part3.md` (`packages/cli/src/acp/*`) |
-| MCP server surface | `DESIGNED` — no MCP server is implemented | this document; capability/authority discipline is ours |
-| Plugin API | `DESIGNED` | this document; hook and manifest shapes from `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` |
+| ACP surface | `DESIGNED` - no ACP agent is implemented | this document; mapping discipline informed by `source: audit/pass2/opencode-report.part3.md` (`packages/cli/src/acp/*`) |
+| MCP server surface | `DESIGNED` - no MCP server is implemented (the stdio MCP CLIENT ships, see docs/15) | this document; capability/authority discipline is ours |
+| Plugin API | `DESIGNED` | this document; hook and manifest shapes from `05-domain-and-schemas.md` |
 | SDKs (TS, Python, Go, Rust) | `DESIGNED`; nothing generated | §4.8; crate names registered (`hz_sdk` in `_conventions.md` §4), no generator exists |
 | Versioning, deprecation, codegen rules | `DESIGNED` | §4.9 |
 | Feature-flag registry | `DESIGNED` — names are specified in §4.1.5; no build toggles them yet | §4.1.5 |
-| Error model and fail-closed classes | `DESIGNED`; category/retry-class sets `CODE_PRESENT (ancestor)` | `source: /data/home/forge/repo-tour/horizoncode/kernel/src/protocol.rs#L2169-L2202` |
+| Error model and fail-closed classes | `DESIGNED`; category/retry-class sets `CODE_PRESENT (ancestor)` | source: `kernel/src/protocol.rs` of the ancestor project (not cloned, path not verified) |
 | Contract tests CT1–CT50 | `DESIGNED` — no test exists; every gate is a plan | §9 |
 
-**References owned elsewhere.** CLI exit codes are owned by `file:///data/home/forge/HorizonCode/docs/14-surfaces.md` §2.2 (RC-5). The concrete storage layout and table DDL behind `hz.db` are owned by `file:///data/home/forge/HorizonCode/docs/12-sessions-state.md`. The event catalogue referenced throughout §4.4 is owned by `file:///data/home/forge/HorizonCode/docs/06-events-and-flows.md`. Canonical hook lifecycle event names are owned by `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.15.3.
+**References owned elsewhere.** CLI exit codes are owned by `14-surfaces.md` §2.2 (RC-5). The concrete storage layout and table DDL behind `hz.db` are owned by `12-sessions-state.md`. The event catalogue referenced throughout §4.4 is owned by `06-events-and-flows.md`. Canonical hook lifecycle event names are owned by `05-domain-and-schemas.md` §4.15.3.
 
 **Open items owned by this document**
 
@@ -1490,7 +1514,187 @@ Contract tests. `Gate = yes` means CI fails the build on violation. The last col
 2. **Kernel operation names are normalized, not verbatim.** The ancestor dispatches dotted operations such as `artifacts.read_range`, `host_run.bind`, `managed_provider.settle` and `automations.create`. §4.2.2 adopts that style and renames the guard/lease/effect path to `effect.*`. The rename is part of the HorizonCode kernel work and MUST be accompanied by an `HZ_ABI` review: this is a *naming* change to a v1 protocol only because no external client exists yet. If any client exists by the time it lands, the rename requires an `HZ_ABI` bump and a deprecation window.
 3. **§8 budgets are unmeasured targets.** They MUST be replaced with measured values (or reported as unmet) before any surface claims `VERIFIED`.
 4. **Feature-flag registry** — ~~not yet enumerated~~ **resolved**: the canonical list is published in §4.1.5 (owned by this document per `_conventions.md` §11 RC-9), with the negotiation classes, the surfaces each name enables, and the C41/C42 deprecation interplay; CT3 now tests against it.
-5. **Rate-limit policy shape** — ~~unspecified~~ **resolved**: the entitlement model is `RateLimitPolicyV1`, owned by `file:///data/home/forge/HorizonCode/docs/05-domain-and-schemas.md` §4.9 under rule D39 (meet across matching policies, most-specific scope reported, honest `Retry-After`, tests T33/T34); §4.3.2 references it by name and MUST NOT restate it. One shape, one owner (05), one referencing document (07).
+5. **Rate-limit policy shape** - ~~unspecified~~ **resolved**: the entitlement model is `RateLimitPolicyV1`, owned by `05-domain-and-schemas.md` §4.9 under rule D39 (meet across matching policies, most-specific scope reported, honest `Retry-After`, tests T33/T34); §4.3.2 references it by name and MUST NOT restate it. One shape, one owner (05), one referencing document (07).
 6. **MCP revision pinning — open until the MCP server surface is implemented.** §4.6 targets MCP `2025-06-18`-or-newer; the exact revision HorizonCode pins, and the compatibility promise for older revisions, MUST be fixed in the same change that implements the server, because MCP revisions do introduce breaking changes.
 7. **ACP revision pinning — open until the ACP surface is implemented.** §4.5 assumes the ACP revision that supports `session/load`, `sessionModes` and `usage_update`. The pinned revision and the fallback behaviour for clients that lack `loadSession` MUST be stated before implementation.
 8. **No receipts for reads on every surface.** This contract receipts mutations universally and treats pure reads as un-receipted (except where a read crosses the workspace boundary, e.g. `sandbox.probe`, `fs/read_text_file` outside the root). If the threat model changes to require universal read receipts, the surface shapes in §4.1 and §4.3 need revision — that is a deliberate, open question, not an oversight.
+
+---
+
+## Provenance (APIs and contracts: what ships, what is design only, where it came from)
+
+This section records, for the contract surfaces of this document, which designs and which bytes came from other repositories, with exact GitHub URLs at the commit that was read, which parts are design only, the additive-only evidence for `contracts.ts`, the provider and credential layer, and a detailed deferral note for every missing piece. It is a handoff aid and changes no status level; `docs/28-implementation-status.md` is the only place that may claim a level above DESIGNED.
+
+Reading the tables:
+
+- URLs point at a file at the full 40 character SHA from [`research/upstream-pins.md`](research/upstream-pins.md). Each path was checked with `git ls-files` in the read-only clone before it was written. Anything not checkable is written `path not verified`.
+- **Relation**: **copied verbatim**, **ported**, **adapted**, or **idea only**, as defined in the Provenance section of [`08-runtime.md`](08-runtime.md). In this document nothing is copied verbatim and nothing is ported. The catalogue data file `models-dev.curated.json` is HorizonCode's own curation of public model facts (five providers), not a copy of the models.dev dataset.
+- Judged from the header comments of `contracts.ts`, `catalog.ts`, `server.ts`, the docs/28 rulings and reading both sides.
+- Licences: opencode MIT; codex and cline Apache-2.0; oh-my-pi MIT; grok-build carries its own `LICENSE`. The models.dev dataset has its own licence, which MUST be checked before a snapshot is committed (K1). The worktree has no `LICENSE` or `NOTICE` (OPEN item for the human owner).
+- Ancestor project paths (`kernel/src/protocol.rs`, `rpc_handshake.rs`, `host_kernel.rs`, `effect_host.rs`, `specs/v2/session.md`) are in a repository that is not cloned: path not verified. aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents, DeepSeek-Reasonix and opencode-v2 are not cloned (see [`research/upstream-pins.md`](research/upstream-pins.md)).
+- Research: [`research/compare-providers.md`](research/compare-providers.md), [`research/steal-opencode-cline.md`](research/steal-opencode-cline.md), [`research/steal-ohmypi-codex.md`](research/steal-ohmypi-codex.md), [`research/forgecode-deep.md`](research/forgecode-deep.md) (T-8, T-18), [`30-steal-list.md`](30-steal-list.md).
+
+### Implemented contracts versus the design (read this first)
+
+Three contracts exist, all different in framing from this document:
+
+1. **The kernel protocol**: NDJSON over stdio, `{id, method, params}`, 11 methods, defined in `app/src/contracts.ts` (`KernelRequestMap`, `KERNEL_METHODS`) and matched exactly by `kernel/src/protocol.rs`. Older text that says '8-method' is out of date.
+2. **The server protocol** (`hzcode serve`): NDJSON, 7 methods, `HZ_PROTO = 1`, defined in `contracts.ts` and implemented in `app/src/core/server.ts`.
+3. **The runtime facade**: `Runtime`, `RuntimeEvent`, `Provider`, `ProviderEvent`, `Tool`, `ToolContext` in `contracts.ts`, consumed in-process by the TUI, print mode and the server.
+
+Everything in sections 4.1 (the `hz.*` Controller catalogue), 4.2 (`hzk` frames), 4.3 and 4.4 (REST, SSE), 4.5 (ACP), 4.6 (MCP server), 4.7 (plugin API), 4.8 (SDKs), the feature-flag registry of 4.1.5, `HZ_ABI` negotiation, `TypedErrorV1` and CT1 to CT50 is **DESIGN ONLY: NOT IMPLEMENTED**. The **providers and credentials** layer, which this document touches only in passing, is described in its own table below.
+
+### `contracts.ts` is additive-only: the additive blocks and the evidence
+
+The rule (never change or remove an exported name, field or constant; add optional fields or new variants consumers ignore) is stated in the file header and repeated in each block's comment. It is held by review: no test snapshots the exports (deferral K11). `kernel/src/canon.rs` is unchanged by all of the following.
+
+| Addition | Origin | Notes |
+|---|---|---|
+| `EventTypes.sessionFork` and `SessionForkPayload` | session fork (ruling 59) | `session.fork` first event of a child stream; payload `{parentSessionId, parentStream, parentSeq, messageIndex}` |
+| `Credential` (`apiKey`, `oauth`, `none`) | provider superset (FEAT-001) | `apiKey` and `none` are produced; `oauth` is declared but NO code path produces it |
+| `KernelRequestMap['guard.allowlist.amend']` | FEAT-002 | mirrored in `kernel/src/protocol.rs` |
+| `KernelRequestMap['sandbox.report']`, `SandboxMode`, `EnforcementReport`, `SandboxUnavailable`, egress policy types | FEAT-004 and the authority waves | fail-closed; a mode that needs unavailable confinement yields `SANDBOX_UNAVAILABLE`, never a silent 'enforced' |
+| `Tool.exposure`, `Tool.searchInfo`, `ToolExposure` | ruling 45 | absent exposure means `direct` |
+| `ToolContext.delegate` profile argument, `DelegateRunner` | ruling 56 | optional `profile` |
+| `ApprovalRequest.guardian` | ruling 60 | advisory string |
+| `RuntimeEvent`: `assistant.thinking`, `turn.diff`, `subagent.event`, `subagent.start`, `subagent.end`; `tool.card` fields `repaired`, `detail` | rulings 54, 87, 88, FEAT-003 | UI facade events, never written to the kernel log |
+| `ProviderEvent` `{type:'thinking'}` | ruling 87 (C3) | display only |
+| `RuntimeOptions.sessionId`, `RuntimeOptions.permissionMode`, `RunBudget`, `RunExit.detail` values | server resume, ruling 58, NF-073, safety rails | all optional |
+| `HZ_PROTO`, `ServerRequest`, `ServerResponse`, `ServerNotification`, `SESSION_EVENT_METHOD`, `ServerMethod`, `SERVER_METHODS` | server mode (rulings 53, 54, 59) | separate from `KernelRequestMap`; `ServerResponse.id` may be `null` only for an uncorrelatable frame |
+
+
+### What shipped, and where it came from
+
+| # | HorizonCode file(s) | Upstream exact URL(s) at the pinned SHA | Relation | Notes |
+|---|---|---|---|---|
+| 1 | `app/src/contracts.ts`, `kernel/src/protocol.rs`, `kernel/src/canon.rs`, `app/src/core/canon.ts` | [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>ancestor `kernel/src/protocol.rs`, `rpc_handshake.rs`: not cloned, path not verified | idea only (one shared contract file as law); original | The frozen contract is the TypeScript file `contracts.ts`, hand-written, with the Rust kernel kept byte-identical in canonical JSON and hashing by `canon.rs` and the interop suites (`app/tests/core/interop.test.ts`, `canon-numbers.test.ts`). The rule is **additive only**: never change or remove an exported type, field or constant; new behaviour arrives as optional fields, new union arms that consumers ignore, or new methods. The additive blocks are listed in the table below. **There is no mechanical enforcement** (no snapshot of exported names, no schema, `gate:wire-parity` is a declared gap): the rule is held by review. `canon.rs` is unchanged by every one of these additions. |
+| 2 | `app/src/core/kernel.ts`, `kernel/src/main.rs`, `kernel/src/protocol.rs` | idea only; original NDJSON | original | The kernel ABI as shipped is NDJSON over stdio: `{id, method, params}` in, `{id, result}` or `{id, error:{message}}` out, 11 methods (`KERNEL_METHODS`, which `protocol.rs` matches exactly). It is NOT the `hzk` frame envelope of section 4.2 (no `hello`/`request`/`response`/`event`/`control` frames, no `HZ_ABI` negotiation, no `TypedErrorV1`); errors are `{message}` only. The TypeScript fallback (`LocalKernel`, mode `untrusted`) implements the same methods. |
+| 3 | `app/src/core/server.ts`, `app/src/contracts.ts` (server protocol block) | [`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)<br>[`packages/server/src/api.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/api.ts) | idea only; original | The client-facing protocol that exists. NDJSON, request `{id, method, params?}`, response `{id, result}` or `{id, error:{code?, message}}`, notification `{method:"session.event", params}`. Codes are the JSON-RPC numbers `-32601` (method not found), `-32602` (invalid params), `-32603` (internal). There is no `jsonrpc` version field, no `deadlineMs`, no `idempotencyKey`, no `hz.initialize` (the handshake is `server.hello`), and none of the `hz.*` methods of section 4.1.2: the 7 shipped methods are `server.hello`, `session.create`, `session.list`, `session.prompt`, `session.rewind`, `session.subscribe`, `session.fork`. |
+| 4 | `app/src/core/providers/index.ts`, `app/src/core/providers/anthropic.ts`, `app/src/core/providers/openai.ts`, `app/src/core/providers/google.ts`, `app/src/core/providers/ollama.ts`, `app/src/core/providers/openai-compatible.ts`, `app/src/core/providers/mock.ts`, `app/src/core/providers/scripted.ts`, `app/src/core/providers/sse.ts`, `app/src/core/providers/retry.ts` | [`packages/ai/src/providers/anthropic.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/anthropic.ts)<br>[`packages/ai/src/providers/anthropic-compatible.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/anthropic-compatible.ts)<br>[`crates/forge_app/src/dto/openai/transformers/mod.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/mod.rs)<br>[`docs/providers.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/providers.md)<br>[`docs/provider-streaming-internals.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/provider-streaming-internals.md) | idea only (adapter per wire protocol, SSE parsing, retry with backoff); original zero-dependency implementations | Providers: Anthropic Messages, OpenAI chat, Google Gemini, Ollama, a generic OpenAI-compatible adapter fed by the user provider registry, plus `mock` and `scripted` for tests. Detailed adapter provenance is in [`10-cognition.md`](10-cognition.md). The public shape is `Provider { name, stream(req) -> AsyncIterable<ProviderEvent> }` in `contracts.ts`. These are NOT the `providers.infer` effect of docs/11 and there is no `hz.provider.*` method. |
+| 5 | `app/src/core/catalog/catalog.ts`, `app/src/core/catalog/models-dev.curated.json`, `app/tests/core/catalog.test.ts` | [`packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts)<br>[`packages/core/script/models-snapshot.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/script/models-snapshot.ts) | adapted (record shape and tolerant decoding); curated data is HorizonCode's own | The catalogue SEAM. A reduced record `{id, provider, limit{context,output?}, capabilities?, cost?}`, tolerant decoding (an unparseable model is skipped and collected in `rejected`, as opencode's `normalize()` does), three-way precedence: (1) `HZ_MODELS_SNAPSHOT` explicit file, floor-validated with `MINIMUM_PROVIDERS = 100`; (2) the committed curated snapshot `models-dev.curated.json` (2.8 KB, five providers), NOT floor-validated; (3) `fetchLiveCatalog`, a documented extension point that is disabled and never called. **The full models.dev snapshot (opencode ships about 8 MB, 230 providers, 8787 models) and the live refresh (ETag or digest, 5 minute poll) are DEFERRED** (K1, K2). Doctrine: capabilities and limits are read from catalogue data, never inferred from model-id substrings. |
+| 6 | `app/src/core/config.ts` (`resolveRegistryCredential`), `app/src/core/providers/openai-compatible.ts` (`authorizationHeader`) | [`packages/core/src/plugin/provider/chatgpt.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/provider/chatgpt.ts) | idea only (the `contracts.ts` header names it as the pattern for the future OAuth work) | **Auth kinds that exist in `app/src`:** `apiKey` (from env var or the config file; sent as `x-api-key` for Anthropic, `x-goog-api-key` for Google, `Authorization: Bearer` for OpenAI, registry providers and Ollama when a key is set) and `none` (keyless hosts such as Ollama or a local vLLM). `Credential.kind === "oauth"` is **declared but dead**: `authorizationHeader` in `openai-compatible.ts` would send its `accessToken` as a Bearer token, but nothing in the codebase constructs an `oauth` credential (`resolveRegistryCredential` returns only `apiKey` or `none`), and there is no login command, no token store, no refresh. **OAuth acquisition flows are DEFERRED** (K3). |
+
+
+### Where each design family came from (all DESIGN ONLY unless marked)
+
+| Family | Upstream exact URL(s) at the pinned SHA | Status | Notes |
+|---|---|---|---|
+| Controller protocol: `hz.initialize`, the ~100 method catalogue, envelope with `deadlineMs`, idempotency, worked exchanges (2.1, 4.1) | [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)<br>ancestor `specs/v2/session.md`: not cloned, path not verified | NOT IMPLEMENTED (design only); the 7-method server protocol ships | See K7. |
+| Kernel ABI `hzk`: frames, handshake, `TypedErrorV1`, `ErrorCategoryV1`, `RetryClassV1`, effect operations (2.3, 4.2) | ancestor `kernel/src/protocol.rs#L2169-L2202`, `rpc_handshake.rs`, `host_kernel.rs`, `effect_host.rs`: not cloned, path not verified | NOT IMPLEMENTED (design only); the 11-method NDJSON protocol ships | See K7 and K10. |
+| REST, SSE, event subscription stream (2.2, 2.4, 4.3, 4.4) | [`packages/server/src/api.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/api.ts)<br>[`packages/server/src/event-feed.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/event-feed.ts)<br>[`packages/server/src/handlers.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/handlers.ts) | NOT IMPLEMENTED (design only) | See K8. |
+| ACP surface (2.5, 4.5) | [`packages/cli/src/acp/agent.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/acp/agent.ts)<br>[`packages/cli/src/acp/capabilities.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/acp/capabilities.ts)<br>[`crates/codegen/xai-acp-lib/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-acp-lib/src/lib.rs) | NOT IMPLEMENTED (design only) | Owned by G5 in [`14-surfaces.md`](14-surfaces.md); revision pinning is open item 7 of this document. |
+| MCP server surface and MCP client counterpart (2.5, 4.6) | [`codex-rs/codex-mcp`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/codex-mcp)<br>[`crates/codegen/xai-grok-mcp/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-mcp/src/lib.rs) | server NOT IMPLEMENTED; stdio tools-only client ships | Owned by G6 in [`14-surfaces.md`](14-surfaces.md) and H7 in [`15-extensibility.md`](15-extensibility.md); MCP revision pinning is open item 6. The shipped client announces protocol `2024-11-05`. |
+| Plugin API (2.6, 4.7) | [`mods/agents-md/.claude-plugin/plugin.json`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/mods/agents-md/.claude-plugin/plugin.json)<br>[`packages/plugin`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/plugin) | NOT IMPLEMENTED (design only) | Owned by H5 in [`15-extensibility.md`](15-extensibility.md). |
+| SDKs and code generation (2.7, 4.8, 4.9.4) | [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`packages/sdk`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/sdk)<br>[`docs/sdk.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/sdk.md) | NOT IMPLEMENTED (design only) | Owned by G7 in [`14-surfaces.md`](14-surfaces.md). |
+| Versioning, deprecation, feature flags, `HZ_PROTO` / `HZ_ABI` negotiation (2.8, 4.1.5, 4.9) | idea only: no upstream reference found | PARTIAL: `HZ_PROTO = 1` exists and `server.hello` returns it; `HZ_ABI`, feature flags, deprecation windows do not exist | See K7. |
+| Error model: carrier, code registry, status mapping, fail-closed classes (2.8, 4.10) | ancestor `kernel/src/protocol.rs`: not cloned, path not verified | PARTIAL: JSON-RPC numeric codes in the server; kernel errors are `{message}`; refusals use stable string prefixes such as `HZ_PRECONDITION_FAILED` and `profile_ceiling_widens` | See K10. |
+| Contract tests CT1 to CT50 (section 9) | idea only | NOT IMPLEMENTED as named; related tests exist (interop, canon, server, kernel-hardening) | See K11. |
+
+
+### Sources that could not be linked
+
+The ancestor project's kernel protocol files (`protocol.rs` including the line range 2169 to 2202 for the error and retry-class sets, `rpc_handshake.rs`, `host_kernel.rs`, `effect_host.rs` lines 4790 and 5801, `guard.rs` line 1289, `worktree_lifecycle.rs`) and `specs/v2/session.md` are in an earlier private codebase that is not cloned. The `docs/audit/pass2/*-report*.md` files cited in the source list are audit notes inside this repository (they exist); they are not upstream code.
+
+
+### Deferred or not started: detailed notes for the next agent
+
+Each note gives: what is deferred, why, the upstream reference, whether to adopt as is or adapt, a suggested design, and the files to touch. 'Adapt' is the default because the references are Rust or framework-specific. No note changes a status level. Paths are from the repository root.
+
+#### K1. models.dev: the full snapshot
+
+- **What is deferred.** Bundle the real models.dev provider catalogue (opencode ships about 8 MB, 230 providers, 8787 models, validated at build with `MINIMUM_PROVIDERS = 100`). Today the committed curated file has five providers and about 2.8 KB; `HZ_MODELS_SNAPSHOT` can point at a full snapshot file and it is floor-validated, but no such file is shipped. Per-model `limit`, `capabilities` and `cost` are therefore known only for the curated models; unknown models fall back to conservative defaults.
+- **Why.** Too heavy for review and unavailable under the no-network sandbox the seam was written in (see the `catalog.ts` header). Also a repository-size decision for the owner: an 8 MB JSON in a zero-dependency repo.
+- **Upstream reference.** [`packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts)<br>[`packages/core/script/models-snapshot.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/script/models-snapshot.ts)<br>Source of truth: [models.dev](https://models.dev) (provider catalogue; its API shape is what `CATALOG_PATH` in `catalog.ts` names). Research: [`research/compare-providers.md`](research/compare-providers.md) section 5.4.
+- **Adopt as is or adapt.** ADAPT the build-time script idea (fetch, normalise, validate with a floor, write a committed JSON) and the `normalize()` tolerance. The data itself is third-party; check its licence before committing a snapshot and record it in a NOTICE.
+- **Suggested design.** Write `app/scripts/refresh-models-snapshot.ts` (run by a human with network access, never by a test or a gate) that downloads the models.dev API JSON, runs the same decoder as `catalog.ts` (`rejected` must be reviewed), enforces `MINIMUM_PROVIDERS`, strips fields HorizonCode does not read (to keep the file small, target under 1 MB), and writes `app/src/core/catalog/models-dev.snapshot.json`. Keep the curated file as the offline floor. Add the file path to the precedence order after `HZ_MODELS_SNAPSHOT`. Make `/model` listing and `doctor`'s model check use it. Cost fields feed an ESTIMATE in `/stats` (see I11 in [`16-operations.md`](16-operations.md)), never a bill.
+- **Files to touch.** `app/src/core/catalog/catalog.ts`, new `app/scripts/refresh-models-snapshot.ts`, new snapshot JSON, `app/tests/core/catalog.test.ts`, README and `docs/28` (ruling), NOTICE (licence).
+
+#### K2. models.dev: live refresh
+
+- **What is deferred.** `fetchLiveCatalog` (ETag or digest conditional fetch, a 5 minute poll in opencode, atomic cache file) is a documented extension point only.
+- **Why.** A background network call from a coding agent is an egress decision: it must go through the egress policy (docs/11) and be off by default. Not testable offline.
+- **Upstream reference.** [`packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts)
+- **Adopt as is or adapt.** ADAPT; take the conditional-request and atomic-cache behaviour, not the polling loop.
+- **Suggested design.** `hzcode models refresh` (explicit user command, not a poll): GET with `If-None-Match`, write `<user config dir>/models-dev.cache.json` through an atomic rename with mode 0600, validate with the floor, print a diff summary (providers added/removed). `loadCatalog` reads the cache after the env override and before the committed snapshot. The fetch itself runs through the guard as `net.fetch` so the egress policy applies. No timer.
+- **Files to touch.** `app/src/core/catalog/catalog.ts` (`fetchLiveCatalog`), `app/src/main.ts`, `app/tests/core/catalog.test.ts` (use an injected fetch).
+
+#### K3. OAuth acquisition flows for providers (the `oauth` credential arm)
+
+- **What is deferred.** Everything needed to OBTAIN and keep an OAuth credential: PKCE with a loopback redirect server, device-code flow, token storage (0600, never in workspace files), refresh on expiry and on 401, logout and revoke, per-provider endpoints (ChatGPT/Codex-style subscription auth, Anthropic, Google, Copilot). The type arm exists; nothing produces it.
+- **Why.** Each flow is provider-specific, depends on third-party endpoints that cannot be exercised offline, and stores a long-lived secret. Two of the references use client ids that belong to other products; HorizonCode would need its own registrations or must not impersonate another client.
+- **Upstream reference.** [`packages/core/src/plugin/provider/chatgpt.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/provider/chatgpt.ts)<br>[`packages/core/src/mcp/oauth.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/mcp/oauth.ts)<br>[`packages/core/src/oauth/page.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/oauth/page.ts)<br>[`packages/ai/src/registry/oauth/callback-server.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/registry/oauth/callback-server.ts)<br>[`packages/ai/src/registry/oauth/device-code.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/registry/oauth/device-code.ts)<br>[`packages/ai/src/registry/oauth/anthropic.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/registry/oauth/anthropic.ts)<br>[`codex-rs/login/src/auth/manager.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/login/src/auth/manager.rs)<br>[`codex-rs/login/src/auth/storage.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/login/src/auth/storage.rs)<br>[`crates/codegen/xai-grok-auth/src/auth_provider.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-auth/src/auth_provider.rs)<br>[`crates/codegen/xai-grok-login/src/api_key_probe.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login/src/api_key_probe.rs)<br>[`apps/cli/src/wizards/mcp/oauth.ts`](https://github.com/cline/cline/blob/5413dc180c10700ce2e26547ab75991360dd0486/apps/cli/src/wizards/mcp/oauth.ts)<br>[`docs/auth-broker-gateway.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/auth-broker-gateway.md)
+- **Adopt as is or adapt.** ADAPT, one provider at a time. opencode's `chatgpt.ts` is named in the `contracts.ts` header as the pattern (PKCE loopback plus token refresh). oh-my-pi's `registry/oauth/*` is TypeScript and the closest in language; codex `login/src/auth/*` is the reference for storage and refresh rules (Rust). Do NOT copy client ids or endpoints without confirming the provider permits third-party clients.
+- **Suggested design.** (1) A `TokenStore` in `app/src/core/auth/store.ts` (file under the user config dir, mode 0600, atomic write, never logged, masked by `maskSecrets`). (2) `app/src/core/auth/pkce.ts`: `node:crypto` verifier and challenge, a one-shot `Bun.serve` loopback server on `127.0.0.1:<random>` that accepts exactly one callback with a matching `state`, times out after 5 minutes, and serves a static success page. (3) `device-code.ts` for headless boxes. (4) `resolveRegistryCredential` returns `{kind:'oauth', accessToken, refreshToken, expiresAt}` when a stored token exists for the provider id; the adapters already map it to a Bearer header (`authorizationHeader`). (5) Refresh once on a 401 before failing. (6) `hzcode login <provider>` and `hzcode logout <provider>` subcommands dispatched before arg parsing like `doctor`; `doctor` reports token presence and expiry, never the value. Tests: state mismatch rejected, token file mode, refresh path with an injected fetch.
+- **Files to touch.** new `app/src/core/auth/*.ts`, `app/src/core/config.ts`, `app/src/main.ts`, `app/src/core/doctor.ts`, `app/tests/core/auth-*.test.ts`, `app/src/contracts.ts` (no change: the arm exists), `docs/11` (storage rule), `docs/28`.
+
+#### K4. Forgecode take T-8: provider quirk table
+
+- **What is deferred.** A data table of per-host and per-model request transformations applied as small pure functions, recorded in the event so a run is reproducible: for example Cerebras without `parallel_tool_calls`, tool-call id trimming and sanitising, ensuring the system message comes first, schema normalisation, dropping reasoning-only messages for Claude, stripping thought signatures on model switch. NOT STARTED.
+- **Why.** It should be driven by real failures. Only one real OpenAI-compatible endpoint (NVIDIA NIM) has been exercised; building 20 transformers speculatively is the 'volume' the research note warns against.
+- **Upstream reference.** [`crates/forge_app/src/dto/openai/transformers/mod.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/mod.rs)<br>[`crates/forge_app/src/dto/openai/transformers/pipeline.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/pipeline.rs)<br>[`crates/forge_app/src/dto/openai/transformers/when_model.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/when_model.rs)<br>[`crates/forge_app/src/dto/openai/transformers/make_cerebras_compat.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/make_cerebras_compat.rs)<br>[`crates/forge_app/src/dto/openai/transformers/trim_tool_call_ids.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/trim_tool_call_ids.rs)<br>[`crates/forge_app/src/dto/openai/transformers/ensure_system_first.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/ensure_system_first.rs)<br>[`crates/forge_app/src/dto/openai/transformers/normalize_tool_schema.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/normalize_tool_schema.rs)<br>[`crates/forge_app/src/dto/openai/transformers/strip_thought_signature.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/strip_thought_signature.rs)<br>[`crates/forge_app/src/dto/openai/transformers/make_xai_compat.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/make_xai_compat.rs)<br>[`crates/forge_app/src/dto/openai/transformers/minimax.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_app/src/dto/openai/transformers/minimax.rs)<br>[`docs/provider-quirks.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/provider-quirks.md)<br>[`docs/provider-compat-reference.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/provider-compat-reference.md)<br>[`docs/provider-endpoint-constraints.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/provider-endpoint-constraints.md)<br>[`docs/ai-schema-normalize.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/ai-schema-normalize.md)
+- **Adopt as is or adapt.** ADAPT the mechanism (a pipeline of pure transformers selected by a predicate on host and model), not the volume. oh-my-pi's quirk docs are the best catalogue of what to expect; forge's Rust transformers are the reference implementations.
+- **Suggested design.** `app/src/core/providers/quirks.ts`: `type Quirk = { id, applies(ctx:{host,model,protocol}): boolean, request?(body): body, messages?(msgs): msgs }`, a `QUIRKS` array, `applyQuirks(ctx, body)` returning `{body, applied: string[]}`; unknown hosts apply none and the adapter works as today (fail loud only on a request the endpoint rejects, with the response text). `openai-compatible.ts` calls it just before `fetch`; the applied ids go into a `notice` once per session and into the `message.start` event payload (additive field `quirks`). Start with exactly the quirks a real endpoint has demanded. Tests with recorded request bodies.
+- **Files to touch.** new `app/src/core/providers/quirks.ts`, `app/src/core/providers/openai-compatible.ts`, `app/src/core/providers/openai.ts`, `app/src/core/loop.ts` (event payload), `app/tests/core/providers-quirks.test.ts`.
+
+#### K5. Forgecode take T-18 and multi-dialect tool conversion: models without native tool calling
+
+- **What is deferred.** (a) T-18: a text tool-call protocol for models served without native tools (forge switches to an XML `<forge_tool_call>` block parsed by a dedicated parser when `tool_supported` is false), for small Ollama models. (b) Multi-dialect tool conversion: parsing each model family's own tool-call text format (Harmony, Hermes, Qwen3, Kimi K2, GLM 4.5, DeepSeek, Gemma, MiniMax, Anthropic and Gemini formats, an XML format) back into normalised calls. Neither is started; `providers/ollama.ts` uses Ollama's native tool-call field and the model must support it.
+- **Why.** Low priority unless local models become a product pillar. The safety rule is non-negotiable: a parsed call is exactly a model-proposed call, so it must go through `parseToolArguments`, the guard, approval and the receipt; the parser must be strict (a malformed block is a format error, never a best-effort guess that could invent arguments).
+- **Upstream reference.** [`crates/forge_domain/src/tools/call/parser.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_domain/src/tools/call/parser.rs)<br>[`crates/forge_domain/src/xml.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_domain/src/xml.rs)<br>[`crates/forge_domain/src/tools/call/tool_call.rs`](https://github.com/tailcallhq/forgecode/blob/a22b49288856d5b3f3ca57e8532683d54a662c8c/crates/forge_domain/src/tools/call/tool_call.rs)<br>[`docs/toolconv/xml.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/xml.md)<br>[`docs/toolconv/hermes.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/hermes.md)<br>[`docs/toolconv/harmony.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/harmony.md)<br>[`docs/toolconv/qwen3.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/qwen3.md)<br>[`docs/toolconv/kimi-k2.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/kimi-k2.md)<br>[`docs/toolconv/glm-4.5.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/glm-4.5.md)<br>[`docs/toolconv/deepseek.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/deepseek.md)<br>[`docs/toolconv/gemma.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/gemma.md)<br>[`docs/toolconv/minimax.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/minimax.md)<br>[`docs/toolconv/anthropic.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/anthropic.md)<br>[`docs/toolconv/gemini.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/gemini.md)<br>[`docs/toolconv/pi-native.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/toolconv/pi-native.md)
+- **Adopt as is or adapt.** ADAPT. oh-my-pi's `toolconv` documents are format specifications per family (the best map of the problem); forge's parser is the reference for one concrete XML dialect. Do not take a parser-combinator dependency; a hand-written scanner is enough.
+- **Suggested design.** `app/src/core/providers/toolconv/<dialect>.ts`, each exporting `parse(text): {calls: ToolCall[], rest: string, errors: string[]}` and `render(specs): string` (for the system prompt), selected by a catalogue `capabilities.toolFormat` field or a provider registry entry key `toolFormat`. A wrapper provider turns a text stream into `tool_call` ProviderEvents ONLY after a complete block closes (never from a partial stream); anything unparsable stays assistant text and increments the format-error rail (NF-073 cap of 3). Golden tests per dialect from the toolconv specs, plus a fuzz test that no input string produces a call whose name is not in the offered `ToolSpec`s.
+- **Files to touch.** new `app/src/core/providers/toolconv/*.ts`, `app/src/core/providers/ollama.ts`, `app/src/core/providers/openai-compatible.ts`, `app/src/core/config.ts` (registry key), `app/tests/core/toolconv-*.test.ts`.
+
+#### K6. Other codecs and providers: `anthropic-compatible`, OpenAI `responses`, Bedrock, Azure, Vertex, gateways
+
+- **What is deferred.** The registry's `protocol` field only accepts `openai-chat`. Anthropic-compatible and OpenAI Responses codecs, and cloud-hosted variants (Bedrock, Azure OpenAI, Vertex), are deferred; the `protocol` field reserves the seam.
+- **Why.** Each is a separate wire format and auth scheme (SigV4 for Bedrock needs HMAC signing without a dependency, which is doable with `node:crypto` but needs care).
+- **Upstream reference.** [`packages/ai/src/providers/anthropic-compatible.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/anthropic-compatible.ts)<br>[`packages/ai/src/providers/azure.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/azure.ts)<br>[`packages/ai/src/providers/amazon-bedrock.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/amazon-bedrock.ts)<br>[`packages/ai/src/providers/cloudflare-ai-gateway.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/ai/src/providers/cloudflare-ai-gateway.ts)<br>[`docs/providers.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/providers.md)<br>[`docs/adding-a-provider.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/adding-a-provider.md)
+- **Adopt as is or adapt.** ADAPT per provider, driven by a real user need.
+- **Suggested design.** Reuse `streamOpenAiCompatible` as the model: one function per protocol returning the same `ProviderEvent` stream; the registry's `protocol` enum grows by one value per codec; each ships with a recorded-fixture test.
+- **Files to touch.** `app/src/core/providers/*`, `app/src/core/config.ts` (`parseProviderEntry`), `app/tests/core/providers-*.test.ts`.
+
+#### K7. Controller protocol, `hz.initialize`, the full method catalogue, feature flags, `HZ_ABI` negotiation
+
+- **What is deferred.** The ~100 `hz.*` methods, `deadlineMs`, idempotency keys, feature-flag negotiation and the kernel `hzk` frame envelope. What exists is the 7-method server protocol and the 11-method kernel protocol, neither of which negotiates anything beyond `HZ_PROTO = 1`.
+- **Why.** Designing an ABI before a second client or a second kernel build exists is premature; the additive-only rule on `contracts.ts` already protects compatibility.
+- **Upstream reference.** [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`codex-rs/app-server/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server/README.md)<br>ancestor `rpc_handshake.rs`, `protocol.rs`: not cloned, path not verified
+- **Adopt as is or adapt.** ADAPT the idea of a handshake that returns capabilities (HorizonCode's `server.hello` already does for the server).
+- **Suggested design.** Add `kernel.hello` as an additive kernel method returning `{version, proto, abi, methods[]}`; the TS client checks that every method it needs is listed and fails closed (untrusted fallback with a notice) otherwise. Mirror in `protocol.rs`. Feature flags: add an optional `features: string[]` to `server.hello` first.
+- **Files to touch.** `app/src/contracts.ts` (additive), `kernel/src/protocol.rs`, `app/src/core/kernel.ts`, `app/src/core/server.ts`, interop tests.
+
+#### K8. REST, SSE and the event subscription stream
+
+- **What is deferred.** Sections 4.3 and 4.4: routes, status codes, authentication modes, `hz.subscribe` with cursors, resnapshot, and heartbeats.
+- **Why.** No HTTP server exists; see G1 to G4 in [`14-surfaces.md`](14-surfaces.md).
+- **Upstream reference.** [`packages/server/src/api.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/api.ts)<br>[`packages/server/src/event-feed.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/event-feed.ts)<br>[`packages/server/src/handlers.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/handlers.ts)<br>[`packages/server/src/auth.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/server/src/auth.ts)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** After the UDS transport (G1) and auth (G3): `session.subscribe {sessionId, fromSeq}` replays from `log.read` then tails; the SSE adapter is a thin mapping of the same stream.
+- **Files to touch.** `app/src/core/server.ts`, `app/src/contracts.ts`.
+
+#### K9. ACP, MCP server, plugin API, SDKs
+
+- **What is deferred.** Sections 4.5 to 4.8.
+- **Why.** Owned elsewhere to avoid duplicate notes.
+- **Upstream reference.** See G5, G6, G7 in [`14-surfaces.md`](14-surfaces.md) and H5, H7 in [`15-extensibility.md`](15-extensibility.md).
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** See those notes.
+- **Files to touch.** See those notes.
+
+#### K10. Typed error model
+
+- **What is deferred.** `TypedErrorV1` with category, code, retry class and fail-closed flag. Shipped: JSON-RPC numeric codes in the server, `{message}` from the kernel, and stable string markers such as `HZ_PRECONDITION_FAILED`, `SANDBOX_UNAVAILABLE`, `profile_ceiling_widens`, `DECLINED by the user`.
+- **Why.** Markers are good enough for the three consumers (TUI, print, server). A typed carrier matters when SDKs exist.
+- **Upstream reference.** idea only; ancestor `protocol.rs#L2169-L2202`: not cloned, path not verified.
+- **Adopt as is or adapt.** Original.
+- **Suggested design.** Add an optional `code` string to kernel error responses (`{message, code?}`, additive), define the code list in `contracts.ts`, and map the existing markers. Keep `message` unchanged.
+- **Files to touch.** `kernel/src/protocol.rs`, `app/src/contracts.ts`, `app/src/core/kernel.ts`.
+
+#### K11. Contract tests and a mechanical additive-only check
+
+- **What is deferred.** CT1 to CT50 of section 9, and a test that enforces the additive-only rule (no snapshot of the exported names and shapes of `contracts.ts` exists).
+- **Why.** The rule is held by review today. A drift check is cheap and protects the one file both languages depend on.
+- **Upstream reference.** idea only: codex checks in generated schema files and tests drift against them, see [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol).
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** `app/tests/contracts/exports.test.ts`: import `* as c from '../../src/contracts'`, assert the sorted list of exported runtime names equals a checked-in list (adding a name requires editing the list, removing one fails loudly), and snapshot `JSON.stringify` of `DEFAULT_POLICY`, `KERNEL_METHODS`, `SERVER_METHODS`, `EventTypes`. Extend with a type-level test using `satisfies` for the key interfaces.
+- **Files to touch.** new `app/tests/contracts/exports.test.ts`, `app/tests/contracts/exports.snapshot.json`.

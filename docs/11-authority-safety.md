@@ -7,6 +7,8 @@
 > **Agent presets (stage 3, `docs/28` ruling 56).** A subagent preset is bounded by the parent's tools, not by the generic child's: an allow-list outside the ceiling (every tool except `agent`) is refused with `profile_ceiling_widens` (ruling 61). Presets grant no lease and skip no approval; read-only presets simply hold no write, edit or shell tool. Workspace preset files are repository content and their prompt text is untrusted-surface input, bounded by that ceiling rule.
 >
 > The execution constitution. How HorizonCode decides who may do what, confines it, proves it happened, and refuses to claim more than it can prove.
+>
+> **Implementation reality (read first).** The kernel is a policy and audit prototype: it decides (guard, command allowlist, egress decider), chains logs and receipts, and reports a sandbox posture. It does NOT execute effects, and it applies NO OS confinement: `kernel_applied_mechanisms()` is all false, so nothing is ever reported as enforced. OS confinement (Landlock, seccomp, network namespaces, rlimits), the MITM egress proxy, workspace trust, the effect host, the evidence gate, Trusted Host State, the secrets vault and the Starlark engine are all DESIGN ONLY. The guardian is advisory and deterministic; speculative execution is unwired (ruling 65). Section 10 lists what is shipped, and the Provenance section at the end gives upstream URLs and a detailed deferral note (E1 to E10) for each missing piece.
 
 ---
 
@@ -31,7 +33,7 @@ Design-only except the v0.1 slice enumerated in §10: the Guard decision path, i
 
 | In scope | Out of scope (owned elsewhere) |
 |---|---|
-| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics — `/data/home/forge/HorizonCode/docs/12-sessions-state.md`, with event meaning and ordering in `/data/home/forge/HorizonCode/docs/06-events-and-flows.md`; TUI presentation — `/data/home/forge/HorizonCode/docs/13-tui.md`; provider wire codecs — `/data/home/forge/HorizonCode/docs/10-cognition.md`; tool argument schemas — `/data/home/forge/HorizonCode/docs/09-tools.md` |
+| Capability admission, policy, leases, confinement, effects, receipts, verification, trust records | Session/event storage mechanics - `12-sessions-state.md`, with event meaning and ordering in `06-events-and-flows.md`; TUI presentation - `13-tui.md`; provider wire codecs - `10-cognition.md`; tool argument schemas - `09-tools.md` |
 | The kernel (`hzk`) boundary and its protocol | The native capability crates' internals (`hz_shell`, `hz_edit`, `hz_diff`, …) beyond what they must guarantee to Guard |
 | Config **authority** semantics (who may widen) | Config **surface** (flags, env, file names) beyond the authority-relevant fields |
 
@@ -98,40 +100,40 @@ Design-only except the v0.1 slice enumerated in §10: the Guard decision path, i
 Source material for this design (all read-only):
 
 ```
-source: /data/home/forge/HorizonCode/README.md
-source: /data/home/forge/HorizonCode/docs/01-vision-and-superset.md
-source: /data/home/forge/HorizonCode/docs/02-decisions.md
-source: /data/home/forge/HorizonCode/docs/_conventions.md
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/effect_host.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/direct_session_grant.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/agent_profile.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/cgroup_v2.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/managed_control.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/managed_verifier.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/secret_use.rs
-source: /data/home/forge/repo-tour/horizoncode/kernel/src/owner_log.rs
-source: /data/home/forge/repo-tour/horizoncode/horizoncode-sandbox/src/lib.rs
-source: /data/home/forge/repo-tour/horizoncode/horizoncode-sandbox/src/landlock.rs
-source: /data/home/forge/repo-tour/horizoncode/horizoncode-sandbox/src/linux.rs
-source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md
-source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/README.md
-source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/src/policy.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/src/decision.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/sandboxing/src/seatbelt.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/sandboxing/src/landlock.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/sandboxing/src/bwrap.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/linux-sandbox/src/seccomp.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/windows-sandbox-rs/src/lib.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/config/src/project_trust.rs
-source: /data/home/forge/repo-tour/codex/codex-rs/core/src/network_policy_decision.rs
-source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-sandbox/src/lib.rs
-source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs
-source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-egress-proxy/src/lib.rs
-source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-secrets/src/lib.rs
-source: /data/home/forge/repo-tour/claude-code/src/hooks/useCanUseTool.tsx
-source: /data/home/forge/repo-tour/claude-code/src/types/permissions.ts
-source: /data/home/forge/repo-tour/DeepSeek-Reasonix/internal/frontend/acp/handshake.go
+source: ../README.md
+source: 01-vision-and-superset.md
+source: 02-decisions.md
+source: _conventions.md
+source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/effect_host.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/direct_session_grant.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/agent_profile.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/cgroup_v2.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/managed_control.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/managed_verifier.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/secret_use.rs` of the ancestor project (not cloned, path not verified)
+source: `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified)
+source: `horizoncode-sandbox/src/lib.rs` of the ancestor project (not cloned, path not verified)
+source: `horizoncode-sandbox/src/landlock.rs` of the ancestor project (not cloned, path not verified)
+source: `horizoncode-sandbox/src/linux.rs` of the ancestor project (not cloned, path not verified)
+source: `HANDOFF.md` of the ancestor project (not cloned, path not verified)
+source: [`codex/codex-rs/execpolicy/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/README.md)
+source: [`codex/codex-rs/execpolicy/src/policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/policy.rs)
+source: [`codex/codex-rs/execpolicy/src/decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/decision.rs)
+source: [`codex/codex-rs/sandboxing/src/seatbelt.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/seatbelt.rs)
+source: [`codex/codex-rs/sandboxing/src/landlock.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/landlock.rs)
+source: [`codex/codex-rs/sandboxing/src/bwrap.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/bwrap.rs)
+source: [`codex/codex-rs/linux-sandbox/src/seccomp.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/linux-sandbox/src/seccomp.rs)
+source: [`codex/codex-rs/windows-sandbox-rs/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/windows-sandbox-rs/src/lib.rs)
+source: [`codex/codex-rs/config/src/project_trust.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/config/src/project_trust.rs)
+source: [`codex/codex-rs/core/src/network_policy_decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/network_policy_decision.rs)
+source: [`grok-build/crates/codegen/xai-grok-sandbox/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/lib.rs)
+source: [`grok-build/crates/codegen/xai-grok-permission-rules/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/lib.rs)
+source: [`grok-build/crates/codegen/xai-grok-egress-proxy/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/lib.rs)
+source: [`grok-build/crates/codegen/xai-grok-secrets/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-secrets/src/lib.rs)
+source: `claude-code/src/hooks/useCanUseTool.tsx` (path not found in the pinned clone, not verified)
+source: `claude-code/src/types/permissions.ts` (path not found in the pinned clone, not verified)
+source: `DeepSeek-Reasonix/internal/frontend/acp/handshake.go` (repo not cloned, path not verified)
 ```
 
 ---
@@ -143,7 +145,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 ### 2.1 Authority (A)
 
 - **A1** Every effect that can change state outside the agent's own memory **MUST** be admitted by `hzk::Guard::authorize()` before it executes. There is no fast path. *(T-A1)*
-- **A2** The capability ID **MUST** be a member of the canonical registry in `/data/home/forge/HorizonCode/docs/_conventions.md` §5 **or** of the internal, non-model-visible block of §4.1 of this document (an ID that is registered here and queued for the §5 internal block; RC-11). An unknown ID **MUST** deny with `unsupported_action`. *(T-A2)*
+- **A2** The capability ID **MUST** be a member of the canonical registry in `_conventions.md` §5 **or** of the internal, non-model-visible block of §4.1 of this document (an ID that is registered here and queued for the §5 internal block; RC-11). An unknown ID **MUST** deny with `unsupported_action`. *(T-A2)*
 - **A3** An alias **MUST NOT** change an effect class. Aliases are dispatch names only. *(T-A3)*
 - **A4** The origin kind **MUST** be fixed by the canonical operation that admitted the effect and **MUST NOT** be readable from any request body, tool argument, or model output. *(T-A4)*
 - **A5** A `SessionBatch` origin **MUST** carry a session id and a `turn_context_digest`; it **MUST NOT** carry an `approval_token` field at all (not merely be ignored). *(T-A5)*
@@ -326,7 +328,7 @@ Numbered, individually testable. `MUST` = a violation is a defect; `SHOULD` = a 
 
 Transport: Unix domain socket (Windows: named pipe); framed, length-prefixed, schema-generated from `packages/protocol` → `crates/hz_abi`.
 
-The protocol method catalogue is owned by `/data/home/forge/HorizonCode/docs/07-apis-and-contracts.md` §4.1–§4.2. The table below is a reading aid restricted to the methods that carry an authority obligation; where the two documents disagree, doc 07 governs the method and this document governs the obligation. Method names live in the method namespace: `secret.use` below is a method, while `secrets.use` (§4.1) is the capability.
+The protocol method catalogue is owned by `07-apis-and-contracts.md` §4.1–§4.2. The table below is a reading aid restricted to the methods that carry an authority obligation; where the two documents disagree, doc 07 governs the method and this document governs the obligation. Method names live in the method namespace: `secret.use` below is a method, while `secrets.use` (§4.1) is the capability.
 
 | Method | Input | Output | Notes |
 |---|---|---|---|
@@ -349,7 +351,7 @@ The protocol method catalogue is owned by `/data/home/forge/HorizonCode/docs/07-
 
 ```rust
 // crates/hz_kernel/src/guard.rs  [planned — shape inherited from]
-// source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs
+// source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified)
 pub enum DecisionKind { Ask, Deny }
 
 pub enum EffectOriginKindV1 { SessionBatch, UserAction, ManagedRun, ManagedRoot }
@@ -399,7 +401,7 @@ pub fn argument_digest(
 
 ```rust
 // crates/hz_sandbox/src/lib.rs  [planned — shape inherited from]
-// source: /data/home/forge/repo-tour/horizoncode/horizoncode-sandbox/src/lib.rs
+// source: `horizoncode-sandbox/src/lib.rs` of the ancestor project (not cloned, path not verified)
 pub enum GuaranteeDimension { FilesystemRead, FilesystemWrite, NetworkEgress,
                               ProcessTree, ResourceLimits, Credentials, WorkspaceFence }
 impl GuaranteeDimension { pub const ALL: [GuaranteeDimension; 7]; }
@@ -450,7 +452,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 3.4 Events owned by this document
 
-`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class — `plugin`, `mcp`, `sandbox`, … — and `code` carries the closed reason code; payload shape owned by `/data/home/forge/HorizonCode/docs/06-events-and-flows.md` row 40, RC-2).
+`hz.effect.decision.made` · `hz.effect.lease.issued` · `hz.effect.settled` · `hz.effect.unknown` · `hz.effect.reconciled` · `hz.permission.asked` · `hz.permission.answered` · `hz.policy.revision.changed` · `hz.error.raised` (`class` carries the error class - `plugin`, `mcp`, `sandbox`, … - and `code` carries the closed reason code; payload shape owned by `06-events-and-flows.md` row 40, RC-2).
 
 ### 3.5 Types owned by this document
 
@@ -466,7 +468,7 @@ export function settle(handle: EffectHandleV1, observation: ObservationV1): Prom
 
 ### 4.1 Capability inventory
 
-Every capability ID is stable; an alias never changes an effect class (A3). Model-visible IDs are the canonical set from `/data/home/forge/HorizonCode/docs/_conventions.md` §5. The internal IDs below are **never projected as model tools** unless the row says otherwise; they are registered here (A2) and `_conventions.md` §5 is to carry them as an internal, non-model-visible block, so the `capability_registry_parity` and `exhaustive_reason_codes` gates (§9.3) see one registry.
+Every capability ID is stable; an alias never changes an effect class (A3). Model-visible IDs are the canonical set from `_conventions.md` §5. The internal IDs below are **never projected as model tools** unless the row says otherwise; they are registered here (A2) and `_conventions.md` §5 is to carry them as an internal, non-model-visible block, so the `capability_registry_parity` and `exhaustive_reason_codes` gates (§9.3) see one registry.
 
 | Capability ID | Effect classes | Default posture `allow`/`ask`/`deny` | Observing required | Model-visible |
 |---|---|---|---|---|
@@ -718,7 +720,7 @@ Two receipt kinds exist and only two (V4, V5):
 | `ths_records` | `seq, kind, payload_digest, payload_ref, prev_digest, digest, recorded_at_ms` | Trusted Host State |
 | `redaction_manifest` | `artifact_digest, field, reason, count` | what an export removed |
 
-**THS storage.** `ths_records` is Trusted Host State's single durable store: SQLite is the one durable store for kernel state, and `/data/home/forge/HorizonCode/docs/12-sessions-state.md` owns the storage layout (§4.1–§4.2). A `ths/*.jsonl` file is only an **exported anchor** (§7.11.3 step 6) and never the store, so `15-extensibility.md` §4.1's JSONL path names the anchor, not a second chain.
+**THS storage.** `ths_records` is Trusted Host State's single durable store: SQLite is the one durable store for kernel state, and `12-sessions-state.md` owns the storage layout (§4.1–§4.2). A `ths/*.jsonl` file is only an **exported anchor** (§7.11.3 step 6) and never the store, so `15-extensibility.md` §4.1's JSONL path names the anchor, not a second chain.
 
 A reopen of the kernel **MUST** reconcile every `PREPARED`/`RUNNING`/`DISPATCHING`/`TOKEN_ISSUED` row to `UNKNOWN` before accepting new work, exactly as the inherited design does (`UPDATE ... SET status='UNKNOWN'` on open).
 
@@ -973,7 +975,7 @@ The example list is validated at load time; the rule matches with severity `forb
 
 **Step 11 — counterfactual B: the kernel dies after dispatch.** The `executions` row is `DISPATCHING` with no settled observation. On reopen, the row is reconciled to `UNKNOWN`, `hz.effect.unknown` is emitted, the resolved resource is frozen, and **no second `rm` is ever issued** (E7). A probe reads the process table and the cgroup: no descendant survives, and the target path's identity is unchanged from the preimage ⇒ a follow-up reconciliation mints `FAILED` with `reason=not_executed`, the freeze lifts, and a fresh Guard request may be made. If the probe cannot decide, the run stops and a human reconciles.
 
-**Step 12 — counterfactual C: the workspace were trusted and had declared a hook.** The hook is still a separate receipted `terminal.run` effect under its own hook profile (read-only unless it declared `files.write`), with a cleared environment and no network. A repo cannot gain an unconfined process by shipping a hook (C5; hook sandboxing is specified in `/data/home/forge/HorizonCode/docs/15-extensibility.md` §7.4).
+**Step 12 - counterfactual C: the workspace were trusted and had declared a hook.** The hook is still a separate receipted `terminal.run` effect under its own hook profile (read-only unless it declared `files.write`), with a cleared environment and no network. A repo cannot gain an unconfined process by shipping a hook (C5; hook sandboxing is specified in `15-extensibility.md` §7.4).
 
 ---
 
@@ -1020,10 +1022,10 @@ The boundary is a **process boundary**, and it is load-bearing (ADR-003):
 
 A capability ID is a stable public name for **one authorisable effect class**, e.g. `files.write`, `terminal.run`, `net.fetch`, `providers.infer`, `mcp.invoke`. Rules that govern IDs:
 
-1. The canonical registry lives in `/data/home/forge/HorizonCode/docs/_conventions.md` §5, plus the internal IDs registered in §4.1 of this document (never model-visible; queued for the §5 internal block per RC-11, so A2 has one answer).
+1. The canonical registry lives in `_conventions.md` §5, plus the internal IDs registered in §4.1 of this document (never model-visible; queued for the §5 internal block per RC-11, so A2 has one answer).
 2. An ID's **effect class** is immutable. `terminal.run` is `process` + `workspace-write` forever. A future need for a different class gets a different ID, never a reinterpretation of an existing one (A3).
 3. Each ID declares: effect class(es), a default posture vector, an observation strategy, an idempotency class, whether it is model-visible, and which origins may request it.
-4. The registry is **narrower than the tool catalog**: a tool may exist that has no capability of its own because it composes already-authorised tools (Code Mode, ADR-015 and the “new capability means new composition, not new authority” lesson from `/data/home/forge/HorizonCode/docs/01-vision-and-superset.md` §3.3).
+4. The registry is **narrower than the tool catalog**: a tool may exist that has no capability of its own because it composes already-authorised tools (Code Mode, ADR-015 and the “new capability means new composition, not new authority” lesson from `01-vision-and-superset.md` §3.3).
 5. Adding an ID requires a dispatch path plus a complete positive/denial/recovery acceptance journey — the inherited discipline is to keep the Guard-supported set strictly smaller than the public registry (`guard_supported_managed_capabilities` in the source kernel).
 
 #### 7.2.2 Effect classes
@@ -1070,7 +1072,7 @@ MCP servers, plugins, workflows and remote triggers are **not** given a fifth or
 - an MCP server request (sampling, roots, elicitation) requires a **host-minted managed run** scoped to that server and that budget, else `mcp_server_request_requires_managed_scope`;
 - a remote trigger is a `UserAction` bound to the authenticated principal that created the trigger — a trigger inherits a human's authority, it does not create its own.
 
-Rationale: the authority algebra with four origin kinds is analysable and closed (`/data/home/forge/HorizonCode/docs/02-decisions.md` ADR-012, ADR-016). Every additional kind is a new widening path. We refuse to grow the algebra to accommodate a component.
+Rationale: the authority algebra with four origin kinds is analysable and closed (`02-decisions.md` ADR-012, ADR-016). Every additional kind is a new widening path. We refuse to grow the algebra to accommodate a component.
 
 ### 7.3 Guard decision flow
 
@@ -1084,7 +1086,7 @@ The Guard is a pure function over `(AuthorizationRequestV1, policy snapshot, pos
 4. executable binding completeness/consistency → `executable_unverified`, `unexpected_executable_binding`, `untrusted_executable`, `invalid_executable_digest`
 5. principal/origin binding presence → `invalid_principal_or_origin`
 6. digest well-formedness → `invalid_effect_digest`
-7. resource containment → `resource_outside_workspace`. The pinned root is the workspace root, plus the user-state store root (`$XDG_STATE_HOME/horizon/`, §7.11.3) for `memory.*` and `artifact.write`, whose layout is owned by `/data/home/forge/HorizonCode/docs/12-sessions-state.md` §4.1. `memory.write` targets a user-state file, not the workspace, so G7 must not refuse it.
+7. resource containment → `resource_outside_workspace`. The pinned root is the workspace root, plus the user-state store root (`$XDG_STATE_HOME/horizon/`, §7.11.3) for `memory.*` and `artifact.write`, whose layout is owned by `12-sessions-state.md` §4.1. `memory.write` targets a user-state file, not the workspace, so G7 must not refuse it.
 8. policy snapshot and guarantee set identity → `unsupported_policy_or_guarantee`
 9. posture application → `posture_read_only`
 10. rule layers → `rule_denied`, `rule_ask`
@@ -1200,6 +1202,8 @@ String matching operates on text; an authority decision operates on an effect. F
 
 #### 7.5.3 Layer 2 — the Starlark prefix engine
 
+> **NOT IMPLEMENTED (Starlark).** A reduced JSON command allowlist ships instead (`kernel/src/execpolicy.rs`, ruling 42): it matches the first program token and its trailing args and does not split compound commands. Deferral E3.
+
 Command decisions are delegated to a Starlark `execpolicy`-shaped engine:
 
 ```starlark
@@ -1259,6 +1263,8 @@ HorizonCode additions on top of the inherited engine:
 
 ### 7.6 Configuration as a merge lattice
 
+> **NOT IMPLEMENTED.** No merge lattice and no managed layer exist. Deferral E6.
+
 #### 7.6.1 The order
 
 ```
@@ -1314,6 +1320,8 @@ C4 is the rule form of this section; §7.5.4(1) is the merge semantics it relies
 
 ### 7.7 Trust on first use
 
+> **NOT IMPLEMENTED.** There is no workspace trust store. Deferral E6.
+
 A workspace can name programs: hooks, LSP servers, MCP servers, formatters, test runners, plugins, workflows. None of them run because a file said so.
 
 | Event | Behaviour |
@@ -1362,7 +1370,7 @@ A lease is not a credential to act; it is evidence that a specific act was autho
 
 ### 7.9 Receipts as evidence
 
-The receipt is the product's unit of trust (`/data/home/forge/HorizonCode/README.md` §2). Anatomy is in §4.6. What matters here is what it does and does not establish.
+The receipt is the product's unit of trust (`../README.md` §2). Anatomy is in §4.6. What matters here is what it does and does not establish.
 
 #### 7.9.1 What a receipt proves
 
@@ -1399,6 +1407,8 @@ Deliberately asymmetric: `SUCCEEDED`, `FAILED` and `DENIED` produce receipts; an
 
 ### 7.10 Evidence gate and independent verification
 
+> **NOT IMPLEMENTED (not wired).** Deferral E5.
+
 ```jsonc
 // ClaimV1
 {
@@ -1426,6 +1436,8 @@ Design rules:
 7. **Honest status.** A session that has an open `UNKNOWN` cannot be reported as verified, no matter what the claims say.
 
 ### 7.11 Trusted Host State
+
+> **NOT IMPLEMENTED.**
 
 #### 7.11.1 Shape
 
@@ -1469,6 +1481,8 @@ Design rules:
 THS is a **tamper-evident** structure, not a signature of truth (T7). Its value comes from being cheap to verify and expensive to forge without detection; its limit is that a fully compromised state store can be replaced wholesale, which is exactly why the anchor must live somewhere else.
 
 ### 7.12 Sandbox matrix
+
+> **SEAM ONLY. NOTHING IS ENFORCED.** The kernel applies no Landlock ruleset, seccomp filter, network namespace or rlimit to any process (`kernel_applied_mechanisms()` is `AppliedMechanisms::none()`). What exists: the per-call mode ladder and escalation markers, runtime capability detection, and a report that says, per dimension, `unsupported` with a non-empty residual and `backend: none`, or the typed `SANDBOX_UNAVAILABLE` for modes that demand filesystem confinement. A Landlock-capable host is reported exactly like one without Landlock. The guarantee vector and matrix below are the TARGET. See deferral E1 (OS confinement) and E8 (Windows, macOS), `docs/audit/landlock-spike-2026-11-08.md` and `ops/landlock-probe.sh`.
 
 #### 7.12.1 Per-platform mechanisms
 
@@ -1531,6 +1545,8 @@ Two inherited details that matter more than they look:
 
 ### 7.13 Egress control and network policy
 
+> **DECIDER ONLY. NO PROXY.** `kernel/src/egress.rs` decides `net.fetch` admission per `(scheme, host, port)`, default deny, and records content-free blocked requests; `guard.rs` consults it before the policy rules. It does not intercept, park, pin or constrain the traffic of any child process. N4 (DNS pinning, rebind re-check), N10 (credential injection at a MITM) and connection parking are NOT IMPLEMENTED. Deferral E2.
+
 ```
  net.fetch / models.list / remote.exec / (any sandboxed child)
         │
@@ -1556,6 +1572,8 @@ Blue-team notes that are easy to get wrong and are therefore rules here:
 - **Provider traffic is egress too.** `providers.infer` goes through the same policy machinery with its own route/consent/budget binding, because "the model call" is exactly where confidential source code leaves the machine.
 
 ### 7.14 Secrets, the vault, and redaction
+
+> **NOT IMPLEMENTED** beyond environment scrubbing for children. No vault, no `SecretUseLeaseV1`, no canary suite. Deferral E7.
 
 #### 7.14.1 Storage and handling
 
@@ -1590,6 +1608,8 @@ The honest statement: **redaction cannot be proven complete.** Therefore redacti
 - `terminal.run` under `read-only` has no write root, so a scrape has nowhere to land.
 
 ### 7.15 Supply chain
+
+> **NOT IMPLEMENTED** beyond zero runtime dependencies and the CI install script. No signing, launcher or update path.
 
 | Item | Measure | Refusal condition |
 |---|---|---|
@@ -1628,7 +1648,7 @@ A verifier must be able to answer, from the export alone: what was requested, by
 1. **No text-only permissions as a security control.** Policy may be *explained* in a prompt; it is never *enforced* by one (P6).
 2. **No library-only authority.** There is no in-process build of the guard that a plugin, dependency, workflow or code-mode payload could call instead (ADR-003, A11).
 3. **No auto-retry of `UNKNOWN`.** Not with an exponential backoff, not for "idempotent-looking" capabilities, not with a flag called `--force` on a non-interactive surface (E7).
-4. **No self-widening authority.** The learning loop may change memory, skills, prompts and routing; never policy, never a grant, never the kernel (ADR-010, `/data/home/forge/HorizonCode/README.md` §3.9).
+4. **No self-widening authority.** The learning loop may change memory, skills, prompts and routing; never policy, never a grant, never the kernel (ADR-010, `../README.md` §3.9).
 5. **No execution of workspace-named programs without a trust record** (C5, §7.7).
 6. **No guarantee claim that a probe did not establish** (S3). No "Landlock is probably available".
 7. **No silent degradation of confinement** (S5). Missing backend ⇒ typed refusal, never a fallback to unconfined execution.
@@ -1874,7 +1894,7 @@ Every guarantee in §2 maps to a test. All test paths below are `[planned]` exce
 | `exhaustive_reason_codes` | a `Deny` returned with a code outside §5.1 |
 | `exhaustive_guarantee_dimensions` | a dimension added to the enum without an assessment on every backend |
 | `capability_registry_parity` | a capability ID in the TS registry that the Rust kernel does not classify, or vice versa |
-| `doc_claim_ratchet` | a document claiming a status level it cannot prove (ADR-004 discipline; `/data/home/forge/HorizonCode/docs/_conventions.md` §8) |
+| `doc_claim_ratchet` | a document claiming a status level it cannot prove (ADR-004 discipline; `_conventions.md` §8) |
 | `refusal_list_ratchet` | code implementing an item from §7.17 without an amendment to this document |
 | `cache_prefix_guard` (cross-cutting) | policy text entering the prompt prefix in a way that makes the prefix non-byte-stable (ADR-009) |
 
@@ -1882,43 +1902,204 @@ Every guarantee in §2 maps to a test. All test paths below are `[planned]` exce
 
 ## 10. Status
 
-Every capability below is **`DESIGNED`** *as a specification claim* — with one implemented slice: the Guard decision path, in-memory leases, chained receipt/tamper-evident logs and `policy.json` overrides exist in v0.1 (`kernel/` Rust + byte-identical TS fallback; evidence and levels in `docs/28-implementation-status.md`). The sandbox matrix, Starlark policy engine, Trusted Host State and managed domain remain design. Ladder per `/data/home/forge/HorizonCode/docs/_conventions.md` §8 (`DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED`); the levels below are the ones `docs/28` §1 records, which is the only place a level above `DESIGNED` may be claimed.
+Every capability below is **`DESIGNED`** *as a specification claim*, with these implemented slices (levels and evidence in `docs/28-implementation-status.md`, the only place a level above `DESIGNED` may be claimed; ladder `DESIGNED → CODE_PRESENT → WIRED → TESTED → VERIFIED → RELEASED` per `_conventions.md` §8):
+
+- the Guard decision path (`kernel/src/guard.rs`: deny > lease > ask > allow, `policy.json` hot reload, in-memory leases, one-use leases and session grants, ruling 32), plus the structural protection of the kernel state directory (rulings 24, 29);
+- the chained, anchored event and receipt logs (`eventlog.rs`, `receipts.rs`, optional HMAC anchors) with a byte-identical TypeScript fallback (`LocalKernel`), and the kernel-mode provenance posture (ruling 33);
+- the command allowlist for `shell.exec` (`execpolicy.rs`, ruling 42; JSON rules, no Starlark);
+- the per-origin egress DECIDER for `net.fetch` (`egress.rs`, ruling 43; default deny, observe mode, hold budget as data; **no proxy**);
+- the fail-closed `SandboxMode` ladder, capability detection and the `sandbox.report` method (`sandbox.rs`, ruling 44, 51). **`kernel_applied_mechanisms()` returns all false: the kernel applies no OS confinement to any process, so no sandbox dimension is ever reported `enforced`.** Detection (`available`, `hostCapabilities`) is reported separately and never converted into enforcement. Landlock is absent on the development host (spike, ruling 38);
+- named permission modes above the guard, with no bypass or yolo mode (ruling 58, 62, 66), and the advisory deterministic guardian (rulings 48, 60, 66; the model-backed classifier is not wired);
+- speculative execution exists as a module and is deliberately unwired (ruling 65);
+- owned child processes with a spawn ledger and an owner-death supervisor (ruling 22), which bound process lifetime, not what a process can touch;
+- cross-process advisory file locks (ruling 63).
+
+NOT implemented and not partially claimed: postures as kernel data, `GuardDecisionV1`, reason codes, the intent digest, the Starlark engine, the config merge lattice, trust on first use, the effect host, `UNKNOWN` reconciliation (only the transcript pairing and admission halt exist), the evidence gate, Trusted Host State, OS confinement, the egress proxy, the secrets vault, the supply-chain controls. Each has a detailed deferral note (E1 to E10) in the Provenance section at the end of this document.
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|
-| Capability registry + effect classes | DESIGNED | §4.1, §7.2; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/managed_control.rs` | `crates/hz_kernel/src/registry.rs` + `registry` test file |
-| Origin typing (4 kinds) | DESIGNED | §7.2.3; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` | `origin_typing.rs` + boundary test |
+| Capability registry + effect classes | DESIGNED | §4.1, §7.2; source: `kernel/src/managed_control.rs` of the ancestor project (not cloned, path not verified) | `crates/hz_kernel/src/registry.rs` + `registry` test file |
+| Origin typing (4 kinds) | DESIGNED | §7.2.3; source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified) | `origin_typing.rs` + boundary test |
 | Guard decision path (shipped shape): policy rules, `policy.json` hot reload, leases, R1 precedence deny > lease > ask > allow | TESTED + VERIFIED | §7.3; `kernel/tests/integration.rs` (guard matrix, `policy.json` overrides, lease expiry, ask-beats-allow); `docs/28` §1 (ruling 23) | the `GuardDecisionV1` struct (§4.2) and the §5.1 reason-code registry are **DESIGNED** — the shipped runtime uses a smaller shape and carries no reason codes |
 | Intent digest | DESIGNED | §7.3.2 | `intent_digest.rs` property tests |
-| Postures as kernel data | DESIGNED | §4.3, §7.4; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/guard.rs` (`DirectSessionPermissionModeProjectionV1`) | `posture.rs` including the `danger-full-access` refusal |
+| Postures as kernel data | DESIGNED (reduced: named permission modes in `app/src/core/permission-mode.ts`, not kernel data) | §4.3, §7.4; source: `kernel/src/guard.rs` of the ancestor project (not cloned, path not verified) (`DirectSessionPermissionModeProjectionV1`) | `posture.rs` including the `danger-full-access` refusal |
 | Wildcard rule DSL | DESIGNED | §7.5.1 | `hz_policy` compile + canonical digest tests |
-| Starlark prefix engine | DESIGNED | §7.5.3; `source: /data/home/forge/repo-tour/codex/codex-rs/execpolicy/README.md` | `starlark.rs`, `unwrap.rs` |
-| Config merge lattice | DESIGNED | §7.6; ADR-008 in `/data/home/forge/HorizonCode/docs/02-decisions.md` | `merge.rs` property tests |
+| Starlark prefix engine | DESIGNED (JSON command allowlist shipped in `kernel/src/execpolicy.rs`; no Starlark) | §7.5.3; source: [`codex/codex-rs/execpolicy/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/README.md) | `starlark.rs`, `unwrap.rs` |
+| Config merge lattice | DESIGNED | §7.6; ADR-008 in `02-decisions.md` | `merge.rs` property tests |
 | Trust-on-first-use | DESIGNED | §7.7 | `trust.rs` adversarial tests |
 | Leases (mint, consult, expiry, R1 precedence) | TESTED + VERIFIED | §7.8; `kernel/tests/integration.rs` (`guard_leases_match_exactly_or_by_prefix_and_expire`, lease-beats-ask); `docs/28` §1 | **one-use durable consumption (L4) is DESIGNED, not shipped** — the shipped lease has no consumed state and the guard accepts caller-supplied leases (external-review triage 2026-11-07, finding 4); needs kernel-issued tokens + durable CAS |
 | Effect host (five phases) | DESIGNED | §6.2, §7.9 | `effect_host.rs` incl. crash tests |
 | Receipts + chain | TESTED + VERIFIED | §4.6, §7.9; `kernel/tests/integration.rs` (receipt chain, tamper detection), `docs/28` §1 | `receipt_shape.rs`, `chain.rs`; **independent effect observation (postimage) is DESIGNED** — shipped receipts record caller-supplied digests written after execution (external-review triage 2026-11-07, finding 3) |
 | `UNKNOWN` + reconciliation | DESIGNED | §6.3; ADR-012 | `reconcile.rs` |
-| Evidence gate | DESIGNED | §6.4, §7.10. Inherited caveat: the reference implementation records the gate as designed but **not wired** in its direct-session lane (`source: /data/home/forge/repo-tour/horizoncode/HANDOFF.md`) | `evidence_gate.rs` + `hzcode verify` end-to-end |
+| Evidence gate | DESIGNED | §6.4, §7.10. Inherited caveat: the reference implementation records the gate as designed but **not wired** in its direct-session lane (source: `HANDOFF.md` of the ancestor project (not cloned, path not verified)) | `evidence_gate.rs` + `hzcode verify` end-to-end |
 | Trusted Host State | DESIGNED | §7.11 | `ths.rs` |
-| Sandbox matrix + guarantee vectors | DESIGNED | §7.12; `source: /data/home/forge/repo-tour/horizoncode/horizoncode-sandbox/src/lib.rs` | `hz_sandbox` matrix tests; Windows and macOS backends are new work |
-| Typed residuals | DESIGNED | §7.12.2 | `matrix.rs` exhaustive test |
-| Fail-closed unknown dimensions | DESIGNED | §7.12.3 | `matrix.rs` |
-| Egress control + proxy | DESIGNED | §7.13; `source: /data/home/forge/repo-tour/codex/codex-rs/core/src/network_policy_decision.rs`, `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-egress-proxy/src/lib.rs` | `egress.rs`, `airgap.rs` |
-| Secret vault + `SecretUseLeaseV1` | DESIGNED | §7.14; `source: /data/home/forge/repo-tour/horizoncode/kernel/src/secret_use.rs` | `secret_use.rs`, `vault.rs` |
-| Redaction + canaries | DESIGNED | §7.14.2; `source: /data/home/forge/repo-tour/grok-build/crates/codegen/xai-grok-secrets/src/lib.rs` | `packages/observe` canary suite |
+| Sandbox matrix + guarantee vectors | DESIGNED (reduced: ladder, capability detection and report seam in `kernel/src/sandbox.rs`; `kernel_applied_mechanisms` all false, nothing reported enforced) | §7.12; source: `horizoncode-sandbox/src/lib.rs` of the ancestor project (not cloned, path not verified) | `hz_sandbox` matrix tests; Windows and macOS backends are new work |
+| Typed residuals | DESIGNED (reduced: a non-empty residual string per non-enforced dimension) | §7.12.2 | `matrix.rs` exhaustive test |
+| Fail-closed unknown dimensions | DESIGNED (reduced: `SANDBOX_UNAVAILABLE` for FS-confined modes) | §7.12.3 | `matrix.rs` |
+| Egress control + proxy | DESIGNED (decider shipped in `kernel/src/egress.rs`; no proxy, no DNS pinning, no interception) | §7.13; source: [`codex/codex-rs/core/src/network_policy_decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/network_policy_decision.rs), source: [`grok-build/crates/codegen/xai-grok-egress-proxy/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/lib.rs) | `egress.rs`, `airgap.rs` |
+| Secret vault + `SecretUseLeaseV1` | DESIGNED | §7.14; source: `kernel/src/secret_use.rs` of the ancestor project (not cloned, path not verified) | `secret_use.rs`, `vault.rs` |
+| Redaction + canaries | DESIGNED | §7.14.2; source: [`grok-build/crates/codegen/xai-grok-secrets/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-secrets/src/lib.rs) | `packages/observe` canary suite |
 | Supply-chain pinning + signatures | DESIGNED | §7.15 | `update.test.ts`, `launcher.test.ts`, CI policy files |
-| Audit + export + verify | DESIGNED | §7.16 | `packages/cli` audit/verify tests |
+| Audit + export + verify | DESIGNED (reduced: kernel `log.verify` and `receipt.verify`, `/export`; no `hzcode audit export`) | §7.16 | `packages/cli` audit/verify tests |
 | Refusal list | DESIGNED | §7.17 | `tools/repolint` rule |
 
 ### 10.1 Known gaps carried forward (inherited, not yet solved)
 
 1. **The evidence gate is not wired in the reference implementation.** This document specs it as a first-class path; promoting it past `DESIGNED` requires end-to-end wiring in the direct-session lane, not just a verdict computation.
 2. **Subagent delegation is behind a flag in the reference implementation.** Capability narrowing for children is specified in ADR-016 and §7.2.4; until the single construction primitive is wired, `agent.spawn` stays `DESIGNED`.
-3. **Two edits to one file in one message are refused** by the reference kernel (`stale_preimage`). The HorizonCode fix is a batch-scoped staging area with a patch application order and a single postimage validation; until then, tool guidance must state the constraint (`/data/home/forge/repo-tour/horizoncode/HANDOFF.md`).
-4. **Windows and macOS sandbox backends are design-only here.** `source: /data/home/forge/repo-tour/codex/codex-rs/windows-sandbox-rs/src/lib.rs` and the macOS `.sbpl` policies are the reference material; neither is implemented in the ancestor project.
+3. **Two edits to one file in one message are refused** by the reference kernel (`stale_preimage`). The HorizonCode fix is a batch-scoped staging area with a patch application order and a single postimage validation; until then, tool guidance must state the constraint (`HANDOFF.md` of the ancestor project (not cloned, path not verified)).
+4. **Windows and macOS sandbox backends are design-only here.** source: [`codex/codex-rs/windows-sandbox-rs/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/windows-sandbox-rs/src/lib.rs) and the macOS `.sbpl` policies are the reference material; neither is implemented in the ancestor project.
 5. **Local root attacker is out of scope** (§7.17.1). This is a limit, not a defect; it is stated so no reader infers protection we do not provide.
 
 > **Session fork (`docs/28` ruling 59).** A fork is a user action that copies settled history only and writes one `session.fork` event to a new stream; it grants nothing, and the child runs under the process's current mode and config (no wider than a fresh `/new`). Narrowing by parent posture (S-46) is not implemented.
 
 > **Guardian surfacing (`docs/28` ruling 60).** The advisory guardian runs only after the kernel answered "ask" and can only annotate or (with `HORIZON_GUARDIAN=enforce`) refuse a deny-verdict ask; it never grants and never overrides a kernel deny. Model-path inputs are JSON-encoded inside `<data>` delimiters.
+
+---
+
+## Provenance (what was taken from where)
+
+This section records, for the authority and safety plane, which designs and which bytes came from other repositories, with exact GitHub URLs at the commit that was read, and what is honestly NOT built. It is a handoff aid and changes no status level; `docs/28-implementation-status.md` is the only place that may claim a level above DESIGNED.
+
+**Honesty statement for this plane.** `kernel_applied_mechanisms()` is all false: the kernel applies NO OS confinement (no Landlock ruleset, no seccomp filter, no network namespace, no rlimit) to any spawned process, and therefore no sandbox dimension is ever reported as `enforced`. Capability detection is reported separately (`available`, `hostCapabilities`) and is never converted into enforcement. The egress decider governs the `net.fetch` guard kind only; there is no proxy. The guardian is advisory and deterministic; no model reviews actions. Speculative execution is deliberately unwired (ruling 65). There is no workspace trust store, no secret vault, no effect host and no evidence gate. Anything in sections 4 to 7 that says otherwise is a specification claim.
+
+Reading the tables:
+
+- URLs point at a file at the full 40 character SHA from [`research/upstream-pins.md`](research/upstream-pins.md). Each path was checked with `git ls-files` in the read-only clone before it was written. Anything not checkable is written `path not verified`.
+- **Relation**: **copied verbatim**, **ported**, **adapted**, or **idea only**, as defined in the Provenance section of [`08-runtime.md`](08-runtime.md).
+- Judged from the header comments of the HorizonCode files, the docs/28 rulings and reading both sides.
+- Licences found: cline, codex Apache-2.0; deepseek-harness, oh-my-pi, opencode MIT; grok-build and claude-code have their own `LICENSE` files not analysed here. The worktree has no `LICENSE` or `NOTICE`; attribution for any verbatim or ported row is an OPEN item for the human owner. The only verbatim reproduction in this plane is the pair of model-facing sandbox marker strings from dsh `escalation.ts` (row 4).
+- The Claude Code clone pinned here contains plugins, workflows and a devcontainer, not the product source, so statements about Claude Code's permission system are product behaviour with no file link. The devcontainer firewall script and egress firewall YAML are linked where they are relevant.
+- The ancestor project (`horizoncode` / `repo-tour`, with files such as `kernel/src/managed_control.rs`, `owner_log.rs`, `checkpoint.rs`, `horizoncode-sandbox/src/*.rs`, `HANDOFF.md`) is an earlier private codebase that is not available in this sandbox; its paths in this document were converted to 'ancestor project (not cloned, path not verified)'. DeepSeek-Reasonix is likewise not cloned.
+- Wider context: [`research/`](research/README.md), [`research/compare-codex-grok.md`](research/compare-codex-grok.md), [`research/compare-ohmypi-deepseek.md`](research/compare-ohmypi-deepseek.md), [`audit/landlock-spike-2026-11-08.md`](audit/landlock-spike-2026-11-08.md), `ops/landlock-probe.sh` and [`30-steal-list.md`](30-steal-list.md).
+
+| # | HorizonCode file(s) | Upstream exact URL(s) at the pinned SHA | Relation | Notes |
+|---|---|---|---|---|
+| 1 | `kernel/src/guard.rs` (`Guard::check`, `policy.json`, leases, structural `kernel-state-protected` rule), `kernel/tests/integration.rs` | [`codex-rs/execpolicy/src/decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/decision.rs)<br>[`codex-rs/execpolicy/src/policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/policy.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/policy.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/policy.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/resolution.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/resolution.rs)<br>Claude Code permission rules (deny, ask, allow): product behaviour; the pinned clone has no CLI source (path not verified) | idea only (precedence), original code | Precedence deny > lease > ask > allow is docs/11 R1 and is HorizonCode's own ruling (docs/28 ruling 23). The header of `guard.rs` cites no upstream; the `Ord` of `Deny > Ask > Allow` in `execpolicy.rs` is the codex-style most-restrictive-wins rule. The structural rule that denies any `fs.write` resolving inside the kernel state directory (ruling 24, hardened in 29 with lexical symlink resolution) is original to HorizonCode, not taken from any repository. |
+| 2 | `kernel/src/execpolicy.rs`, `kernel/src/guard.rs` (allowlist consult for `shell.exec`) | [`codex-rs/execpolicy/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/README.md)<br>[`codex-rs/execpolicy/src/policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/policy.rs)<br>[`codex-rs/execpolicy/src/rule.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/rule.rs)<br>[`codex-rs/execpolicy/src/decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/decision.rs)<br>[`codex-rs/execpolicy/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/lib.rs) | adapted (reduced form) | Ruling 42. The header says it is modeled on codex's execpolicy: a `Policy` keyed by the first program token, `PrefixRule`s with trailing-arg patterns, `NetworkRule`s with a normalized host, an order-independent `fingerprint()` (through `canon::canonical_json` and `canon::sha256_hex`, no new hash scheme) and a runtime `amend` path under a file lock (`<state-dir>/allowlist.json`). REDUCED: no Starlark (codex's rules are Starlark; HorizonCode's are JSON), simple lowercasing instead of NFC/NFD. No code was copied. Evidence: `kernel/tests/integration.rs` and unit tests in the module. |
+| 3 | `kernel/src/egress.rs`, `kernel/src/guard.rs` (`net.fetch` consult), `app/src/contracts.ts` (egress shapes) | [`crates/codegen/xai-grok-egress-proxy/src/decider.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/decider.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/lib.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/request.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/request.rs)<br>[`codex-rs/core/src/network_policy_decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/network_policy_decision.rs)<br>[`codex-rs/network-proxy/src/network_policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/network_policy.rs) | adapted (decider and hold budget only) | Ruling 43. A pure per-origin decider: `Origin{scheme,host,port}`, `EgressDecision{Allow,Deny,Ask,AllowAndRecord}`, default DENY (docs/11 N1), observe mode, a two-level hold budget (16 proxy-wide, 8 per command tag, 600 s timeout) modeled as DATA only, content-free `BlockedRequest` records bounded to 256, and fail-closed loading of `<state-dir>/egress.json`. The header says it is modeled on Grok's `Decider`. There is NO proxy: no listener, no connection is parked, no DNS pinning (N4), no TLS interception (N10). See deferral E2. |
+| 4 | `kernel/src/sandbox.rs`, `app/src/contracts.ts` (`SandboxMode`, `SANDBOX_WIDER_MODES`, `sandboxDenialMarker`, `escalationHintMarker`) | [`packages/sandbox/sandbox/src/escalation.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox/src/escalation.ts)<br>[`packages/sandbox/sandbox/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox/README.md) | ported (the two model-facing marker strings are reproduced byte for byte); the ladder is adapted | Ruling 44. The per-call ladder `read-only \| workspace-write \| danger-full-access`, the strictly-wider table, `ESCALATION_TARGETS`, `validate_escalation_args`, `approve_escalation`, and the two markers come from dsh `escalation.ts` (the header says so, and the escalation marker's separator is a literal U+2014, pinned by a unit test). That is a verbatim reproduction of two short strings; the licence of deepseek-harness is MIT (see the licence note), and no `NOTICE` exists in this tree, so attribution is an OPEN item for the owner. The capability detection layer (Landlock, bwrap, userns, seccomp, rlimits, netns via `/proc` and a raw syscall) is original. `kernel_applied_mechanisms()` is all false, so NOTHING is reported as enforced (ruling 51). |
+| 5 | `kernel/src/sandbox.rs` (`capabilities()`, `AppliedMechanisms`), `ops/landlock-probe.sh`, `docs/audit/landlock-spike-2026-11-08.md` | [`codex-rs/sandboxing/src/landlock.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/landlock.rs)<br>[`codex-rs/sandboxing/src/bwrap.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/bwrap.rs)<br>[`codex-rs/linux-sandbox/src/seccomp.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/linux-sandbox/src/seccomp.rs)<br>[`codex-rs/linux-sandbox/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/linux-sandbox/src/lib.rs)<br>[`codex-rs/sandboxing/src/seatbelt.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/seatbelt.rs)<br>[`codex-rs/windows-sandbox-rs/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/windows-sandbox-rs/src/lib.rs)<br>[`crates/codegen/xai-grok-sandbox/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/lib.rs)<br>[`crates/codegen/xai-grok-sandbox/src/command/detect.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/detect.rs)<br>[`crates/codegen/xai-grok-sandbox/src/command/backend/seatbelt.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/backend/seatbelt.rs)<br>[`packages/sandbox/sandbox-local/src/index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-local/src/index.ts)<br>[`packages/sandbox/sandbox-local/src/profiles.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-local/src/profiles.ts)<br>[`sdk/packages/core/src/runtime/tools/subprocess-sandbox.ts`](https://github.com/cline/cline/blob/5413dc180c10700ce2e26547ab75991360dd0486/sdk/packages/core/src/runtime/tools/subprocess-sandbox.ts) | idea only (design references for the NOT BUILT enforcement backend) | None of these is used by shipped code. They are the references for deferral E1. The spike document and the probe are original and measured on this host (a gVisor sandbox: Landlock absent, `unshare -Ur` works). |
+| 6 | `kernel/src/eventlog.rs`, `kernel/src/receipts.rs`, `kernel/src/canon.rs`, `app/src/core/kernel.ts` (`LocalKernel`) | none claimed (original; the hash-chain and anchor design is docs/11 sections 4.6 and 7.9 and docs/28 rulings 12, 20) | original | Append-only JSONL chains with `seq`, `prevHash`, canonical-JSON sha256, a `.head` anchor (optionally HMAC-SHA256 with `HZ_ANCHOR_KEY`), an exclusive `create_new` lock file with 30 s stale takeover, owner-only modes (`permm.rs`). The Rust and TypeScript implementations are byte-identical and cross-tested (`app/tests/core/interop.test.ts`). `canon.rs` must stay unchanged (contribution rule). The older ancestor project is the design lineage but its files are not cloned here (path not verified). |
+| 7 | `app/src/core/permission-mode.ts`, `app/src/core/loop.ts` (`GuardGate`) | [`crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md)<br>[`sdk/packages/core/src/runtime/tools/tool-approval.ts`](https://github.com/cline/cline/blob/5413dc180c10700ce2e26547ab75991360dd0486/sdk/packages/core/src/runtime/tools/tool-approval.ts)<br>[`docs/approval-mode.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/approval-mode.md)<br>[`packages/core/src/permission/saved.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/permission/saved.ts)<br>Claude Code default/acceptEdits/plan and codex approval modes: product behaviour (path not verified) | idea only (mode names), original policy layer | Ruling 58, 62, 66. A policy layer ABOVE the kernel guard that can refuse (read-only) or answer an ASK (accept-edits, judged by lexical AND symlink-resolved path) and can never produce an allow the guard did not give. There is deliberately NO bypass or yolo mode: `yolo`, `bypass`, `dangerously-skip-permissions` are refused with a reason. The decision is a deliberate departure from the products that offer one. |
+| 8 | `app/src/core/guardian.ts`, `app/src/core/loop.ts` (`GuardGate.approve`, `guardianLine`) | [`codex-rs/core/src/guardian/mod.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/mod.rs)<br>[`codex-rs/core/src/guardian/decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/decision.rs)<br>[`codex-rs/core/src/guardian/coverage.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/coverage.rs)<br>[`codex-rs/core/src/guardian/prompt.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/prompt.rs)<br>[`codex-rs/prompts/templates/guardian/classifier_instructions.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/templates/guardian/classifier_instructions.md)<br>[`codex-rs/prompts/src/guardian_instructions.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/src/guardian_instructions.rs) | adapted (reduced form) | Rulings 48, 60, 66. The header says it mirrors codex `guardian/` (review_session, score_authorization, routing, coverage, classifier_instructions). SHIPPED: a deterministic rule-based classifier (`deterministicClassifier`) wired into `GuardGate.approve`, run only AFTER the kernel answered ask, advisory by default, `HORIZON_GUARDIAN=enforce` makes a `deny` refuse a deny-verdict ask and fails closed on a classifier error (ruling 66). It can annotate or refuse, never grant, never override a kernel deny. The model-backed classifier (`createGuardianClassifier({model})`) exists as a capability-detected seam and is NOT wired to any provider, so no model reviews actions today. |
+| 9 | `app/src/core/speculation.ts`, `app/tests/core/speculation.test.ts`, `app/tests/core/speculation-unwired.test.ts` | [`packages/agent/src/speculative-execution.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/agent/src/speculative-execution.ts) | adapted (coordinator), deliberately UNWIRED | Rulings 47 and 65. A closed effect union (`pure` or `local_read` only), max 2 in flight, fingerprint reconciliation with cascade discard. `LoopDeps.speculativeExecution` is off by default and ruling 65 records why it stays unwired (no commit window, ordering across segments, hook and approval bypass, exactly-once ownership in `runToolCall`). A pinned test requires identical guard checks with the flag absent and on. Do NOT wire it without the design in deferral E9. |
+| 10 | `app/src/core/owned-spawn.ts`, `app/src/core/supervisor.ts`, `app/src/core/worker-identity.ts` | see Provenance in [`08-runtime.md`](08-runtime.md) (managed runtime v1) | n/a here | Process ownership (spawn ledger, owner-death supervisor) is the nearest thing to confinement the runtime applies: it bounds process LIFETIME, not what a process can touch. It is not a sandbox and nothing here reports it as one. |
+| 11 | `app/src/tools/helpers.ts` (`scrubEnv`), `app/src/tools/shell.ts`, `app/src/core/hooks.ts` | [`crates/codegen/xai-grok-secrets/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-secrets/src/lib.rs) | idea only | Environment scrubbing for child processes and logging redaction exist in small form. There is NO secret vault, NO `SecretUseLeaseV1`, NO canary suite (section 7.14 is design only). Deferral E8. |
+| 12 | `app/src/core/server.ts` (UNKNOWN pairing at attach), `app/src/core/session.ts` (`repairDanglingToolCalls`, `interruptedToolResult`), `app/src/core/admission.ts` | [`packages/core/session/src/repair.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/core/session/src/repair.ts)<br>[`codex-rs/core/src/session/daemon_recovery.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/daemon_recovery.rs)<br>[`codex-rs/core/src/session/rollout_reconstruction.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/rollout_reconstruction.rs) | adapted (pairing invariant), reduced form | The only shipped slice of docs/11 section 6.3 (`UNKNOWN`): an assistant tool call with no recorded result is paired with a synthetic `UNKNOWN: the run was interrupted ...` tool result, and an interrupted admission row settles to `unknown` and halts its followers. There is no effect host, no reconciliation flow and no receipt for an UNKNOWN. Detailed in the docs/12 Provenance section. |
+
+
+### Design families with no shipped code (reference material and status)
+
+| Family | Upstream exact URL(s) at the pinned SHA | Status | Notes |
+|---|---|---|---|
+| Trust on first use, workspace trust records (section 7.7, 4.5) | [`crates/codegen/xai-grok-permission-rules/src/folder_trust.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/folder_trust.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/trust.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/trust.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/project_config.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/project_config.rs)<br>[`codex-rs/config/src/project_trust.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/config/src/project_trust.rs) | NOT IMPLEMENTED | `grep` finds no trust store. A workspace file can currently set only what the loaders read (instructions, commands, skills, `.hz/` config); the user config alone supplies `permissionMode` (ruling 58). |
+| Config merge lattice and managed (narrowing-only) policy (section 7.6) | [`crates/codegen/xai-grok-permission-rules/src/managed_policy/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/managed_policy/mod.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/managed_policy/layer.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/managed_policy/layer.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/managed_policy/verdict.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/managed_policy/verdict.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/claude_settings.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/claude_settings.rs) | NOT IMPLEMENTED | Only `policy.json` hot reload in the state directory, `allowlist.json`, `egress.json` and the user config exist; there is no layer order, no managed layer. |
+| Starlark prefix engine and `unwrap` of wrapper commands (sections 7.5.2, 7.5.3) | [`codex-rs/execpolicy/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/README.md)<br>[`codex-rs/execpolicy/src/policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/policy.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/bash_command_splitting.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/bash_command_splitting.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/exec_risk.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/exec_risk.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/shell_access.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/shell_access.rs) | NOT IMPLEMENTED (JSON allowlist shipped instead) | The shipped allowlist matches the first program token and trailing args; it does not split compound shell commands or unwrap `bash -c`, `env`, `sudo`. Admission of shell is therefore ask-by-default. |
+| Postures as kernel data, `GuardDecisionV1`, closed reason-code set, intent digest (sections 4.2, 4.3, 5.1, 7.3.2, 7.4) | none claimed (original docs/11 design) | NOT IMPLEMENTED | The shipped decision is a smaller shape without reason codes or an intent digest. Named permission modes (ruling 58) live in the app, not the kernel. |
+| Effect host (five phases), `UNKNOWN` reconciliation (sections 6.2, 6.3, 7.9) | [`codex-rs/core/src/session/daemon_recovery.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/daemon_recovery.rs)<br>[`packages/core/session/src/repair.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/core/session/src/repair.ts) | NOT IMPLEMENTED; the kernel does not execute effects | Tools execute in the app process after a guard answer; the receipt records caller-supplied digests written AFTER execution (triage finding 3). |
+| Evidence gate and independent verification (sections 6.4, 7.10) | none claimed | NOT IMPLEMENTED | Not wired anywhere. `completion-evidence.test.ts` covers a narrower runtime check, not this gate. |
+| Trusted Host State (section 7.11) | none claimed | NOT IMPLEMENTED |  |
+| Secrets vault, `SecretUseLeaseV1`, redaction canaries (section 7.14) | [`crates/codegen/xai-grok-secrets/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-secrets/src/lib.rs)<br>[`codex-rs/network-proxy/src/credential_broker.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/credential_broker.rs) | NOT IMPLEMENTED beyond env scrubbing |  |
+| Supply chain pinning, signatures, update (section 7.15) | none claimed | NOT IMPLEMENTED; zero runtime dependencies and `ops/install-ci.sh` are the only controls | No signing, no launcher, no `update` path. |
+| Audit export and verify (section 7.16) | none claimed | PARTIAL: kernel `log.verify` and `receipt.verify`, `/export json\|html` shows chain status | No `hzcode audit export`. |
+
+
+### Sources that could not be linked
+
+The ancestor project files listed above, DeepSeek-Reasonix `internal/frontend/acp/handshake.go`, Claude Code `src/types/permissions.ts` and `src/hooks/useCanUseTool.tsx` (the pinned claude-code clone has no `src/` tree, so these paths were not found), and aider, mini-swe-agent, hermes-agent, OpenHands, SWE-agent, wshobson-agents and opencode-v2 are not available or not verifiable. See the 'Not cloned' table in [`research/upstream-pins.md`](research/upstream-pins.md). Their items stay as report pointers until the owner re-clones them and pins a SHA.
+
+
+### Deferred or not started: detailed notes for the next agent
+
+Each note gives: what is deferred, why, the upstream reference, whether to adopt as is or adapt, a suggested design, and the files to touch. Paths are from the repository root. No note changes a status level.
+
+#### E1. OS confinement for shell and code mode: Landlock, seccomp, network namespace, rlimits, bubblewrap, Seatbelt, Windows (sections 7.12, S1 to S9; NF-016)
+
+- **What is deferred.** Actually applying a confinement mechanism to a spawned child. Today `kernel_applied_mechanisms()` returns `AppliedMechanisms::none()` (all four fields false), so `sandbox.report` can only say: the mode is admitted, the host OFFERS such-and-such (`hostCapabilities`, `available`), and no dimension is `enforced`. `read-only` and `workspace-write` with `demand_full` yield the typed `SANDBOX_UNAVAILABLE`; `danger-full-access` reports nothing enforced. The seam is reporting and admission only. Nothing in the repository applies a Landlock ruleset, a seccomp filter, a netns or an rlimit to any process.
+- **Why.** Landlock is absent on the host this was built on (kernel `4.19.0-gvisor`, `landlock_create_ruleset` returns ENOSYS; `docs/audit/landlock-spike-2026-11-08.md`); on the hosted CI runner (ubuntu-latest, non-root, Landlock active) a Landlock-capable host exists but the kernel still applies nothing, which ruling 51 made the report say honestly. Enforcement needs a spawn path that applies the mechanism between fork and exec (a helper binary or `pre_exec`), which Bun's `Bun.spawn` cannot do, so it belongs to the Rust side or a launcher. Mislabelling a mechanism as enforced would be worse than none; the rule in `sandbox.rs` is: flip a field of `AppliedMechanisms` only in the same change that really applies it.
+- **Upstream reference.** [`packages/sandbox/sandbox-local/src/index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-local/src/index.ts)<br>[`packages/sandbox/sandbox-local/src/profiles.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-local/src/profiles.ts)<br>[`packages/sandbox/sandbox/src/diagnostics.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox/src/diagnostics.ts)<br>[`packages/sandbox/sandbox/src/roots.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox/src/roots.ts)<br>[`packages/sandbox/sandbox-windows-acl/src/index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-windows-acl/src/index.ts)<br>[`codex-rs/sandboxing/src/landlock.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/landlock.rs)<br>[`codex-rs/sandboxing/src/bwrap.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/bwrap.rs)<br>[`codex-rs/sandboxing/src/seatbelt.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/seatbelt.rs)<br>[`codex-rs/linux-sandbox/src/seccomp.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/linux-sandbox/src/seccomp.rs)<br>[`codex-rs/linux-sandbox/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/linux-sandbox/src/lib.rs)<br>[`codex-rs/process-hardening/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/process-hardening/src/lib.rs)<br>[`codex-rs/windows-sandbox-rs/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/windows-sandbox-rs/src/lib.rs)<br>[`crates/codegen/xai-grok-sandbox/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/lib.rs)<br>[`crates/codegen/xai-grok-sandbox/src/profiles.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/profiles.rs)<br>[`crates/codegen/xai-grok-sandbox/src/command/backend.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/backend.rs)<br>[`crates/codegen/xai-grok-sandbox/src/command/backend/seatbelt.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/backend/seatbelt.rs)<br>[`crates/codegen/xai-grok-sandbox/src/command/detect.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/detect.rs)<br>[`crates/codegen/xai-grok-sandbox/src/network_policy.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/network_policy.rs)<br>[`crates/codegen/xai-grok-sandbox/src/deny/mod.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/deny/mod.rs)<br>[`crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md)<br>[`sdk/packages/core/src/runtime/tools/subprocess-sandbox.ts`](https://github.com/cline/cline/blob/5413dc180c10700ce2e26547ab75991360dd0486/sdk/packages/core/src/runtime/tools/subprocess-sandbox.ts)<br>[`.devcontainer/init-firewall.sh`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.devcontainer/init-firewall.sh)
+- **Adopt as is or adapt.** ADAPT, per platform. For Linux the Rust references (codex `sandboxing`, `linux-sandbox`, `process-hardening`) fit the Rust kernel directly in design (no code copy is needed: the mechanisms are syscalls). The dsh `sandbox-local` package is TypeScript and shows the same rung chain (bwrap, then Landlock; Seatbelt; Windows ACL restricted token) with a FUNCTIONAL probe of each candidate and fail-closed behaviour ('missing or unusable confinement fails closed rather than returning the original argv'), which matches `sandbox.rs`'s stance. The macOS SBPL profiles are in the Grok `sandbox/src/command/backend/sbpl/*.sbpl`. Licences: codex Apache-2.0, deepseek-harness MIT, grok-build its own LICENSE; copying any file verbatim would need attribution (open item).
+- **Suggested design.** Follow the standing direction of ruling 38, unchanged: (1) FIRST the portable reduced form for code_mode and shell children: `no_new_privs`, a seccomp filter (deny-list of dangerous syscalls such as ptrace, mount, bpf, kexec), rlimits (CPU, address space, file size, processes, open files) and network-off through an unshared network namespace, typed `best_effort` with named residuals (no per-path rules). Implement as a small Rust helper, `hz-sandbox-exec`, built by `kernel/Cargo.toml` as a second binary, that sets the mechanisms and `execve`s the target; the TS side spawns `hz-sandbox-exec -- <argv>` through `spawnOwned`. (2) On gVisor and container deployments record the outer sandbox as the confinement of record (it bounds the whole agent and cannot be verified from inside). (3) Keep Landlock a probe-gated upgrade on a >= 5.13 kernel using the checklist in the spike document section 6 (ABI versioning, per-path rules, exec restrictions). (4) Only when the helper really applies a mechanism, flip the matching field in `kernel_applied_mechanisms()` and add a test that spawns a child and shows the denial (a write outside the allowed root fails, a socket connect fails). The report must then list `enforced` for that dimension ONLY, with the backend name. (5) macOS and Windows backends are separate work items (section 10.1 gap 4) and stay `unsupported`. Never add a code path that converts `hostCapabilities.available` into `enforced`.
+- **Files to touch.** `kernel/src/sandbox.rs` (`AppliedMechanisms`, `kernel_applied_mechanisms`, `enforce`), new `kernel/src/bin/hz_sandbox_exec.rs` or `kernel/src/confine.rs`, `kernel/Cargo.toml`, `kernel/tests/integration.rs`, `app/src/core/owned-spawn.ts` and `app/src/tools/shell.ts` (route through the helper only when a report says a dimension is enforced), `app/src/contracts.ts` (additive only), `ops/landlock-probe.sh` (as the deployment gate), `docs/28-implementation-status.md` (a new ruling and level), this document's section 7.12.
+
+#### E2. Routed MITM egress proxy: connection parking, DNS pinning, rebind re-check, TLS interception, credential injection (section 7.13, N3 to N10)
+
+- **What is deferred.** A real proxy that terminates and re-originates traffic from sandboxed children, parks a connection while the decider asks, pins resolved IPs, re-checks after redirect or rebind, intercepts TLS with a local CA where policy requires it, and injects credentials at the proxy so the child never holds them. Shipped: only the pure decider and policy in `kernel/src/egress.rs`, consulted by `guard.rs` for `net.fetch` BEFORE the policy rules. It governs the `net.fetch` guard kind (an admission decision), not the traffic of a shell child: a shell command that runs `curl` is admitted or refused as `shell.exec`, and once admitted it can reach any host.
+- **Why.** A proxy only constrains a child that cannot bypass it, which needs network confinement (E1: a netns whose only route is the proxy). Without E1 a proxy would be advisory and reporting it as enforced would be false. MITM TLS also needs a CA lifecycle and a user-visible trust step.
+- **Upstream reference.** [`crates/codegen/xai-grok-egress-proxy/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/lib.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/server.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/server.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/connect.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/connect.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/tls.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/tls.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/http.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/http.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/ip.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/ip.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/credential.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/credential.rs)<br>[`crates/codegen/xai-grok-egress-proxy/src/decider.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-egress-proxy/src/decider.rs)<br>[`codex-rs/network-proxy/src/http_proxy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/http_proxy.rs)<br>[`codex-rs/network-proxy/src/certs.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/certs.rs)<br>[`codex-rs/network-proxy/src/connect_policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/connect_policy.rs)<br>[`codex-rs/network-proxy/src/domain_matcher.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/domain_matcher.rs)<br>[`codex-rs/network-proxy/src/credential_broker.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/credential_broker.rs)<br>[`codex-rs/network-proxy/src/body_budget.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/body_budget.rs)<br>[`.devcontainer/init-firewall.sh`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.devcontainer/init-firewall.sh)<br>[`.github/egress-firewall.yaml`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/.github/egress-firewall.yaml)
+- **Adopt as is or adapt.** ADAPT. The Grok crate is the model for the decider (already adapted) and for `hold()` returning a oneshot receiver; codex `network-proxy` adds the credential broker and domain matcher. Both are Rust and could be studied for the Rust kernel; copying code needs attribution (open item). The Claude Code devcontainer `init-firewall.sh` and `egress-firewall.yaml` are a much cheaper allowlist-firewall pattern (iptables plus an ipset of allowed domains) that fits a container deployment and needs no proxy.
+- **Suggested design.** Staged. Stage 0 (cheap, honest, no new enforcement claim): ship a documented container recipe based on the devcontainer firewall pattern and have `hzcode doctor` report whether an outer egress firewall is present, as 'outer, unverifiable from inside'. Stage 1: a CONNECT-only forward proxy in the Rust kernel (HTTP CONNECT and plain HTTP, no interception), listening on loopback, whose `Decider` is `egress::Decider`; children get `HTTPS_PROXY` and, with E1, a netns whose only route is the proxy. Implement `hold()` as a real parked connection with the `HoldBudget` already modeled (ceilings 16 and 8, 600 s). Stage 2: DNS pinning and N4 rebind re-check (resolve once in the proxy, connect by IP, refuse private/loopback/link-local ranges unless the rule says otherwise, as Grok's `ip.rs` does). Stage 3 only if needed: TLS interception with a per-session CA written 0600 under the state dir, and credential injection (N10), keeping `SecretUseLeaseV1` (E8) as the authority for what may be injected. Record every blocked request with the existing content-free `BlockedRequest` shape.
+- **Files to touch.** `kernel/src/egress.rs` (add `proxy` submodule, keep `Decider` pure), `kernel/src/main.rs` (listener lifecycle), `kernel/src/protocol.rs` (additive `egress.report` method), `kernel/Cargo.toml` (an async runtime would be the first Rust dependency beyond std/serde; that is a decision for the owner), `app/src/core/owned-spawn.ts` (proxy env), `app/src/core/doctor.ts`, `docs/11` section 7.13, `docs/28`.
+
+#### E3. Starlark prefix engine and compound-command splitting (sections 7.5.2, 7.5.3)
+
+- **What is deferred.** A rule engine that understands `bash -c`, pipes, `&&`, `env`, `sudo` wrappers, and decides each simple command; rules as Starlark with `match`/`not_match` examples validated at load. Shipped: JSON allowlist keyed by the first program token.
+- **Why.** Needs a shell parser and a Starlark interpreter; Starlark would be the first non-std Rust dependency. Without splitting, an allowlisted prefix can be smuggled inside a compound command; the shipped answer is that `shell.exec` defaults to ask.
+- **Upstream reference.** [`codex-rs/execpolicy/README.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/README.md)<br>[`codex-rs/execpolicy/src/policy.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/policy.rs)<br>[`codex-rs/execpolicy/src/rule.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/execpolicy/src/rule.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/bash_command_splitting.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/bash_command_splitting.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/bash_permission_script.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/bash_permission_script.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/exec_risk.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/exec_risk.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/shell_access.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/shell_access.rs)
+- **Adopt as is or adapt.** ADAPT. Take the SPLITTING algorithm (Grok `bash_command_splitting.rs`) as a design for a small hand-written tokenizer; keep JSON rules rather than Starlark unless the owner accepts the dependency.
+- **Suggested design.** Write `kernel/src/shellsplit.rs`: tokenize quotes, escapes, `;`, `&&`, `||`, `|`, `$(...)`, backticks and redirections conservatively; on ANY construct it cannot parse, return 'opaque' and make the guard answer ask (fail closed). Apply the allowlist per simple command and require ALL to be allowed; one deny wins. Add property tests on adversarial strings (the existing invisible-Unicode refusal in the shell tool is a related precedent, ruling 66).
+- **Files to touch.** `kernel/src/execpolicy.rs`, new `kernel/src/shellsplit.rs`, `kernel/src/guard.rs`, `kernel/tests/integration.rs`, `app/src/core/kernel.ts` (the TS fallback must stay byte-identical in decisions).
+
+#### E4. Effect host (five phases), UNKNOWN reconciliation and independent effect observation (sections 6.2, 6.3, 7.9)
+
+- **What is deferred.** The kernel executing or supervising effects, observing the postimage itself, and reconciling an UNKNOWN. Today the app executes tools and the receipt carries digests supplied by the caller after execution (external-review triage finding 3).
+- **Why.** It changes the trust boundary: the kernel becomes the only component that touches the filesystem for effects, a rewrite of the tool layer. Depends on E1 to mean anything.
+- **Upstream reference.** [`codex-rs/core/src/session/daemon_recovery.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/daemon_recovery.rs)<br>[`codex-rs/core/src/session/rollout_reconstruction.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/session/rollout_reconstruction.rs)<br>[`packages/core/session/src/repair.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/core/session/src/repair.ts)
+- **Adopt as is or adapt.** ADAPT (only the recovery semantics have a reference; the effect host is original).
+- **Suggested design.** Smallest honest step: have the kernel compute the postimage sha256 itself for `fs.write` effects (read the file after the app reports done) and store both, flagging a mismatch. This needs the kernel to read the workspace path, which `guard.rs` already resolves for scope. Then the five phases as a state machine in a new `effect_host.rs`.
+- **Files to touch.** `kernel/src/receipts.rs`, new `kernel/src/effect_host.rs`, `kernel/src/protocol.rs` (additive methods), `app/src/tools/write.ts` and `edit.ts` (report instead of assert).
+
+#### E5. Evidence gate and independent verification (sections 6.4, 7.10)
+
+- **What is deferred.** A first-class gate that refuses to call a run complete without verifier evidence, computed outside the model's claims.
+- **Why.** The reference implementation recorded it as designed but not wired in its direct-session lane; promoting it needs end-to-end wiring, not only a verdict function.
+- **Upstream reference.** none (original design; the inherited caveat is in section 10.1 gap 1)
+- **Adopt as is or adapt.** n/a (original).
+- **Suggested design.** Start from the completion-evidence check that exists in the runtime (`app/tests/core/completion-evidence.test.ts`) and the pending-todos reminder (ruling 69, 75): extend the exit status with an 'unverified' state when edits were made and no verification command ran, surfaced in the turn footer and `-p` JSON.
+- **Files to touch.** `app/src/core/loop.ts` (exit status), `app/src/tui/render.ts`, `app/src/tui/print.ts`, `app/src/contracts.ts` (additive).
+
+#### E6. Workspace trust (TOFU), config merge lattice and managed policy (sections 7.6, 7.7)
+
+- **What is deferred.** A trust record per workspace, a first-use prompt, a merge order with narrowing-only managed policy.
+- **Why.** No code path yet distinguishes a trusted workspace from an untrusted one. Today a workspace can supply instruction files, custom commands, skills and `.hz/` content, all of which are prompt text (read through symlink-refusing readers, ruling 79) but still model-influencing.
+- **Upstream reference.** [`crates/codegen/xai-grok-permission-rules/src/folder_trust.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/folder_trust.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/trust.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/trust.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/project_config.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/project_config.rs)<br>[`crates/codegen/xai-grok-permission-rules/src/managed_policy/layer.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-permission-rules/src/managed_policy/layer.rs)<br>[`codex-rs/config/src/project_trust.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/config/src/project_trust.rs)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** A `trust.json` in the USER config directory (never the workspace) mapping canonical workspace path to `{decision, at, digest of the instruction files seen}`. First run in an unknown workspace asks (TTY) or treats the workspace as untrusted (headless): untrusted means project commands, skills, hooks and MCP servers from the workspace are not loaded. This also narrows the hook and MCP surfaces (docs/15).
+- **Files to touch.** new `app/src/core/trust.ts`, `app/src/core/config.ts`, `app/src/core/commands.ts`, `skills.ts`, `hooks.ts`, `mcp/`, `app/src/tui/interactive.ts` (prompt), tests.
+
+#### E7. Secrets vault, `SecretUseLeaseV1`, redaction canaries (section 7.14)
+
+- **What is deferred.** Storing secrets outside the environment, issuing a use-lease to an effect, and canary tests that prove redaction.
+- **Why.** Provider keys currently come from the environment or the user config file; `scrubEnv` strips environment variables from children. A vault is a product decision (OS keychain versus encrypted file).
+- **Upstream reference.** [`crates/codegen/xai-grok-secrets/src/lib.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-secrets/src/lib.rs)<br>[`codex-rs/network-proxy/src/credential_broker.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/credential_broker.rs)<br>[`codex-rs/network-proxy/src/credential_broker/registry.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/network-proxy/src/credential_broker/registry.rs)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** First a canary test: set a fake key in the environment, run a full scripted turn, and assert it appears in no event, receipt, transcript, spill file or export. Then the vault.
+- **Files to touch.** `app/src/tools/helpers.ts`, `app/src/core/config.ts`, new test `app/tests/core/secret-canary.test.ts`.
+
+#### E8. Windows and macOS sandbox backends
+
+- **What is deferred.** Seatbelt on macOS and the restricted-token plus ACL runner on Windows.
+- **Why.** Design-only; neither is implemented here (section 10.1 gap 4).
+- **Upstream reference.** [`crates/codegen/xai-grok-sandbox/src/command/backend/seatbelt.rs`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/backend/seatbelt.rs)<br>[`crates/codegen/xai-grok-sandbox/src/command/backend/sbpl/base.sbpl`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sandbox/src/command/backend/sbpl/base.sbpl)<br>[`codex-rs/sandboxing/src/seatbelt.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/sandboxing/src/seatbelt.rs)<br>[`codex-rs/windows-sandbox-rs/src/lib.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/windows-sandbox-rs/src/lib.rs)<br>[`packages/sandbox/sandbox-windows-acl/src/index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-windows-acl/src/index.ts)<br>[`packages/sandbox/sandbox-windows-acl/src/runner.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/sandbox/sandbox-windows-acl/src/runner.ts)
+- **Adopt as is or adapt.** ADAPT.
+- **Suggested design.** After E1 on Linux. Each backend reports its own residuals; Windows hard links and unconfined reads are named residuals in the dsh source comment.
+- **Files to touch.** `kernel/src/sandbox.rs`, new per-platform modules.
+
+#### E9. Wiring the guardian model path and speculative execution (rulings 48, 60, 65)
+
+- **What is deferred.** (a) Guardian: the model-backed classifier. (b) Speculation: running side-effect-free reads ahead of commit.
+- **Why.** (a) A model reviewing actions adds latency, cost and a new injection surface; the advisory deterministic classifier ships. (b) Ruling 65 is explicit: speculation stays unwired because the loop has no commit window, ordering across segments is unsound, user pre/post hooks and approval would be bypassed by a kept result, and `runToolCall` owns exactly-once effects.
+- **Upstream reference.** [`codex-rs/core/src/guardian/mod.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/mod.rs)<br>[`codex-rs/core/src/guardian/decision.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/decision.rs)<br>[`codex-rs/core/src/guardian/input_budget.rs`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/core/src/guardian/input_budget.rs)<br>[`codex-rs/prompts/templates/guardian/classifier_instructions.md`](https://github.com/openai/codex/blob/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/prompts/templates/guardian/classifier_instructions.md)<br>[`packages/agent/src/speculative-execution.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/agent/src/speculative-execution.ts)
+- **Adopt as is or adapt.** ADAPT (both).
+- **Suggested design.** (a) Pass the action and the task instructions in `<data>` delimiters (already done for the deterministic path), use the review fork's closed read-only tool set, set a hard input budget (codex `input_budget.rs`), fail CLOSED in enforce mode, never let a model verdict grant. (b) Revisit only with a design that runs `tool.pre` hooks and approval BEFORE any kept result is used; the safe slice is prefetching file contents into a cache that the real, fully guarded `read` consults, so the guarded call is still made exactly once.
+- **Files to touch.** `app/src/core/guardian.ts`, `app/src/core/loop.ts`, `app/src/core/speculation.ts`, `app/tests/core/speculation-unwired.test.ts` (must keep passing or be replaced deliberately).
+
+#### E10. Debug Adapter Protocol tool `debug` (docs/09), authority side
+
+- **What is deferred.** A `debug` tool that launches and drives a debug adapter (breakpoints, stepping, variables). It is not implemented; docs/09 names it.
+- **Why.** It needs a spawn of an adapter process (admitted as `spawn`), program execution under a debugger (equivalent to `shell.exec` in authority terms: arbitrary code runs) and so must be confined by E1 to be more than an ask-gated tool.
+- **Upstream reference.** [`packages/coding-agent/src/dap/client.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/dap/client.ts)<br>[`packages/coding-agent/src/dap/session.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/dap/session.ts)<br>[`packages/coding-agent/src/dap/config.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/dap/config.ts)<br>[`packages/coding-agent/src/dap/defaults.json`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/dap/defaults.json)<br>[`packages/coding-agent/src/dap/types.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/dap/types.ts)
+- **Adopt as is or adapt.** ADAPT. oh-my-pi's DAP client is TypeScript (MIT); the protocol framing and adapter defaults can be re-implemented, or ported with attribution (open item).
+- **Suggested design.** Admit `debug.launch` as BOTH `spawn` and `shell.exec` (ask by default, never auto-approved by accept-edits); route the adapter through `spawnOwned` with a ledger row; speak DAP over the adapter's stdio with Content-Length framing (the MCP client in `core/mcp/` already frames similarly); expose a read-only subset first (`debug.stack`, `debug.variables`).
+- **Files to touch.** new `app/src/tools/debug.ts`, `app/src/core/dap/`, `app/src/tools/index.ts`, `app/src/core/loop.ts` (`guardActionFor`), `app/src/core/permission-mode.ts` (read-only must refuse launch), docs/09.
