@@ -89,7 +89,7 @@ import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./pos
 // the mistake tracker on error. The modules are pure; the loop imports them,
 // never the reverse.
 import { LoopDetectionTracker } from "./guards/loop-detection";
-import { MistakeTracker } from "./guards/mistake-tracker";
+import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
 // Tier-3 speculative execution (docs/28 ruling 47): an OFF-BY-DEFAULT coordinator
 // that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
@@ -1749,6 +1749,10 @@ async function runToolCall(
   // Lazy nested-instruction discovery (docs/10): a successful path-touching
   // tool registers the AGENTS.md/CLAUDE.md files above that path.
   lazy?: LazyInstructions,
+  // T-4: failed steps still allowed once THIS failure is counted (for a call
+  // whose arguments did not parse, the tighter of the mistake and format caps).
+  // Absent for callers that run no mistake tracker.
+  attemptsAfterFailure?: (formatError: boolean) => number,
 ): Promise<ToolCallOutcome> {
   const parsed = parseCall(call);
   const started = Date.now();
@@ -1784,7 +1788,17 @@ async function runToolCall(
     const refusal = writeSpillSafely(plan.spill.file, plan.spill.contents);
     if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
   }
-  const content = toolMessageContent(result, plan.text);
+  // The outcome the batch loop's mistake accounting reads. Computed here so the
+  // model-facing text can name the remaining budget only for failures that
+  // actually count: a guard/hook denial, a plan-mode stage or an edit-ladder
+  // miss is the system working as designed and costs no attempt.
+  const expected = executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name));
+  const countsAsMistake = !result.ok && !expected && executed.staged !== true;
+  // T-4: a model-facing note only. The receipt and event digests above and below
+  // are of the tool's own output; the note is appended to the transcript text.
+  const attemptsNote =
+    countsAsMistake && attemptsAfterFailure !== undefined ? attemptsRemainingNote(attemptsAfterFailure(parsed.error !== undefined)) : "";
+  const content = toolMessageContent(result, plan.text) + attemptsNote;
   if (lazy !== undefined && result.ok && LAZY_TRIGGER_TOOLS.has(call.name)) {
     for (const touched of touchedPaths(call.name, parsed.args)) {
       for (const fragment of lazy.discover(touched)) {
@@ -1893,7 +1907,7 @@ async function runToolCall(
   // nothing and is not a failure.
   return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok,
     staged: executed.staged === true,
-    expected: executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name)),
+    expected,
   };
 }
 
@@ -2309,7 +2323,10 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy)
+            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy, (formatError) => {
+              const mistakeLeft = mistakes.remaining - 1;
+              return formatError ? Math.min(mistakeLeft, MAX_CONSECUTIVE_FORMAT_ERRORS - consecutiveFormatErrors - 1) : mistakeLeft;
+            })
               .then((outcome) => {
                 appendedTokens += outcome.tokens;
                 // A plan-mode staged call changed nothing: not a failure. A
