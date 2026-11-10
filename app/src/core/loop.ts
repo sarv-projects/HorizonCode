@@ -34,6 +34,7 @@ import type {
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
+import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { presetCatalog } from "./agent-profiles";
@@ -209,16 +210,21 @@ export function systemPrompt(
   return buildSystemPrompt(workspace, today, env, memory);
 }
 
-export function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {
-  const text = typeof raw === "string" ? raw.trim() : "";
-  if (text === "") return { args: {} };
-  try {
-    const value: unknown = JSON.parse(text);
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) return { args: value as Record<string, unknown> };
-    return { args: {}, error: "arguments must be a JSON object" };
-  } catch (err) {
-    return { args: {}, error: errorMessage(err) };
-  }
+/**
+ * Parse a tool call's argument blob (NF-069 tolerant decoding). Valid JSON is
+ * taken as is; a syntactic slip is repaired and counted, and scalars are
+ * coerced to the tool's schema (see json-repair.ts). `toolName` selects the
+ * fail-closed policy: a truncated blob is only completed for read-only tools,
+ * so a half-sent shell command or file content is refused. `repaired` marks the
+ * result so the event and card can say the admitted args are not the raw bytes.
+ */
+export function parseArguments(raw: string, toolName?: string): ToolArguments {
+  return parseToolArguments(raw, toolName, toolName === undefined ? undefined : getTool(toolName)?.parameters);
+}
+
+/** The parsed arguments of one tool call, repaired and schema-coerced. */
+function parseCall(call: ToolCall): ToolArguments {
+  return parseArguments(call.arguments, call.name);
 }
 
 /** True when `rel` names the root itself, an ancestor of it, or another root. */
@@ -1076,7 +1082,7 @@ export function buildSpeculationHost(
   return {
     async run(candidate: SpeculativeToolCandidate): Promise<SpeculativeRunResult> {
       const call: ToolCall = { id: candidate.id, name: candidate.name, arguments: JSON.stringify(candidate.args) };
-      const parsed = parseArguments(call.arguments);
+      const parsed = parseCall(call);
       // Route through executeTool so admissionFor -> gate.check -> tool.execute
       // happens exactly as it would for a non-speculative call.
       const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks);
@@ -1094,7 +1100,7 @@ export function buildSpeculationHost(
 export function speculativeCandidatesFor(calls: ToolCall[], workspace: string): SpeculativeToolCandidate[] {
   const out: SpeculativeToolCandidate[] = [];
   for (const call of calls) {
-    const parsed = parseArguments(call.arguments);
+    const parsed = parseCall(call);
     if (parsed.error !== undefined) continue;
     const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
     if (effect === undefined) continue;
@@ -1717,10 +1723,19 @@ async function runToolCall(
   // tool registers the AGENTS.md/CLAUDE.md files above that path.
   lazy?: LazyInstructions,
 ): Promise<ToolCallOutcome> {
-  const parsed = parseArguments(call.arguments);
+  const parsed = parseCall(call);
   const started = Date.now();
-  emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
-  await logEvent(deps, faults, EventTypes.toolCall, { callId: call.id, name: call.name, args: parsed.args }, { kind: "tool", id: call.name });
+  // NF-069: when the admitted args are a repaired form of the model's bytes the
+  // event and both cards say so; the receipt below hashes these same args.
+  const repairedMark = parsed.repaired === true ? { repaired: true as const } : {};
+  emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running", ...repairedMark });
+  await logEvent(
+    deps,
+    faults,
+    EventTypes.toolCall,
+    { callId: call.id, name: call.name, args: parsed.args, ...(parsed.repaired === true ? { repaired: true, repairs: parsed.repairs } : {}) },
+    { kind: "tool", id: call.name },
+  );
 
   const executed = await executeTool(deps, gate, call, parsed, faults, hooks);
   const result = executed.result;
@@ -1839,6 +1854,7 @@ async function runToolCall(
     callId: call.id,
     name: call.name,
     args: parsed.args,
+    ...repairedMark,
     status: result.ok ? "ok" : "error",
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
     ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
@@ -2207,7 +2223,7 @@ export async function runTurn(
       // (which the tracker's own state resets) does not leave a stale nudge.
       loopNudge = undefined;
       for (const call of turn.toolCalls) {
-        const verdict = loopDetection.inspect({ name: call.name, input: parseArguments(call.arguments).args });
+        const verdict = loopDetection.inspect({ name: call.name, input: parseCall(call).args });
         if (verdict.kind === "hard") {
           emit(deps.callbacks, { type: "error", message: verdict.message ?? "tool-call loop detected" });
           await logEvent(deps, faults, EventTypes.error, { message: verdict.message, detail: "tool_loop" });
@@ -2254,7 +2270,7 @@ export async function runTurn(
                 // by the format cap / `invalid_tool_call` axis below — not a
                 // `tool_execution_failed` mistake, so it is excluded here to
                 // avoid double-counting the same batch on both axes.
-                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseArguments(call.arguments).error === undefined) {
+                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseCall(call).error === undefined) {
                   toolOk.set(call.id, outcome.ok);
                 }
               })
@@ -2304,7 +2320,7 @@ export async function runTurn(
       // chain. The reminder is advisory — injected as a user message with a
       // clear source marker, never a veto.
       for (const call of turn.toolCalls) {
-        const reminder = repeatTool.observe(call.name, parseArguments(call.arguments).args);
+        const reminder = repeatTool.observe(call.name, parseCall(call).args);
         if (reminder === undefined) continue;
         const content = `[repeat-tool-reminder] ${reminder}`;
         try {
@@ -2346,7 +2362,7 @@ export async function runTurn(
       let parseErrors = 0;
       let cleanCalls = 0;
       for (const call of turn.toolCalls) {
-        if (parseArguments(call.arguments).error !== undefined) parseErrors += 1;
+        if (parseCall(call).error !== undefined) parseErrors += 1;
         else cleanCalls += 1;
       }
       if (parseErrors > 0 && cleanCalls === 0) {
