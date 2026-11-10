@@ -34,8 +34,10 @@ import type {
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
+import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
+import { openTodos, todoVersion } from "../tools/todo";
 import { presetCatalog } from "./agent-profiles";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
@@ -87,7 +89,7 @@ import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./pos
 // the mistake tracker on error. The modules are pure; the loop imports them,
 // never the reverse.
 import { LoopDetectionTracker } from "./guards/loop-detection";
-import { MistakeTracker } from "./guards/mistake-tracker";
+import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
 // Tier-3 speculative execution (docs/28 ruling 47): an OFF-BY-DEFAULT coordinator
 // that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
@@ -209,16 +211,21 @@ export function systemPrompt(
   return buildSystemPrompt(workspace, today, env, memory);
 }
 
-export function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {
-  const text = typeof raw === "string" ? raw.trim() : "";
-  if (text === "") return { args: {} };
-  try {
-    const value: unknown = JSON.parse(text);
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) return { args: value as Record<string, unknown> };
-    return { args: {}, error: "arguments must be a JSON object" };
-  } catch (err) {
-    return { args: {}, error: errorMessage(err) };
-  }
+/**
+ * Parse a tool call's argument blob (NF-069 tolerant decoding). Valid JSON is
+ * taken as is; a syntactic slip is repaired and counted, and scalars are
+ * coerced to the tool's schema (see json-repair.ts). `toolName` selects the
+ * fail-closed policy: a truncated blob is only completed for read-only tools,
+ * so a half-sent shell command or file content is refused. `repaired` marks the
+ * result so the event and card can say the admitted args are not the raw bytes.
+ */
+export function parseArguments(raw: string, toolName?: string): ToolArguments {
+  return parseToolArguments(raw, toolName, toolName === undefined ? undefined : getTool(toolName)?.parameters);
+}
+
+/** The parsed arguments of one tool call, repaired and schema-coerced. */
+function parseCall(call: ToolCall): ToolArguments {
+  return parseArguments(call.arguments, call.name);
 }
 
 /** True when `rel` names the root itself, an ancestor of it, or another root. */
@@ -1076,7 +1083,7 @@ export function buildSpeculationHost(
   return {
     async run(candidate: SpeculativeToolCandidate): Promise<SpeculativeRunResult> {
       const call: ToolCall = { id: candidate.id, name: candidate.name, arguments: JSON.stringify(candidate.args) };
-      const parsed = parseArguments(call.arguments);
+      const parsed = parseCall(call);
       // Route through executeTool so admissionFor -> gate.check -> tool.execute
       // happens exactly as it would for a non-speculative call.
       const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks);
@@ -1094,7 +1101,7 @@ export function buildSpeculationHost(
 export function speculativeCandidatesFor(calls: ToolCall[], workspace: string): SpeculativeToolCandidate[] {
   const out: SpeculativeToolCandidate[] = [];
   for (const call of calls) {
-    const parsed = parseArguments(call.arguments);
+    const parsed = parseCall(call);
     if (parsed.error !== undefined) continue;
     const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
     if (effect === undefined) continue;
@@ -1182,6 +1189,35 @@ export class RunFaults {
  */
 const VERIFICATION_SHAPE =
   /(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun|deno|npx)\s+(?:run\s+)?(?:test|tests|lint|typecheck|type-check|check|build|tsc)|(?:^|[\s;&|(])(?:pytest|jest|vitest|mocha|cargo|go\s+test|make|tsc|eslint|ruff|mypy|flake8)\b/;
+
+/** Audit-trail event: the turn ended with todo items open and was re-opened once (T-3). */
+export const PENDING_TODOS_EVENT = "run.pending_todos_reminder";
+
+/** Most open items named in the reminder, and the longest text kept per item. */
+const TODO_REMINDER_MAX_ITEMS = 5;
+const TODO_REMINDER_MAX_TEXT = 80;
+
+/**
+ * The one-shot reminder for a turn that ended while the session todo list still
+ * has open items, or undefined when nothing is open (no todos, or all done).
+ * Pure text over the session's own list: no authority, no tool call.
+ */
+export function pendingTodosReminder(sessionId: string, sinceVersion?: number): { text: string; open: number } | undefined {
+  // Stale open items from an earlier run are not this run's business: when a
+  // start-of-run version is given, the list must have changed since (ruling 74).
+  if (sinceVersion !== undefined && todoVersion(sessionId) === sinceVersion) return undefined;
+  const open = openTodos(sessionId);
+  if (open.length === 0) return undefined;
+  const shown = open
+    .slice(0, TODO_REMINDER_MAX_ITEMS)
+    .map((t) => `${t.id} ${t.text.length > TODO_REMINDER_MAX_TEXT ? `${t.text.slice(0, TODO_REMINDER_MAX_TEXT - 3)}...` : t.text}`);
+  const more = open.length > shown.length ? `; and ${open.length - shown.length} more` : "";
+  const noun = open.length === 1 ? "todo item is" : "todo items are";
+  return {
+    open: open.length,
+    text: `[pending-todos-reminder] ${open.length} ${noun} still open: ${shown.join("; ")}${more}. Finish them, or mark them done with the todo tool, before ending your turn.`,
+  };
+}
 
 /** Audit-trail event: a run changed files and ran nothing that verifies them. */
 export const UNVERIFIED_COMPLETION_EVENT = "run.unverified_completion";
@@ -1716,11 +1752,24 @@ async function runToolCall(
   // Lazy nested-instruction discovery (docs/10): a successful path-touching
   // tool registers the AGENTS.md/CLAUDE.md files above that path.
   lazy?: LazyInstructions,
+  // T-4: failed steps still allowed once THIS failure is counted (for a call
+  // whose arguments did not parse, the tighter of the mistake and format caps).
+  // Absent for callers that run no mistake tracker.
+  attemptsAfterFailure?: (formatError: boolean) => number,
 ): Promise<ToolCallOutcome> {
-  const parsed = parseArguments(call.arguments);
+  const parsed = parseCall(call);
   const started = Date.now();
-  emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running" });
-  await logEvent(deps, faults, EventTypes.toolCall, { callId: call.id, name: call.name, args: parsed.args }, { kind: "tool", id: call.name });
+  // NF-069: when the admitted args are a repaired form of the model's bytes the
+  // event and both cards say so; the receipt below hashes these same args.
+  const repairedMark = parsed.repaired === true ? { repaired: true as const } : {};
+  emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running", ...repairedMark });
+  await logEvent(
+    deps,
+    faults,
+    EventTypes.toolCall,
+    { callId: call.id, name: call.name, args: parsed.args, ...(parsed.repaired === true ? { repaired: true, repairs: parsed.repairs } : {}) },
+    { kind: "tool", id: call.name },
+  );
 
   const executed = await executeTool(deps, gate, call, parsed, faults, hooks);
   const result = executed.result;
@@ -1742,7 +1791,20 @@ async function runToolCall(
     const refusal = writeSpillSafely(plan.spill.file, plan.spill.contents);
     if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
   }
-  const content = toolMessageContent(result, plan.text);
+  // The outcome the batch loop's mistake accounting reads. Computed here so the
+  // model-facing text can name the remaining budget only for failures that
+  // actually count: a guard/hook denial, a plan-mode stage or an edit-ladder
+  // miss is the system working as designed and costs no attempt.
+  const expected = executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name));
+  const countsAsMistake = !result.ok && !expected && executed.staged !== true;
+  // T-4: a model-facing note only. The receipt and event digests above and below
+  // are of the tool's own output; the note is appended to the transcript text.
+  const attemptsNote =
+    countsAsMistake && attemptsAfterFailure !== undefined ? attemptsRemainingNote(attemptsAfterFailure(parsed.error !== undefined)) : "";
+  // A truncation repair closed a cut-off blob for a read-only tool: say so to
+  // the model, since the card flag is not visible to it (ruling 74).
+  const truncationNote = parsed.truncated === true ? `\n${TRUNCATED_ARGS_NOTE}` : "";
+  const content = toolMessageContent(result, plan.text) + truncationNote + attemptsNote;
   if (lazy !== undefined && result.ok && LAZY_TRIGGER_TOOLS.has(call.name)) {
     for (const touched of touchedPaths(call.name, parsed.args)) {
       for (const fragment of lazy.discover(touched)) {
@@ -1839,6 +1901,7 @@ async function runToolCall(
     callId: call.id,
     name: call.name,
     args: parsed.args,
+    ...repairedMark,
     status: result.ok ? "ok" : "error",
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
     ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
@@ -1850,9 +1913,12 @@ async function runToolCall(
   // nothing and is not a failure.
   return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok,
     staged: executed.staged === true,
-    expected: executed.expected === true || (!result.ok && EXPECTED_MISS_TOOLS.has(call.name)),
+    expected,
   };
 }
+
+/** One line appended to the model-facing result when its arguments were cut off and closed. */
+const TRUNCATED_ARGS_NOTE = "[arguments were cut off and closed; re-issue the call if the values are incomplete]";
 
 /** Most characters of shell output a finished tool card carries (head and tail kept). */
 const CARD_OUTPUT_CAP = 16_000;
@@ -2042,6 +2108,10 @@ export async function runTurn(
     // so the format-error corrective reset cannot clear it. It rides the next
     // step's system rail alongside `corrective`.
     let loopNudge: string | undefined;
+    // T-3: the end-of-turn pending-todos reminder fires at most once per run.
+    let todoReminderSent = false;
+    // Ruling 74: the reminder fires only if this run modified the todo list.
+    const todoVersionAtStart = todoVersion(deps.sessionId);
     // One report per run, not one per dispatch: the compaction numbers describe
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
@@ -2194,7 +2264,25 @@ export async function runTurn(
       if (turn.stopReason === "max_tokens") {
         emit(deps.callbacks, { type: "notice", message: "the model hit its output limit for this turn" });
       }
-      if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) break;
+      if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
+        // T-3: the model is ending its turn. If the session todo list still has
+        // open items, give it ONE more step with a bounded reminder before the
+        // run settles (the exit-status gate below keeps `unknown` as the
+        // terminal if it stops again). Budgets and abort are re-checked at the
+        // top of the loop, so the extra step is never free.
+        const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId, todoVersionAtStart);
+        if (pending === undefined) break;
+        todoReminderSent = true;
+        try {
+          deps.store.appendMessage(deps.sessionId, { role: "user", content: pending.text });
+        } catch (err) {
+          faults.noteTranscript("todo", err);
+          break;
+        }
+        emit(deps.callbacks, { type: "notice", message: `${pending.open} todo item(s) still open: giving the model one more step` });
+        await logEvent(deps, faults, PENDING_TODOS_EVENT, { open: pending.open }, { kind: "system", id: "hz-loop" });
+        continue;
+      }
 
       // SAFETY-RAILS (rail 1): identical-tool-call loop detection, BEFORE the
       // batch is dispatched. A soft verdict (the 3rd identical call) adds a
@@ -2207,7 +2295,7 @@ export async function runTurn(
       // (which the tracker's own state resets) does not leave a stale nudge.
       loopNudge = undefined;
       for (const call of turn.toolCalls) {
-        const verdict = loopDetection.inspect({ name: call.name, input: parseArguments(call.arguments).args });
+        const verdict = loopDetection.inspect({ name: call.name, input: parseCall(call).args });
         if (verdict.kind === "hard") {
           emit(deps.callbacks, { type: "error", message: verdict.message ?? "tool-call loop detected" });
           await logEvent(deps, faults, EventTypes.error, { message: verdict.message, detail: "tool_loop" });
@@ -2246,7 +2334,10 @@ export async function runTurn(
         }
         await Promise.all(
           segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy)
+            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy, (formatError) => {
+              const mistakeLeft = mistakes.remaining - 1;
+              return formatError ? Math.min(mistakeLeft, MAX_CONSECUTIVE_FORMAT_ERRORS - consecutiveFormatErrors - 1) : mistakeLeft;
+            })
               .then((outcome) => {
                 appendedTokens += outcome.tokens;
                 // A plan-mode staged call changed nothing: not a failure. A
@@ -2254,7 +2345,7 @@ export async function runTurn(
                 // by the format cap / `invalid_tool_call` axis below — not a
                 // `tool_execution_failed` mistake, so it is excluded here to
                 // avoid double-counting the same batch on both axes.
-                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseArguments(call.arguments).error === undefined) {
+                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseCall(call).error === undefined) {
                   toolOk.set(call.id, outcome.ok);
                 }
               })
@@ -2304,7 +2395,7 @@ export async function runTurn(
       // chain. The reminder is advisory — injected as a user message with a
       // clear source marker, never a veto.
       for (const call of turn.toolCalls) {
-        const reminder = repeatTool.observe(call.name, parseArguments(call.arguments).args);
+        const reminder = repeatTool.observe(call.name, parseCall(call).args);
         if (reminder === undefined) continue;
         const content = `[repeat-tool-reminder] ${reminder}`;
         try {
@@ -2346,7 +2437,7 @@ export async function runTurn(
       let parseErrors = 0;
       let cleanCalls = 0;
       for (const call of turn.toolCalls) {
-        if (parseArguments(call.arguments).error !== undefined) parseErrors += 1;
+        if (parseCall(call).error !== undefined) parseErrors += 1;
         else cleanCalls += 1;
       }
       if (parseErrors > 0 && cleanCalls === 0) {

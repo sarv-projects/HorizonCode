@@ -98,8 +98,30 @@ export class MistakeTracker {
     this.consecutiveMistakes = 0;
   }
 
+  /**
+   * Consecutive mistakes still allowed before the stop (limit minus streak,
+   * never below 0); Infinity when the limit is disabled.
+   */
+  get remaining(): number {
+    const max = this.maxConsecutiveMistakes;
+    return !max ? Number.POSITIVE_INFINITY : Math.max(0, max - this.consecutiveMistakes);
+  }
+
   /** The current consecutive-mistake count (for tests and diagnostics). */
   get value(): number {
     return this.consecutiveMistakes;
   }
+}
+
+/**
+ * The line appended to a failed tool result so the model sees its budget
+ * (forgecode renders the same on every failed result). `remaining` is the
+ * number of further failed steps allowed once the one being reported is
+ * counted; 0 means this failure reached the limit and the run stops. Returns
+ * "" for a disabled (infinite) limit, so no misleading number is shown.
+ */
+export function attemptsRemainingNote(remaining: number): string {
+  if (!Number.isFinite(remaining)) return "";
+  const n = Math.max(0, Math.floor(remaining));
+  return `\n[attempts remaining before this run stops: ${n}]`;
 }

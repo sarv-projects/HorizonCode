@@ -31,7 +31,7 @@
 
 ## 2. What `ops/gates.sh` runs today
 
-Seven gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Measured 2026-11-09 on `integration/superset` (as root): `rust-kernel-suite`, `kernel-selftest` and `ts-typecheck` ok; `ts-suite` fails on the 11 known root/uid-0 permission tests (ruling 39), so the e2e steps were skipped by fail-fast. Run by hand they all pass: exit 0 with receipts, exit 5, exit 2.
+Eight gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). Measured 2026-11-09 on `integration/superset` (as root): `rust-kernel-suite`, `kernel-selftest` and `ts-typecheck` ok; `ts-suite` fails on the 11 known root/uid-0 permission tests (ruling 39), so the e2e steps were skipped by fail-fast. Run by hand they all pass: exit 0 with receipts, exit 5, exit 2.
 
 | Step | What it proves | Existing evidence for it |
 |---|---|---|
@@ -42,8 +42,20 @@ Seven gates, fail-fast, each in its own temp-logged step (`bash ops/gates.sh`). 
 | `e2e-headless-smoke` | fresh workspace, `printf 'list files' \| ./bin/hzcode --workspace <tmp>` exits 0, the mock's tool exchange appears in the output, and a non-empty `receipts.jsonl` is left behind | docs/28 §1 e2e rows |
 | `e2e-budget-rail` | the same with `HZ_MAX_STEPS=1` exits 5 with the budget notice | docs/28 §3 ruling 15 |
 | `e2e-usage-error` | `./bin/hzcode --max-steps nope` exits 2 with the diagnostic naming the flag | docs/28 §3 ruling 15; docs/14 §3.2 (exit table) |
+| `startup-latency` | the median of 5 timed runs (after one untimed warm-up) of `hzcode --version` is at most 500 ms, and of one headless mock turn (spawn, kernel, glob call, receipt, exit) at most 1000 ms; every run must also exit 0 and print its expected text, so a crash is never "fast". Override with `HZ_LATENCY_VERSION_MS` / `HZ_LATENCY_TURN_MS`. Needs a millisecond clock (bash 5 or GNU date) and fails rather than guess without one. About 2 s of gate time | docs/28 ruling 72; the numbers are below |
 
-None of these seven *is* a §3.5 gate: they are the repository's own suites. The e2e steps run the provider pinned to `mock` under a throwaway `HOME`, so a gate never reaches the network and never spends money.
+None of these eight *is* a §3.5 gate: they are the repository's own suites. The e2e steps run the provider pinned to `mock` under a throwaway `HOME`, so a gate never reaches the network and never spends money.
+
+### Startup-latency numbers
+
+Measured 2026-11-09 on an 8-core x86_64 sandbox container, Bun 1.2.14, running as root, mock provider, 9 runs each after a warm-up (ms, sorted):
+
+| Measurement | Samples | Median | Ceiling | Margin |
+|---|---|---|---|---|
+| `hzcode --version` | 92 94 95 95 96 96 98 99 100 | 96 | 500 ms | about 5x |
+| headless mock turn (`printf 'list files' \| hzcode`) | 193 194 195 197 198 199 199 203 222 | 198 | 1000 ms | about 5x |
+
+The ceilings are deliberately generous. A hosted CI runner is slower and noisier than this machine, and a gate that flakes gets ignored, so the margin is roughly 5x rather than the 3x a quiet machine would justify. The gate still trips on the regressions it exists for (an eager heavy import, a blocking kernel handshake, a synchronous scan at start), which cost far more than 5x on a 96 ms baseline only when they are large; a subtler slowdown is caught by tightening the defaults when new numbers justify it. Re-measure at release and update this table and the two defaults in `ops/gates.sh` together. These are single-machine numbers and exclude model latency.
 
 ## 3. Keeping this file honest
 

@@ -560,6 +560,9 @@ export type RuntimeEvent =
       name: string;
       args: Record<string, unknown>;
       status: "running" | "ok" | "error";
+      // ADDITIVE (NF-069): the admitted args are a repaired/coerced form of the
+      // model's raw argument bytes (src/core/json-repair.ts). Old consumers ignore it.
+      repaired?: true;
       summary?: string;
       // ADDITIVE (TUI part 2, C1): evidence for the finished-card renderer.
       // Present only on a final (ok|error) card: `durationMs` for every tool,
