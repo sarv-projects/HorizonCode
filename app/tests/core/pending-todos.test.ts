@@ -162,6 +162,47 @@ describe("pending todos re-check", () => {
   });
 });
 
+describe("stale todos from an earlier run (ruling 75)", () => {
+  test("open todos left by a previous run do not trigger a reminder on an unrelated later run", async () => {
+    const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+    const store = new SessionStore(workspace);
+    const sessionId = store.createSession("stale").id;
+    const go = async (turns: ProviderEvent[][], prompt: string) => {
+      const { provider, requests } = scripted(turns);
+      await runTurn(
+        { workspace, sessionId, model: "m", provider, kernel, store, signal: new AbortController().signal, callbacks: { onEvent: () => {} }, sessionLeases: [], approve: async () => true },
+        prompt,
+      );
+      return requests;
+    };
+    try {
+      // Run 1 leaves an item open; it earns its own reminder (3 steps).
+      expect(await go([todo({ action: "add", text: "left open" }, "c1"), END], "first")).toHaveLength(3);
+      expect(reminders(store.history(sessionId))).toHaveLength(1);
+      // Run 2 never touches the list: the stale item is not nagged about.
+      expect(await go([END], "unrelated question")).toHaveLength(1);
+      expect(reminders(store.history(sessionId))).toHaveLength(1);
+      // Run 3 modifies the list again (adds another): the reminder fires again.
+      expect(await go([todo({ action: "add", text: "new item" }, "c2"), END], "third")).toHaveLength(3);
+      expect(reminders(store.history(sessionId))).toHaveLength(2);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+
+  test("pendingTodosReminder with an unchanged version returns nothing even with open items", async () => {
+    const { getTool } = await import("../../src/tools");
+    const { todoVersion } = await import("../../src/tools/todo");
+    const sid = "stale-version";
+    await getTool("todo")?.execute({ action: "add", text: "old" }, { sessionId: sid, workspace } as never);
+    const v = todoVersion(sid);
+    expect(pendingTodosReminder(sid, v)).toBeUndefined();
+    await getTool("todo")?.execute({ action: "add", text: "new" }, { sessionId: sid, workspace } as never);
+    expect(pendingTodosReminder(sid, v)?.open).toBe(2);
+  });
+});
+
 describe("pendingTodosReminder text", () => {
   test("is bounded: at most 5 items named, long texts truncated, the rest counted", async () => {
     // Populate a session through the real tool so the store is the production one.

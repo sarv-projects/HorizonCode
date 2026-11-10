@@ -11,6 +11,18 @@ interface Todo {
 /** Session-scoped store; a fresh process starts with an empty plan. */
 const STORE = new Map<string, Todo[]>();
 
+/** Per-session count of list mutations (add, done); lets a run tell if it touched the list. */
+const VERSIONS = new Map<string, number>();
+
+function bump(sessionId: string): void {
+  VERSIONS.set(sessionId, (VERSIONS.get(sessionId) ?? 0) + 1);
+}
+
+/** The session's todo mutation counter; 0 when the list was never touched. */
+export function todoVersion(sessionId: string): number {
+  return VERSIONS.get(sessionId) ?? 0;
+}
+
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
 }
@@ -73,6 +85,7 @@ export const todoTool: Tool = {
         const text = typeof args.text === "string" ? args.text.trim() : "";
         if (text === "") return fail("text is required for add");
         list.push({ id: nextId(list), text, done: false });
+        bump(ctx.sessionId);
         return { ok: true, output: checklist(list) };
       }
 
@@ -82,6 +95,7 @@ export const todoTool: Tool = {
         const item = list.find((t) => t.id === id);
         if (!item) return fail(`todo not found: ${id}`);
         item.done = true;
+        bump(ctx.sessionId);
         return { ok: true, output: checklist(list) };
       }
 
