@@ -317,3 +317,5 @@ Grok-derived deferred items, one commit each (docs/28 rulings 84+, docs/13 Part 
 - `subagent-boundary.test.ts` (1) and `subagent-cells.test.ts` (4) (ruling 88).
 - `completion.test.ts` (6) and a rich PTY case: ghost bytes, Tab to `/plan`, `@READ` to README.md (ruling 89).
 - `theme.test.ts` (4) and a rich PTY case (ruling 90).
+- Review pass (ruling 91): pasted text can no longer answer the approval card (`paste.pasting()`, `tests/tui/paste.test.ts`); completion never offers file names with control or bidi characters (`tests/tui/completion.test.ts`); em dashes removed from new prose. Suite: 1792 pass / 8 skip / 0 fail.
+- Handoff notes: deferred work and provenance are in docs/13 "Part 3 provenance" and "Part 3 known gaps and deferred work" and docs/30 section 5.12. Upstream URLs for the Grok Build items were not re-verified (clone absent from this worktree). The branch tracks `origin/feat/forgecode-takes-3` by mistake; push with an explicit `origin feat/tui-part3`. `gh` does not work against the gateway remote (no github.com remote), so PRs could not be listed or merged from here.

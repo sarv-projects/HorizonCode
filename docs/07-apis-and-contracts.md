@@ -56,6 +56,8 @@ Numbered, individually testable. `MUST` violations are contract-test failures (Â
 | **C7** | Every request MUST carry a deadline (`deadlineMs`). On expiry the server MUST refuse with `HZ_DEADLINE_EXCEEDED` (`Deadline`, `Never`) rather than continue silently; an effect already admitted MUST still settle and be reported. |
 | **C8** | Cancellation is a request, not a completion. `hz.run.cancel` and `hz.session.interrupt` acknowledge intent; the run is complete only when `hz.session.claim.released` is observed. A client MUST NOT treat an acknowledgement as a terminal state. |
 
+> **Additive harness-side contract notes (TUI part 3).** `ProviderEvent` gained `{ type: "thinking"; text }` and `RuntimeEvent` gained `assistant.thinking`, `subagent.start` and `subagent.end` (`app/src/contracts.ts`). All are optional variants: a consumer that does not know them ignores them, a provider without reasoning never emits `thinking`, and an older runtime never emits the subagent boundaries (the TUI falls back to the `agent` tool card). They are facade events, not kernel events: the 44-name kernel catalogue and `canon.rs` are unchanged, and the server relays them as ordinary `session.event`s. See docs/28 rulings 87 and 88 and docs/13 Part 3.
+
 ### 2.2 Streaming and subscription
 
 | ID | Rule |
