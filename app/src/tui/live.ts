@@ -105,7 +105,7 @@ const PULSE_ACCENT: RGB = [0xbb, 0x9a, 0xf7];
 export function pulseGlyph(frame: string, pulseTick: number, level = colorLevel()): string {
   if (level === 0) return frame;
   if (level < 3) return paint("accent", frame, level);
-  const rgb = blend(PULSE_BASE, PULSE_ACCENT, 0.3 + 0.7 * pulse(pulseTick, 0.08));
+  const rgb = blend(PULSE_BASE, PULSE_ACCENT, 0.5 + 0.5 * pulse(pulseTick, 0.08));
   return rgbFg(rgb, 3) + frame + "\u001b[0m";
 }
 
