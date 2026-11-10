@@ -501,6 +501,8 @@ export interface ToolArguments {
   error?: string;
   /** True when the admitted args differ from the model's raw bytes (syntax repair or type coercion). */
   repaired?: true;
+  /** True when a cut-off tail was closed by the parser, so the values may be incomplete. */
+  truncated?: true;
   /** Every repair and coercion applied, for the event log. */
   repairs?: string[];
 }
@@ -515,6 +517,7 @@ export function parseToolArguments(raw: string, toolName?: string, schema?: Sche
   if (text === "") return { args: {} };
   let value: unknown;
   const repairs: string[] = [];
+  let cutOff = false;
   try {
     value = JSON.parse(text);
   } catch (strictErr) {
@@ -528,10 +531,11 @@ export function parseToolArguments(raw: string, toolName?: string, schema?: Sche
     }
     value = out.value;
     repairs.push(...out.repairs);
+    cutOff = out.truncated;
   }
   if (!isRecord(value)) return { args: {}, error: "arguments must be a JSON object" };
   const coerced = coerceToSchema(value, schema);
   repairs.push(...coerced.coercions);
   if (repairs.length === 0) return { args: coerced.args };
-  return { args: coerced.args, repaired: true, repairs };
+  return { args: coerced.args, repaired: true, ...(cutOff ? { truncated: true as const } : {}), repairs };
 }

@@ -65,7 +65,8 @@ async function run(rawName: string, rawArgs: string) {
   try {
     const result = await runTurn(deps, "go");
     const logged = await kernel.readEvents(`session:${deps.sessionId}`).catch(() => []);
-    return { result, events, receipts, logged };
+    const history = store.history(deps.sessionId);
+    return { result, events, receipts, logged, history };
   } finally {
     await kernel.close();
     store.close();
@@ -105,6 +106,32 @@ describe("repairable arguments run, marked and receipted as repaired", () => {
     expect(payload.repaired).toBe(true);
     expect(payload.repairs).toContain("stripped a code fence");
     expect(payload.args).toEqual({ path: "a.txt" });
+  });
+});
+
+describe("a truncation repair is disclosed to the model (ruling 74)", () => {
+  const NOTE = "[arguments were cut off and closed; re-issue the call if the values are incomplete]";
+  const toolText = (history: Array<{ role: string; content: string }>) => history.filter((m) => m.role === "tool").map((m) => m.content).join("\n");
+
+  test("a cut-off read call runs and its tool result carries the note", async () => {
+    writeFileSync(path.join(workspace, "a.txt"), "one\ntwo\n");
+    const { events, history } = await run("read", '{"path":"a.txt');
+    const done = events.filter((e): e is Extract<RuntimeEvent, { type: "tool.card" }> => e.type === "tool.card" && e.status !== "running");
+    expect(done[0]?.status).toBe("ok");
+    expect(done[0]?.repaired).toBe(true);
+    expect(toolText(history)).toContain(NOTE);
+  });
+
+  test("a plain syntax repair (no cut-off) carries no note", async () => {
+    writeFileSync(path.join(workspace, "a.txt"), "one\n");
+    const { history } = await run("read", "{'path': 'a.txt',}");
+    expect(toolText(history)).not.toContain(NOTE);
+  });
+
+  test("a clean call carries no note", async () => {
+    writeFileSync(path.join(workspace, "a.txt"), "one\n");
+    const { history } = await run("read", '{"path":"a.txt"}');
+    expect(toolText(history)).not.toContain(NOTE);
   });
 });
 
