@@ -305,8 +305,6 @@ export interface LiveOptions {
   atLineStart: () => boolean;
   /** the human has typed something into the bar */
   typed: () => boolean;
-  /** zero-based column of the readline cursor */
-  cursorCol: () => number;
   /** Esc cancels (raw keypress handling is wired) */
   esc: boolean;
   /** pause drawing (an approval question owns the line) */
@@ -316,12 +314,14 @@ export interface LiveOptions {
 
 export interface Live {
   readonly enabled: boolean;
-  /** erase whatever is drawn; call before every transcript write */
+  /** erase the spinner line; call before every transcript write */
   erase(): void;
-  /** draw the idle status bar under the prompt */
+  /**
+   * Print the dim status line ONCE as a normal transcript line, just before the
+   * prompt. Skipped when nothing was written since the last copy and it has not
+   * changed. The cursor must be at the start of a line.
+   */
   showIdle(): void;
-  /** the human submitted a line: drop the idle bar (cursor is on its row) */
-  submitted(): void;
   beginTurn(): void;
   toolStart(name: string, args: unknown): void;
   toolEnd(): void;
@@ -331,11 +331,16 @@ export interface Live {
   dispose(): void;
 }
 
+/**
+ * Design: readline owns the prompt line, so nothing is ever drawn below it. While
+ * idle the status is a plain transcript line above the prompt. While a turn runs
+ * exactly one live line (the spinner) sits at the cursor, redrawn in place with
+ * `\r\x1b[2K` and erased before any transcript write.
+ */
 export function createLive(opts: LiveOptions): Live {
   const now = opts.now ?? Date.now;
   const unicode = unicodeLocale();
-  let drawn: "none" | "idle" | "busy" = "none";
-  let idleCol = 0;
+  let drawn = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let tick = 0;
   let startedAt = 0;
@@ -344,39 +349,39 @@ export function createLive(opts: LiveOptions): Live {
   let running = 0;
   let inputTokens: number | undefined;
   let busy = false;
-
-  const barLine = (): string => composeStatusBar(opts.status(), terminalWidth() - 1);
+  let dirty = true;
+  let lastBar = "";
 
   const erase = (): void => {
-    if (!opts.enabled || drawn === "none") return;
-    const was = drawn;
-    drawn = "none";
-    if (was === "busy") opts.write("\r\u001b[J");
-    else opts.write(`\u001b[1B\r\u001b[2K\u001b[1A\u001b[${idleCol + 1}G`);
+    if (!opts.enabled) return;
+    dirty = true;
+    if (!drawn) return;
+    drawn = false;
+    opts.write("\r\u001b[2K");
   };
 
   const drawBusy = (): void => {
     const elapsed = now() - startedAt;
     const spin = spinnerLine({ tick, verb, elapsedMs: elapsed, esc: opts.esc, unicode });
     const w = terminalWidth() - 1;
-    const first = visibleWidth(spin) > w ? truncate(strip(spin), w) : spin;
-    drawn = "busy";
-    opts.write("\r\u001b[2K" + first + "\n\u001b[2K" + barLine() + "\u001b[1A\r");
+    const line = visibleWidth(spin) > w ? truncate(strip(spin), w) : spin;
+    drawn = true;
+    opts.write("\r\u001b[2K" + line);
   };
 
   const frame = (): void => {
     if (!busy) return;
     tick++;
     if (opts.paused?.() || !opts.atLineStart() || opts.typed()) {
-      // Text is streaming (or the human is typing): the spinner steps aside.
-      if (drawn === "busy") erase();
+      // Text is streaming, a question is open or the human is typing: step aside.
+      if (drawn) erase();
       return;
     }
     drawBusy();
   };
 
   const onResize = (): void => {
-    if (busy && drawn === "busy") erase();
+    if (drawn) erase();
   };
   if (opts.enabled) {
     try {
@@ -386,20 +391,24 @@ export function createLive(opts: LiveOptions): Live {
     }
   }
 
+  const stop = (): void => {
+    busy = false;
+    if (timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+
   return {
     enabled: opts.enabled,
     erase,
     showIdle() {
       if (!opts.enabled || busy) return;
-      idleCol = Math.max(0, opts.cursorCol());
-      drawn = "idle";
-      opts.write("\n\r\u001b[2K" + barLine() + `\u001b[1A\u001b[${idleCol + 1}G`);
-    },
-    submitted() {
-      if (!opts.enabled || drawn !== "idle") return;
-      drawn = "none";
-      // readline's newline already moved the cursor onto the bar's row.
-      opts.write("\r\u001b[2K");
+      const bar = composeStatusBar(opts.status(), terminalWidth() - 1);
+      if (!dirty && bar === lastBar) return;
+      dirty = false;
+      lastBar = bar;
+      opts.write(bar + "\n");
     },
     beginTurn() {
       tools = 0;
@@ -429,20 +438,12 @@ export function createLive(opts: LiveOptions): Live {
       if (Number.isFinite(n) && n > 0) inputTokens = n;
     },
     endTurn() {
-      busy = false;
-      if (timer !== undefined) {
-        clearInterval(timer);
-        timer = undefined;
-      }
+      stop();
       erase();
       return { ms: now() - startedAt, tools, inputTokens };
     },
     dispose() {
-      busy = false;
-      if (timer !== undefined) {
-        clearInterval(timer);
-        timer = undefined;
-      }
+      stop();
       erase();
       if (opts.enabled) {
         try {

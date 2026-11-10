@@ -738,7 +738,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   let live: Live | undefined;
   let contextPercent: number | undefined;
-  let promptActive = false;
 
   const renderer: Renderer = createRenderer({
     wrap: true,
@@ -783,15 +782,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     status: statusInfo,
     atLineStart: () => renderer.atLineStart(),
     typed: () => String((rl as unknown as { line?: string }).line ?? "").length > 0,
-    cursorCol: () => {
-      try {
-        const pos = (rl as unknown as { getCursorPos?: () => { cols: number } }).getCursorPos?.();
-        if (pos && typeof pos.cols === "number") return pos.cols;
-      } catch {
-        /* fall through */
-      }
-      return visibleWidth(planPrompt(planState.on, readPermissionMode(runtime))) + String((rl as unknown as { line?: string }).line ?? "").length;
-    },
     esc: canEsc,
     paused: () => answerWaiter !== null,
   });
@@ -849,9 +839,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (blank) renderer.write("\n");
     try {
       rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
+      if (renderer.atLineStart()) live?.showIdle();
       rl.prompt();
-      promptActive = true;
-      live?.showIdle();
     } catch {
       /* terminal went away */
     }
@@ -1091,9 +1080,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return;
     }
     const text = (typeof raw === "string" ? raw : "").trim();
-    promptActive = false;
     const wasIdle = !busy;
-    live?.submitted();
     if (text === "") {
       showPrompt();
       return;
@@ -1142,8 +1129,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (!answerWaiter) abortTurn();
         return;
       }
-      // Typing, history and editing can disturb the row under the prompt: redraw it.
-      if (!busy && promptActive) setImmediate(() => void (!busy && promptActive && !exiting && live?.showIdle()));
     });
   }
 

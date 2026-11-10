@@ -199,7 +199,6 @@ describe("live region", () => {
       status: () => info,
       atLineStart: () => true,
       typed: () => false,
-      cursorCol: () => 0,
       esc: true,
     });
     live.showIdle();
@@ -219,7 +218,6 @@ describe("live region", () => {
       status: () => info,
       atLineStart: () => true,
       typed: () => false,
-      cursorCol: () => 4,
       esc: true,
       now: () => clock,
     });
@@ -231,10 +229,27 @@ describe("live region", () => {
     expect(strip(out.join(""))).toContain("Reading math.js\u2026 2s");
     const stats = live.endTurn();
     expect(stats).toMatchObject({ ms: 2000, tools: 1 });
-    expect(out[out.length - 1]).toBe("\r\u001b[J");
+    expect(out[out.length - 1]).toBe("\r\u001b[2K");
+    expect(out.join("")).not.toContain("\n");
     const n = out.length;
     await new Promise((r) => setTimeout(r, 250));
     expect(out.length).toBe(n);
+    live.dispose();
+  });
+});
+
+describe("idle status line", () => {
+  test("printed once per prompt, deduped until the transcript changes, never with cursor moves", () => {
+    const out: string[] = [];
+    const live = createLive({ enabled: true, write: (s) => void out.push(s), status: () => info, atLineStart: () => true, typed: () => false, esc: true });
+    live.showIdle();
+    live.showIdle();
+    expect(out.length).toBe(1);
+    expect(out[0].endsWith("\n")).toBe(true);
+    expect(out[0]).not.toContain("\u001b[1A");
+    live.erase();
+    live.showIdle();
+    expect(out.length).toBe(2);
     live.dispose();
   });
 });
