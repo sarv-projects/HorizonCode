@@ -41,4 +41,13 @@ describe("bracketed paste", () => {
     expect(pasteLabel(1)).toBe("[pasted 1 line]");
     expect(echoedRows(["abcdefghij", "", "x"], 2, 10)).toBe(2 + 1 + 1);
   });
+
+  test("pasting() is true only between the markers", () => {
+    const c = createPasteCollector();
+    expect(c.pasting()).toBe(false);
+    c.key("paste-start");
+    expect(c.pasting()).toBe(true);
+    c.key("paste-end");
+    expect(c.pasting()).toBe(false);
+  });
 });

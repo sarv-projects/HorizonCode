@@ -1000,7 +1000,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           resolve(answer);
         };
         const onKey = (str: string | undefined, key: { name?: string; ctrl?: boolean } | undefined): void => {
-          if (Date.now() < armedAt) {
+          // Pasted text is never a typed answer: a paste of "y" must not approve.
+          if (Date.now() < armedAt || paste.pasting() || key?.name === "paste-start" || key?.name === "paste-end") {
             wipeLine();
             return;
           }
