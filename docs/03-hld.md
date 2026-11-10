@@ -2,18 +2,18 @@
 
 > **Scope.** This document decides the *shape* of HorizonCode: which planes exist, which processes run, which components own which behaviour, what the interfaces between them are, how the whole thing is deployed, and what happens when each piece dies. It does not decide schemas, function bodies or tool semantics — those live in [`04-lld.md`](./04-lld.md) and the topical documents.
 >
-> Nothing in this document is a claim of working code for the capabilities it designs. `HorizonCode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` — the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
+> Nothing in this document is a claim of working code for the capabilities it designs. `HorizonCode` contains a v0.1 implementation (`app/`, `bin/`, `kernel/`) whose levels are recorded in `docs/28-implementation-status.md` - the single source of truth (RC-13). Every capability below is **`DESIGNED`** unless `docs/28` promotes it.
 
 **Derived from** (cloned repositories link to GitHub at the pinned SHA, see [`research/upstream-pins.md`](research/upstream-pins.md); repositories that were not cloned in the current sandbox are marked `not cloned, path not verified`):
 
-- source: the ancestor project (not cloned, path not verified) — the execution constitution this design inherits: kernel process, Guard, origin-typed effects, one-use leases, receipts, OwnerLog, managed domain, sandbox with typed residuals.
-- source: [`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0) — event-sourced core, admission inbox, write-ahead claim, one `llm.stream` per step, contract-separated monorepo.
-- source: [`openai/codex`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053) — per-OS sandbox depth, Starlark `execpolicy`, generated JSON-RPC across CLI/app-server/SDK, rollout replay.
-- source: [`xai-org/grok-build`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8) — fullscreen mouse TUI, leader process with client-side replay, in-process startup sandbox, workspace daemon, occurrence-journaled scheduler.
-- source: `DeepSeek-Reasonix` (repo not cloned, path not verified) — one transport-agnostic Controller behind every front-end, layering law enforced by `repolint`, cache-guard in CI, content-addressed Trusted Host State, evidence adjudication that can only lower a claim.
-- source: [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296) — one compiled native addon exposing the whole native capability stack, bidirectional ACP, deep LSP/DAP.
-- source: [`tailcallhq/forgecode`](https://github.com/tailcallhq/forgecode/tree/a22b49288856d5b3f3ca57e8532683d54a662c8c) — clean-architecture crate stack, compile-time tool descriptions, tolerant decoding and JSON repair for truncated tool arguments.
-- source: [`anthropics/claude-code`](https://github.com/anthropics/claude-code/tree/0ed94698aa0aeee471465fc9c867c2e8434c4d68) — the declarative tool contract, wildcard rule ergonomics, skills, task system, coordinator.
+- source: the ancestor project (not cloned, path not verified) - the execution constitution this design inherits: kernel process, Guard, origin-typed effects, one-use leases, receipts, OwnerLog, managed domain, sandbox with typed residuals.
+- source: [`sst/opencode`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0) - event-sourced core, admission inbox, write-ahead claim, one `llm.stream` per step, contract-separated monorepo.
+- source: [`openai/codex`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053) - per-OS sandbox depth, Starlark `execpolicy`, generated JSON-RPC across CLI/app-server/SDK, rollout replay.
+- source: [`xai-org/grok-build`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8) - fullscreen mouse TUI, leader process with client-side replay, in-process startup sandbox, workspace daemon, occurrence-journaled scheduler.
+- source: `DeepSeek-Reasonix` (repo not cloned, path not verified) - one transport-agnostic Controller behind every front-end, layering law enforced by `repolint`, cache-guard in CI, content-addressed Trusted Host State, evidence adjudication that can only lower a claim.
+- source: [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296) - one compiled native addon exposing the whole native capability stack, bidirectional ACP, deep LSP/DAP.
+- source: [`tailcallhq/forgecode`](https://github.com/tailcallhq/forgecode/tree/a22b49288856d5b3f3ca57e8532683d54a662c8c) - clean-architecture crate stack, compile-time tool descriptions, tolerant decoding and JSON repair for truncated tool arguments.
+- source: [`anthropics/claude-code`](https://github.com/anthropics/claude-code/tree/0ed94698aa0aeee471465fc9c867c2e8434c4d68) - the declarative tool contract, wildcard rule ergonomics, skills, task system, coordinator.
 
 ---
 
@@ -182,7 +182,7 @@ Seven process *roles*. One OS image may host several of them; the roles are what
 | P6 | **Plugin sandbox host** | P2 (one per plugin generation) | one plugin generation | plugin code, its declared tools/commands | P2, plugin fault, capability revocation |
 | P7 | **Remote sandbox / workspace daemon** | operator or `remote.exec` | as configured | a kernel + supervisor pair on another machine | network, operator |
 
-**Supervision tree.** P1 supervises P2. P2 supervises P6 and *connects to* P3 but does not supervise it — the kernel is deliberately outside the agent's control (ADR-003): killing the agent MUST NOT kill the receipt chain, and restarting the agent MUST re-attach to the same kernel instance and the same OwnerLog head. A single-supervisor lease with a monotonically increasing owner epoch prevents two supervisors from claiming one workspace (the ancestor's `supervisor_lease` discipline — source: `kernel/src/supervisor_lease.rs` of the ancestor project (not cloned, path not verified)).
+**Supervision tree.** P1 supervises P2. P2 supervises P6 and *connects to* P3 but does not supervise it - the kernel is deliberately outside the agent's control (ADR-003): killing the agent MUST NOT kill the receipt chain, and restarting the agent MUST re-attach to the same kernel instance and the same OwnerLog head. A single-supervisor lease with a monotonically increasing owner epoch prevents two supervisors from claiming one workspace (the ancestor's `supervisor_lease` discipline - source: `kernel/src/supervisor_lease.rs` of the ancestor project (not cloned, path not verified)).
 
 **Why the plugin host is a role and not a library.** A plugin that runs inside P2 can patch `@horizoncode/core`, replace a tool implementation, or read the session's credentials. Running it in P6 with a capability grant and no kernel file descriptor makes the plugin's authority a *fact about the system* rather than a promise in a manifest (H-18).
 
@@ -303,7 +303,7 @@ The system is carried by ~30 interfaces. Each has one owner, one direction of au
 | Truth | Owner | Medium | Recovery |
 |---|---|---|---|
 | **Session truth** — what was asked, reasoned, attempted and observed | C5 (`SessionEngine`) | append-only `DurableEventV1` rows in SQLite WAL, one transaction per fact (ADR-004) | replay the log; projections are disposable (`hzcode session reindex`) |
-| **Authority truth** — what was permitted, executed, observed and settled | C9 (`hzk`) | OwnerLog: committed-head, segment-sealed, hash-chained records + the receipt ledger (see source: `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified)) | replay the OwnerLog; the committed head is the sole commit authority |
+| **Authority truth** - what was permitted, executed, observed and settled | C9 (`hzk`) | OwnerLog: committed-head, segment-sealed, hash-chained records + the receipt ledger (see source: `kernel/src/owner_log.rs` of the ancestor project (not cloned, path not verified)) | replay the OwnerLog; the committed head is the sole commit authority |
 
 The two truths join on three ids carried by both: `sessionId`, `effectId`, `receiptId`. `hzcode session verify <id>` joins them and reports whether the work is *proven* or merely *claimed*.
 

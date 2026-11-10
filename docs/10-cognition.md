@@ -140,7 +140,7 @@ R66) — not a terminal state.
 | R50 | The **price table is append-only** (`PriceRateV1`): a rate is superseded, never edited; lookup is `(provider_id, model_id, at_timestamp)`. A missing rate yields `cost = unknown` and is never recorded as `0`. | `price-append-only.test.ts`, `price-lookup.test.ts` (ancestor: `DeepSeek-Reasonix/internal/contract/pricing/rates.go` (repo not cloned, path not verified)) |
 | R51 | Cache pricing is explicit: `cache_read_per_mtok` and `cache_write_per_mtok` are separate rates. When the provider reports no cache counters, input is priced at the full input rate and the record sets `cache_measured = false` — conservative, never optimistic. | `cache-pricing.test.ts` |
 | R52 | Currency: the ledger stores the vendor's declared currency plus the id of the FX snapshot used for display. Reconciliation MAY convert for display; accounting MUST NOT convert. A display conversion never mutates a stored amount. | `currency-ledger.test.ts` |
-| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` — `dream` is the background-consolidation run defined in `08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
+| R53 | Session-tree totals are a fold of `hz.usage.recorded` events with origin labels (`planner`, `executor`, `subagent:<id>`, `compaction`, `extraction`, `dream` - `dream` is the background-consolidation run defined in `08-runtime.md` R-runtime-102), never a sum of provider responses. `hzcode budget` and `hzcode session tree --cost` MUST equal the fold exactly. | `usage-fold-parity.test.ts` |
 | R54 | Every provider call is preceded by a budget check against the enclosing run's token and cost budgets. A call that cannot fit is refused before any network effect, and the refusal is a receipted `denied` effect (RC-7), not a silent failure. | `budget-preflight.test.ts` |
 
 ### 2.F The context compiler in depth
@@ -258,7 +258,7 @@ Retrieval is local-first: the default configuration needs no network, and every 
 
 ### 2.I Compaction
 
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** — triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
+> Reconciled 2026-11-07 (reaudit stage 2, RC-15). **This section owns compaction semantics** - triggers, strategies, the host digest, the survival list, the checkpoint rule and the failure modes. `12-sessions-state.md` owns only `CompactionRecordV1` persistence, the `hz.session.compacted` payload, checkpoints and the session tables, and points here instead of restating any of it.
 
 The event log is never compacted. Compaction rewrites the *requested context* only.
 
@@ -296,7 +296,7 @@ The event log is never compacted. Compaction rewrites the *requested context* on
 - **Keep-alive during idle:** pause time is cache-expiry time — the harness pings the provider prefix cache before expiry so the next turn is a hit, not a full cache write.
 - **Append-only sync:** any in-place rewrite of the message log truncates to the longest byte-stable prefix (`syncMessages` semantics); append-only mode is gated **per provider from data** (`appendOnlyContext: auto`), never from a user preference — a provider that rewrites history between turns would be hurt by it.
 - **Output-budget fit (NF-074):** estimate prompt size from the provider's newest reported usage anchor plus a local count of the appended tail; fit the output cap to the remaining window with a per-message framing charge (16 tokens) and an absolute headway margin — constants measured, not guessed.
-- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here — `09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
+- **Spill and minimisation defaults (NF-074):** tool-output caps are **not** restated here - `09-tools.md` R-tools-42 owns them (model-facing 16 KiB / 4,000 tokens; human pane 1 MiB; retained stream 64 MiB) and R-tools-43 owns the spill pointer, whose single shape is `ToolResultV1.truncated` (`09-tools.md` §3.6: `{reason, omittedBytes, omittedLines, nextOffset, artifactUri?}`, never a boolean and never a second object). What this addendum contributes is the policy on top: the shell-output minimiser is on by default, and `cat`/`grep`-class shell forms are intercepted to the native tools with a user-visible notice.
 
 ### 2.J Prompting
 
@@ -594,7 +594,7 @@ The index is owned by `hz_index` (Rust) and driven over the versioned `status` /
 | Capability downgrade | never applies inside a live session; takes effect at the next session start and is reported by `hzcode doctor` | R6 |
 | Discovery providers | race a 750 ms deadline, then fall back to the cached list; never block startup | R10 |
 
-source: [`opencode/packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts) and source: [`opencode/packages/core/src/models-dev/snapshot.txt`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev/snapshot.txt) — ancestor artifacts, cited as design input only; they are not part of this product.
+source: [`opencode/packages/core/src/models-dev.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev.ts) and source: [`opencode/packages/core/src/models-dev/snapshot.txt`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/models-dev/snapshot.txt) - ancestor artifacts, cited as design input only; they are not part of this product.
 
 ---
 
@@ -834,16 +834,16 @@ Harness requirements: a fake clock for every backoff and timeout test, recorded 
 
 ## 11. Related documents
 
-- `02-decisions.md` — the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
-- `03-hld.md` — the system map this plane sits in: planes, processes, package and crate layout.
-- `05-domain-and-schemas.md` — the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
-- `06-events-and-flows.md` — the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
-- `08-runtime.md` — the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
-- `09-tools.md` — tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
-- `11-authority-safety.md` — the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
-- `12-sessions-state.md` — the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
-- `14-surfaces.md` §2.2 — the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
-- `_conventions.md` — names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
+- `02-decisions.md` - the binding decisions this plane must not contradict: ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-015.
+- `03-hld.md` - the system map this plane sits in: planes, processes, package and crate layout.
+- `05-domain-and-schemas.md` - the owning schema document for every type named here (`ContextPlanV1`, `MemoryRecord`, `ProviderConfigV1`, `ModelRefV1`, and the records of §3 and §4).
+- `06-events-and-flows.md` - the event catalogue and its G-1…G-5 findings, which §3.9 and §6 depend on; the rulings themselves (RC-1…RC-15) are ratified in `_conventions.md` §11, not in doc 06.
+- `08-runtime.md` - the step engine that calls `compile`, sequences retries and owns the session/turn lifecycle this plane compiles for (ADR-011's one-stream-per-step rule).
+- `09-tools.md` - tool declarations whose model-facing descriptions come from this plane's prompt library (ADR-015), and the tool results the compiler must never admit into the prefix.
+- `11-authority-safety.md` - the kernel: capability registry, receipts, redaction, secret use, and the rule that memory and prompts can never widen authority.
+- `12-sessions-state.md` - the sessions, checkpoints, compaction records and forks that carry this plane's digests and usage folds.
+- `14-surfaces.md` §2.2 - the canonical exit-code table referenced by §5 (RC-5); referenced here, never restated.
+- `_conventions.md` - names, planes, capability IDs, event names, schema naming, status levels and rulings RC-1…RC-15 (RC-7's terminal-state enum, RC-8's prefix pins, RC-10's two events, RC-11's reserved names and RC-15's adoption wave are load-bearing here).
 
 > Header reconciliation (applied): §1's dependency list previously used draft doc numbers. The references above now point at the files that exist — `03-hld.md`, `05-domain-and-schemas.md`, `08-runtime.md`, `09-tools.md`, `11-authority-safety.md`, `12-sessions-state.md` — and the draft-number mapping is closed.
 

@@ -131,7 +131,7 @@ Crate -> JS bridge: pi-natives is the single N-API addon; `packages/natives` is 
 - `src/cli.ts` — top-level arg parse + mode dispatch (interactive / print / rpc / acp).
 - `src/cli-commands.ts` — registers all subcommands (the ~60 files under src/commands).
 - `src/main.ts` — main-mode bootstrap (session wiring before a mode takes over).
-- `src/sdk.ts` — the embeddable SDK: `createAgentSession(...)`, `buildSystemPrompt(...)`, discovery helpers (`discoverSkills`, `discoverContextFiles`, `discoverMCPServers`, `discoverExtensions`). ~6k lines. Source: [`oh-my-pi/packages/coding-agent/src/sdk.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/sdk.ts#L577-L1019), #L1944-L1950.
+- `src/sdk.ts` - the embeddable SDK: `createAgentSession(...)`, `buildSystemPrompt(...)`, discovery helpers (`discoverSkills`, `discoverContextFiles`, `discoverMCPServers`, `discoverExtensions`). ~6k lines. Source: [`oh-my-pi/packages/coding-agent/src/sdk.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/sdk.ts#L577-L1019), #L1944-L1950.
 - Mode entry points under `src/modes/`: `interactive-mode.ts`, `print-mode.ts`, `rpc/` (JSON-lines RPC), `acp/` (Agent Client Protocol).
 - Subcommand entry points: `src/commands/*.ts` (e.g. acp.ts, auth.ts, login.ts, launch.ts, plugin.ts, browser-relay.ts, worktree.ts, bench.ts, stats.ts, usage.ts).
 - Rust binaries: pi-shell ships `src/bin/obash` (the embedded bash engine as a standalone shell for differential tests); the engine is also exposed as `omp zsh|bash|sh` via pi-natives. Source: [`oh-my-pi/crates/pi-shell/src/lib.rs`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/crates/pi-shell/src/lib.rs#L14-L20.)
@@ -158,7 +158,7 @@ Hidden tools (3), from HIDDEN_TOOL_NAMES: yield, goal, think ([`oh-my-pi/package
 Additional selectable capabilities exposed through `eval` preludes rather than the registry (per README tool table): browser, computer, generate_image, tts. Source: [`oh-my-pi/README.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/README.md#L80-L100) (tool table).
 
 Beyond the built-ins, the tool set composes:
-- MCP tools: `mcp__<server>_<tool>` (isMCPToolName) — [`oh-my-pi/packages/coding-agent/src/tools/builtin-names.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/tools/builtin-names.ts#L65-L67.)
+- MCP tools: `mcp__<server>_<tool>` (isMCPToolName) - [`oh-my-pi/packages/coding-agent/src/tools/builtin-names.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/tools/builtin-names.ts#L65-L67.)
 - Extension-contributed tools and ambient custom tools (extensibility/custom-tools).
 - Session-managed builtins: manage_skill, learn, context_notes, new_context ([`oh-my-pi/packages/coding-agent/src/sdk.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/sdk.ts#L1487)).
 - Devices mounted as `xd://` for forks (mountedToolNames).
@@ -166,7 +166,7 @@ Beyond the built-ins, the tool set composes:
 Tool-related infrastructure: approval.ts, approval-cache.ts, approval-targets.ts, acp-bridge.ts, browser.ts, and per-tool files under `oh-my-pi/packages/coding-agent/src/tools/.` (path not found in the pinned clone, not verified)
 
 ### 5.3 Model / provider integration
-- Unified LLM client: `@oh-my-pi/pi-ai` — [`oh-my-pi/packages/ai/src/index.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/index.ts), streaming via providers.
+- Unified LLM client: `@oh-my-pi/pi-ai` - [`oh-my-pi/packages/ai/src/index.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/index.ts), streaming via providers.
 - Custom API registry (built-in API ids): [`oh-my-pi/packages/ai/src/api-registry.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/api-registry.ts#L20-L36) (openai-completions, openai-responses, openrouter, openai-codex-responses, azure-openai-responses, anthropic-messages, bedrock-converse-stream, google-generative-ai, google-gemini-cli, google-vertex, ollama-chat, cursor-agent, factory-droid-agent, gitlab-duo-agent, devin-agent, apple-foundation-models).
 - Cursor provider + external-tool handoff: [`oh-my-pi/packages/ai/src/providers/cursor.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/ai/src/providers/cursor.ts) and `oh-my-pi/packages/ai/src/providers/cursor-external-tool-handoff.md.` (path not found in the pinned clone, not verified)
 - Model catalog / discovery / identity: `@oh-my-pi/pi-catalog` and [`oh-my-pi/packages/coding-agent/src/config/model-registry.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/config/model-registry.ts), model-resolver.ts, model-discovery.ts, model-provider-discovery.ts, model-roles.ts, model-presets.ts, custom-models.ts, model-patch.ts.
@@ -185,7 +185,7 @@ Tool-related infrastructure: approval.ts, approval-cache.ts, approval-targets.ts
 - Multi-agent / IRC routing: session/irc-bridge.ts, registry/agent-registry.ts (MAIN_AGENT_ID, AgentRegistry.global()).
 
 ### 5.6 TUI
-- Library: `@oh-my-pi/pi-tui` ([`oh-my-pi/packages/tui/src/`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/tui/src)) — differential rendering, tool renderers, overlays, composer.
+- Library: `@oh-my-pi/pi-tui` ([`oh-my-pi/packages/tui/src/`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/tui/src)) - differential rendering, tool renderers, overlays, composer.
 - App usage: [`oh-my-pi/packages/coding-agent/src/modes/interactive-mode.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/modes/interactive-mode.ts) plus modes/components/, modes/controllers/.
 
 ### 5.7 Config
@@ -206,7 +206,7 @@ Tool-related infrastructure: approval.ts, approval-cache.ts, approval-targets.ts
 - Discovery from `.mcp.json`: `discoverMCPServers` (sdk.ts#L1402-L1405). MCP prompts become slash commands (`buildMCPPromptCommands`, sdk.ts#L1657-L1700).
 
 ### 5.10 Permissions / approval
-- [`oh-my-pi/packages/coding-agent/src/tools/approval.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/tools/approval.ts) — approval modes: `always-ask`, `always-ask-cached`, `write`, `yolo`; per-tool policies allow|deny|prompt.
+- [`oh-my-pi/packages/coding-agent/src/tools/approval.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/tools/approval.ts) - approval modes: `always-ask`, `always-ask-cached`, `write`, `yolo`; per-tool policies allow|deny|prompt.
 - Cache/targets: tools/approval-cache.ts, tools/approval-targets.ts.
 - ACP permission gate: session/acp-permission-gate.ts; approval prompts via prompts/tools/approval-folder.md.
 - CLI flag `--auto-approve` -> options.autoApprove (sdk.ts#L1017-L1018).
@@ -226,7 +226,7 @@ Tool-related infrastructure: approval.ts, approval-cache.ts, approval-targets.ts
 
 ### 5.13 IDE / LSP integration (the "IDE wired in" axis)
 - LSP client + tool: [`oh-my-pi/packages/coding-agent/src/lsp/`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/lsp) (client.ts, servers.ts, defaults.json, diagnostics.ts, edits.ts, format-options.ts, tool.ts, lspmux.ts, mux/, writethrough.ts).
-- ACP (Agent Client Protocol) — editor/IDE bridge: [`oh-my-pi/packages/coding-agent/src/modes/acp/`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/modes/acp) (acp-agent.ts, acp-client-bridge.ts, acp-event-mapper.ts, acp-mode.ts, terminal-auth.ts).
+- ACP (Agent Client Protocol) - editor/IDE bridge: [`oh-my-pi/packages/coding-agent/src/modes/acp/`](https://github.com/can1357/oh-my-pi/tree/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/modes/acp) (acp-agent.ts, acp-client-bridge.ts, acp-event-mapper.ts, acp-mode.ts, terminal-auth.ts).
 - ACP subcommand + tool bridge: commands/acp.ts, tools/acp-bridge.ts.
 - Cursor integration: [`oh-my-pi/packages/coding-agent/src/cursor.ts`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/packages/coding-agent/src/cursor.ts) + ai provider cursor.ts (cursor-agent API) + cursor-external-tool-handoff.md.
 - "The IDE wired in" works two ways: (a) omp runs as an ACP **agent** that an editor (Zed/ACP-capable) drives; (b) omp drives Cursor/VS Code-family editors as a **client** via the cursor-agent provider + external tool handoff. LSP provides navigation/diagnostics/formatting.

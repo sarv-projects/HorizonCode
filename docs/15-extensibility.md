@@ -1535,7 +1535,7 @@ Every guarantee in §2 maps to a test. All paths are `[planned]` except the skil
 
 ## 10. Status
 
-Every capability below is **DESIGNED** except the rows annotated below, whose reduced forms `28-implementation-status.md` records above it — that file owns implementation levels (RC-13) and is the only place a level above `DESIGNED` may be claimed. Evidence for every other row is this document. Levels per `_conventions.md` §8; nothing else here is a claim of working code.
+Every capability below is **DESIGNED** except the rows annotated below, whose reduced forms `28-implementation-status.md` records above it - that file owns implementation levels (RC-13) and is the only place a level above `DESIGNED` may be claimed. Evidence for every other row is this document. Levels per `_conventions.md` §8; nothing else here is a claim of working code.
 
 | Capability | Level | Evidence | Next required evidence for promotion |
 |---|---|---|---|
@@ -1546,7 +1546,7 @@ Every capability below is **DESIGNED** except the rows annotated below, whose re
 | Plugin tools → `ToolDeclarationV1` | DESIGNED | §3.2; `02-decisions.md` ADR-015 | `packages/plugin/src/compile.ts` + exhaustive test |
 | Lifecycle (discovery/install/load/update/uninstall) | DESIGNED | §6.1 | `lifecycle.test.ts`, `update.test.ts` |
 | Marketplace model | DESIGNED | §4.7; source: [`grok-build/crates/codegen/xai-grok-plugin-marketplace/src/`](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-plugin-marketplace/src) | `marketplace.test.ts` |
-| Skills (`SKILL.md`, discovery, precedence) | VERIFIED for the flat-file slice; TESTED for the `SKILL.md` folder form (ruling 78); DESIGNED for strict front matter, `run-as`, locks | `28-implementation-status.md` §1 — `.hzcode/skills/*.md` discovery with workspace shadowing, prompt directory capped at 12, `/skill` activation (`bun test tests/core/skills-agents.test.ts` → 10 pass); §4.2, §4.3 for the designed form. **Shape difference, stated not hidden:** v0.1 reads flat `.hzcode/skills/*.md`, while S1 specifies a directory containing `SKILL.md` — the flat file is the compatibility form, the directory form is `[planned]` | directory discovery + `packages/skills` load suite |
+| Skills (`SKILL.md`, discovery, precedence) | VERIFIED for the flat-file slice; TESTED for the `SKILL.md` folder form (ruling 78); DESIGNED for strict front matter, `run-as`, locks | `28-implementation-status.md` §1 - `.hzcode/skills/*.md` discovery with workspace shadowing, prompt directory capped at 12, `/skill` activation (`bun test tests/core/skills-agents.test.ts` → 10 pass); §4.2, §4.3 for the designed form. **Shape difference, stated not hidden:** v0.1 reads flat `.hzcode/skills/*.md`, while S1 specifies a directory containing `SKILL.md` - the flat file is the compatibility form, the directory form is `[planned]` | directory discovery + `packages/skills` load suite |
 | `run-as: subagent` | VERIFIED for the `agent`-tool slice; DESIGNED for the `run-as:` front-matter form | `28-implementation-status.md` §1 — `agent` tool, child session, base-seven tools only, steps 12 default / 20 cap, own receipts (same suite, 10 pass); §6.2 and ADR-016 for the skill-triggered form | `subagent.test.ts` + boundary test |
 | Skill lock/update + evals | DESIGNED | §4.9, §6.9 | `packages/skills` eval harness |
 | Bundled skills | DESIGNED | §4.4; source: `claude-code/src/skills/bundled` (the pinned claude-code clone has no `src/` tree; path not verified) | one bundled skill wired + evaluated |

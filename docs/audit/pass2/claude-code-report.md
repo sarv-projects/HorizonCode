@@ -41,8 +41,8 @@ Read-only: no repo file was modified. All paths below are absolute under [`anthr
 
 | Path | What it is |
 |---|---|
-| `claude-code/mcp-server` (path not found in the pinned clone, not verified) | npm package `warrioraashuu-codemaster@1.1.0` — MCP server that lets any MCP client explore the leaked `src/` |
-| `claude-code/web` (path not found in the pinned clone, not verified) | `claude-code-web@0.1.0` — Next.js 14 chat UI for a Claude backend |
+| `claude-code/mcp-server` (path not found in the pinned clone, not verified) | npm package `warrioraashuu-codemaster@1.1.0` - MCP server that lets any MCP client explore the leaked `src/` |
+| `claude-code/web` (path not found in the pinned clone, not verified) | `claude-code-web@0.1.0` - Next.js 14 chat UI for a Claude backend |
 | `claude-code/server.json` (path not found in the pinned clone, not verified) | MCP registry metadata for that package (stdio transport) |
 | `claude-code/vercel.json` (path not found in the pinned clone, not verified) | Hosts `mcp-server/api/index.ts` on Vercel with `/mcp`, `/sse`, `/messages`, `/health` routes |
 | `claude-code/Dockerfile` (path not found in the pinned clone, not verified), `claude-code/docker` (path not found in the pinned clone, not verified) | Container build of the CLI (root) and of a PTY web terminal (docker/) |
@@ -73,7 +73,7 @@ Read-only: no repo file was modified. All paths below are absolute under [`anthr
 └── src/                     # ← the leaked Claude Code CLI (1,940 files)
 ```
 
-**Docs (`claude-code/docs` (path not found in the pinned clone, not verified)).** Six markdown guides, useful as a map but not authoritative — several numbers in them are off versus the source (e.g. `docs/tools.md` claims ~40 tools and a `buildTool({... inputSchema: z.object(...)})` shape with `checkPermissions()` returning `{granted…}`; the real `Tool` type returns a `PermissionResult` discriminated union `allow | ask | deny`). Files: `architecture.md`, `tools.md`, `commands.md`, `subsystems.md` (Bridge, MCP, permissions, plugins, skills, tasks, memory, coordinator, voice, services), `bridge.md`, `exploration-guide.md`.
+**Docs (`claude-code/docs` (path not found in the pinned clone, not verified)).** Six markdown guides, useful as a map but not authoritative - several numbers in them are off versus the source (e.g. `docs/tools.md` claims ~40 tools and a `buildTool({... inputSchema: z.object(...)})` shape with `checkPermissions()` returning `{granted…}`; the real `Tool` type returns a `PermissionResult` discriminated union `allow | ask | deny`). Files: `architecture.md`, `tools.md`, `commands.md`, `subsystems.md` (Bridge, MCP, permissions, plugins, skills, tasks, memory, coordinator, voice, services), `bridge.md`, `exploration-guide.md`.
 
 **Prompts (`claude-code/prompts` (path not found in the pinned clone, not verified)).** This directory is *not* the agent's prompt library; it is a 17-file, ordered rebuild plan for making the leaked tree runnable again: `00-overview.md` (index), `01-install-bun-and-deps.md`, `02-runtime-shims.md` (create a `bun:bundle` shim + `MACRO` globals), `03-build-config.md` (esbuild single-file bundle), `04-fix-mcp-server.md`, `05-env-and-auth.md`, `06-ink-react-terminal-ui.md`, `07-tool-system.md`, `08-command-system.md`, `09-query-engine.md`, `10-context-and-prompts.md`, `11-mcp-integration.md`, `12-services-layer.md`, `13-bridge-ide.md`, `14-dev-runner.md`, `15-production-bundle.md`, `16-testing.md`. The real system prompt lives in TypeScript, in `claude-code/src/constants/prompts.ts` (path not found in the pinned clone, not verified) and per-tool `prompt.ts` modules.
 

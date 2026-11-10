@@ -16,7 +16,7 @@ function run(target) {
   }
 ```
 
-**Real program.** `packages/cli/src/index.ts` — an Effect program wiring the command tree, signal handling, heap/CPU profiling, plugin runtime, and `NodeRuntime.runMain` teardown ([`opencode/packages/cli/src/index.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/index.ts#L44-L99)):
+**Real program.** `packages/cli/src/index.ts` - an Effect program wiring the command tree, signal handling, heap/CPU profiling, plugin runtime, and `NodeRuntime.runMain` teardown ([`opencode/packages/cli/src/index.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/cli/src/index.ts#L44-L99)):
 
 ```ts
 const Handlers = Runtime.handlers(Commands, {
@@ -72,7 +72,7 @@ export interface Interface extends State.Transformable<Editor> {
 export class Service extends Context.Service<Service, Interface>()("@opencode/Agent") {}
 ```
 
-Built-ins are declared by the internal `AgentPlugin` at `packages/core/src/plugin/agent.ts`: **build** (`Agent.defaultID`, default), **general** (subagent), **explore** (subagent; read-only search specialist with `PROMPT_EXPLORE`), **compaction** (hidden), **title** (hidden, `PROMPT_TITLE`), **summary** (hidden, `PROMPT_SUMMARY`) — registered through `ctx.agent.transform(editor => editor.update(...))` ([`opencode/packages/core/src/plugin/agent.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/agent.ts#L52-L117)):
+Built-ins are declared by the internal `AgentPlugin` at `packages/core/src/plugin/agent.ts`: **build** (`Agent.defaultID`, default), **general** (subagent), **explore** (subagent; read-only search specialist with `PROMPT_EXPLORE`), **compaction** (hidden), **title** (hidden, `PROMPT_TITLE`), **summary** (hidden, `PROMPT_SUMMARY`) - registered through `ctx.agent.transform(editor => editor.update(...))` ([`opencode/packages/core/src/plugin/agent.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/plugin/agent.ts#L52-L117)):
 
 ```ts
 export const Plugin = define({
@@ -114,8 +114,8 @@ Runtime agent and command `.md` files exist only for this repo's own config unde
 ### 5.2 Session loop / run
 The core is a durable, event-sourced, step-based loop:
 
-- `packages/core/src/session/runner/llm.ts` — the **drain loop** (`SessionRunner.drain`). It promotes inbox input, handles `compaction`/`move` controls, then loops `advanceToStep` → `runStep`. Each `runStep` reloads context, estimates/compacts, builds the transcript, and calls `steps.attempt` ([`opencode/packages/core/src/session/runner/llm.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/runner/llm.ts#L233-L315)).
-- `packages/core/src/session/runner/step.ts` — **one logical step = one `llm.stream` call**. Streams provider events, spawns local tool fibers eagerly, classifies tool exits, and publishes durable `Step.Ended`/failure ([`opencode/packages/core/src/session/runner/step.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/runner/step.ts#L64-L135)).
+- `packages/core/src/session/runner/llm.ts` - the **drain loop** (`SessionRunner.drain`). It promotes inbox input, handles `compaction`/`move` controls, then loops `advanceToStep` → `runStep`. Each `runStep` reloads context, estimates/compacts, builds the transcript, and calls `steps.attempt` ([`opencode/packages/core/src/session/runner/llm.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/runner/llm.ts#L233-L315)).
+- `packages/core/src/session/runner/step.ts` - **one logical step = one `llm.stream` call**. Streams provider events, spawns local tool fibers eagerly, classifies tool exits, and publishes durable `Step.Ended`/failure ([`opencode/packages/core/src/session/runner/step.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/runner/step.ts#L64-L135)).
 - `packages/core/src/session/runner/{model,retry,to-llm-message,publish-llm-event,max-steps}.ts` — model resolution, retry policy, transcript conversion, event publishing, step-limit prompt.
 
 ```ts
@@ -170,7 +170,7 @@ const providerStream = llm.stream(input.prepared.request, input.prepared.options
 `packages/core/src/session/runner/index.ts` defines the `Service`/`DrainResult`/`RunError`; `packages/core/src/session/model-request.ts` builds the provider request; `packages/core/src/session/model-transport.ts` owns WebSocket/continuation transport.
 
 ### 5.3 Execution ownership & coordination
-- `packages/core/src/session/execution.ts` — process-global, Session-ID keyed `SessionExecution`. Commits a **write-ahead execution claim** at busy-period start, releases it on success/failure/user-interrupt, and *preserves it on shutdown* so the next start resumes work ([`opencode/packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts#L73-L83)):
+- `packages/core/src/session/execution.ts` - process-global, Session-ID keyed `SessionExecution`. Commits a **write-ahead execution claim** at busy-period start, releases it on success/failure/user-interrupt, and *preserves it on shutdown* so the next start resumes work ([`opencode/packages/core/src/session/execution.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/execution.ts#L73-L83)):
 
 ```ts
 // Write-ahead claim: starting records the durable intent that a turn is in flight, in the same
@@ -182,7 +182,7 @@ const claimOnCommit = (sessionID) => ({ commit: () => store.claim(sessionID) })
 const releaseOnCommit = (sessionID) => ({ commit: () => store.release(sessionID) })
 ```
 
-- `packages/core/src/session/run-coordinator.ts` — `SessionRunCoordinator`: joins same-Session resumes, coalesces prompt wakeups ("doorbell"), lets different Sessions run concurrently, implements interrupt/`awaitIdle` ([`opencode/packages/core/src/session/run-coordinator.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/run-coordinator.ts#L27-L54)):
+- `packages/core/src/session/run-coordinator.ts` - `SessionRunCoordinator`: joins same-Session resumes, coalesces prompt wakeups ("doorbell"), lets different Sessions run concurrently, implements interrupt/`awaitIdle` ([`opencode/packages/core/src/session/run-coordinator.ts`](https://github.com/sst/opencode/blob/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/core/src/session/run-coordinator.ts#L27-L54)):
 
 ```ts
 /**

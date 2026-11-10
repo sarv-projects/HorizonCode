@@ -1,6 +1,6 @@
 # Ultra Deep-Dive: `wshobson/agents` — Subagent System Design Study
 
-**Repo:** `wshobson-agents` (repo not cloned, path not verified) ("Claude Code Workflows" — multi-harness plugin marketplace)
+**Repo:** `wshobson-agents` (repo not cloned, path not verified) ("Claude Code Workflows" - multi-harness plugin marketplace)
 **Purpose:** Learning pass for HorizonCode's subagent system (`AgentProfileV1` + fleet, docs 08 / 15)
 **Method:** structure map → 202-agent frontmatter census (mechanical) → deep-read of 17 agent specs + 5 meta-docs
 **Date:** 2026-11-06 · **Read-only on the repo; nothing outside this report file was modified.**

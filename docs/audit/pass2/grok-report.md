@@ -24,12 +24,12 @@ Key identity facts:
 
 - **Binary artifact** is `xai-grok-pager`; shipped as `grok` in official installs ([`grok-build/README.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/README.md#L81-L83)).
 - Built by the **composition-root package** `crates/codegen/xai-grok-pager-bin` (`README.md#L99`).
-- **Read-only workspace root**: `Cargo.toml` is generated — `# Auto-generated workspace root. Prefer editing per-crate Cargo.toml files.` ([`grok-build/Cargo.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/Cargo.toml#L1)).
+- **Read-only workspace root**: `Cargo.toml` is generated - `# Auto-generated workspace root. Prefer editing per-crate Cargo.toml files.` ([`grok-build/Cargo.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/Cargo.toml#L1)).
 - **External contributions are not accepted** — `CONTRIBUTING.md:3-L4`. Published for source transparency under Apache-2.0.
 - The repo is synced periodically from the SpaceXAI monorepo (`README.md#L31-L35`).
 - **Workspace size**: 107 workspace members; `crates/codegen` holds **89** crates, `crates/common` **12**, plus `crates/build`, `prod/mc`, and 4 vendored `third_party` crates.
 
-Notable root-config policies ([`grok-build/clippy.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/clippy.toml#L40-L54)) ban raw `reqwest::Client::new`, `std::fs::canonicalize`, `dirs::home_dir`, and raw process spawning — enforcing a central TLS policy, `dunce` canonicalization, `xai_dirs` home resolution, and `ProcessScope::enroll` child lifecycle.
+Notable root-config policies ([`grok-build/clippy.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/clippy.toml#L40-L54)) ban raw `reqwest::Client::new`, `std::fs::canonicalize`, `dirs::home_dir`, and raw process spawning - enforcing a central TLS policy, `dunce` canonicalization, `xai_dirs` home resolution, and `ProcessScope::enroll` child lifecycle.
 
 ---
 
@@ -70,10 +70,10 @@ Only one file, `bin/protoc`, a DotSlash descriptor ([`grok-build/bin/protoc`](ht
 It pins protoc 29.3 per-platform by sha256; `xai-grok-tools-api/build.rs` and `xai-proto-build` resolve it.
 
 ### `prod/`
-`prod/mc/cli-chat-proxy-types` — a small shared crate (`crates/common`/`prod` leafs pulled in by the closure). Consumed by `xai-grok-shell` as `prod-mc-cli-chat-proxy-types` ([`grok-build/crates/codegen/xai-grok-shell/Cargo.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/Cargo.toml#L179)).
+`prod/mc/cli-chat-proxy-types` - a small shared crate (`crates/common`/`prod` leafs pulled in by the closure). Consumed by `xai-grok-shell` as `prod-mc-cli-chat-proxy-types` ([`grok-build/crates/codegen/xai-grok-shell/Cargo.toml`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/Cargo.toml#L179)).
 
 ### `third_party/`
-Vendored **upstream source** for the Mermaid diagram stack — the "grove-on-NFS" userspace server and FUSE client. From [`grok-build/third_party/README.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/third_party/README.md#L14-L22):
+Vendored **upstream source** for the Mermaid diagram stack - the "grove-on-NFS" userspace server and FUSE client. From [`grok-build/third_party/README.md`](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/third_party/README.md#L14-L22):
 
 ```markdown
 This directory holds in-tree third-party Rust (and similar) sources: the
