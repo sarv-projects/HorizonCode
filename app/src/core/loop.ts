@@ -1446,6 +1446,9 @@ function projectChange(
     return { ok: true, resolved, rel, before, after: args.content };
   }
   if (before === null) return { ok: false, error: `edit: file not found: ${rel}` };
+  if (args.start_anchor !== undefined) {
+    return { ok: false, error: "edit: an anchored edit cannot be staged; use write with the full intended content, or exit plan mode" };
+  }
   if (typeof args.old !== "string" || args.old === "" || typeof args.new !== "string") {
     return { ok: false, error: "edit requires old and new strings" };
   }
