@@ -1,0 +1,28 @@
+Let me look.
+⏺ read({"path":"src/a.ts"})
+  └ ok: export const a = 1;
+⏺ shell({"command":"npm test"})
+  └ error: exit 1
+⏺ edit({"path":"src/a.ts","old":"a","new":"b\nc"})
+  └ ok: edited
+  --- a
+  +++ b
+  @@ -1 +1,2 @@
+  -a
+  +b
+  +c
+  │ profile: explore
+  │ ⏺ read({"path":"z"})
+  │ done
+· a notice
+· changed 1 file
+  --- a
+  +++ b
+  @@ -1 +1 @@
+  -a
+  +b
+⚠ boom
+Done.
+l
+· n
+⚠ e

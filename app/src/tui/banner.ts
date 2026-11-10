@@ -66,6 +66,30 @@ export function printBanner(info: BannerInfo, opts: PrintOptions = {}): void {
   }
 }
 
+/**
+ * The TTY banner: a styled wordmark, the same facts, and one tip. Only used
+ * when colour and animation are on; piped/plain sessions keep printBanner.
+ */
+export function printRichBanner(info: BannerInfo, opts: PrintOptions & { tip?: string } = {}): void {
+  const out = opts.out ?? ((chunk: string) => void process.stdout.write(chunk));
+  const width = Math.max(20, opts.width ?? terminalWidth());
+  const kernel = String(info.kernel ?? "unknown");
+  const lines: string[] = [
+    cyan("\u25c6") + " " + bold("Horizon") + bold(cyan("Code")) + dim(" v" + shortVersion(info.version) + " \u00b7 terminal coding agent"),
+    "  " + dim("model ") + String(info.model ?? "unknown") + dim(" \u00b7 provider ") + String(info.provider ?? "unknown"),
+    "  " + dim("workspace ") + shortenPath(info.workspace),
+    "  " + dim("kernel ") + (kernel === "trusted" ? green(kernel) : yellow(kernel)),
+  ];
+  if (opts.tip) lines.push("  " + yellow("tip") + dim(" " + opts.tip));
+  for (const line of lines) {
+    if (visibleWidth(line) <= width) {
+      out(line + "\n");
+      continue;
+    }
+    for (const part of wrapText(strip(line), width)) out(dim(part) + "\n");
+  }
+}
+
 /** The hint line under the banner. */
 export function printGreeting(opts: PrintOptions = {}): void {
   const out = opts.out ?? ((chunk: string) => void process.stdout.write(chunk));
