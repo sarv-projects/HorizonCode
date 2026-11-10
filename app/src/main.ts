@@ -23,6 +23,7 @@ import { liveStdin } from "./core/stdin-live";
 import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
+import { checkConfigFile, renderConfigCheck } from "./core/config";
 import { resolveCommandForMessage } from "./core/commands";
 
 const VERSION = "0.1.0";
@@ -32,6 +33,7 @@ const HELP = [
   "",
   "  hzcode [message]     start chatting (optionally with an opening message)",
   "  hzcode serve         run the single-attach server (NDJSON JSON-RPC on stdio)",
+  "  hzcode config check  report unknown and rejected keys in the config file",
   "  hzcode doctor        diagnose this install (OK/WARN/FAIL + a fix per problem; --json, --workspace <path>)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
@@ -261,10 +263,21 @@ function runDoctorCommand(args: string[]): number {
   return doctorExitCode(checks);
 }
 
+function runConfigCommand(args: string[]): number {
+  if (args[0] !== "check" || args.length > 2) {
+    process.stderr.write("usage: hzcode config check [file]\n");
+    return 2;
+  }
+  const check = args[1] !== undefined ? checkConfigFile(path.resolve(args[1])) : checkConfigFile();
+  process.stdout.write(renderConfigCheck(check) + "\n");
+  return check.unknown.length > 0 || check.rejected.length > 0 ? 1 : 0;
+}
+
 async function main(): Promise<number> {
   // Subcommand dispatch happens before the chat-first arg parse so no existing
   // flag behaviour changes: `serve` is additive, everything else is unchanged.
   const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "config") return runConfigCommand(rawArgs.slice(1));
   if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
   if (rawArgs[0] === "serve") {
     const serveOpts = parseArgs(rawArgs.slice(1));
