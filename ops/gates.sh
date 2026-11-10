@@ -22,6 +22,10 @@
 #                         a non-empty receipt chain in the workspace
 #   e2e-budget-rail       the same with HZ_MAX_STEPS=1   -> exit 5 + the budget notice
 #   e2e-usage-error       ./bin/hzcode --max-steps nope -> exit 2 + the diagnostic
+#   startup-latency       median of 5 runs of `hzcode --version` and of one
+#                         headless mock turn, each under a generous ceiling
+#                         (HZ_LATENCY_VERSION_MS / HZ_LATENCY_TURN_MS override;
+#                         numbers and reasoning in ops/gate-catalogue.md)
 #
 # The other docs/24 §3.5 rows (gate:parity-ratchet, gate:cache-guard,
 # gate:layering, gate:frontend-parity, gate:file-size, gate:function-size,
@@ -106,6 +110,7 @@ GATES=(
   e2e-headless-smoke
   e2e-budget-rail
   e2e-usage-error
+  startup-latency
 )
 GATE_STATUS=()
 GATE_MS=()
@@ -293,6 +298,95 @@ gate_e2e_usage_error() {
   e2e_run usage-error 2 '' - "$ROOT/bin/hzcode" --max-steps nope
 }
 
+# ----------------------------------------------------------- startup latency ---
+
+# Ceilings in milliseconds, for the MEDIAN of 5 timed runs (after one untimed
+# warm-up). Measured 2026-11-09 on an 8-core x86_64 sandbox, Bun 1.2.14, running
+# as root: `--version` median 96 ms (range 92-100), one headless mock turn
+# (spawn, kernel, glob call, receipt, exit) median 198 ms (range 193-222). The
+# ceilings are about 5x those medians so a slower or noisier hosted runner does
+# not flake, while a real regression (an eager heavy import, a kernel handshake
+# that blocks, a synchronous scan at start) still trips. Override per machine
+# with the environment variables; tighten the defaults only with new numbers.
+LATENCY_VERSION_MS="${HZ_LATENCY_VERSION_MS:-500}"
+LATENCY_TURN_MS="${HZ_LATENCY_TURN_MS:-1000}"
+LATENCY_RUNS=5
+
+# A millisecond clock fine enough to time a 100 ms process. bash 5 has
+# EPOCHREALTIME; GNU date has %N. Anything else cannot measure, and a gate that
+# cannot measure must fail rather than pass on whole seconds.
+precise_now_ms() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    local digits="${EPOCHREALTIME//./}"
+    printf '%s' "${digits%???}"
+    return 0
+  fi
+  local ns
+  ns="$(date +%s%N 2>/dev/null || true)"
+  case "$ns" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "${ns%??????}"
+}
+
+# latency_median <label> <ceiling-ms> <expected-text> <stdin-line or ""> <command...>
+# One untimed warm-up, then LATENCY_RUNS timed runs. Every run must exit 0 and
+# print the expected text: a process that dies instantly is not fast, it is broken.
+latency_median() {
+  local label="$1" ceiling="$2" expect="$3" line="$4"
+  shift 4
+  local -a samples=()
+  local run out status start end ws
+  local -a envv=(
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u HZ_API_KEY -u HZ_MODEL -u HZ_BASE_URL
+    -u HZ_MAX_STEPS -u HZ_MAX_TOKENS -u HZ_MAX_WALL_MS
+    HOME="$E2E_HOME" PATH="$E2E_PATH" HZ_PROVIDER=mock
+  )
+  for run in 0 1 2 3 4 5; do
+    out="$WORK_DIR/latency-$label.out"
+    status=0
+    ws="$(mktemp -d "$WORK_DIR/latency-ws.XXXXXX")"
+    start="$(precise_now_ms)" || { printf 'no millisecond clock (needs bash >= 5 or GNU date); cannot measure latency\n'; return 1; }
+    if [ -z "$line" ]; then
+      "${envv[@]}" "$@" --workspace "$ws" </dev/null >"$out" 2>&1 || status=$?
+    else
+      printf '%s\n' "$line" | "${envv[@]}" "$@" --workspace "$ws" >"$out" 2>&1 || status=$?
+    fi
+    end="$(precise_now_ms)"
+    if [ "$status" -ne 0 ]; then
+      printf '%s: run %s exited %s\n' "$label" "$run" "$status"
+      cat "$out"
+      return 1
+    fi
+    case "$(cat "$out")" in
+      *"$expect"*) : ;;
+      *)
+        printf '%s: run %s did not print the expected text %s\n' "$label" "$run" "$expect"
+        cat "$out"
+        return 1
+        ;;
+    esac
+    if [ "$run" -gt 0 ]; then samples+=("$((end - start))"); fi
+  done
+  local sorted median
+  sorted="$(printf '%s\n' "${samples[@]}" | sort -n | tr '\n' ' ')"
+  median="$(printf '%s\n' "${samples[@]}" | sort -n | sed -n '3p')"
+  printf '%s: median %s ms (ceiling %s ms); samples %s\n' "$label" "$median" "$ceiling" "$sorted"
+  if [ "$median" -gt "$ceiling" ]; then
+    printf 'startup-latency: %s median %s ms exceeds the %s ms ceiling\n' "$label" "$median" "$ceiling"
+    return 1
+  fi
+  return 0
+}
+
+gate_startup_latency() {
+  e2e_begin
+  # --version is parsed before any workspace work, so the extra flag is harmless;
+  # it keeps the helper uniform with the turn measurement.
+  latency_median version "$LATENCY_VERSION_MS" 'hzcode ' "" "$ROOT/bin/hzcode" --version || return 1
+  latency_median mock-turn "$LATENCY_TURN_MS" 'Mock mode: the glob tool returned' 'list files' "$ROOT/bin/hzcode"
+}
+
 # ------------------------------------------------------------------ summary ---
 
 print_summary() {
@@ -350,6 +444,9 @@ main() {
 
 # main returns 0 when every gate passed, 1 on the first failing gate, 2 on a
 # usage error; the EXIT trap above removes the scratch directory either way.
-STATUS=0
-main "$@" || STATUS=$?
-exit "$STATUS"
+# Sourcing the file (the gate tests do) defines the functions and runs nothing.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  STATUS=0
+  main "$@" || STATUS=$?
+  exit "$STATUS"
+fi
