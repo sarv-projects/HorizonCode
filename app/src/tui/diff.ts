@@ -1,5 +1,5 @@
 /**
- * diff.ts — the rich diff view: a line-number gutter and coloured +/- rows.
+ * diff.ts : the rich diff view: a line-number gutter and coloured +/- rows.
  *
  * Pure: unified-diff text in, display lines out. Used only in rich (TTY) mode;
  * the plain `diffBlock` in render.ts stays byte-identical for pipes and tests.

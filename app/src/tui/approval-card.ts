@@ -1,5 +1,5 @@
 /**
- * approval-card.ts — the bordered single-key approval card (rich TTY only).
+ * approval-card.ts : the bordered single-key approval card (rich TTY only).
  *
  * Pure rendering: `approvalCard` returns the card lines for a request, and
  * `keyChoice` maps one keypress to an answer. The interactive loop owns the

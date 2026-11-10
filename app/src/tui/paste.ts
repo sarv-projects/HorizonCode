@@ -1,5 +1,5 @@
 /**
- * paste.ts — bracketed paste for the chat bar.
+ * paste.ts : bracketed paste for the chat bar.
  *
  * With bracketed paste on (`ESC[?2004h`) a terminal wraps pasted text in
  * `ESC[200~ ... ESC[201~`. Node's readline reports those as `paste-start` and

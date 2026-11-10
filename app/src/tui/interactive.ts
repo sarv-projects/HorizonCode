@@ -321,15 +321,15 @@ export function runThemeCommand(arg: string, renderer: Renderer): void {
     return;
   }
   if (want !== "dark" && want !== "light" && want !== "auto" && want !== "mono") {
-    renderer.notice(`unknown theme "${truncate(sanitizeText(arg.trim()), 24)}" \u2014 use /theme dark, light, auto or mono`);
+    renderer.notice(`unknown theme "${truncate(sanitizeText(arg.trim()), 24)}": use /theme dark, light, auto or mono`);
     return;
   }
   setThemeMode(want);
   renderer.notice(
     noColor
-      ? `theme: ${want} \u2014 NO_COLOR is set, so colours stay off`
+      ? `theme: ${want}, NO_COLOR is set, so colours stay off`
       : want === "mono"
-        ? "theme: mono \u2014 no colours (bold and dim stay)"
+        ? "theme: mono, no colours (bold and dim stay)"
         : `theme: ${want === "auto" ? `auto (${activeTheme()})` : want}`,
   );
 }
@@ -1253,7 +1253,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "think": {
         const text = renderer.lastThinking?.() ?? "";
         if (text.trim() === "") {
-          renderer.notice("no reasoning block yet \u2014 only models that stream their thinking have one");
+          renderer.notice("no reasoning block yet, only models that stream their thinking have one");
           break;
         }
         for (const l of sanitizeText(text).trimEnd().split("\n")) renderer.line(dim("\u2503 " + l));

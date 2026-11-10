@@ -1,5 +1,5 @@
 /**
- * completion.ts — Tab completion and ghost text for the chat bar.
+ * completion.ts : Tab completion and ghost text for the chat bar.
  *
  * Two completion contexts, both pure functions over the current line:
  *   - `/name`  a slash command (built-ins plus the custom files in .hz/commands)

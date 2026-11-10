@@ -1,5 +1,5 @@
 /**
- * subagent-boundary.test.ts — C2: explicit subagent.start / subagent.end events.
+ * subagent-boundary.test.ts : C2: explicit subagent.start / subagent.end events.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
