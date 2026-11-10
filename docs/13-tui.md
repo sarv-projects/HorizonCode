@@ -823,3 +823,4 @@ All rich-only unless noted; non-TTY output is unchanged.
 - **Diff gutters.** Line numbers, coloured +/- rows, folded context and an `… N more lines` footer in rich `turn.diff` and previews (`diff.ts`, ruling 86).
 - **Thinking.** `assistant.thinking` (additive C3) from openai-compatible and anthropic streams, collapsed to `◆ Thought for Ns · N lines`, `/think` expands (ruling 87).
 - **Subagent cells.** `subagent.start`/`subagent.end` (additive C2) give exact outcome, time and tool count to the `◆ Subagent completed in 4.2s: “task” · 3 tools` cell (ruling 88).
+- **Completion.** Tab completes `/commands` (built-in and custom) and `@paths`, with a dim ghost suffix after the cursor (`completion.ts`, ruling 89). Ghost is rich TTY only; Tab itself works wherever readline has a terminal.

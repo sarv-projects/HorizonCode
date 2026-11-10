@@ -287,5 +287,33 @@ if (SCRIPT) {
     },
     PTY_TIMEOUT_MS + 5_000,
   );
+
+  test(
+    "rich mode: ghost text suggests, Tab completes /commands and @files",
+    async () => {
+      const ws = pool.make({ "README.md": "hello\n" });
+      const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
+      expect(await waitFor(proc, "\u276f")).toBe(true);
+
+      // typing /pla shows the dim ghost "n" right after the cursor
+      proc.write("/pla");
+      await new Promise((r) => setTimeout(r, 500));
+      proc.write("\t");
+      await new Promise((r) => setTimeout(r, 300));
+      proc.write("\n"); // runs /plan
+      expect(await waitFor(proc, /plan mode/i)).toBe(true);
+
+      proc.write("see @READ\t");
+      expect(await waitFor(proc, "README.md")).toBe(true);
+
+      proc.write("\u0015"); // clear the line, Ctrl-D only leaves on an empty one
+      proc.write("\u0004");
+      const run = await proc.done;
+      expect(run.code).toBe(0);
+      // the dim ghost "n" was drawn after "/pla" and the cursor stepped back over it
+      expect(run.stdout).toContain("\u001b[2mn\u001b[0m\u001b[1D");
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
 }
 
