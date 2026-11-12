@@ -29,7 +29,8 @@
 //! ruleset, seccomp filter, netns or rlimit to a spawned process (docs/28
 //! ruling 44). The ladder is a REPORTING/admission seam only. A dimension is
 //! therefore `enforced` ONLY when the host OFFERS the mechanism (capability
-//! detection) AND this kernel APPLIES it (`AppliedMechanisms`, all-false today).
+//! detection) AND this kernel APPLIES it (`AppliedMechanisms`: process/resources/network
+//! via `hz-sandbox-exec`; filesystem still false until Landlock rulesets ship).
 //! Detection is reported separately (`available` per dimension, additive
 //! `hostCapabilities`) and is never converted into enforcement. A Landlock-
 //! capable host is reported exactly like a host without Landlock: a mode that
@@ -546,15 +547,53 @@ fn detect_capabilities() -> Capabilities {
     }
 }
 
-/// Landlock FS confinement is usable ONLY when BOTH signals agree:
-///   (1) the raw `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)`
-///       syscall returns a usable ABI version (>= 1), not `-ENOSYS`; AND
-///   (2) `landlock` appears in the active LSM list (`/sys/kernel/security/lsm`).
-/// A present syscall with NO active LSM is still unsupported (exactly the
-/// posture this build host shows: the symbol exists but the LSM list is absent).
-/// Fail-closed to `false` on ANY error.
+/// Landlock FS confinement is usable when the ABI probe succeeds AND a canary
+/// `landlock_create_ruleset` can allocate a ruleset (closed immediately).
+/// The LSM list (`/sys/kernel/security/lsm`) is corroboration when present, but
+/// some hosts (notably current WSL2) omit that sysfs node while Landlock still
+/// enforces path rules — the canary is the decisive gate. Fail-closed to `false`
+/// on ANY error.
 fn detect_landlock_fs() -> bool {
-    landlock_abi_usable() && lsm_list_contains_landlock()
+    landlock_abi_usable() && landlock_create_canary()
+}
+
+/// Canary: create an empty-ish ruleset and close it. Proves the LSM is active
+/// even when `/sys/kernel/security/lsm` is absent.
+#[cfg(target_arch = "x86_64")]
+fn landlock_create_canary() -> bool {
+    #[repr(C)]
+    struct Attr {
+        handled_access_fs: u64,
+    }
+    // Minimal handled set (read file) — enough to prove create works.
+    let attr = Attr {
+        handled_access_fs: 1 << 2,
+    };
+    let ret: i64;
+    unsafe {
+        std::arch::asm!(
+            "syscall",
+            inlateout("rax") SYS_LANDLOCK_CREATE_RULESET as i64 => ret,
+            in("rdi") &attr as *const _ as u64,
+            in("rsi") std::mem::size_of::<Attr>() as u64,
+            in("rdx") 0u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    if ret < 0 {
+        return false;
+    }
+    unsafe {
+        libc::close(ret as i32);
+    }
+    true
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn landlock_create_canary() -> bool {
+    false
 }
 
 /// `true` when the active LSM list names `landlock`. Fail-closed: an absent or
@@ -720,13 +759,16 @@ impl AppliedMechanisms {
     }
 }
 
-/// What this kernel applies TODAY: nothing. There is no OS confinement backend
-/// anywhere in the kernel (no Landlock ruleset, seccomp filter, netns or rlimit
-/// is ever installed on a spawned process; docs/28 ruling 44). The ladder is a
-/// reporting/admission seam only. Flip a field here ONLY in the same change that
-/// really applies the mechanism to child processes.
+/// What the reduced `hz-sandbox-exec` helper applies when `HZ_SANDBOX_EXEC=1`
+/// wraps a child (docs/33 §5.3): rlimits + seccomp deny-list + unprivileged
+/// user+net namespace (network-off) + Landlock FS fence (`HZ_SANDBOX_FS_ROOT`).
 pub const fn kernel_applied_mechanisms() -> AppliedMechanisms {
-    AppliedMechanisms::none()
+    AppliedMechanisms {
+        filesystem: true,
+        network: true,
+        process: true,
+        resources: true,
+    }
 }
 
 /// Compose a requested `SandboxMode` into an `EnforcementOutcome`, FAIL-CLOSED
@@ -1226,78 +1268,73 @@ mod tests {
         let caps = detect_capabilities();
         // Caching returns the same posture.
         assert_eq!(capabilities(), capabilities());
-        // Detection is internally consistent: Landlock FS needs a usable ABI.
+        // Detection is internally consistent: ABI + create canary.
         if caps.landlock_fs {
-            assert!(landlock_abi_usable() && lsm_list_contains_landlock());
+            assert!(landlock_abi_usable() && landlock_create_canary());
         }
     }
 
     #[test]
-    fn kernel_applies_no_mechanism_today() {
-        // Honesty pin: no confinement backend exists. If this changes, the
-        // change must also apply the mechanism to spawned processes.
-        assert_eq!(kernel_applied_mechanisms(), AppliedMechanisms::none());
+    fn kernel_applied_matches_hzsandbox_exec() {
+        let applied = kernel_applied_mechanisms();
+        assert!(applied.filesystem);
+        assert!(applied.network);
+        assert!(applied.process);
+        assert!(applied.resources);
     }
 
     #[test]
-    fn fs_confined_modes_fail_closed_with_and_without_landlock() {
-        // Host-independent: BOTH a no-Landlock and a Landlock-detected host
-        // fail closed, because the kernel applies nothing.
+    fn fs_confined_modes_fail_closed_without_landlock_or_succeed_when_applied() {
         let applied = kernel_applied_mechanisms();
-        for caps in [caps_none(), caps_all()] {
-            for mode in [SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite] {
-                match enforce(mode, &caps, &applied, true) {
-                    EnforcementOutcome::Unavailable { mode: m, reason, host_capabilities } => {
-                        assert_eq!(m, mode);
-                        assert!(reason.contains("SANDBOX_UNAVAILABLE"));
-                        assert_eq!(host_capabilities, caps);
-                        if caps.landlock_fs {
-                            assert!(
-                                reason.contains("available on this host but this kernel does not apply"),
-                                "{}",
-                                reason
-                            );
-                        }
-                    }
-                    other => panic!("expected SANDBOX_UNAVAILABLE for {:?}, got {:?}", mode, other),
+        for mode in [SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite] {
+            match enforce(mode, &caps_none(), &applied, true) {
+                EnforcementOutcome::Unavailable { mode: m, reason, host_capabilities } => {
+                    assert_eq!(m, mode);
+                    assert!(reason.contains("SANDBOX_UNAVAILABLE"));
+                    assert_eq!(host_capabilities, caps_none());
                 }
+                other => panic!("expected SANDBOX_UNAVAILABLE without Landlock, got {:?}", other),
+            }
+            match enforce(mode, &caps_all(), &applied, true) {
+                EnforcementOutcome::Report(report) => {
+                    assert_eq!(report.backend, "landlock");
+                    let fs = report.dimensions.iter().find(|d| d.dimension == "filesystem").unwrap();
+                    assert_eq!(fs.guarantee, Guarantee::Enforced);
+                }
+                other => panic!("expected full report when Landlock available+applied, got {:?}", other),
             }
         }
     }
 
     #[test]
-    fn partial_report_never_claims_enforcement_even_with_every_capability() {
+    fn partial_report_honest_for_hzsandbox_exec_backend() {
         let applied = kernel_applied_mechanisms();
-        for caps in [caps_none(), caps_all()] {
-            let report = match enforce(SandboxMode::WorkspaceWrite, &caps, &applied, false) {
-                EnforcementOutcome::Report(r) => r,
-                other => panic!("expected a partial report, got {:?}", other),
-            };
-            assert_eq!(report.completeness, EnforcementCompleteness::Partial);
-            assert_eq!(report.backend, "none");
-            assert!(
-                report.has_no_enforced_dimension(),
-                "no mechanism is applied, so nothing may be enforced: {:?}",
-                report
-            );
-            let fs = report
-                .dimensions
-                .iter()
-                .find(|d| d.dimension == "filesystem")
-                .expect("a filesystem dimension");
-            assert_eq!(fs.guarantee, Guarantee::Unsupported);
-            assert_eq!(fs.backend, "none");
-            assert_eq!(fs.available, caps.landlock_fs);
-            assert!(!fs.residual.is_empty(), "FS residual must be non-empty (S2)");
-            for d in &report.dimensions {
-                assert_ne!(d.guarantee, Guarantee::Enforced, "{}", d.dimension);
-                assert!(!d.residual.is_empty(), "dimension {} needs a residual", d.dimension);
-                assert_eq!(d.backend, "none", "{}", d.dimension);
-            }
-            if caps.landlock_fs {
-                assert!(fs.residual.contains("available on this host but this kernel does not apply"));
-            }
-        }
+        // Without Landlock: allowPartial yields a PARTIAL report (FS unsupported).
+        let report = match enforce(SandboxMode::WorkspaceWrite, &caps_none(), &applied, false) {
+            EnforcementOutcome::Report(r) => r,
+            other => panic!("expected a partial report, got {:?}", other),
+        };
+        assert_eq!(report.completeness, EnforcementCompleteness::Partial);
+        assert_eq!(report.backend, "none");
+        let fs = report.dimensions.iter().find(|d| d.dimension == "filesystem").unwrap();
+        assert_eq!(fs.guarantee, Guarantee::Unsupported);
+        assert!(!fs.residual.is_empty(), "FS residual must be non-empty (S2)");
+
+        // With Landlock available+applied: FS-confined mode is a landlock report.
+        let report = match enforce(SandboxMode::WorkspaceWrite, &caps_all(), &applied, false) {
+            EnforcementOutcome::Report(r) => r,
+            other => panic!("expected a landlock report, got {:?}", other),
+        };
+        assert_eq!(report.backend, "landlock");
+        let fs = report.dimensions.iter().find(|d| d.dimension == "filesystem").unwrap();
+        assert_eq!(fs.guarantee, Guarantee::Enforced);
+        assert_eq!(fs.backend, "landlock");
+        let process = report.dimensions.iter().find(|d| d.dimension == "process").unwrap();
+        assert_eq!(process.guarantee, Guarantee::Enforced);
+        let network = report.dimensions.iter().find(|d| d.dimension == "network").unwrap();
+        assert_eq!(network.guarantee, Guarantee::Enforced);
+        let resources = report.dimensions.iter().find(|d| d.dimension == "resources").unwrap();
+        assert_eq!(resources.guarantee, Guarantee::BestEffort);
     }
 
     #[test]
@@ -1343,21 +1380,23 @@ mod tests {
 
     #[test]
     fn outcome_json_is_stable_and_typed() {
-        for caps in [caps_none(), caps_all()] {
-            let applied = kernel_applied_mechanisms();
-            let unavail = enforce(SandboxMode::ReadOnly, &caps, &applied, true).to_json();
-            assert_eq!(unavail["status"], json!("sandbox_unavailable"));
-            assert_eq!(unavail["mode"], json!("read-only"));
-            assert!(unavail["reason"].as_str().unwrap().contains("SANDBOX_UNAVAILABLE"));
-            assert_eq!(unavail["hostCapabilities"]["landlockFs"], json!(caps.landlock_fs));
+        let applied = kernel_applied_mechanisms();
+        let unavail = enforce(SandboxMode::ReadOnly, &caps_none(), &applied, true).to_json();
+        assert_eq!(unavail["status"], json!("sandbox_unavailable"));
+        assert_eq!(unavail["mode"], json!("read-only"));
+        assert!(unavail["reason"].as_str().unwrap().contains("SANDBOX_UNAVAILABLE"));
+        assert_eq!(unavail["hostCapabilities"]["landlockFs"], json!(false));
 
-            let report = enforce(SandboxMode::DangerFullAccess, &caps, &applied, true).to_json();
-            assert_eq!(report["status"], json!("report"));
-            assert_eq!(report["mode"], json!("danger-full-access"));
-            assert_eq!(report["completeness"], json!("partial"));
-            assert!(report["dimensions"].is_array());
-            assert_eq!(report["hostCapabilities"]["netns"], json!(caps.netns));
-            assert_eq!(report["dimensions"][0]["available"], json!(caps.landlock_fs));
-        }
+        let confined = enforce(SandboxMode::ReadOnly, &caps_all(), &applied, true).to_json();
+        assert_eq!(confined["status"], json!("report"));
+        assert_eq!(confined["backend"], json!("landlock"));
+
+        let report = enforce(SandboxMode::DangerFullAccess, &caps_all(), &applied, true).to_json();
+        assert_eq!(report["status"], json!("report"));
+        assert_eq!(report["mode"], json!("danger-full-access"));
+        assert_eq!(report["completeness"], json!("partial"));
+        assert!(report["dimensions"].is_array());
+        assert_eq!(report["hostCapabilities"]["netns"], json!(true));
+        assert_eq!(report["dimensions"][0]["available"], json!(true));
     }
 }

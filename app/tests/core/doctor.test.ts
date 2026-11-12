@@ -18,7 +18,9 @@ import {
   type DoctorEnv,
   type SpawnResult,
 } from "../../src/core/doctor";
+import { COMMITTED_CATALOG_SNAPSHOT } from "../../src/core/catalog/catalog";
 import { kernelStateDir } from "../../src/core/paths";
+import { writeOAuthToken } from "../../src/core/auth/store";
 
 let home: string;
 let workspace: string;
@@ -29,6 +31,51 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(workspace, { recursive: true, force: true });
+});
+
+test("oauth token line when stored", () => {
+  writeOAuthToken(
+    { provider: "myllm", accessToken: "secret", obtainedAt: new Date().toISOString(), expiresAt: "2099-01-01T00:00:00.000Z" },
+    home,
+  );
+  writeConfig(
+    JSON.stringify({
+      providers: [{ id: "myllm", baseUrl: "http://127.0.0.1:9999", protocol: "openai-chat" }],
+      provider: "myllm",
+      model: "m1",
+    }),
+  );
+  const checks = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_PROVIDER: "myllm", HZ_MODEL: "m1", HOME: home } }));
+  expect(byId(checks, "provider.oauth").status).toBe("ok");
+});
+
+test("hz-sandbox-exec doctor line", () => {
+  const missing = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_SANDBOX_EXEC_BIN: "/no/such/hz-sandbox-exec" } }));
+  expect(missing.some((c) => c.id === "sandbox.exec" && c.status === "warn")).toBe(true);
+  const off = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_SANDBOX_EXEC: "0" } }));
+  expect(off.some((c) => c.id === "sandbox.exec" && c.status === "ok" && c.detail.includes("disabled"))).toBe(true);
+});
+
+test("landlock doctor line is honest (no FS enforcement claimed)", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "sandbox.landlock");
+  expect(line.status === "ok" || line.status === "warn").toBe(true);
+  expect(line.detail.toLowerCase()).not.toContain("enforced");
+});
+
+test("tui.screen warns when fullscreen is requested", () => {
+  const scroll = byId(runDoctor(fakeEnv()), "tui.screen");
+  expect(scroll.status).toBe("ok");
+  expect(scroll.detail).toContain("scrollback");
+  const full = byId(runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_TUI_MODE: "fullscreen" } })), "tui.screen");
+  expect(full.status).toBe("warn");
+});
+
+test("outer egress firewall marker", () => {
+  const off = runDoctor(fakeEnv({ env: { ...fakeEnv().env, LANG: "en_US.UTF-8" } }));
+  expect(off.some((c) => c.id === "egress.outer" && c.status === "warn")).toBe(true);
+  const on = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_OUTER_EGRESS_FIREWALL: "1" } }));
+  expect(on.some((c) => c.id === "egress.outer" && c.status === "ok")).toBe(true);
 });
 
 const OKRUN = (cmd: string): SpawnResult =>
@@ -181,6 +228,14 @@ describe("provider, key and model", () => {
     expect(renderDoctor(checks)).not.toContain(secret);
     expect(renderDoctorJson(checks)).not.toContain(secret);
   });
+  test("catalog.source names committed models-dev snapshot when bundled", () => {
+    if (!existsSync(COMMITTED_CATALOG_SNAPSHOT)) return;
+    const env = { ...fakeEnv().env, LANG: "C.UTF-8", HZ_NO_COMMITTED_SNAPSHOT: "0" };
+    const line = byId(runDoctor(fakeEnv({ env, home })), "catalog.source");
+    expect(line.status).toBe("ok");
+    expect(line.detail).toContain("models-dev.snapshot");
+  });
+
   test("a known model resolves in the catalog; an unknown one is a WARN", () => {
     const env = { HZ_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k", LANG: "C.UTF-8" };
     const known = byId(runDoctor(fakeEnv({ env })), "model");

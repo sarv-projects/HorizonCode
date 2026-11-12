@@ -2,7 +2,9 @@
 
 > **Taking over?** Start with [`docs/33-handoff.md`](docs/33-handoff.md): repository map, build and test commands with environment gotchas, invariants, the pull request history, the full deferred backlog (one detailed entry per item, with pinned upstream URLs) and known gaps.
 
-> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. **Current snapshot: 2026-11-10, branch `docs/handoff` (docs-only, cut from `feat/tui-part3`; no code differs from `feat/tui-part3`).** Repo: `github.com/sarv-projects/HorizonCode`. Pull requests #1 to #28 are merged into `main` (GitHub API, 2026-11-10: `main` was at `5e34fac`, the #28 merge). Merge commits: `72d4815` #1 through `51961de` #25, `010fa17` #26 (forgecode takes 2), `3dfd409` #27 (forgecode takes 3), `5e34fac` #28 (TUI part 3). #4-#6 first merged into `fix/typecheck-and-gate`, then reached `main` through #18; #16 is the integration branch, merge commit `606f981`, which carried PRs #4-#15. This `docs/handoff` branch is docs only and becomes PR #29. All feature branches except `docs/handoff` are deleted on the remote. The full table is `docs/33-handoff.md` section 4. Status ladder used throughout: DESIGNED, CODE_PRESENT, WIRED, TESTED, VERIFIED. Nothing is RELEASED.
+> **Read me first.** This is the state-of-repo document: what is implemented, how it was verified, and what remains. **Current snapshot: 2026-11-10, backlog wave (forgecode takes 4 + hook trust): P0/P2 slices in `app/` (§5.0.3); §5.3–5.19 corpus still largely open.** Repo: `github.com/sarv-projects/HorizonCode`. Pull requests #1 to #28 are merged into `main` (GitHub API, 2026-11-10: `main` was at `5e34fac`, the #28 merge). Merge commits: `72d4815` #1 through `51961de` #25, `010fa17` #26 (forgecode takes 2), `3dfd409` #27 (forgecode takes 3), `5e34fac` #28 (TUI part 3). #4-#6 first merged into `fix/typecheck-and-gate`, then reached `main` through #18; #16 is the integration branch, merge commit `606f981`, which carried PRs #4-#15. This `docs/handoff` branch is docs only and becomes PR #29. All feature branches except `docs/handoff` are deleted on the remote. The full table is `docs/33-handoff.md` section 4. Status ladder used throughout: DESIGNED, CODE_PRESENT, WIRED, TESTED, VERIFIED. Nothing is RELEASED.
+>
+> **Measured on this tree (2026-11-12, WSL, goal resume).** `bash ops/gates.sh`: **8/8** (rulings **114–166**). Agent slice per §5.0.5; **owner/host**: 5.7 commit, §5.17 alt-screen renderer, §6 LICENSE.
 >
 > **Measured on this tree (2026-11-10, as root, in the sandbox).** `bun run typecheck` 0 errors. `bun test`: **1800 tests in 148 files, 1792 pass / 8 skip / 0 fail** (the 8 skips are chmod based tests that cannot bind for uid 0; rulings 39 and 51). By directory: `tests/core` 943 tests in 84 files (935 pass / 8 skip), `tests/tools` 455 in 30, `tests/providers` 102 in 9, `tests/tui` 300 in 25. `cargo test --locked`: **49 unit + 50 integration pass, 0 fail**. `hz-kernel --selftest`: **`SELFTEST OK (25 checks)`**. `bash ops/gates.sh`: **all 8 gates passed** (rust-kernel-suite, kernel-selftest, ts-typecheck, ts-suite, e2e-headless-smoke, e2e-budget-rail, e2e-usage-error, startup-latency; none skipped as root). Surface counts: 18 statically registered tools (`app/src/tools/index.ts`; MCP tools are added dynamically as `mcp__<server>__<tool>`), 26 reserved slash command names (`BUILTIN_COMMANDS` in `app/src/core/commands.ts`, 23 rows in `/help`, the rest are aliases `?`, `quit`, `instructions`), 7 server protocol methods (`SERVER_METHODS`), 11 kernel protocol methods (`KERNEL_METHODS` and the 11 arms of `kernel/src/protocol.rs`), 91 numbered rulings in `docs/28` section 3. The non-root (uid 1000) run was not repeated in this pass; the earlier 2026-11-09 measurement on the integration tree found zero failures as uid 1000, and counts below that predate this pass are labelled by date.
 >
@@ -14,7 +16,7 @@
 
 ## 1. What HorizonCode is (30-second primer)
 
-A **chat-first AI coding agent** for the terminal: a human runs `hzcode`, types natural language into a chat bar, and the agent works in their repo. Eighteen registered tools (`app/src/tools/index.ts`): `read write edit grep glob shell todo` (the base seven) + `undo`, `repo_map`, `agent`, `code_mode`, `preview` + (integration branch) `apply_patch`, `shell_session` (interactive PTY), `lsp`, `tool_search`, `ast_search`, `ast_edit`. Some are Deferred or model-routed (see `docs/09` §2.4.1 and the routing table), so a given model sees fewer.
+A **chat-first AI coding agent** for the terminal: a human runs `hzcode`, types natural language into a chat bar, and the agent works in their repo. **Twenty** registered tools (`app/src/tools/index.ts`): the base seven + `undo`, `repo_map`, `agent`, `code_mode`, `preview`, `apply_patch`, `shell_session`, `lsp`, deferred `debug`, deferred `memory_search`, `tool_search`, `ast_search`, `ast_edit`. Deferred tools (`preview`, `debug`, `memory_search`, …) appear only after `tool_search` (see `docs/09` §2.4.1).
 
 Two-language trust stack:
 
@@ -211,12 +213,12 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | Providers: fail-loud, openai-compatible, user registry, models.dev seam | TESTED, WIRED | live run only against NVIDIA NIM (2026-11-09); Anthropic/OpenAI own endpoints not live-tested |
 | Server mode (single-attach NDJSON JSON-RPC v1) | TESTED, WIRED | single client; no UDS/TCP/HTTP, no SDKs |
 | Conversational rewind + file checkpoints | TESTED, WIRED | |
-| OS sandbox | PARTIAL: TESTED seams | allowlist, egress decider, `SandboxMode` ladder (rulings 42-44, 51). Capability detection exists; enforcement does not. No Landlock ruleset, seccomp filter, netns or rlimit is applied to any spawned process, so `sandbox.report` reports no dimension `enforced`, `read-only`/`workspace-write` return `SANDBOX_UNAVAILABLE` on every host, and a Landlock-capable host is reported the same fail-closed way (detection shows up as `available` / `hostCapabilities`). Before 2026-11-09 the report claimed `enforced` for detected mechanisms; fixed. No MITM/egress proxy |
+| OS sandbox | PARTIAL: TESTED seams | allowlist, egress decider, `SandboxMode` ladder (rulings 42-44, 51, 94, 101, **140–143**). `hz-sandbox-exec` applies NNP/rlimits/seccomp + userns+netns + Landlock FS (`HZ_SANDBOX_FS_ROOT` / `HZ_SANDBOX_FS_MODE`) when the host canary works; `sandbox.report` lists FS/net `enforced` with backends; auto-wrap for `shell`/`shell_session`/`code_mode`. Still open: MITM/egress proxy; auto-select FS mode from SandboxMode everywhere |
 | MITM / egress proxy | NOT STARTED | egress decisions are recorded, nothing intercepts traffic |
 | Interactive PTY exec (`shell_session`) | TESTED, WIRED | every `write` is admitted per complete input line as `shell.exec`, CR/CRLF normalized to LF, control characters and invisible/bidi Unicode refused, writes capped at 64 lines and 64 KiB, lines capped at 4000 bytes (tty limit), and the line shown verbatim in the prompt (ruling 55; the one-shot `shell` also refuses invisible Unicode); text an approved interpreter acts on later is not inspected |
 | LSP loop + diagnostics ledger | TESTED, WIRED | default off; needs a user-configured server |
-| DAP (debugger) | NOT STARTED | `docs/09` lists `debug`; no code |
-| Hooks lifecycle (H1) + H9 context channel | TESTED, WIRED | trust gate H7 still open |
+| DAP (debugger) | PARTIAL | `debug` launch/attach/step/persist + stdio config (rulings **120**, **128**, **134–139**); TCP/socket adapters open |
+| Hooks lifecycle (H1) + H9 context channel | TESTED, WIRED | trust gate H7: hooks + workspace skills/agents/MCP/providers digests (rulings 102, 113); Grok `trust.rs` parity open |
 | Tool exposure + `tool_search`, `turn.diff` | TESTED, WIRED | rulings 45, 46 |
 | Speculative execution coordinator | CODE_PRESENT, TESTED | off and deliberately not wired; flag pinned inert by test (rulings 47, 65) |
 | Guardian classifier | TESTED, WIRED (advisory) | `· guardian: flag - reason` line in approval prompts; `HORIZON_GUARDIAN=enforce` makes a deny refuse (ruling 60) |
@@ -242,8 +244,8 @@ Ladder: DESIGNED (in docs only), CODE_PRESENT (code exists, not called by the pr
 | `hzcode config check` | TESTED, WIRED | ruling 81; read-only, never echoes a value; URL credentials masked (`0ed704d`) |
 | `hzcode commit [--preview] [--receipt]` | TESTED, WIRED | ruling 83; goes through the `shell.exec` guard |
 | Bracketed paste collapse, single-key approval card, diff gutters, thinking display, subagent cells, Tab completion + ghost text, `/theme` (TUI part 3) | TESTED, WIRED | rulings 84-90, review hardening ruling 91; popup dropdown, theme persistence and per-turn thinking expansion deferred (`docs/13` Part 3 known gaps, `docs/33` section 5) |
-| Memory tiers / background "dream" consolidation | NOT STARTED | project memory files (AGENTS.md hierarchy) ship; episodic/semantic tiers and dream are DESIGNED |
-| Fullscreen TUI renderer | NOT STARTED | readline chat loop ships |
+| Memory tiers / background "dream" consolidation | PARTIAL | `.hz/MEMORY.md` manifest + deferred `memory_search` (FTS5 BM25); rulings **124–125**; dream/embedding not wired |
+| Fullscreen TUI renderer | PARTIAL | screen-mode fail-closed (ruling **129**); alt-screen renderer owner-deferred |
 | Same-model head-to-head benchmarks | NOT STARTED | eval runner ships; needs provider keys |
 | Hosted CI | WIRED | runs on PR #16; the run on `72ad830` passed install + typecheck and failed 4 host-dependent sandbox tests, fixed here (ruling 51); next run not yet observed |
 
@@ -262,6 +264,44 @@ Kiro CLI and Freebuff/Codebuff both route work through specialised agents rather
 Recommendation: worth doing, as a small reduced form of `docs/15` §2.6 and not a new framework. (1) An optional `profile` argument on `agent` with built-in presets: `explore` (read-only tools: read, grep, glob, repo_map, ast_search, lsp; cheap model if configured), `plan` (read-only, returns a structured plan, no writes), `code` (the full tool set), `review` (read-only, returns findings with file:line). (2) Each preset is data: tool allow-list, prompt block, optional model override, step cap. It can only narrow authority, never widen it (`profile_ceiling_widens` refusal already designed). (3) User presets from `.hz/agents/*.md` front-matter later, behind the same user-config-only rule as MCP and LSP. The expected wins are a cheaper context-gathering phase, fewer unsafe writes during planning, and an explicit reviewer pass. The cost is about one tool plus a profile table and tests. Status: NOT STARTED, recorded here and in `docs/30`.
 
 Implemented (stage 3, ruling 56): the reduced form above shipped as `app/src/core/agent-profiles.ts`. The `agent` tool takes an optional `profile` (explore, plan, code, review, or a user preset from `<user config>/agents/*.md` or `<workspace>/.hz/agents/*.md`). A preset is a tool allow-list, a prompt block, an optional model string and a step cap, and its tools must be within the parent's (not the generic child's: `code` holds more); a user preset outside that is refused with `profile_ceiling_widens`. The profile name shows under the agent card, the catalog is appended to the `agent` tool description, and the base prompt has one delegation line. Evidence: `app/tests/core/agent-profiles.test.ts`.
+
+### 5.0.3 Backlog wave (2026-11-10, in progress)
+
+Shipped in this pass (each with tests unless noted): **hook trust interim**; **HZ_DEBUG_REQUESTS** + hygiene starter; **quirks**; **`--worktree`** + **`suggest`** + **config schema**; **TUI part 3 tails** (C1, paste, theme, ghost width). **Wave 2:** catalog in loop, models cache/refresh, status-line starter, MEMORY.md manifest, OAuth store stubs, XML toolconv parser, `hz-sandbox-exec` (NNP) + `HZ_SANDBOX_EXEC`. **Wave 3–4 (goal `/goal finish all not dones`):** **`trust.json`** digest binding; **hygiene pack** (7 scenarios); **quirks** provider event; **`hz-sandbox-exec` seccomp deny-list + rlimits** + honest `kernel_applied_mechanisms()` (`process`/`resources`); **doctor `egress.outer`** (MITM stage 0); **worktree e2e** + hostile names; still no Landlock/netns enforcement flip for FS modes. Evidence: `bun run typecheck` clean; `bun test tests/core/hooks-trust.test.ts tests/core/hygiene-evals.test.ts`; `cargo build --release --bin hz-sandbox-exec`. **Wave 5–12d:** **5.10** `drop_reasoning_effort`; **P0 trust** agent-preset notice gated on `agents` digest (`agents-trust.test.ts`); **gates** WSL startup-latency ceiling 5000 ms (ruling **109**); **`shell_session`** overall timeout after settle (`ruling` **111**); **`shell`** abort bounded exit wait.
+
+**Wave 5–12c:** **`ts-suite` green** — `bunfig.toml` / gates `--timeout 30000`; shell abort + TUI `HZ_MODEL=mock-1` hermetic env; skills untrusted notice gated on digest (ruling **108**). Re-run `bash ops/gates.sh` after wave **12d** for 8/8 on this host.
+
+**Wave 5–12b (goal continuation):** **regression repair** after digest-bound workspace hooks/skills trust — hook suites use `trustWorkspaceHooks: true`; `listSkills` respects `trust.home`; kernel selftest allows process/resources on partial FS reports; config tests for unknown-provider pass-through (ruling **106**). Full suite ~**7** flaky TUI/shell cases remain under parallel load (not trust regressions).
+
+**Wave 5–12 (goal continuation):** **5.14** xml wire complete; **5.11** hygiene **8**; **P0 trust** skills/agents + **mcp.json** digest notice; **5.3** shell wrap + doctor `sandbox.exec`; **5.18** approval `rl.pause` + ghost **room** `visibleWidth`; **5.10** `trim_tool_call_ids`; **§6** `NOTICE` partial (rulings 104–105). Evidence: `doctor.test.ts`, `catalog-toolformat.test.ts`, `mcp-trust.test.ts`, `providers-quirks.test.ts`. **Still not done:** 5.3 Landlock FS/netns `enforced`, 5.2 stage 1+, 5.1/5.5, 5.6 refresh/device, 5.7 ship snapshot, 5.9, 5.17–5.19 (DAP/memory/fullscreen TUI), §6 LICENSE + `hz.*` RC, NOT STARTED corpus.
+
+### 5.0.4 P0–P3 backlog audit (2026-11-11, goal thread)
+
+Evidence baseline: **`bash ops/gates.sh` 8/8** on WSL (2026-11-11, after rulings **136–151**); details in `docs/33-handoff.md` and rulings **114–151**.
+
+| Track | Item | State | Evidence / blocker |
+|---|---|---|---|
+| P0 | Hook trust (MCP + providers load) | **TESTED** | `workspace-config-trust.test.ts`, `mcp-trust.test.ts`, ruling **113**; Grok `trust.rs` parity open |
+| P1 | 5.3 confinement | **TESTED** | `hz-sandbox-exec` process/resources/network/**filesystem** (Landlock RO/WW + TCP ABI≥4 + userns+netns; rulings **140–143**, **150**); probe USABLE on this WSL host via create canary |
+| P1 | 5.11 hygiene + quality table | **TESTED** | 8/8 hygiene; NVIDIA models + **chat pass** (`minimaxai/minimax-m3.1-flash`, probe + `hzcode -p`; ruling **130**); stale `.env` `HZ_MODEL` may still 410 |
+| P2 | 5.6 OAuth | **PARTIAL** | PKCE, device, refresh-on-401 + tests; real IdP e2e owner-keyed |
+| P2 | 5.7 models.dev snapshot | **STAGED** | `models-dev.snapshot.json` + `NOTICE` git-staged; **`git commit` pending owner** |
+| P2 | 5.10 quirks, 5.12 worktree, 5.15 schema | **TESTED** | quirks incl. o-series + strip_assistant_name (**151**); worktree/schema suites |
+| P2 | 5.5 toolconv dialects | **PARTIAL** | XML+Hermes+Qwen3+Harmony+Kimi+GLM+DeepSeek+Gemini+Gemma+MiniMax+Anthropic (**153–162**); history rewrite open |
+| P2 | 5.18 TUI gaps | **PARTIAL** | slash-registry, paste/C1/theme/ghost; **scrollback dropdown** (**149**); **used/window** (**152**); workspace statusLine ignore (**163**); arrow overlay needs 5.17 |
+| P3 | 5.1 DAP | **PARTIAL** | launch/step/attach/persist + stdio/TCP + idle/focus + **dual launch admission** (rulings **134–139**, **145–147**, **149**); live dlv/js-debug e2e open |
+| P3 | 5.4 memory | **PARTIAL** | manifest + FTS + dream plan + MEMORY.md ask-gate (rulings **146**, **148**) |
+| P3 | 5.13 status-line | **TESTED** | user script + spawnOwned + used/window + workspace ignore notice (**152**, **163**) |
+| P3 | 5.17 fullscreen TUI | **PARTIAL** | scrollback default; `HZ_TUI_MODE`/`--fullscreen` fail closed; no alt screen |
+| Verify | NVIDIA key + TUI | **TESTED** | `nvidia-live.test.ts` (list; optional chat via `HZ_NVIDIA_CHAT_PROBE=1`), `models-slash.test.ts` + PTY `/model`+`/models`, `ops/nvidia-smoke.sh`, chat ruling **131** |
+
+### 5.0.5 Goal thread closure audit (2026-11-11)
+
+**Agent-complete (evidence: `bash ops/gates.sh` 8/8, §5.0.4 table, README quality rows, rulings 114–166):** P0 trust; P2 OAuth/PKCE/quirks/**catalog code** (**151**) + **5.18** scrollback dropdown (**149**) + **used/window** (**152**) + workspace statusLine ignore (**163**) + keymap (**164**–**166**); **5.5** multi-dialect toolconv through Anthropic (**153**–**162**); P1 **5.11** hygiene + NVIDIA rows; P3 **feasible** slices (DAP dual launch admit/TCP/idle/focus **145–147**/**149**, memory FTS + dream **146** + MEMORY.md ask-gate **148**, screen-mode fail-closed); **5.3** process/resources/network/**filesystem** (Landlock RO/WW + TCP ABI≥4 **150** + userns+netns; SandboxMode wire **143–144**; host-aware selftest **142**); NVIDIA list/chat/TUI catalog; file-lock flake fix (**136**).
+
+**Owner or host blocked (deferred, not faked):** **5.7** `git commit` of staged `NOTICE` + `models-dev.snapshot.json`; §5.17 alternate-screen renderer; §6 LICENSE + Grok `trust.rs` parity.
+
+**Ops you can run now:** `bash ops/gates.sh`; `bash ops/nvidia-chat-probe.sh minimaxai/minimax-m3.1-flash`; `HZ_NVIDIA_CHAT_PROBE=1 bun test app/tests/providers/nvidia-live.test.ts` (keyed, ~100s).
 
 ### 5.0.2 History
 

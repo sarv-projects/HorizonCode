@@ -128,6 +128,66 @@
     }
   },
   {
+    "concurrencyClass": "shared",
+    "description": "Debugger over DAP. stack/variables are read-only; launch/attach keep a live adapter for the chat session; continue/next/stepIn/stepOut reuse it; close disposes. Pass command, or adapter name from defaults (debugpy/gdb/…), or let launch auto-pick from program extension. OMP sequencing in session.ts.",
+    "exposure": "deferred",
+    "name": "debug",
+    "parameters": {
+      "properties": {
+        "adapter": {
+          "description": "Named adapter from dap/defaults.json (e.g. debugpy, gdb, lldb-dap); resolved via PATH.",
+          "type": "string"
+        },
+        "args": {
+          "description": "Argv tail for the adapter (optional; merged after catalogue defaults).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Executable that speaks DAP on stdio (optional when adapter is set).",
+          "type": "string"
+        },
+        "host": {
+          "description": "Host for port attach (default 127.0.0.1).",
+          "type": "string"
+        },
+        "op": {
+          "description": "stack, variables, launch, attach, close, continue, next (step over), stepIn, or stepOut.",
+          "enum": [
+            "stack",
+            "variables",
+            "launch",
+            "attach",
+            "close",
+            "continue",
+            "next",
+            "stepIn",
+            "stepOut"
+          ],
+          "type": "string"
+        },
+        "pid": {
+          "description": "Process id to attach (attach op; admitted as shell.exec).",
+          "type": "number"
+        },
+        "port": {
+          "description": "Debug port to attach (attach op; with optional host).",
+          "type": "number"
+        },
+        "program": {
+          "description": "Debuggee command line (required for launch and step ops; admitted as shell.exec).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "concurrencyClass": "exclusive",
     "description": "Replace a string in a file: exact match, then relative-indent, three-way-merge and line-patch repair rungs (each only when unambiguous). All occurrences or the first only. Alternatively, address whole lines by the anchors read returns with anchors:true (start_anchor, optional end_anchor) instead of old.",
     "exposure": "direct",
@@ -236,6 +296,24 @@
       "required": [
         "op",
         "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Search user-curated workspace memory (FTS index under .hz/memory.db, seeded from MEMORY.md). Read-only recall.",
+    "exposure": "deferred",
+    "name": "memory_search",
+    "parameters": {
+      "properties": {
+        "query": {
+          "description": "Terms to search for in remembered facts.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
       ],
       "type": "object"
     }

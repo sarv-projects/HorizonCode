@@ -142,6 +142,37 @@ case "$bwrap_rc" in
 esac
 printf 'bwrap --version         : %s\n' "$bwrap_note"
 
+# ------------------------------------------- ABI create canary ----------------
+# Some hosts (WSL2) omit /sys/kernel/security/lsm while Landlock still enforces.
+# A successful landlock_create_ruleset is the decisive usability signal.
+
+canary_ok=no
+canary_note="(skipped: python3 not found)"
+if command -v python3 >/dev/null 2>&1; then
+  canary_out="$(python3 - <<'PY' 2>/dev/null
+import ctypes, errno
+libc = ctypes.CDLL(None, use_errno=True)
+class Attr(ctypes.Structure):
+    _fields_ = [("handled_access_fs", ctypes.c_uint64)]
+attr = Attr(handled_access_fs=1 << 2)  # READ_FILE
+ctypes.set_errno(0)
+fd = libc.syscall(444, ctypes.byref(attr), ctypes.sizeof(attr), 0)
+err = ctypes.get_errno()
+if fd >= 0:
+    import os
+    os.close(fd)
+    print("ok")
+else:
+    print("fail", err, errno.errorcode.get(err, err))
+PY
+)" || canary_out="fail"
+  case "$canary_out" in
+    ok) canary_ok=yes; canary_note="ok (create_ruleset)" ;;
+    *) canary_note="failed ($canary_out)" ;;
+  esac
+fi
+printf 'landlock create canary  : %s\n' "$canary_note"
+
 # ---------------------------------------------------------------- verdict -----
 
 reason=""
@@ -151,16 +182,20 @@ if [ "$kernel_ok" != yes ]; then
   else
     reason="kernel release '$release' cannot be parsed as major.minor (Landlock requires Linux >= 5.13 with the LSM active)"
   fi
-elif [ "$landlock_present" != yes ]; then
+elif [ "$landlock_present" != yes ] && [ "$canary_ok" != yes ]; then
   if [ -n "$lsm" ]; then
-    reason="kernel >= 5.13, but 'landlock' is not in the LSM list ($lsm)"
+    reason="kernel >= 5.13, but 'landlock' is not in the LSM list ($lsm) and create canary failed ($canary_note)"
   else
-    reason="kernel >= 5.13, but the LSM list is unavailable ($lsm_note)"
+    reason="kernel >= 5.13, but the LSM list is unavailable ($lsm_note) and create canary failed ($canary_note)"
   fi
 fi
 
 if [ -z "$reason" ]; then
-  printf 'verdict                 : USABLE — kernel %s and landlock is in the LSM list (%s)\n' "$release" "$lsm"
+  if [ "$landlock_present" = yes ]; then
+    printf 'verdict                 : USABLE — kernel %s and landlock is in the LSM list (%s)\n' "$release" "$lsm"
+  else
+    printf 'verdict                 : USABLE — kernel %s; LSM list absent but create canary ok (%s)\n' "$release" "$canary_note"
+  fi
   exit 0
 fi
 printf 'verdict                 : NOT USABLE — %s\n' "$reason"

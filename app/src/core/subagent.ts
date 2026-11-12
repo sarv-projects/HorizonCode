@@ -19,6 +19,7 @@ import type { ApprovalHandler, Lease, Provider, RuntimeEvent, ToolResult } from 
 // child session boundary (session.start/end for the child), OBSERVATION-only
 // (H4 — a subagent boundary hook can never block the delegated run).
 import { loadHooks, runLifecycleHooks } from "./hooks";
+import { hooksLoadOptions } from "./trust";
 import type { KernelClient } from "./kernel";
 import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
@@ -26,6 +27,7 @@ import { BASE_TOOL_NAMES } from "../tools";
 import { buildChildPrompt, staticChildPrompt } from "./prompt";
 import type { PermissionMode } from "./permission-mode";
 import { resolvePreset, type AgentPreset, type PresetOptions } from "./agent-profiles";
+import { catalogWindow, loadCatalog } from "./catalog/catalog";
 
 /** The child prompt is fixed: a subagent reports, it does not converse. */
 export const SUBAGENT_SYSTEM_PROMPT = staticChildPrompt();
@@ -127,6 +129,7 @@ export interface NestedRunOptions {
   permissionMode?: PermissionMode;
   /** NF-073: the parent run's ledger — the child gets its own step slice but shares the ceiling. */
   ledger?: BudgetLedger;
+  trustedWorkspaceHooks?: string[];
 }
 
 /**
@@ -207,6 +210,8 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     maxProviderCalls: steps,
     // NF-073: the child's step slice sits under the parent's shared ceiling.
     ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: steps }) : undefined,
+    trustedWorkspaceHooks: opts.trustedWorkspaceHooks,
+    contextWindowTokens: catalogWindow(opts.provider.name, opts.model, loadCatalog()),
     // No `delegate`: a subagent can never spawn subagents.
   };
   // H1 subagent.start/subagent.stop (the child session boundary): OBSERVATION
@@ -214,7 +219,12 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   // an attributed event by the runner; it is not injected into the child's
   // request (the child drives its own run). A hook here can never block the
   // delegated run.
-  const hooks = loadHooks(opts.workspace);
+  const hooks = loadHooks(
+    opts.workspace,
+    hooksLoadOptions(opts.workspace, { trustedWorkspaceHooks: opts.trustedWorkspaceHooks }, (message) => {
+      emitBoundary({ type: "notice", message });
+    }),
+  );
   const subagentDetail = { childSessionId: session.id, task: taskHead(task) };
   await runLifecycleHooks(hooks, {
     point: "subagentStart",

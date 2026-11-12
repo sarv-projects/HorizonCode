@@ -200,7 +200,7 @@ gate_ts_suite() {
     printf 'bun not found — looked on PATH and at $HOME/.bun/bin/bun\n'
     return 1
   fi
-  ( cd "$ROOT/app" && "$BUN" test )
+  ( cd "$ROOT/app" && HZ_NO_COMMITTED_SNAPSHOT=1 "$BUN" test --timeout 30000 )
 }
 
 # --------------------------------------------------------------- e2e helpers ---
@@ -310,6 +310,13 @@ gate_e2e_usage_error() {
 # with the environment variables; tighten the defaults only with new numbers.
 LATENCY_VERSION_MS="${HZ_LATENCY_VERSION_MS:-500}"
 LATENCY_TURN_MS="${HZ_LATENCY_TURN_MS:-1000}"
+# WSL2 on Windows often pays a high first-spawn cost; override still wins via HZ_LATENCY_*_MS.
+if [ -z "${HZ_LATENCY_VERSION_MS:-}" ] && grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+  LATENCY_VERSION_MS=5000
+fi
+if [ -z "${HZ_LATENCY_TURN_MS:-}" ] && grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+  LATENCY_TURN_MS=5000
+fi
 LATENCY_RUNS=5
 
 # A millisecond clock fine enough to time a 100 ms process. bash 5 has

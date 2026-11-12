@@ -41,8 +41,24 @@ describe("command line", () => {
     expect(run.stdout).toContain("--model <name>");
     expect(run.stdout).toContain("--mock");
     expect(run.stdout).toContain("--version");
+    expect(run.stdout).toContain("hzcode keybind check");
     // usage is not an error
     expect(run.stderr).toBe("");
+  });
+
+  test("keybind check defaults exits 0", async () => {
+    const run = await runApp(appSpec(["keybind", "check"]));
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("keybind check ok");
+  });
+
+  test("keybind check rejects protected chord shadow", async () => {
+    const dir = makeWorkspace();
+    const file = path.join(dir, "keys.json");
+    writeFileSync(file, JSON.stringify({ "turn.cancel": "ctrl+c" }), "utf8");
+    const run = await runApp(appSpec(["keybind", "check", file]));
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("protected");
   });
 
   test("an unusable --workspace exits 2 with a message on stderr", async () => {

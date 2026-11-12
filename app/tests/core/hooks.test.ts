@@ -35,6 +35,7 @@ import {
   runPreToolHooks,
   type HookDef,
   type HookMatch,
+  type HooksOptions,
   type PostToolHookContext,
 } from "../../src/core/hooks";
 import { kernelStateDir, readSpawnLedger, spawnLedgerPath } from "../../src/core/owned-spawn";
@@ -117,12 +118,17 @@ function context(
 
 const ledgerPath = (ws: string): string => spawnLedgerPath(kernelStateDir(ws));
 
+/** Workspace hooks in these tests are intentional; mirror a trusted workspace path. */
+function loadTestHooks(ws: string, home: string, extra: HooksOptions = {}): ReturnType<typeof loadHooks> {
+  return loadHooks(ws, { home, trustWorkspaceHooks: true, ...extra });
+}
+
 /* ------------------------- discovery and precedence ------------------------- */
 
 describe("loadHooks: config discovery", () => {
   test("no config anywhere is 'none': no hook runs, no process, no ledger", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-absent");
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("none");
 
     const ctx = context(ws, "write", { path: "a.txt" });
@@ -141,7 +147,7 @@ describe("loadHooks: config discovery", () => {
     // This file would win only if the legacy tree were ignored.
     writeHooks(path.join(home, ".config", "horizon", "hooks.json"), { hooks: { preTool: [jsHook("deny-with-reason.js")] } });
 
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     expect(config.sources).toEqual([legacy]);
@@ -155,7 +161,7 @@ describe("loadHooks: config discovery", () => {
     const file = path.join(userConfigDir(home), "hooks.json");
     writeHooks(file, { hooks: { preTool: [bashHook("allow.sh")] } });
 
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     expect(config.sources).toEqual([file]);
@@ -165,7 +171,7 @@ describe("loadHooks: config discovery", () => {
     const { ws, home } = fixtureWorld("hz-hooks-ws");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [bashHook("allow.sh", { match: { tool: "read" } })] } });
 
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     expect(config.sources).toEqual([wsHooksFile(ws)]);
@@ -191,7 +197,7 @@ describe("loadHooks: config discovery", () => {
   test('match.tool "*" matches every tool', async () => {
     const { ws, home } = fixtureWorld("hz-hooks-wild");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [bashHook("allow.sh", { match: { tool: ["read", "*"] } })] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(await runPreToolHooks(config, context(ws, "shell", {}))).toEqual({ decision: "allow" });
     expect((await readSpawnLedger(kernelStateDir(ws))).entries).toHaveLength(1);
   });
@@ -199,7 +205,7 @@ describe("loadHooks: config discovery", () => {
   test("a present but empty hooks object is 'ready' with no hooks (not 'none')", () => {
     const { ws, home } = fixtureWorld("hz-hooks-empty");
     writeHooks(wsHooksFile(ws), { hooks: {} });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     expect(config.points.preTool).toEqual([]);
@@ -231,7 +237,7 @@ describe("loadHooks: a malformed config is a typed refusal", () => {
     ];
     for (const { doc, expectError } of cases) {
       writeHooks(file, doc);
-      const config = loadHooks(ws, { home });
+      const config = loadTestHooks(ws, home);
       expect(config.state, JSON.stringify(doc)).toBe("refused");
       if (config.state !== "refused") continue;
       expect(config.refusals, JSON.stringify(doc)).toHaveLength(1);
@@ -244,7 +250,7 @@ describe("loadHooks: a malformed config is a typed refusal", () => {
     const { ws, home } = fixtureWorld("hz-hooks-refuse");
     writeHooks(path.join(home, ".config", "horizon", "hooks.json"), { hooks: { preTool: [bashHook("allow.sh")] } });
     writeHooks(wsHooksFile(ws), "{ nope");
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("refused");
 
     const ctx = context(ws, "write", { path: "a.txt" });
@@ -278,7 +284,7 @@ describe("loadHooks: a malformed config is a typed refusal", () => {
     writeHooks(userFile, "{ not json");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [bashHook("allow.sh")] } });
 
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("refused");
     if (config.state !== "refused") return;
     expect(config.refusals[0].file).toBe(userFile);
@@ -293,7 +299,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
   test("an allow hook runs, is recorded in the ledger, and advances", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-allow");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [bashHook("allow.sh")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = context(ws, "read", { path: "note.txt" });
     expect(await runPreToolHooks(config, ctx)).toEqual({ decision: "allow" });
@@ -312,7 +318,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
   test("a deny hook sees the declared input and its reason is carried verbatim", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-deny");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [jsHook("deny-with-reason.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = context(ws, "write", { path: "blocked.txt" });
     const decision = await runPreToolHooks(config, ctx);
@@ -339,7 +345,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
     for (const { script, expected } of cases) {
       const { ws, home } = fixtureWorld("hz-hooks-proto");
       writeHooks(wsHooksFile(ws), { hooks: { preTool: [bashHook(script)] } });
-      const config = loadHooks(ws, { home });
+      const config = loadTestHooks(ws, home);
       const ctx = context(ws, "read", {});
       const decision = await runPreToolHooks(config, ctx);
       expect(decision.decision, script).toBe("deny");
@@ -353,7 +359,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
   test("a non-zero exit denies even after a valid allow line", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-exit");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [bashHook("exit-code-3.sh")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = context(ws, "read", {});
     const decision = await runPreToolHooks(config, ctx);
@@ -368,7 +374,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
   test("a hang is denied at its configured timeout and the child is killed", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-hang");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [jsHook("hang.js", { timeoutMs: 200 })] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const started = Date.now();
     const decision = await runPreToolHooks(config, context(ws, "read", {}));
@@ -385,7 +391,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
   test("a slow hook inside its configured timeout still allows", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-slow");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [jsHook("slow-ok.js", { timeoutMs: 3_000 })] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const started = Date.now();
     expect(await runPreToolHooks(config, context(ws, "read", {}))).toEqual({ decision: "allow" });
@@ -396,7 +402,7 @@ describe("runPreToolHooks: the one-line protocol", () => {
     const { ws, home } = fixtureWorld("hz-hooks-nospawn");
     const missing = path.join(ws, "no-such-hook-program");
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [{ command: missing, args: [] }] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const decision = await runPreToolHooks(config, context(ws, "read", {}));
     expect(decision.decision).toBe("deny");
@@ -414,7 +420,7 @@ describe("runPreToolHooks: ordering and short-circuit", () => {
     writeHooks(wsHooksFile(ws), {
       hooks: { preTool: [markerHook("order.log", "first"), markerHook("order.log", "second")] },
     });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = context(ws, "read", {});
     expect(await runPreToolHooks(config, ctx)).toEqual({ decision: "allow" });
@@ -428,7 +434,7 @@ describe("runPreToolHooks: ordering and short-circuit", () => {
     writeHooks(wsHooksFile(ws), {
       hooks: { preTool: [jsHook("deny-with-reason.js"), markerHook("never.log", "later")] },
     });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = context(ws, "write", { path: "x.txt" });
     const decision = await runPreToolHooks(config, ctx);
@@ -443,7 +449,7 @@ describe("runPreToolHooks: ordering and short-circuit", () => {
     writeHooks(wsHooksFile(ws), {
       hooks: { preTool: [markerHook("ran.log", "first"), jsHook("deny-with-reason.js")] },
     });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const decision = await runPreToolHooks(config, context(ws, "write", { path: "x.txt" }));
     expect(decision.decision).toBe("deny");
@@ -457,7 +463,7 @@ describe("runPreToolHooks: ordering and short-circuit", () => {
       hooks: { preTool: [markerHook("order.log", "user")] },
     });
     writeHooks(wsHooksFile(ws), { hooks: { preTool: [markerHook("order.log", "workspace")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     expect(await runPreToolHooks(config, context(ws, "read", {}))).toEqual({ decision: "allow" });
     expect(readFileSync(path.join(ws, "order.log"), "utf8").split("\n").filter(Boolean)).toEqual(["user", "workspace"]);
@@ -472,7 +478,7 @@ describe("runPostToolHooks: observation only", () => {
   test("a post hook sees the result context with a capped excerpt and blocks nothing", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-post-ok");
     writeHooks(wsHooksFile(ws), { hooks: { postTool: [jsHook("post-check.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     // The 10 000-char excerpt must arrive capped at 4 096 (the fixture fails
     // otherwise, which would surface as a notice); a failure would also show up
@@ -491,7 +497,7 @@ describe("runPostToolHooks: observation only", () => {
     writeHooks(wsHooksFile(ws), {
       hooks: { postTool: [bashHook("garbage-output.sh"), markerHook("post.log", "after-failure")] },
     });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = context(ws, "write", { path: "a.txt" }, { ok: false, ms: 5, outputExcerpt: "boom" });
     await runPostToolHooks(config, ctx); // must resolve, never reject
@@ -510,7 +516,7 @@ describe("runPostToolHooks: observation only", () => {
   test("post hooks match their own tools", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-post-match");
     writeHooks(wsHooksFile(ws), { hooks: { postTool: [markerHook("never-post.log", "x", { tool: "read" })] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     await runPostToolHooks(config, context(ws, "write", {}));
     expect(existsSync(path.join(ws, "never-post.log"))).toBe(false);

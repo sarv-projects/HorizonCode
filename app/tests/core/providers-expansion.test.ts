@@ -557,8 +557,8 @@ describe("config and factory", () => {
     expect(missingKey(proxied)).toBeNull();
   });
 
-  test("an unknown provider name is still refused", () => {
-    expect(loadConfig({ HZ_PROVIDER: "prism" }, missingConfig()).provider).toBe("mock");
+  test("an unknown provider name passes through for openai-compatible adapter", () => {
+    expect(loadConfig({ HZ_PROVIDER: "prism" }, missingConfig()).provider).toBe("prism");
   });
 
   test("makeProvider: ollama needs no key; google without one explains both variables", async () => {

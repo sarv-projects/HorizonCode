@@ -29,6 +29,7 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { skillsDir as resolveWorkspaceSkillsDir, userSkillsDir } from "./paths";
+import { digestWorkspaceSkills, resolveWorkspaceProjectSkillsTrust, type WorkspaceTrustOptions } from "./trust";
 
 export interface Skill {
   name: string;
@@ -105,15 +106,22 @@ function readSkillFile(file: string, fallbackName?: string): Skill | undefined {
  * foreign global (~/.agents, ~/.claude, read-only), horizon global, foreign
  * project (.claude/skills, read-only), horizon project.
  */
-function skillDirs(workspace: string): string[] {
+function skillDirs(workspace: string, home?: string): string[] {
   const dirs: string[] = [];
-  try {
-    const home = os.homedir();
-    if (home !== "") {
-      dirs.push(path.join(home, ".agents", "skills"), path.join(home, ".claude", "skills"), userSkillsDir(home));
+  let resolvedHome = typeof home === "string" ? home : "";
+  if (resolvedHome === "") {
+    try {
+      resolvedHome = os.homedir();
+    } catch {
+      resolvedHome = "";
     }
-  } catch {
-    /* no home directory: workspace skills only */
+  }
+  if (resolvedHome !== "") {
+    dirs.push(
+      path.join(resolvedHome, ".agents", "skills"),
+      path.join(resolvedHome, ".claude", "skills"),
+      userSkillsDir(resolvedHome),
+    );
   }
   dirs.push(path.join(workspace, ".claude", "skills"), resolveWorkspaceSkillsDir(workspace));
   return dirs;
@@ -151,9 +159,25 @@ function folderResources(dir: string): string[] {
 }
 
 /** Every skill visible from a workspace, workspace copy winning by name. */
-export function listSkills(workspace: string): Skill[] {
+export function listSkills(workspace: string, trust?: WorkspaceTrustOptions): Skill[] {
+  const projectSkillsOk =
+    trust === undefined
+      ? true
+      : resolveWorkspaceProjectSkillsTrust(
+          workspace,
+          trust.trustedWorkspaceHooks,
+          trust.home ?? "",
+          trust.onNotice,
+        );
   const byName = new Map<string, Skill>();
-  for (const dir of skillDirs(workspace)) {
+  const projectDir = resolveWorkspaceSkillsDir(workspace);
+  for (const dir of skillDirs(workspace, trust?.home)) {
+    if (!projectSkillsOk && dir === projectDir) {
+      if (digestWorkspaceSkills(workspace) !== null) {
+        trust?.onNotice?.("workspace skills ignored (untrusted workspace or digest changed)");
+      }
+      continue;
+    }
     let entries: string[];
     try {
       entries = readdirSync(dir);
@@ -206,18 +230,18 @@ export const BUILTIN_SKILLS: readonly Skill[] = [
 ];
 
 /** The skill with this exact name, if any. */
-export function getSkill(workspace: string, name: string): Skill | undefined {
+export function getSkill(workspace: string, name: string, trust?: WorkspaceTrustOptions): Skill | undefined {
   const wanted = typeof name === "string" ? name.trim() : "";
   if (wanted === "") return undefined;
-  return listSkills(workspace).find((skill) => skill.name === wanted) ?? BUILTIN_SKILLS.find((skill) => skill.name === wanted);
+  return listSkills(workspace, trust).find((skill) => skill.name === wanted) ?? BUILTIN_SKILLS.find((skill) => skill.name === wanted);
 }
 
 /**
  * The system-prompt section listing available skills; empty string when the
  * workspace has none, so callers can append it unconditionally.
  */
-export function skillsPromptSection(workspace: string): string {
-  const skills = listSkills(workspace);
+export function skillsPromptSection(workspace: string, trust?: WorkspaceTrustOptions): string {
+  const skills = listSkills(workspace, trust);
   if (skills.length === 0) return "";
   const lines = skills.slice(0, PROMPT_SKILL_CAP).map((skill) => {
     const description =
@@ -235,12 +259,13 @@ export function skillsPromptSection(workspace: string): string {
 export function resolveSkillForMessage(
   workspace: string,
   text: string,
+  trust?: WorkspaceTrustOptions,
 ): { skill: Skill; action: string } | undefined {
   const value = typeof text === "string" ? text.trim() : "";
   if (!value.startsWith("/")) return undefined;
   const match = /^\/([A-Za-z0-9._-]+)(?:\s+([\s\S]*))?$/.exec(value);
   if (!match) return undefined;
-  const skill = getSkill(workspace, match[1]);
+  const skill = getSkill(workspace, match[1], trust);
   if (!skill) return undefined;
   return { skill, action: (match[2] ?? "").trim() };
 }

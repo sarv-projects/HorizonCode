@@ -46,6 +46,27 @@ import * as path from "node:path";
 import { kernelStateDir as resolveKernelStateDir } from "./paths";
 import { birthIdentityOf, readProcessFacts, type ProcessIdentity } from "./worker-identity";
 import { startOwnerDeathSupervisor } from "./supervisor";
+import type { SandboxSpawnKernel } from "../contracts";
+import { resolveSandboxExecBinary } from "./kernel";
+import { kernelEnforcesProcessSandbox, SANDBOX_AUTO_LABELS } from "./sandbox-spawn";
+
+function wrapArgvForSandbox(argv: string[]): string[] {
+  const bin = resolveSandboxExecBinary();
+  if (!bin) return argv;
+  return [bin, "--", ...argv];
+}
+
+async function resolveSpawnArgv(cmd: string[], opts: SpawnOwnedOptions): Promise<string[]> {
+  if (process.env.HZ_SANDBOX_EXEC === "0" || opts.sandboxWrap === false) return cmd;
+  if (process.env.HZ_SANDBOX_EXEC === "1" || opts.sandboxWrap === true) return wrapArgvForSandbox(cmd);
+  const auto =
+    opts.sandboxWrap === "auto" ||
+    (opts.sandboxWrap === undefined && SANDBOX_AUTO_LABELS.has(opts.label) && opts.kernel !== undefined);
+  if (auto && opts.kernel !== undefined && (await kernelEnforcesProcessSandbox(opts.kernel))) {
+    return wrapArgvForSandbox(cmd);
+  }
+  return cmd;
+}
 
 /**
  * The Bun subprocess type, narrowed to what callers use (pid/stdio/kill/exited).
@@ -80,6 +101,17 @@ export interface SpawnOwnedOptions {
   longLived?: boolean;
   /** The process whose death must take this child down (default: this process). */
   ownerPid?: number;
+  /** When `"auto"` (or for shell/code labels), wrap via hz-sandbox-exec if the kernel reports enforcement. */
+  sandboxWrap?: boolean | "auto";
+  /**
+   * Landlock access on `HZ_SANDBOX_FS_ROOT` when the child is sandbox-wrapped.
+   * Default `workspace-write` (RW fence). `read-only` makes the workspace RO.
+   * Prefer `sandboxMode` when the call site already has a SandboxMode.
+   */
+  sandboxFsMode?: "read-only" | "workspace-write";
+  /** When set, derives `HZ_SANDBOX_FS_MODE` unless `sandboxFsMode` is explicit. */
+  sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
+  kernel?: SandboxSpawnKernel;
 }
 
 /** One line of `<stateDir>/spawns.jsonl`. */
@@ -382,10 +414,28 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
     );
   }
 
+  const argv = await resolveSpawnArgv(cmd, opts);
+  const wrapped = argv[0] !== undefined && argv[0] !== cmd[0];
+  let spawnEnv = opts.env;
+  if (wrapped) {
+    const root = opts.cwd ?? process.cwd();
+    const fromMode =
+      opts.sandboxMode === "read-only"
+        ? "read-only"
+        : opts.sandboxMode === "workspace-write"
+          ? "workspace-write"
+          : undefined;
+    const fsMode = opts.sandboxFsMode ?? fromMode ?? "workspace-write";
+    spawnEnv = {
+      ...(opts.env ?? process.env),
+      HZ_SANDBOX_FS_ROOT: root,
+      HZ_SANDBOX_FS_MODE: fsMode,
+    };
+  }
   const proc = Bun.spawn({
-    cmd,
+    cmd: argv,
     cwd: opts.cwd,
-    env: opts.env,
+    env: spawnEnv,
     stdin: opts.stdio?.stdin ?? "ignore",
     stdout: opts.stdio?.stdout ?? "pipe",
     stderr: opts.stdio?.stderr ?? "pipe",
@@ -410,7 +460,7 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
     birthIdentity: birthIdentityOf(identity),
     label: opts.label,
     ts: new Date().toISOString(),
-    cmd: cmd.join(" "),
+    cmd: argv.join(" "),
   };
 
   try {

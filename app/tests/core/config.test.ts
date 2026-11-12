@@ -48,6 +48,7 @@ function cleanEnv(): void {
     HZ_API_KEY: undefined,
     ANTHROPIC_API_KEY: undefined,
     OPENAI_API_KEY: undefined,
+    HZ_NO_COMMITTED_SNAPSHOT: "1",
   });
 }
 
@@ -130,8 +131,9 @@ test("API keys: HZ_API_KEY beats the file, the file beats nothing", () => {
 test("a provider key in the environment is a detection, never an override", () => {
   cleanEnv();
   const { file } = homeWithConfig();
+  const floor = { HZ_NO_COMMITTED_SNAPSHOT: "1" } as const;
 
-  const detected = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-detected" }, file);
+  const detected = loadConfig({ ...floor, ANTHROPIC_API_KEY: "sk-ant-detected" }, file);
   expect(detected.provider).toBe("anthropic");
   expect(detected.sources.provider).toBe("detected");
   expect(detected.model).toBe(DEFAULT_MODELS.anthropic);
@@ -139,13 +141,13 @@ test("a provider key in the environment is a detection, never an override", () =
   expect(detected.sources.apiKey).toBe("env");
   expect(missingKey(detected)).toBeNull();
 
-  expect(loadConfig({ OPENAI_API_KEY: "sk-openai" }, file).provider).toBe("openai");
+  expect(loadConfig({ ...floor, OPENAI_API_KEY: "sk-openai" }, file).provider).toBe("openai");
   // An explicit provider always wins over a detected key.
-  expect(loadConfig({ ANTHROPIC_API_KEY: "sk-ant", HZ_PROVIDER: "mock" }, file).provider).toBe("mock");
+  expect(loadConfig({ ...floor, ANTHROPIC_API_KEY: "sk-ant", HZ_PROVIDER: "mock" }, file).provider).toBe("mock");
 
   // The file wins over detection, and the other provider's key does not leak in.
   const withFile = homeWithConfig(JSON.stringify({ provider: "openai" }));
-  const config = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-detected" }, withFile.file);
+  const config = loadConfig({ ...floor, ANTHROPIC_API_KEY: "sk-ant-detected" }, withFile.file);
   expect(config.provider).toBe("openai");
   expect(config.sources.provider).toBe("file");
   expect(config.apiKey).toBeUndefined();
@@ -164,7 +166,8 @@ test("a malformed or wrong-shaped config file is treated as absent", () => {
   expect(loadConfig({}, list.file).provider).toBe("mock");
 
   const nonsense = homeWithConfig(JSON.stringify({ provider: "bogus", model: "   " }));
-  expect(loadConfig({}, nonsense.file).provider).toBe("mock");
+  // Unknown ids pass through for openai-compatible resolution; only invalid JSON is absent.
+  expect(loadConfig({}, nonsense.file).provider).toBe("bogus");
   expect(loadConfig({}, nonsense.file).model).toBe(DEFAULT_MODELS.mock);
 
   const trimmed = homeWithConfig(JSON.stringify({ provider: "MOCK", model: " custom ", apiKey: "  spaced  " }));

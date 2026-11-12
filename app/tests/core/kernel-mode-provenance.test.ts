@@ -129,9 +129,8 @@ test.skipIf(!hasRustKernel)("a trusted runtime records kernelMode 'trusted' and 
   try {
     expect(runtime.kernelMode).toBe("trusted");
     const notices = await turnNotices(runtime, "hello");
-    // No untrusted-mode notice — and no mention of the mode at all.
+    // No kernel fallback mode notice (other notices may mention workspace trust).
     expect(notices.filter((message) => MODE_NOTICE.test(message))).toEqual([]);
-    expect(notices.some((message) => message.includes("untrusted"))).toBe(false);
   } finally {
     await runtime.close();
   }

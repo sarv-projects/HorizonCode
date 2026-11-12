@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "hzcode user config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "provider": {
+      "type": "string",
+      "description": "Built-in provider id or a registered provider id."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model id for the active provider."
+    },
+    "baseUrl": {
+      "type": "string",
+      "description": "Override the provider API base URL."
+    },
+    "apiKey": {
+      "type": "string",
+      "description": "Inline API key (prefer env vars)."
+    },
+    "mcp": {
+      "type": "object",
+      "description": "MCP stdio servers (user config only)."
+    },
+    "lsp": {
+      "type": "object",
+      "description": "Language servers to start (user config only)."
+    },
+    "providers": {
+      "type": "array",
+      "description": "Registered OpenAI-compatible providers."
+    },
+    "permissionMode": {
+      "type": "string",
+      "description": "Starting permission mode.",
+      "enum": [
+        "default",
+        "plan",
+        "accept-edits",
+        "read-only"
+      ]
+    },
+    "trustedWorkspaceHooks": {
+      "type": "array",
+      "description": "Absolute workspace paths allowed to load workspace hooks.json."
+    },
+    "theme": {
+      "type": "string",
+      "description": "Default TUI palette.",
+      "enum": [
+        "dark",
+        "light",
+        "auto",
+        "mono"
+      ]
+    },
+    "statusLine": {
+      "type": "object",
+      "description": "User status-line script: command + optional args (JSON on stdin)."
+    }
+  }
+}

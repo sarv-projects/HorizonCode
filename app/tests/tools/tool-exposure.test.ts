@@ -155,6 +155,12 @@ describe("tool exposure gating", () => {
     const preview = candidates.find((c) => c.name === "preview");
     expect(preview).toBeDefined();
     expect(preview!.keywords).toContain("localhost");
+    const debug = candidates.find((c) => c.name === "debug");
+    expect(debug).toBeDefined();
+    expect(debug!.keywords).toContain("dap");
+    const memory = candidates.find((c) => c.name === "memory_search");
+    expect(memory).toBeDefined();
+    expect(memory!.keywords).toContain("recall");
     // Only Deferred tools are candidates.
     for (const c of candidates) {
       expect(exposureOf(getTool(c.name)!)).toBe("deferred");

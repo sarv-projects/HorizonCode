@@ -29,10 +29,12 @@
  *   - when the lock file cannot be created for a reason other than "exists" (read
  *     only directory, EACCES), `withFileLock` runs the work UNLOCKED so that the
  *     caller's own honest write error is what the human sees.
+ *   - `HZ_LOCK_BUSY_MARKER` (tests): path written once when an acquire first sees a
+ *     live holder, so cross-process fixtures can wait for the waiter without sleeps.
  */
 
 import { randomBytes } from "node:crypto";
-import { closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./canon";
 import { workspaceStateDir } from "./paths";
@@ -48,6 +50,19 @@ export interface LockOptions {
   emptyGraceMs?: number;
   /** Injected liveness probe (tests); default is `process.kill(pid, 0)`. */
   isAlive?: (pid: number) => boolean;
+}
+
+/** Test sync: when set, the first busy poll of an acquire writes this path (pid\\n). */
+function signalBusyOnce(signaled: { done: boolean }): void {
+  if (signaled.done) return;
+  const marker = process.env.HZ_LOCK_BUSY_MARKER;
+  if (!marker) return;
+  signaled.done = true;
+  try {
+    writeFileSync(marker, `${process.pid}\n`);
+  } catch {
+    /* marker is best-effort for tests */
+  }
 }
 
 export class LockTimeoutError extends Error {
@@ -182,10 +197,12 @@ export function acquireLockSync(lockPath: string, options: LockOptions = {}): ()
   const opts = resolved(options);
   const start = Date.now();
   let poll = opts.pollMs;
+  const signaled = { done: false };
   for (;;) {
     const attempt = tryAcquire(lockPath, opts);
     if (attempt.kind === "held") return attempt.release;
     if (attempt.kind === "unlockable") return () => undefined;
+    signalBusyOnce(signaled);
     const waited = Date.now() - start;
     if (waited >= opts.timeoutMs) throw new LockTimeoutError(lockPath, attempt.holderPid, waited);
     sleepSync(poll);
@@ -198,10 +215,12 @@ export async function acquireLock(lockPath: string, options: LockOptions = {}): 
   const opts = resolved(options);
   const start = Date.now();
   let poll = opts.pollMs;
+  const signaled = { done: false };
   for (;;) {
     const attempt = tryAcquire(lockPath, opts);
     if (attempt.kind === "held") return attempt.release;
     if (attempt.kind === "unlockable") return () => undefined;
+    signalBusyOnce(signaled);
     const waited = Date.now() - start;
     if (waited >= opts.timeoutMs) throw new LockTimeoutError(lockPath, attempt.holderPid, waited);
     await new Promise((resolve) => setTimeout(resolve, poll));

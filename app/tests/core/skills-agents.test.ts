@@ -25,6 +25,8 @@ import {
   resolveSkillForMessage,
   skillsPromptSection,
 } from "../../src/core/skills";
+import { skillsDir, userSkillsDir } from "../../src/core/paths";
+import type { WorkspaceTrustOptions } from "../../src/core/trust";
 import { clampSteps, runNested } from "../../src/core/subagent";
 import { agentTool } from "../../src/tools/agent";
 import { BASE_TOOL_NAMES, getTool } from "../../src/tools";
@@ -51,9 +53,13 @@ afterEach(() => {
 });
 
 function writeSkill(root: string, file: string, content: string): void {
-  const dir = path.join(root, ".hzcode", "skills");
+  const dir = root === home ? userSkillsDir(home) : skillsDir(root);
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, file), content, "utf8");
+}
+
+function skillTrust(): WorkspaceTrustOptions {
+  return { home, trustedWorkspaceHooks: [path.resolve(workspace)] };
 }
 
 function fakeContext(overrides: Partial<ToolContext> = {}): ToolContext {
@@ -79,30 +85,30 @@ describe("skills", () => {
     writeSkill(workspace, "notes.md", "Just a body, no frontmatter.\n");
     writeSkill(workspace, "bad name.md", "no safe filename either\n");
 
-    const skills = listSkills(workspace);
+    const skills = listSkills(workspace, skillTrust());
     const names = skills.map((s) => s.name).sort();
     expect(names).toEqual(["deploy", "notes"]);
 
-    const deploy = getSkill(workspace, "deploy");
+    const deploy = getSkill(workspace, "deploy", skillTrust());
     expect(deploy?.description).toBe("Ship it safely");
     expect(deploy?.body).toContain("Step one.");
     expect(deploy?.source.endsWith("deploy.md")).toBe(true);
-    expect(getSkill(workspace, "notes")?.description).toBe("");
+    expect(getSkill(workspace, "notes", skillTrust())?.description).toBe("");
   });
 
   test("a workspace skill shadows a home skill with the same name", () => {
     writeSkill(home, "same.md", "---\nname: same\ndescription: from home\n---\nbody\n");
     writeSkill(workspace, "same.md", "---\nname: same\ndescription: from workspace\n---\nbody\n");
-    expect(getSkill(workspace, "same")?.description).toBe("from workspace");
+    expect(getSkill(workspace, "same", skillTrust())?.description).toBe("from workspace");
   });
 
   test("the prompt section is empty with no skills and capped at 12 with a note", () => {
-    expect(skillsPromptSection(workspace)).toBe("");
+    expect(skillsPromptSection(workspace, skillTrust())).toBe("");
     for (let i = 1; i <= 14; i += 1) {
       const n = String(i).padStart(2, "0");
       writeSkill(workspace, `skill-${n}.md`, `---\nname: skill-${n}\ndescription: number ${n}\n---\nbody\n`);
     }
-    const section = skillsPromptSection(workspace);
+    const section = skillsPromptSection(workspace, skillTrust());
     expect(section).toContain("## Available skills");
     expect(section).toContain("skill-01 — number 01");
     expect(section).toContain("(2 more not listed)");
@@ -111,17 +117,17 @@ describe("skills", () => {
 
   test("slash activation resolves the skill and strips the action; unknown or partial names do not", () => {
     writeSkill(workspace, "deploy.md", "---\nname: deploy\ndescription: x\n---\nbody\n");
-    const hit = resolveSkillForMessage(workspace, "  /deploy push the service\nand watch it\n");
+    const hit = resolveSkillForMessage(workspace, "  /deploy push the service\nand watch it\n", skillTrust());
     expect(hit?.skill.name).toBe("deploy");
     expect(hit?.action).toBe("push the service\nand watch it");
 
-    const bare = resolveSkillForMessage(workspace, "/deploy");
+    const bare = resolveSkillForMessage(workspace, "/deploy", skillTrust());
     expect(bare?.skill.name).toBe("deploy");
     expect(bare?.action).toBe("");
 
-    expect(resolveSkillForMessage(workspace, "/deployment now")).toBeUndefined();
-    expect(resolveSkillForMessage(workspace, "plain text")).toBeUndefined();
-    expect(resolveSkillForMessage(workspace, "/unknown-skill x")).toBeUndefined();
+    expect(resolveSkillForMessage(workspace, "/deployment now", skillTrust())).toBeUndefined();
+    expect(resolveSkillForMessage(workspace, "plain text", skillTrust())).toBeUndefined();
+    expect(resolveSkillForMessage(workspace, "/unknown-skill x", skillTrust())).toBeUndefined();
   });
 
   test("the active-skill section carries the body, capped at the contract size", () => {

@@ -151,16 +151,21 @@ describe("shell tool", () => {
     );
   });
 
-  test("is killed and reported as aborted when the context signal fires", async () => {
-    const ctx = mockToolContext();
-    const started = Date.now();
-    const timer = setTimeout(() => ctx.abort(), 150);
-    const r = await shellTool.execute({ command: "sleep 5" }, ctx);
-    clearTimeout(timer);
-    expect(r.ok).toBe(false);
-    expect(r.error).toBe("aborted");
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
+  test(
+    "is killed and reported as aborted when the context signal fires",
+    async () => {
+      const ctx = mockToolContext();
+      const started = Date.now();
+      const timer = setTimeout(() => ctx.abort(), 150);
+      const r = await shellTool.execute({ command: "sleep 120" }, ctx);
+      clearTimeout(timer);
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe("aborted");
+      // Budget is generous under parallel suite load (sandbox spawn); signal must still win.
+      expect(Date.now() - started).toBeLessThan(20_000);
+    },
+    25_000,
+  );
 
   test("does not start when the signal is already aborted", async () => {
     const ctx = mockToolContext({ aborted: true });

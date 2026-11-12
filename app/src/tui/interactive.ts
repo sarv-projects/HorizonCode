@@ -11,7 +11,11 @@ import * as readline from "node:readline";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
+import { modelsForProvider } from "../core/catalog/list-models";
+import { formatModelsNotice } from "./models-slash";
 import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
+import { builtinSlashHelpRows } from "../core/slash-registry";
+import type { HzConfig } from "../core/config";
 import { getSkill } from "../core/skills";
 import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, osc52, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
@@ -26,11 +30,21 @@ import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
 import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, unicodeLocale, userBlock, type Live, type StatusInfo } from "./live";
-import { complete, ghostFor, type CompletionContext } from "./completion";
+import { kernelStateDir } from "../core/paths";
+import { complete, formatCompletionDropdown, ghostFor, type CompletionContext } from "./completion";
+import { loadUserKeymap, resolveAction } from "./keymap";
 import { keyChoice, type KeyAnswer } from "./approval-card";
-import { PASTE_OFF, PASTE_ON, createPasteCollector, echoedRows, pasteLabel } from "./paste";
+import {
+  PASTE_OFF,
+  PASTE_ON,
+  PASTE_SINGLE_LINE_FLUSH_MS,
+  createPasteCollector,
+  echoedRows,
+  pasteLabel,
+} from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
 import { activeTheme, bold, colorLevel, cyan, dim, errorMessage, sanitizeText, setThemeMode, strip, terminalWidth, themeMode, truncate, visibleWidth, wrapText, yellow } from "./style";
+import { persistThemeMode } from "../core/config";
 
 const PROMPT = "\u276f ";
 const HISTORY_LIMIT = 500;
@@ -61,6 +75,7 @@ export interface CheckpointView {
 
 /** Extras the core runtime may or may not expose yet; each one is optional. */
 type RuntimeWithExtras = Runtime & {
+  config?: HzConfig;
   newSession?: () => unknown;
   setModel?: (model: string) => unknown;
   contextUsage?: () => ContextUsage | undefined;
@@ -170,31 +185,7 @@ function printWrapped(r: Renderer, text: string, style: (s: string) => string = 
 }
 
 function printHelp(r: Renderer, workspace?: string): void {
-  const rows: Array<[string, string]> = [
-    ["/help", "this list"],
-    ["/new", "start a fresh session"],
-    ["/model [name]", "show or switch the model"],
-    ["/files", "tools the assistant can use"],
-    ["/context", "what the next request will carry"],
-    ["/plan [on|off]", "toggle plan mode (writes are staged)"],
-    ["/mode [name]", "show or set the permission mode: default, plan, accept-edits, read-only"],
-    ["/changes", "review staged changes and diffs"],
-    ["/apply", "write the staged changes"],
-    ["/discard", "drop the staged changes"],
-    ["/fork [n]", "branch this chat into a new session (n = checkpoint number, else everything so far)"],
-    ["/sessions", "recent sessions with fork lineage (resume a fork with hzcode --resume <id>)"],
-    ["/rename <title>", "retitle this session"],
-    ["/retry", "drop the last reply and ask the same question again"],
-    ["/theme [name]", "dark, light, auto or mono (NO_COLOR is always respected)"],
-    ["/think", "show the last reasoning block (rich mode)"],
-    ["/stats", "message, tool call and token counts for this chat"],
-    ["/export [json|html]", "write the chat to .hz/exports (html shows the receipt chain status)"],
-    ["/copy", "copy the last answer to the clipboard (terminal OSC 52)"],
-    ["/rewind [n]", "list checkpoints; n restores the files changed since one"],
-    ["/memory", "which instruction files (AGENTS.md, CLAUDE.md, ...) are loaded (alias /instructions)"],
-    ["/init", "draft an AGENTS.md for this repo (staged; you review it, then /apply)"],
-    ["/exit", "leave (Ctrl+D also works)"],
-  ];
+  const rows = builtinSlashHelpRows();
   const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
   r.line(dim("Just type what you want in plain language \u2014 no flags needed."));
   r.line("");
@@ -325,6 +316,11 @@ export function runThemeCommand(arg: string, renderer: Renderer): void {
     return;
   }
   setThemeMode(want);
+  try {
+    persistThemeMode(want);
+  } catch {
+    /* user config may be read-only */
+  }
   renderer.notice(
     noColor
       ? `theme: ${want}, NO_COLOR is set, so colours stay off`
@@ -887,7 +883,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     terminal: true,
     completer: (line: string): [string[], string] => {
       try {
-        return complete(line, completionCtx());
+        const result = complete(line, completionCtx());
+        // Scrollback-safe popup: print a one-shot box above the prompt when Tab
+        // yields multiple hits (docs/33 §5.18). Single-hit Tab still completes
+        // silently through readline.
+        if (result[0].length > 1) {
+          const box = formatCompletionDropdown(result[0], 0);
+          if (box !== "") process.stdout.write(`\n${box}\n`);
+        }
+        return result;
       } catch {
         return [[], line];
       }
@@ -909,6 +913,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   let live: Live | undefined;
   let contextPercent: number | undefined;
+  let contextUsed: number | undefined;
+  let contextWindowTokens: number | undefined;
 
   const renderer: Renderer = createRenderer({
     wrap: true,
@@ -944,14 +950,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       model: runtime.model,
       provider: runtime.providerName,
       contextPercent,
+      contextUsed,
+      contextWindow: contextWindowTokens,
       path: shortenPath(workspace),
       branch: branchCache.value,
     };
   };
+  const hz = runtime as import("../core").HzRuntime;
   live = createLive({
     enabled: liveEnabled(),
     write: (chunk) => void process.stdout.write(chunk),
     status: statusInfo,
+    statusScript: hz.config?.statusLine,
+    statusSpawn: { workspace, stateDir: kernelStateDir(workspace) },
     atLineStart: () => renderer.atLineStart(),
     typed: () => String((rl as unknown as { line?: string }).line ?? "").length > 0,
     esc: canEsc,
@@ -991,12 +1002,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       new Promise<KeyAnswer>((resolve) => {
         const armedAt = Date.now() + 250;
         let settled = false;
+        try {
+          rl.pause();
+        } catch {
+          /* readline may already be paused */
+        }
         const settle = (answer: KeyAnswer): void => {
           if (settled) return;
           settled = true;
           process.stdin.off("keypress", onKey);
           answerWaiter = null;
           wipeLine();
+          try {
+            rl.resume();
+          } catch {
+            /* closed */
+          }
           resolve(answer);
         };
         const onKey = (str: string | undefined, key: { name?: string; ctrl?: boolean } | undefined): void => {
@@ -1084,7 +1105,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
               if (ev.status === "running") live?.toolStart(String(ev.name), ev.args, String(ev.callId));
               else live?.toolEnd(String(ev.callId));
             } else if (ev.type === "context.usage") {
-              if (ev.window > 0) contextPercent = (ev.estimatedInput / ev.window) * 100;
+              if (ev.window > 0) {
+                contextUsed = ev.estimatedInput;
+                contextWindowTokens = ev.window;
+                contextPercent = (ev.estimatedInput / ev.window) * 100;
+              }
               live?.noteUsage(ev.estimatedInput);
             }
           }
@@ -1146,6 +1171,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       renderer.notice(`could not start a new session: ${errorMessage(err)}`);
       return null;
     }
+  };
+
+  const showModels = (): void => {
+    const rt = runtime as RuntimeWithExtras;
+    const provider = rt.providerName ?? "unknown";
+    const list = modelsForProvider(provider, rt.config ?? {});
+    renderer.notice(formatModelsNotice(provider, list));
   };
 
   const showOrSetModel = async (arg: string): Promise<void> => {
@@ -1217,6 +1249,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       case "model":
         await showOrSetModel(arg);
+        break;
+      case "models":
+        showModels();
         break;
       case "files":
         showTools(renderer, runtime);
@@ -1460,27 +1495,49 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (line === "" || state.cursor !== line.length) return;
         const ghost = ghostFor(line, completionCtx());
         if (ghost === "") return;
-        const room = terminalWidth() - visibleWidth(planPrompt(planState.on, readPermissionMode(runtime))) - line.length - 1;
-        if (ghost.length > room) return;
+        const ghostW = visibleWidth(ghost);
+        const room = terminalWidth() - visibleWidth(planPrompt(planState.on, readPermissionMode(runtime))) - visibleWidth(line) - 1;
+        if (ghostW > room) return;
         ghostShown = true;
-        process.stdout.write(dim(ghost) + `\u001b[${ghost.length}D`);
+        process.stdout.write(dim(ghost) + `\u001b[${ghostW}D`);
       });
     });
   }
 
   if (pasteOn) {
+    let pasteFlushTimer: ReturnType<typeof setTimeout> | undefined;
+    const submitPaste = (pasted: { text: string; lines: number; raw: string[] }): void => {
+      if (pasted.lines > 1) {
+        const promptW = visibleWidth(planPrompt(planState.on, readPermissionMode(runtime)));
+        const rows = echoedRows(pasted.raw, answerWaiter ? 0 : promptW, terminalWidth());
+        process.stdout.write(`\u001b[${rows}A\r\u001b[J`);
+        handlePasted(pasted.text, pasteLabel(pasted.lines));
+        return;
+      }
+      void handleUserLine(pasted.text);
+    };
     process.stdin.on("keypress", (_s: unknown, key: { name?: string } | undefined) => {
       paste.key(key?.name);
+      if (key?.name === "paste-end") {
+        if (pasteFlushTimer) clearTimeout(pasteFlushTimer);
+        pasteFlushTimer = setTimeout(() => {
+          pasteFlushTimer = undefined;
+          const flushed = paste.flushAfterEnd();
+          if (flushed) submitPaste(flushed);
+        }, PASTE_SINGLE_LINE_FLUSH_MS);
+      }
     });
   }
 
   if (liveOn) {
+    const loaded = loadUserKeymap();
+    for (const err of loaded.errors) renderer.notice(`keybind: ${err}`);
+    const keymap = loaded.keymap;
     process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {
       if (exiting) return;
-      if (busy && key?.name === "escape" && !key.ctrl && !key.meta) {
-        // Esc is a cancel only while a turn runs and no approval question is open.
-        if (!answerWaiter) abortTurn();
-        return;
+      // Esc cancel goes through the keymap table (docs/33 §5.19); approval keeps Esc inert.
+      if (resolveAction(keymap, key, busy ? "busy" : "idle")?.id === "turn.cancel" && !answerWaiter) {
+        abortTurn();
       }
     });
   }

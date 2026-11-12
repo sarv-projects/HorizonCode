@@ -174,10 +174,8 @@ describe("loadConfig resolves a registered provider", () => {
     expect(configured.model).toBe("my-model");
   });
 
-  test("an unknown, unregistered id still falls back to mock at the config layer", () => {
-    // makeProvider owns the fail-loud default when handed one directly; the
-    // config layer keeps the historic mock fallback for a bare typo.
-    expect(loadConfig({ HZ_PROVIDER: "prism" }, registryConfig()).provider).toBe("mock");
+  test("an unknown, unregistered id passes through at the config layer", () => {
+    expect(loadConfig({ HZ_PROVIDER: "prism" }, registryConfig()).provider).toBe("prism");
   });
 });
 

@@ -336,6 +336,28 @@ export function protectedPathRefusal(action: GuardAction, stateDir: string): str
   return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
 }
 
+/**
+ * `.hz/MEMORY.md` (or legacy `.hzcode/MEMORY.md`) next to the kernel state tree.
+ * Writes may proceed only after human ask/lease — never via a bare policy allow.
+ */
+export function memoryManifestPathForStateDir(stateDir: string): string {
+  const resolved = path.resolve(stateDir);
+  const parent = path.dirname(resolved);
+  const hzRoot = path.basename(parent) === "state" ? path.dirname(parent) : parent;
+  return path.join(hzRoot, "MEMORY.md");
+}
+
+/** True when `action` is an fs.write that targets the workspace MEMORY.md manifest. */
+export function isMemoryManifestWrite(action: GuardAction, stateDir: string): boolean {
+  if (action === null || typeof action !== "object" || action.kind !== "fs.write") return false;
+  const target = typeof action.target === "string" ? action.target : "";
+  if (target === "") return false;
+  const manifest = memoryManifestPathForStateDir(stateDir);
+  const resolvedTarget = path.resolve(target);
+  if (resolvedInside(resolvedTarget, path.dirname(manifest)) === false) return false;
+  return path.basename(resolvedTarget).toLowerCase() === "memory.md";
+}
+
 function leaseActive(lease: Lease, now: number): boolean {
   const expiry = Date.parse(lease?.expiry ?? "");
   return Number.isFinite(expiry) && expiry > now;
@@ -964,7 +986,17 @@ export class LocalKernel {
     }
 
     const allow = matching.find((rule) => rule.decision === "allow");
-    if (allow) return { decision: "allow" };
+    if (allow) {
+      // MEMORY.md is user-curated memory (docs/33 §5.4): a policy allow never
+      // silent-writes it; a human ask (or a held/grant lease above) is required.
+      if (isMemoryManifestWrite(action, this.stateDir)) {
+        return {
+          decision: "ask",
+          reason: `memory-manifest-protected: writing MEMORY.md needs approval`,
+        };
+      }
+      return { decision: "allow" };
+    }
 
     return { decision: "ask", reason: `no policy rule allows ${action.kind}` };
   }
@@ -1082,6 +1114,18 @@ export function resolveKernelBinary(env: Record<string, string | undefined> = pr
   const candidates = [
     path.join(repoRoot, "kernel", "target", "release", "hz-kernel"),
     path.join(repoRoot, "kernel", "target", "debug", "hz-kernel"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+/** Companion binary for `HZ_SANDBOX_EXEC=1` child wrapping (docs/33 §5.3). */
+export function resolveSandboxExecBinary(env: Record<string, string | undefined> = process.env): string | undefined {
+  const override = typeof env.HZ_SANDBOX_EXEC_BIN === "string" ? env.HZ_SANDBOX_EXEC_BIN.trim() : "";
+  if (override !== "") return existsSync(override) ? override : undefined;
+  const repoRoot = path.resolve(import.meta.dir, "../../..");
+  const candidates = [
+    path.join(repoRoot, "kernel", "target", "release", "hz-sandbox-exec"),
+    path.join(repoRoot, "kernel", "target", "debug", "hz-sandbox-exec"),
   ];
   return candidates.find((candidate) => existsSync(candidate));
 }
@@ -1496,6 +1540,13 @@ export class KernelClient {
       "guard.grant",
       { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.grant"]["params"],
     );
+  }
+
+  async sandboxReport(
+    mode: KernelRequestMap["sandbox.report"]["params"]["mode"],
+    opts: { allowPartial?: boolean; sandboxPermissions?: KernelRequestMap["sandbox.report"]["params"]["sandboxPermissions"]; justification?: string } = {},
+  ): Promise<KernelRequestMap["sandbox.report"]["result"]> {
+    return this.rpc("sandbox.report", { mode, ...opts });
   }
 
   /** Kill the kernel child (when any) and release the client. */

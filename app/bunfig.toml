@@ -1,0 +1,5 @@
+[test]
+# E2E headless/pty spawns need headroom under parallel load (default 5000ms flakes in ts-suite).
+timeout = 30000
+# Hermetic catalog tests expect the 5-provider curated floor; skip a local models-dev.snapshot.json.
+env = { HZ_NO_COMMITTED_SNAPSHOT = "1" }

@@ -14,6 +14,7 @@
 
 import * as path from "node:path";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import type {
   ApprovalHandler,
   ApprovalRequest,
@@ -36,7 +37,8 @@ import type {
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
 import { AdmissionQueue } from "./admission";
-import { loadConfig, type HzConfig, type McpConfig } from "./config";
+import { augmentConfigWithTrustedWorkspace, loadConfig, type HzConfig, type McpConfig } from "./config";
+import { catalogWindow, loadCatalog } from "./catalog/catalog";
 import { KernelClient } from "./kernel";
 import {
   BudgetLedger,
@@ -53,6 +55,7 @@ import { makeProvider } from "./providers";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): the runtime seam emits session.start/
 // session.end as OBSERVATION points (H4) alongside the existing event appends.
 import { loadHooks, runLifecycleHooks } from "./hooks";
+import { ensureWorkspaceHookTrust, hooksLoadOptions } from "./trust";
 import { SessionStore, type SessionInfo } from "./session";
 import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
 import { runNested } from "./subagent";
@@ -85,6 +88,7 @@ import { isPermissionMode, permissionModeError } from "./permission-mode";
 import { consumeChange, reloadFromDisk } from "../tools/change-journal";
 import { receiptHead, type ChainStatus } from "./convo";
 import { isRefused, writeAtomic } from "../tools/atomic-write";
+import { setThemeMode } from "../tui/style";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -701,6 +705,8 @@ class HzRuntimeImpl implements HzRuntime {
     this.mcp = await startMcpManager(config, {
       workspace: this.workspace,
       sessionId: this.session.id,
+      trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
+      home: homedir(),
       guard: (action: GuardAction) =>
         this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
       approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),
@@ -772,13 +778,19 @@ class HzRuntimeImpl implements HzRuntime {
     sessionId: string = this.session.id,
   ): Promise<void> {
     try {
-      await runLifecycleHooks(loadHooks(this.workspace), {
-        point,
-        sessionId,
-        workspace: this.workspace,
-        detail,
-        onNotice: (message) => this.note(message),
-      });
+      await runLifecycleHooks(
+        loadHooks(
+          this.workspace,
+          hooksLoadOptions(this.workspace, { trustedWorkspaceHooks: this.config.trustedWorkspaceHooks }, (message) => this.note(message)),
+        ),
+        {
+          point,
+          sessionId,
+          workspace: this.workspace,
+          detail,
+          onNotice: (message) => this.note(message),
+        },
+      );
     } catch {
       /* a lifecycle hook can never take the session down (H4) */
     }
@@ -792,6 +804,25 @@ class HzRuntimeImpl implements HzRuntime {
    * never fail the turn, and a corrupt journal read is a notice, never an
    * empty `changes` (which would claim the turn changed nothing).
    */
+  private async ensureHookTrust(): Promise<void> {
+    const home = homedir();
+    await ensureWorkspaceHookTrust(
+      this.workspace,
+      this.config.trustedWorkspaceHooks,
+      home,
+      (req) => (this.instanceApproval ?? getApprovalHandler())(req),
+      async (payload) => {
+        await this.kernel.issueReceipt({
+          action: "hook.trust",
+          tool: "hooks",
+          argsDigest: sha256Hex(canonicalJson(payload)),
+          resultDigest: sha256Hex(payload.decision),
+        });
+      },
+      (message) => this.note(message),
+    );
+  }
+
   private recordTurnCheckpoint(userText: string, turnStartedAt: number): void {
     try {
       const since = changesSince(this.workspace, turnStartedAt, this.session.id);
@@ -804,6 +835,7 @@ class HzRuntimeImpl implements HzRuntime {
       const firstLine = userText.trim().split(/\r?\n/, 1)[0] ?? "";
       recordCheckpoint(this.workspace, this.session.id, this.store.messageCount(this.session.id), since.entries.map((entry) => entry.id), {
         label: firstLine.slice(0, 80),
+        onAppendFailure: (message) => this.note(message),
       });
     } catch (err) {
       this.note(`could not record a checkpoint for this turn: ${errorMessage(err)}`);
@@ -839,13 +871,20 @@ class HzRuntimeImpl implements HzRuntime {
     while (this.queued.length > 0) emit(cb, { type: "notice", message: this.queued.shift() ?? "" });
     this.pruneLeases();
     try {
+      const home = homedir();
+      await this.ensureHookTrust();
       // Skills: list what is available, and when the human opens a message with
       // `/<skill>`, activate it by injecting the body for this turn only.
       const skillSections: string[] = [];
-      const directory = skillsPromptSection(this.workspace);
+      const skillTrust = {
+        trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
+        home,
+        onNotice: (message: string) => this.note(message),
+      };
+      const directory = skillsPromptSection(this.workspace, skillTrust);
       if (directory !== "") skillSections.push(directory);
       let userContent = text;
-      const activated = resolveSkillForMessage(this.workspace, text);
+      const activated = resolveSkillForMessage(this.workspace, text, skillTrust);
       if (activated) {
         skillSections.push(activeSkillSection(activated.skill));
         userContent = activated.action !== "" ? activated.action : `Apply the ${activated.skill.name} skill.`;
@@ -863,12 +902,16 @@ class HzRuntimeImpl implements HzRuntime {
         },
       };
       const turnStartedAt = Date.now();
+      const catalog = loadCatalog();
+      const contextWindowTokens = catalogWindow(this.provider.name, this.currentModel, catalog);
       const outcome = await runTurn(
         {
           workspace: this.workspace,
           sessionId: this.session.id,
           model: this.currentModel,
           provider: this.provider,
+          providerBaseUrl: this.config.resolved?.baseUrl ?? this.config.baseUrl ?? "",
+          contextWindowTokens,
           kernel: this.kernel,
           store: this.store,
           signal: controller.signal,
@@ -881,6 +924,7 @@ class HzRuntimeImpl implements HzRuntime {
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
+          trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
           delegate: (task, maxSteps, profile) =>
             runNested({
               workspace: this.workspace,
@@ -896,6 +940,7 @@ class HzRuntimeImpl implements HzRuntime {
               approve: this.instanceApproval ?? getApprovalHandler(),
               permissionMode: this.mode,
               ledger,
+              trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
               onEvent: (ev) => emit(cb, ev),
             }),
         },
@@ -959,7 +1004,11 @@ class HzRuntimeImpl implements HzRuntime {
  */
 export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
-  const config = loadConfig();
+  const startupNotices: string[] = [];
+  const config = augmentConfigWithTrustedWorkspace(loadConfig(), workspace, process.env, homedir(), (message) =>
+    startupNotices.push(message),
+  );
+  if (config.theme !== undefined) setThemeMode(config.theme);
   const model = opts?.model && opts.model.trim() !== "" ? opts.model.trim() : config.model;
   const provider = makeProvider(config, { mockFlag: opts?.mock === true });
   const store = new SessionStore(workspace);
@@ -1032,6 +1081,7 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     },
   });
   await impl.logSessionStart();
+  for (const message of startupNotices) impl.note(message);
   if (config.permissionModeRejected !== undefined) {
     impl.note(`config permissionMode ignored: ${config.permissionModeRejected}`);
   }
@@ -1088,6 +1138,9 @@ export {
   catalogDefaultModel,
   catalogModel,
   catalogWindow,
+  catalogCachePath,
+  readCatalogCache,
+  writeCatalogCache,
   MINIMUM_PROVIDERS,
   CATALOG_PATH,
   DEFAULT_CATALOG_SOURCE,

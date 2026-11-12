@@ -440,6 +440,20 @@ impl Guard {
         }
 
         if let Some(allow) = matching.iter().find(|rule| rule.decision == "allow") {
+            // MEMORY.md is user-curated memory (docs/33 §5.4): a policy allow
+            // never silent-writes it; a human ask (or a held/grant lease above)
+            // is required.
+            if action.kind == "fs.write" && is_memory_manifest_write(&self.state_dir, Path::new(&action.target))
+            {
+                return Ok(GuardDecision {
+                    decision: "ask".to_string(),
+                    reason: format!(
+                        "memory-manifest-protected: writing MEMORY.md needs approval (action {} on {})",
+                        action.kind, action.target
+                    ),
+                    lease_id: None,
+                });
+            }
             return Ok(GuardDecision {
                 decision: "allow".to_string(),
                 reason: format!(
@@ -773,6 +787,32 @@ fn resolves_inside(root: &Path, target: &Path) -> bool {
         (Some(root), Some(target)) => target == root || target.starts_with(&root),
         _ => true,
     }
+}
+
+/// `.hz/MEMORY.md` (or legacy `.hzcode/MEMORY.md`) beside the kernel state tree.
+fn memory_manifest_path(state_dir: &Path) -> PathBuf {
+    let parent = state_dir.parent().unwrap_or(state_dir);
+    let hz_root = if parent.file_name().and_then(|n| n.to_str()) == Some("state") {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    };
+    hz_root.join("MEMORY.md")
+}
+
+fn is_memory_manifest_write(state_dir: &Path, target: &Path) -> bool {
+    let manifest = memory_manifest_path(state_dir);
+    let Some(manifest_parent) = manifest.parent() else {
+        return false;
+    };
+    if !resolves_inside(manifest_parent, target) {
+        return false;
+    }
+    target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.eq_ignore_ascii_case("memory.md"))
+        .unwrap_or(false)
 }
 
 /// The path made absolute against the process cwd (relative targets are how a

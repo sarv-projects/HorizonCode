@@ -19,6 +19,17 @@ import { createMockProvider } from "./mock";
 import { createOllamaProvider } from "./ollama";
 import { createOpenAiProvider } from "./openai";
 import { createOpenAiCompatibleProvider } from "./openai-compatible";
+import { wrapAnthropicToolProvider } from "./toolconv/wrap-anthropic";
+import { wrapDeepseekToolProvider } from "./toolconv/wrap-deepseek";
+import { wrapGemmaToolProvider } from "./toolconv/wrap-gemma";
+import { wrapGeminiToolProvider } from "./toolconv/wrap-gemini";
+import { wrapGlmToolProvider } from "./toolconv/wrap-glm";
+import { wrapHarmonyToolProvider } from "./toolconv/wrap-harmony";
+import { wrapHermesToolProvider } from "./toolconv/wrap-hermes";
+import { wrapKimiToolProvider } from "./toolconv/wrap-kimi";
+import { wrapMinimaxToolProvider } from "./toolconv/wrap-minimax";
+import { wrapQwen3ToolProvider } from "./toolconv/wrap-qwen3";
+import { wrapXmlToolProvider } from "./toolconv/wrap-xml";
 
 export { createMockProvider, MOCK_GREETING } from "./mock";
 export { createAnthropicProvider, toAnthropicMessages, toAnthropicTools } from "./anthropic";
@@ -87,9 +98,24 @@ function noModelProvider(provider: string): Provider {
   };
 }
 
+function withToolFormat(provider: Provider, config: HzConfig): Provider {
+  if (config.toolFormat === "xml") return wrapXmlToolProvider(provider);
+  if (config.toolFormat === "hermes") return wrapHermesToolProvider(provider);
+  if (config.toolFormat === "qwen3") return wrapQwen3ToolProvider(provider);
+  if (config.toolFormat === "harmony") return wrapHarmonyToolProvider(provider);
+  if (config.toolFormat === "kimi") return wrapKimiToolProvider(provider);
+  if (config.toolFormat === "glm") return wrapGlmToolProvider(provider);
+  if (config.toolFormat === "deepseek") return wrapDeepseekToolProvider(provider);
+  if (config.toolFormat === "gemini") return wrapGeminiToolProvider(provider);
+  if (config.toolFormat === "gemma") return wrapGemmaToolProvider(provider);
+  if (config.toolFormat === "minimax") return wrapMinimaxToolProvider(provider);
+  if (config.toolFormat === "anthropic") return wrapAnthropicToolProvider(provider);
+  return provider;
+}
+
 /** The provider the runtime will talk to. */
 export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): Provider {
-  if (opts.mockFlag) return createMockProvider();
+  if (opts.mockFlag) return withToolFormat(createMockProvider(), config);
 
   // A registered (config-declared) provider resolves to the generic
   // openai-compatible adapter — endpoint + credential as DATA, never code. An
@@ -105,27 +131,46 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
     if (config.model === "") {
       return noModelProvider(resolved.name);
     }
-    return createOpenAiCompatibleProvider({ name: resolved.name, baseUrl: resolved.baseUrl, credential: resolved.credential });
+    const home = typeof process.env.HOME === "string" && process.env.HOME !== "" ? process.env.HOME : undefined;
+    return withToolFormat(
+      createOpenAiCompatibleProvider({
+        name: resolved.name,
+        baseUrl: resolved.baseUrl,
+        credential: resolved.credential,
+        oauth: resolved.oauth,
+        home,
+      }),
+      config,
+    );
   }
 
   switch (config.provider) {
     case "anthropic":
-      return config.apiKey
-        ? createAnthropicProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
-        : missingKeyProvider("anthropic", "ANTHROPIC_API_KEY");
+      return withToolFormat(
+        config.apiKey
+          ? createAnthropicProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+          : missingKeyProvider("anthropic", "ANTHROPIC_API_KEY"),
+        config,
+      );
     case "openai":
-      return config.apiKey
-        ? createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
-        : missingKeyProvider("openai", "OPENAI_API_KEY");
+      return withToolFormat(
+        config.apiKey
+          ? createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+          : missingKeyProvider("openai", "OPENAI_API_KEY"),
+        config,
+      );
     case "google":
-      return config.apiKey
-        ? createGoogleProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
-        : missingKeyProvider("google", "GEMINI_API_KEY or GOOGLE_API_KEY");
+      return withToolFormat(
+        config.apiKey
+          ? createGoogleProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+          : missingKeyProvider("google", "GEMINI_API_KEY or GOOGLE_API_KEY"),
+        config,
+      );
     case "ollama":
       // No key required: a local server (a key only fronts a proxy deployment).
-      return createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl });
+      return withToolFormat(createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl }), config);
     case "mock":
-      return createMockProvider();
+      return withToolFormat(createMockProvider(), config);
     default:
       // Fail loud: an unknown id (a typo'd HZ_PROVIDER) is reported, never
       // silently turned into the offline mock. The mock is only reachable via

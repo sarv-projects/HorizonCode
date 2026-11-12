@@ -39,6 +39,11 @@ import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { openTodos, todoVersion } from "../tools/todo";
 import { presetCatalog } from "./agent-profiles";
+import { dapSpawnAction } from "./dap/client";
+import { resolveAdapter, selectAdapterForProgram } from "./dap/config";
+import { attachTargetLabel } from "./dap/session";
+import { memoryDbPath } from "./memory/store";
+import { previewQuirks } from "./providers/quirks";
 import { canonicalJson, sha256Hex } from "./canon";
 // The window's compaction: one replacement for the silent slice, imported here
 // and nowhere else (compaction.ts holds the pinning, the summary and the
@@ -57,6 +62,7 @@ import {
   resolveModelInstructions,
   touchedPaths,
 } from "./instructions";
+import { memoryPromptSection } from "./memory/manifest";
 // The model->tool routing table (docs/28; research A.7): resolved ONCE per run
 // against the active model/provider and composed with deps.toolFilter, so a
 // routing-disabled tool is both hidden from toolSpecs() and refused at
@@ -83,6 +89,7 @@ import {
   type HookContextFragment,
   type HooksConfig,
 } from "./hooks";
+import { hooksLoadOptions } from "./trust";
 import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
 // SAFETY-RAILS (FEAT-002): three self-contained loop-level guards, wired here
 // minimally — loop-detection before dispatch, repeat-tool after execute, and
@@ -389,6 +396,48 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const file = argString(args, "path", "file");
       return file ? { kind: "fs.read", target: resolved(file) } : undefined;
     }
+    case "memory_search": {
+      return { kind: "fs.read", target: memoryDbPath(workspace) };
+    }
+    case "debug": {
+      const op = argString(args, "op");
+      // close: dispose in-process live adapter only (no kernel effect).
+      if (op === "close") return undefined;
+      // launch: primary shell.exec on program; dual spawn rides via admissionFor.also.
+      // step ops: debuggee is shell.exec; adapter spawn is in-tool when needed.
+      if (op === "launch" || op === "continue" || op === "next" || op === "stepIn" || op === "stepOut") {
+        const program = argString(args, "program");
+        return program ? { kind: "shell.exec", target: program } : undefined;
+      }
+      if (op === "attach") {
+        const pid = typeof args.pid === "number" && Number.isInteger(args.pid) && args.pid > 0 ? args.pid : undefined;
+        const port = typeof args.port === "number" && Number.isInteger(args.port) && args.port > 0 ? args.port : undefined;
+        const host = argString(args, "host");
+        if (pid === undefined && port === undefined) return undefined;
+        return {
+          kind: "shell.exec",
+          target: attachTargetLabel({ pid, port, host }),
+        };
+      }
+      // stack/variables (and adapter-resolved launch): loop-level spawn digest mirrors in-tool.
+      const command = argString(args, "command");
+      const adapterName = argString(args, "adapter");
+      const rawArgs = args.args;
+      const argv = Array.isArray(rawArgs) ? rawArgs.filter((a): a is string => typeof a === "string") : [];
+      if (command !== undefined) return dapSpawnAction(command, argv);
+      if (adapterName !== undefined) {
+        const resolved = resolveAdapter(adapterName, workspace);
+        if (resolved) return dapSpawnAction(resolved.resolvedCommand, [...resolved.args, ...argv]);
+        return dapSpawnAction(`adapter:${adapterName}`, argv);
+      }
+      const program = argString(args, "program");
+      if (program !== undefined) {
+        const first = program.split(/\s+/).filter((p) => p !== "")[0] ?? program;
+        const picked = selectAdapterForProgram(first, workspace);
+        if (picked) return dapSpawnAction(picked.resolvedCommand, [...picked.args, ...argv]);
+      }
+      return undefined;
+    }
     case "undo": {
       // The effect target is the journal's recorded change, which no argument
       // names. A `path` argument admits as that file's fs.write; without one the
@@ -421,17 +470,51 @@ export function taskHead(text: string, max = 120): string {
 export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session", "tool_search"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
-export type ToolAdmission = { kind: "guard"; action: GuardAction } | { kind: "session-state" };
+export type ToolAdmission =
+  | { kind: "guard"; action: GuardAction; /** Extra actions that must also clear (debug.launch dual). */ also?: GuardAction[] }
+  | { kind: "session-state" };
+
+/**
+ * Resolve the adapter spawn half of a debug launch (command / adapter / auto-pick).
+ */
+function debugLaunchSpawnAction(args: Record<string, unknown>, workspace: string): GuardAction | undefined {
+  const command = argString(args, "command");
+  const adapterName = argString(args, "adapter");
+  const rawArgs = args.args;
+  const argv = Array.isArray(rawArgs) ? rawArgs.filter((a): a is string => typeof a === "string") : [];
+  if (command !== undefined) return dapSpawnAction(command, argv);
+  if (adapterName !== undefined) {
+    const resolved = resolveAdapter(adapterName, workspace);
+    if (resolved) return dapSpawnAction(resolved.resolvedCommand, [...resolved.args, ...argv]);
+    return dapSpawnAction(`adapter:${adapterName}`, argv);
+  }
+  const program = argString(args, "program");
+  if (program !== undefined) {
+    const first = program.split(/\s+/).filter((p) => p !== "")[0] ?? program;
+    const picked = selectAdapterForProgram(first, workspace);
+    if (picked) return dapSpawnAction(picked.resolvedCommand, [...picked.args, ...argv]);
+  }
+  return undefined;
+}
 
 /**
  * Every tool call passes one admission before it runs. A guard admission
  * carries the action to check; a session-state admission is the in-process
  * mirror. `undefined` is the fail-closed answer for a tool with no mapping:
  * executeTool refuses it rather than running it unguarded.
+ *
+ * `debug` `op:launch` also carries the adapter `spawn` in `also` (docs/33 §5.1
+ * dual admission / `debug.launch` alias).
  */
 export function admissionFor(name: string, args: Record<string, unknown>, workspace: string): ToolAdmission | undefined {
   const action = guardActionFor(name, args, workspace);
-  if (action !== undefined) return { kind: "guard", action };
+  if (action !== undefined) {
+    if (name === "debug" && argString(args, "op") === "launch") {
+      const spawn = debugLaunchSpawnAction(args, workspace);
+      return spawn !== undefined ? { kind: "guard", action, also: [spawn] } : { kind: "guard", action };
+    }
+    return { kind: "guard", action };
+  }
   if ((SESSION_STATE_TOOLS as readonly string[]).includes(name)) return { kind: "session-state" };
   return undefined;
 }
@@ -1011,6 +1094,8 @@ export interface LoopDeps {
   sessionId: string;
   model: string;
   provider: Provider;
+  /** OpenAI-compatible endpoint root for provider quirks preview (docs/33 §5.10). */
+  providerBaseUrl?: string;
   kernel: KernelClient;
   store: SessionStore;
   signal: AbortSignal;
@@ -1046,6 +1131,10 @@ export interface LoopDeps {
   permissionMode?: PermissionMode;
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
+  /** User-config workspace hook trust list (docs/33 §6.2). */
+  trustedWorkspaceHooks?: string[];
+  /** NF-074: catalog-resolved context window; falls back to `windowForModel`. */
+  contextWindowTokens?: number;
   /**
    * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
    * YET READ by the turn path. The field and the `buildSpeculationHost` /
@@ -1119,6 +1208,7 @@ interface AssistantTurn {
   stopReason: "end" | "tool_use" | "max_tokens" | "abort";
   usage?: Usage;
   error?: string;
+  quirks?: string[];
 }
 
 /**
@@ -1359,7 +1449,17 @@ async function collectAssistant(
   const specs = toolSpecs(deps.sessionId)
     .filter((spec) => deps.toolFilter === undefined || deps.toolFilter(spec.name))
     // docs/15 §3.6: the agent tool lists the presets (built-in and user) so the model knows they exist.
-    .map((spec) => (spec.name === "agent" ? { ...spec, description: `${spec.description}\n${presetCatalog(deps.workspace)}` } : spec));
+    .map((spec) =>
+      spec.name === "agent"
+        ? {
+            ...spec,
+            description: `${spec.description}\n${presetCatalog(deps.workspace, {
+              trustedWorkspaceHooks: deps.trustedWorkspaceHooks,
+              home: typeof process.env.HOME === "string" ? process.env.HOME : undefined,
+            })}`,
+          }
+        : spec,
+    );
   const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
   const kernelMode = (deps.kernel as { mode?: unknown } | undefined)?.mode;
   const basePrompt =
@@ -1393,7 +1493,7 @@ async function collectAssistant(
     rails?.anchorBase !== undefined
       ? rails.anchorBase + (rails.appendedTokens ?? 0)
       : estimatePromptTokens(basePrompt + extra + rail, history, JSON.stringify(specs));
-  const contextWindow = windowForModel(deps.model);
+  const contextWindow = deps.contextWindowTokens ?? windowForModel(deps.model);
   const maxTokens = fitMaxOutputTokens(inputEstimate, contextWindow);
   // What the next dispatch will carry, as the harness computed it — the
   // `/context` report (one event per dispatch; renderers that do not care
@@ -1433,6 +1533,9 @@ async function collectAssistant(
         // A retry on the way in, or any other provider-side fact the human should
         // know: surface it rather than swallowing it into the transcript.
         emit(deps.callbacks, { type: "notice", message: event.message });
+      } else if (event.type === "quirks") {
+        turn.quirks = event.applied;
+        emit(deps.callbacks, { type: "notice", message: `provider quirks: ${event.applied.join(", ")}` });
       } else if (event.type === "done") {
         turn.stopReason = event.stopReason;
         turn.usage = event.usage;
@@ -1601,45 +1704,49 @@ async function executeTool(
   let leaseId: string | undefined;
   let admitted: GuardAction | undefined;
   if (admission.kind === "guard") {
-    const action = withCallIntent(admission.action, parsed.args, deps.workspace);
-    admitted = action;
-    const decision = await gate.check(action);
-    leaseId = decision.leaseId ?? gate.leaseFor(action);
-    if (decision.decision === "deny") {
-      const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
-      return { result: { ok: false, output: denied, error: denied }, expected: true };
-    }
-    if (decision.decision === "ask") {
-      const request = approvalRequestFor(call.name, action, deps.workspace);
-      // Reviewable before writing: a write/edit ask carries the projected diff
-      // when it can be computed cheaply; any problem (unreadable file, no
-      // exact match) silently omits it — the ask itself is unchanged.
-      let approvalPreview: string | undefined;
-      if (call.name === "write" || call.name === "edit") {
-        const projected = projectChange(call.name, parsed.args, deps.workspace);
-        if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
+    const primary = withCallIntent(admission.action, parsed.args, deps.workspace);
+    const extras = (admission.also ?? []).map((a) => withCallIntent(a, parsed.args, deps.workspace));
+    const toAdmit = [primary, ...extras];
+    admitted = primary;
+    for (const action of toAdmit) {
+      const decision = await gate.check(action);
+      leaseId = decision.leaseId ?? gate.leaseFor(action) ?? leaseId;
+      if (decision.decision === "deny") {
+        const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
+        return { result: { ok: false, output: denied, error: denied }, expected: true };
       }
-      const asked: ApprovalRequest & { preview?: string } =
-        approvalPreview !== undefined ? { ...request, preview: approvalPreview } : request;
-      await logEvent(
-        deps,
-        faults,
-        EventTypes.approvalRequest,
-        { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
-        { kind: "system", id: "hz-guard" },
-      );
-      const approved = await gate.approve(asked, action);
-      await logEvent(
-        deps,
-        faults,
-        EventTypes.approvalDecision,
-        { callId: call.id, tool: call.name, kind: action.kind, decision: approved ? "approved" : "declined" },
-        { kind: "human", id: "user" },
-      );
-      if (!approved) {
-        return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" }, expected: true };
+      if (decision.decision === "ask") {
+        const request = approvalRequestFor(call.name, action, deps.workspace);
+        // Reviewable before writing: a write/edit ask carries the projected diff
+        // when it can be computed cheaply; any problem (unreadable file, no
+        // exact match) silently omits it — the ask itself is unchanged.
+        let approvalPreview: string | undefined;
+        if (call.name === "write" || call.name === "edit") {
+          const projected = projectChange(call.name, parsed.args, deps.workspace);
+          if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
+        }
+        const asked: ApprovalRequest & { preview?: string } =
+          approvalPreview !== undefined ? { ...request, preview: approvalPreview } : request;
+        await logEvent(
+          deps,
+          faults,
+          EventTypes.approvalRequest,
+          { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
+          { kind: "system", id: "hz-guard" },
+        );
+        const approved = await gate.approve(asked, action);
+        await logEvent(
+          deps,
+          faults,
+          EventTypes.approvalDecision,
+          { callId: call.id, tool: call.name, kind: action.kind, decision: approved ? "approved" : "declined" },
+          { kind: "human", id: "user" },
+        );
+        if (!approved) {
+          return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" }, expected: true };
+        }
+        leaseId = gate.leaseFor(action);
       }
-      leaseId = gate.leaseFor(action);
     }
   }
 
@@ -1672,6 +1779,7 @@ async function executeTool(
     approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
     delegate: deps.delegate,
+    kernel: deps.kernel,
   };
 
   try {
@@ -2053,8 +2161,10 @@ export async function runTurn(
           if (!message.startsWith("no per-model instruction template")) emit(deps.callbacks, { type: "notice", message });
         },
       });
-      if (perModel === "") return projectBlocks;
-      return `${projectBlocks}\n\n${perModel}\n`;
+      const mem = memoryPromptSection(deps.workspace);
+      const base = perModel === "" ? projectBlocks : `${projectBlocks}\n\n${perModel}\n`;
+      if (mem === undefined) return base;
+      return `${base}\n\n${mem}\n`;
     })();
 
     const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId, deps.permissionMode);
@@ -2068,7 +2178,14 @@ export async function runTurn(
     // Hooks are config-backed and loaded ONCE per run (absent config = zero
     // cost, zero spawns). A malformed config is a fail-closed refusal state
     // carried by the loader, not an exception here.
-    const hooks = deps.hooks ?? loadHooks(deps.workspace);
+    const hooks =
+      deps.hooks ??
+      loadHooks(
+        deps.workspace,
+        hooksLoadOptions(deps.workspace, { trustedWorkspaceHooks: deps.trustedWorkspaceHooks }, (message) =>
+          emit(deps.callbacks, { type: "notice", message }),
+        ),
+      );
     // H9 (docs/15 §2.4): observation-hook context notes gathered this run,
     // carried into the NEXT provider request as one attributed untrusted block
     // (never a forgeable user turn). Fragments are consumed once rendered.
@@ -2195,7 +2312,16 @@ export async function runTurn(
         // pair (observation-only, H4).
         await emitLifecycle("compactPost", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
       }
-      await logEvent(deps, faults, EventTypes.messageStart, { role: "assistant", model: deps.model, turn: calls });
+      const quirksPreview =
+        deps.providerBaseUrl !== undefined
+          ? previewQuirks({ provider: deps.provider.name, model: deps.model, baseUrl: deps.providerBaseUrl })
+          : [];
+      await logEvent(deps, faults, EventTypes.messageStart, {
+        role: "assistant",
+        model: deps.model,
+        turn: calls,
+        ...(quirksPreview.length > 0 ? { quirks: quirksPreview } : {}),
+      });
       const combinedCorrective = [corrective, loopNudge].filter((part) => part !== undefined && part !== "").join("\n");
       // H9: drain any hook context notes collected so far into one attributed
       // untrusted block for THIS request; clearing them means each note is
@@ -2238,6 +2364,7 @@ export async function runTurn(
         text: turn.text,
         toolCalls: turn.toolCalls.map((call) => ({ id: call.id, name: call.name })),
         usage: turn.usage,
+        ...(turn.quirks !== undefined && turn.quirks.length > 0 ? { quirks: turn.quirks } : {}),
       });
       emit(deps.callbacks, { type: "assistant.done", text: turn.text });
 

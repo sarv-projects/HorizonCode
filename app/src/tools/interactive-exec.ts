@@ -65,6 +65,7 @@ import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { newId } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
+import { kernelEnforcesProcessSandbox } from "../core/sandbox-spawn";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
 import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
@@ -84,7 +85,13 @@ const MAX_SESSIONS = 4;
  * still running. A command that exits within this window reports its exit code
  * synchronously; a longer-lived one reports as running and keeps draining.
  */
-const SETTLE_MS = 150;
+const SETTLE_MS = 500;
+const SETTLE_SANDBOX_MS = 1500;
+
+async function settleMsFor(ctx: ToolContext): Promise<number> {
+  if (ctx.kernel !== undefined && (await kernelEnforcesProcessSandbox(ctx.kernel))) return SETTLE_SANDBOX_MS;
+  return SETTLE_MS;
+}
 /** Opt-out env var: `HZ_NO_PTY=1` disables the PTY backend (cf. oh-my-pi PI_NO_PTY). */
 export const NO_PTY_ENV = "HZ_NO_PTY";
 
@@ -399,6 +406,9 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
         stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         detached: true,
         longLived: false,
+        sandboxWrap: "auto",
+        sandboxMode: "workspace-write",
+        kernel: ctx.kernel,
       })
     ).proc;
   } catch (e) {
@@ -422,10 +432,11 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
   };
   sessions.set(session.id, session);
   startDraining(session);
-  armWatchdog(session);
 
   // Let a short-lived command report its exit synchronously (codex shape).
-  const settled = await settlesWithin(session.proc.exited, SETTLE_MS);
+  // Overall timeout does not run during this window — a short budget must not
+  // expire before we can return Session / Status: running.
+  const settled = await settlesWithin(session.proc.exited, await settleMsFor(ctx));
   if (settled || session.exited) {
     session.exited = true;
     const body = takeBuffer(session);
@@ -434,6 +445,8 @@ async function startSession(args: Record<string, unknown>, ctx: ToolContext): Pr
     return { ok: true, output: out };
   }
   // Still running: report id + running status + buffered output so far.
+  session.startedAt = Date.now();
+  session.lastActivity = Date.now();
   const body = takeBuffer(session);
   armWatchdog(session);
   return { ok: true, output: render(ctx, session, "running", body) };
@@ -550,7 +563,7 @@ async function writeToSession(args: Record<string, unknown>, ctx: ToolContext): 
   session.lastActivity = Date.now();
   armWatchdog(session);
 
-  const settled = await settlesWithin(session.proc.exited, SETTLE_MS);
+  const settled = await settlesWithin(session.proc.exited, await settleMsFor(ctx));
   if (settled || session.exited) {
     session.exited = true;
     const body = takeBuffer(session);

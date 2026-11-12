@@ -13,6 +13,8 @@
 
 export const PASTE_ON = "\u001b[?2004h";
 export const PASTE_OFF = "\u001b[?2004l";
+/** After paste-end, finalize a single-line paste without waiting for Enter (docs/13 D18). */
+export const PASTE_SINGLE_LINE_FLUSH_MS = 50;
 
 export interface PasteResult {
   /** The whole paste, lines joined with "\n". */
@@ -35,6 +37,15 @@ export interface PasteCollector {
    * gathered, and the finished paste once the line after `paste-end` arrives.
    */
   line(raw: string): PasteResult | undefined;
+  /** Finalize when `paste-end` arrived with buffered lines (single-line paste). */
+  flushAfterEnd(): PasteResult | undefined;
+}
+
+function finalizePaste(lines: string[]): PasteResult {
+  const raw = lines.slice();
+  const done = lines.slice();
+  while (done.length > 1 && done[done.length - 1] === "") done.pop();
+  return { text: done.join("\n"), lines: done.length, raw };
 }
 
 export function createPasteCollector(): PasteCollector {
@@ -61,14 +72,19 @@ export function createPasteCollector(): PasteCollector {
       if (!inside) return undefined;
       lines.push(typeof text === "string" ? text : "");
       if (!ended) return undefined;
-      const done = lines;
+      const out = finalizePaste(lines);
       inside = false;
       ended = false;
       lines = [];
-      const raw = done.slice();
-      // A trailing newline in the paste leaves an empty last line: drop it.
-      while (done.length > 1 && done[done.length - 1] === "") done.pop();
-      return { text: done.join("\n"), lines: done.length, raw };
+      return out;
+    },
+    flushAfterEnd() {
+      if (!inside || !ended || lines.length === 0) return undefined;
+      const out = finalizePaste(lines);
+      inside = false;
+      ended = false;
+      lines = [];
+      return out;
     },
   };
 }

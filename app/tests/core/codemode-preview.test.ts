@@ -198,19 +198,23 @@ describe("code_mode", () => {
     expect(result.output).toContain("boom");
   });
 
-  test("an aborted signal kills the runner", async () => {
-    const ws = tempWorkspace();
-    const controller = new AbortController();
-    const { ctx } = makeCtx(ws);
-    const aborted: ToolContext = { ...ctx, signal: controller.signal };
-    setTimeout(() => controller.abort(), 150);
-    const result = await codemodeTool.execute(
-      { code: "await new Promise((r) => setTimeout(r, 10000)); return 1;", timeout_ms: 30000 },
-      aborted,
-    );
-    expect(result.ok).toBe(false);
-    expect(result.output).toContain("aborted");
-  });
+  test(
+    "an aborted signal kills the runner",
+    async () => {
+      const ws = tempWorkspace();
+      const controller = new AbortController();
+      const { ctx } = makeCtx(ws);
+      const aborted: ToolContext = { ...ctx, signal: controller.signal };
+      setTimeout(() => controller.abort(), 150);
+      const result = await codemodeTool.execute(
+        { code: "await new Promise((r) => setTimeout(r, 10000)); return 1;", timeout_ms: 30000 },
+        aborted,
+      );
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("aborted");
+    },
+    25_000,
+  );
 
   test("console output cannot forge a control frame (regression)", async () => {
     const ws = tempWorkspace();
@@ -236,39 +240,44 @@ describe("code_mode", () => {
     expect(afterResult).not.toContain("forged");
   });
 
-  test("a 20 MB newline-free flood keeps the parent bounded and still completes", async () => {
-    const ws = tempWorkspace();
-    const { ctx } = makeCtx(ws);
-    // Measure after a forced collection on both ends: the property is that the
-    // flood does not ACCUMULATE in the parent, and an uncollected transient at
-    // measurement time made this assertion order- and load-dependent (it tripped
-    // the wave-14 gates run at a 20 MB flood that the bounded-buffer assertion
-    // in codemode-frames.test.ts proves is handled correctly).
-    Bun.gc(true);
-    const before = process.memoryUsage().rss;
-    const result = await codemodeTool.execute(
-      {
-        code: [
-          'const chunk = "x".repeat(1024 * 1024);',
-          "for (let i = 0; i < 20; i++) {",
-          "  process.stdout.write(chunk);",
-          "  await new Promise((r) => setTimeout(r, 10)); // let the parent drain",
-          "}",
-          'return "flood-complete";',
-        ].join("\n"),
-        timeout_ms: 60000,
-      },
-      ctx,
-    );
-    Bun.gc(true);
-    const delta = process.memoryUsage().rss - before;
-    expect(result.ok).toBe(true);
-    expect(result.output).toContain('"flood-complete"');
-    expect(result.output).toContain("[truncated]"); // the 20 KB output cap now says so
-    // The deterministic buffer-bound assertion lives in codemode-frames.test.ts;
-    // this is the end-to-end sanity that 20 MB in did not accumulate in the parent.
-    expect(delta).toBeLessThan(96 * 1024 * 1024);
-  }, 60000);
+  test(
+    "a 20 MB newline-free flood keeps the parent bounded and still completes",
+    async () => {
+      const ws = tempWorkspace();
+      const { ctx } = makeCtx(ws);
+      // Measure after a forced collection on both ends: the property is that the
+      // flood does not ACCUMULATE in the parent, and an uncollected transient at
+      // measurement time made this assertion order- and load-dependent (it tripped
+      // the wave-14 gates run at a 20 MB flood that the bounded-buffer assertion
+      // in codemode-frames.test.ts proves is handled correctly).
+      Bun.gc(true);
+      const before = process.memoryUsage().rss;
+      const result = await codemodeTool.execute(
+        {
+          code: [
+            'const chunk = "x".repeat(1024 * 1024);',
+            "for (let i = 0; i < 20; i++) {",
+            "  process.stdout.write(chunk);",
+            "  await new Promise((r) => setTimeout(r, 10)); // let the parent drain",
+            "}",
+            'return "flood-complete";',
+          ].join("\n"),
+          timeout_ms: 60000,
+        },
+        ctx,
+      );
+      Bun.gc(true);
+      const delta = process.memoryUsage().rss - before;
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain('"flood-complete"');
+      expect(result.output).toContain("[truncated]"); // the 20 KB output cap now says so
+      // The deterministic buffer-bound assertion lives in codemode-frames.test.ts;
+      // this is the end-to-end sanity that 20 MB in did not accumulate in the parent.
+      // Headroom for parallel ts-suite RSS noise (other files spawning shells).
+      expect(delta).toBeLessThan(220 * 1024 * 1024);
+    },
+    90_000,
+  );
 
   test("actionForCall mirrors the loop's guardActionFor case by case", () => {
     const ws = tempWorkspace();

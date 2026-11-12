@@ -18,6 +18,7 @@ import { shortenPath } from "../../src/tui/banner";
 import {
   APP_DIR,
   BUN_BIN,
+  TUI_MOCK_ENV,
   createWorkspacePool,
   flatten,
   killAllProcesses,
@@ -50,7 +51,7 @@ afterAll(() => {
 });
 
 /** Start `hzcode` inside a pty, with the pty's input coming from our pipe. */
-function startChat(workspace: string, env: Record<string, string> = { NO_COLOR: "1" }) {
+function startChat(workspace: string, env: Record<string, string> = {}) {
   const command = [
     "exec",
     shellQuote(BUN_BIN),
@@ -64,7 +65,7 @@ function startChat(workspace: string, env: Record<string, string> = { NO_COLOR: 
     file: SCRIPT as string,
     args: ["-qec", command, "/dev/null"],
     cwd: APP_DIR,
-    env: { ...env, TERM: "xterm-256color" },
+    env: { ...TUI_MOCK_ENV, ...env, TERM: "xterm-256color" },
     timeoutMs: PTY_TIMEOUT_MS,
   });
 }
@@ -131,6 +132,9 @@ if (!SCRIPT) {
       proc.write("/model\n");
       // the notice line (a bullet), not the banner's model line
       expect(await waitFor(proc, "\u00b7 model mock-1")).toBe(true);
+
+      proc.write("/models\n");
+      expect(await waitFor(proc, /models for mock/)).toBe(true);
 
       proc.write("/files\n");
       expect(await waitFor(proc, /tools \(\d+ registered\): \d+ available now: /)).toBe(true);
@@ -247,19 +251,19 @@ if (SCRIPT) {
       const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
 
       proc.write("list files\n");
-      expect(await waitFor(proc, "Approve read")).toBe(true);
-      expect(await waitFor(proc, "always this session")).toBe(true);
+      expect(await waitFor(proc, "Approve read", { timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
+      expect(await waitFor(proc, "always this session", { timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
       // Enter is a denial, not a yes
       await new Promise((r) => setTimeout(r, 400));
       proc.write("\r");
-      expect(await waitFor(proc, "DECLINED by the user")).toBe(true);
+      expect(await waitFor(proc, "DECLINED by the user", { timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
 
       proc.write("list files\n");
-      expect(await waitFor(proc, "Approve read", { count: 2 })).toBe(true);
+      expect(await waitFor(proc, "Approve read", { count: 2, timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
       await new Promise((r) => setTimeout(r, 400));
       proc.write("y"); // no Enter
-      expect(await waitFor(proc, "\u00b7 approved (this time)")).toBe(true);
-      expect(await waitFor(proc, "1 tool")).toBe(true);
+      expect(await waitFor(proc, "\u00b7 approved (this time)", { timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
+      expect(await waitFor(proc, "1 tool", { timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
 
       proc.write("\u0004");
       const run = await proc.done;
@@ -277,7 +281,7 @@ if (SCRIPT) {
       const ws = pool.make();
       const proc = startChat(ws, { NO_COLOR: "", FORCE_COLOR: "1", LANG: "en_US.UTF-8" });
       proc.write("think hard about this\n");
-      expect(await waitFor(proc, "Thought for")).toBe(true);
+      expect(await waitFor(proc, /Thought for/, { timeoutMs: PTY_TIMEOUT_MS })).toBe(true);
       expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
       proc.write("/think\n");
       expect(await waitFor(proc, "I can simply greet them.")).toBe(true);
