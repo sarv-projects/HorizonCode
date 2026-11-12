@@ -269,6 +269,8 @@ describe("every tool passes an admission", () => {
       apply_patch: { input: "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\n" },
       shell_session: { mode: "start", command: "echo hi" },
       lsp: { op: "diagnostics", path: "a.ts" },
+      debug: { op: "stack", command: "fake-dap" },
+      memory_search: { query: "rg" },
       tool_search: { query: "preview dev server" },
       ast_search: { pat: "foo($A)" },
       ast_edit: { path: "a.ts", pat: "foo($A)", out: "bar($A)" },

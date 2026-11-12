@@ -416,6 +416,14 @@ export interface ToolContext {
   receipt(rec: ReceiptInput): Promise<Receipt>;
   /** Present when the runtime supports delegation (the `agent` tool). */
   delegate?: DelegateRunner;
+  /** Optional: used to decide hz-sandbox-exec wrapping on shell spawns (docs/33 §5.3). */
+  kernel?: SandboxSpawnKernel;
+}
+
+/** Minimal kernel surface for spawn sandbox routing (avoids a contracts → core import). */
+export interface SandboxSpawnKernel {
+  readonly mode: string;
+  sandboxReport(mode: SandboxMode, opts?: { allowPartial?: boolean }): Promise<EnforcementOutcome>;
 }
 
 export interface ToolResult {
@@ -497,6 +505,8 @@ export type ProviderEvent =
   | { type: "thinking"; text: string }
   | { type: "tool_call"; id: string; name: string; arguments: string }
   | { type: "notice"; message: string }
+  /** Per-request provider quirk ids (forge T-8; docs/33 §5.10). */
+  | { type: "quirks"; applied: string[] }
   | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage }
   | { type: "error"; message: string };
 export interface ProviderRequest {

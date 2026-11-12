@@ -14,6 +14,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { blend, bold, colorEnabled, paint, colorLevel, cyan, dim, pulse, rgbFg, strip, terminalWidth, truncate, visibleWidth, wrapText, yellow, type RGB } from "./style";
+import { runStatusLineScript, type StatusLineScript, type StatusLineSpawnContext } from "./status-line";
 
 /* ------------------------------ capability ------------------------------ */
 
@@ -259,9 +260,28 @@ export interface StatusInfo {
   provider: string;
   /** 0-100, or undefined before the first context.usage event */
   contextPercent?: number;
+  /** Token estimate and window from `context.usage` (docs/30 §5.12). */
+  contextUsed?: number;
+  contextWindow?: number;
   /** already shortened (~) workspace path */
   path: string;
   branch?: string;
+}
+
+/**
+ * Built-in `used/window` segment (docs/33 §5.13). Compact k-suffix counts;
+ * when usage exceeds 85% of the window, append `high` so the bar signals
+ * pressure without needing a separate gauge.
+ */
+export function formatTokenHint(used?: number, window?: number): string {
+  if (used === undefined || window === undefined || window <= 0) return "";
+  const fmt = (n: number): string => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return String(Math.round(n));
+  };
+  const base = `${fmt(used)}/${fmt(window)}`;
+  return used / window >= 0.85 ? `${base} high` : base;
 }
 
 const SEP = " \u00b7 ";
@@ -273,16 +293,18 @@ const SEP = " \u00b7 ";
 export function composeStatusBar(info: StatusInfo, width: number): string {
   const limit = Math.max(10, Math.floor(width));
   const mode = info.badge !== "" ? bold(yellow(info.badge)) : dim("default");
+  const usageHint = formatTokenHint(info.contextUsed, info.contextWindow);
   const parts: Record<string, string> = {
     mode,
     model: info.model,
     provider: dim(info.provider),
     ctx: info.contextPercent === undefined ? "" : dim("\u25d1 ") + `${Math.max(0, Math.min(999, Math.round(info.contextPercent)))}%`,
+    usage: usageHint !== "" ? dim(usageHint) : "",
     path: dim(info.path),
     branch: info.branch ? dim("\u2442 ") + info.branch : "",
   };
-  const dropOrder = ["path", "provider", "branch", "ctx"];
-  const order = ["mode", "model", "provider", "ctx", "path", "branch"];
+  const dropOrder = ["path", "provider", "branch", "usage", "ctx"];
+  const order = ["mode", "model", "provider", "ctx", "usage", "path", "branch"];
   const dropped = new Set<string>();
   const build = (): string =>
     order
@@ -411,6 +433,10 @@ export interface LiveOptions {
   now?: () => number;
   /** extra live lines drawn above the spinner (the subagent group) */
   group?: (tick: number, width: number) => string[];
+  /** optional user-config script row (docs/33 §5.13) */
+  statusScript?: StatusLineScript;
+  /** When set, status scripts spawn through `spawnOwned` instead of `spawnSync`. */
+  statusSpawn?: StatusLineSpawnContext;
   /** DEC 2026 around each redraw (default: not under tmux) */
   sync?: boolean;
 }
@@ -551,16 +577,26 @@ export function createLive(opts: LiveOptions): Live {
     }
   };
 
+  const scriptLines = (info: StatusInfo): string[] => {
+    if (!opts.statusScript) return [];
+    return runStatusLineScript(opts.statusScript, { ...info }, JSON.stringify(info), opts.statusSpawn);
+  };
+
   return {
     enabled: opts.enabled,
     erase,
     showIdle() {
       if (!opts.enabled || busy) return;
-      const bar = composeStatusBar(opts.status(), terminalWidth() - 1);
-      if (!dirty && bar === lastBar) return;
+      const info = opts.status();
+      const bar = composeStatusBar(info, terminalWidth() - 1);
+      const extra = scriptLines(info)
+        .map((l) => dim(truncate(l, Math.max(10, terminalWidth() - 1))))
+        .join("\n");
+      const block = extra !== "" ? `${bar}\n${extra}` : bar;
+      if (!dirty && block === lastBar) return;
       dirty = false;
-      lastBar = bar;
-      opts.write(bar + "\n");
+      lastBar = block;
+      opts.write(block + "\n");
     },
     beginTurn() {
       tools = 0;

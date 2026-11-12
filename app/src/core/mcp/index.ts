@@ -38,11 +38,13 @@ import { parseMcpServer, type McpConfig, type McpServerConfig } from "../config"
 import { kernelStateDir } from "../owned-spawn";
 import { McpClient, type McpClientOptions } from "./client";
 import { clearMcpTools, registerMcpTools } from "./registry";
-
 /** What a manager needs from its host session. */
 export interface McpManagerHooks {
   workspace: string;
   sessionId: string;
+  /** When set, an present but untrusted workspace `mcp.json` emits a notice (v1 does not load it). */
+  trustedWorkspaceHooks?: readonly string[];
+  home?: string;
   /** The host's guard (the session's GuardGate, or the kernel client directly). */
   guard: (action: GuardAction) => Promise<GuardDecision>;
   /** The host's approval handler; `action` names what is being approved. */

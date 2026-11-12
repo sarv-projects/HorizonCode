@@ -13,6 +13,7 @@ import {
   TIPS,
   clockTime,
   composeStatusBar,
+  formatTokenHint,
   createLive,
   formatDuration,
   formatElapsed,
@@ -127,6 +128,17 @@ describe("status bar", () => {
     } finally {
       setColorEnabled(false);
     }
+  });
+
+  test("used/window segment and high-pressure hint", () => {
+    expect(formatTokenHint(1200, 128000)).toBe("1k/128k");
+    expect(formatTokenHint(120000, 128000)).toBe("120k/128k high");
+    expect(formatTokenHint(undefined, 128000)).toBe("");
+    const withUsage = composeStatusBar(
+      { ...info, contextUsed: 1200, contextWindow: 128000 },
+      120,
+    );
+    expect(strip(withUsage)).toContain("1k/128k");
   });
 });
 

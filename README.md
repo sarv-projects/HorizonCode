@@ -293,7 +293,7 @@ Results from a run on 2026-11-10 on this tree (as root in a sandbox container):
 
 - `cd kernel && cargo build --release --locked && cargo test --locked`: 49 unit tests and 50 integration tests pass.
 - `hz-kernel --selftest`: `SELFTEST OK (25 checks)`.
-- `cd app && bun run typecheck && bun test`: typecheck 0 errors; 1,800 tests in 148 files; 1,792 pass, 8 skip, 0 fail.
+- `cd app && bun run typecheck && bun test`: typecheck 0 errors; ~1,900 tests in ~185 files; ~1,892 pass, 8 skip, 0 fail (re-measure on your tree).
 - `bash ops/gates.sh`: all 8 gates pass (to be re-run at release).
 
 The 8 skips are chmod-based tests that cannot bind when the process runs as root, so they skip by design; the run above was as root. The same suite also runs on hosted CI as a non-root user, where they execute.
@@ -304,14 +304,27 @@ The hosted workflow is [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
 Pre-release and single-platform. Read this before relying on it.
 
-- **No OS-level sandboxing.** The kernel decides and records; it does not confine. No Landlock ruleset, seccomp filter, network namespace or resource limit is applied to a spawned process, and `sandbox.report` never claims otherwise. A permitted command runs with your user's authority.
+- **OS sandboxing (partial).** Optional `hz-sandbox-exec` can apply seccomp/rlimits to shell children when the helper is built; **Landlock FS and network namespaces are not applied** — `hzcode doctor` and `ops/landlock-probe.sh` report host capability only.
 - **Not released.** There is no package, installer, signed binary or auto-update. Build from source.
 - **Live providers.** Live runs have been exercised only against an OpenAI-compatible endpoint (NVIDIA NIM). The Anthropic, OpenAI, Google and Ollama adapters are covered by tests against recorded and mock streams, not by live runs against those vendors.
+
+| Quality check | Provider / model | Date | Result |
+|---|---|---|---|
+| Tool hygiene evals (key-free) | `scripted` | 2026-11-10 | 8/8 pass (`tests/core/hygiene-evals.test.ts`) |
+| NVIDIA NIM connection smoke | `ops/nvidia-smoke.sh` | 2026-11-11 | pass models list with repo `.env` (CRLF-safe) |
+| NVIDIA NIM models API | `integrate.api.nvidia.com` | 2026-11-11 | pass (`tests/providers/nvidia-live.test.ts` with `NVIDIA_API_KEY`; lists 100+ model ids) |
+| NVIDIA NIM chat turn | `minimaxai/minimax-m3.1-flash` + repo `.env` key | 2026-11-11 | **pass** (`ops/nvidia-chat-probe.sh` HTTP 200; headless `hzcode -p`); default `.env` `HZ_MODEL` still **410 EOL** — point at a deployed id |
+| models.dev catalog snapshot | committed `models-dev.snapshot.json` | 2026-11-11 | pass floor + &lt;2 MiB (`catalog.test.ts`; file **staged**, commit pending) |
+| Landlock host probe | `ops/landlock-probe.sh` | 2026-11-11 | pass exit 0\|3 (`tests/ops/landlock-probe.test.ts`; honest — no FS rules applied) |
+| TUI `/model` + `/models` | mock + NVIDIA catalog ids | 2026-11-11 | pass (`pty.test.ts`, `list-models.test.ts`, `models-slash.test.ts`; live `/model <id>` on 2026-11-09 in `CURRENT_RUN` §5.0.2 item 9) |
+| Memory FTS recall | deferred `memory_search` | 2026-11-11 | pass (`memory-store.test.ts`, `memory-search.test.ts`) |
+
 - **No benchmarks.** Same-model head-to-head comparisons have not been run. No ranking or token-efficiency claim is made.
 - **Platforms.** Linux x86_64 is the only tested platform. macOS and Windows are untested.
 - **Not wired by default.** Speculative execution exists as code and tests but is off, and a test pins it inert. The guardian is advisory unless `HORIZON_GUARDIAN=enforce`. The language server loop is off until you configure a server. Hashline anchors are opt-in.
-- **Partial.** Per-model tool dialects beyond `apply_patch` (the routing table exists, one dialect ships). The server accepts one client over stdio; there is no socket, TCP or HTTP transport and no SDK. Hook trust gating is still open.
-- **Not started.** Fullscreen TUI renderer; MITM or routed egress proxy (egress decisions are recorded, nothing intercepts traffic); debugger (DAP) tool; episodic and semantic memory tiers and background consolidation (only the instruction-file hierarchy ships); same-model benchmarks.
+- **Partial.** Per-model tool dialects beyond `apply_patch` (the routing table exists, one dialect ships). The server accepts one client over stdio; there is no socket, TCP or HTTP transport and no SDK. Workspace trust loads hooks, skills, agent presets, **MCP** and **providers** when listed in `trustedWorkspaceHooks` and digests match `trust.json` (see `docs/33` §6.2).
+- **Not started.** Alternate-screen fullscreen TUI renderer (cell buffer + layout); MITM or routed egress proxy (egress decisions are recorded, nothing intercepts traffic); episodic and semantic memory tiers and background consolidation (only the instruction-file hierarchy ships); same-model benchmarks.
+- **Partial.** Scrollback TUI only; `HZ_TUI_MODE=fullscreen` / `--fullscreen` fail closed (ruling **129**). Deferred **`debug`** tool (DAP stack/variables/`launch` adapter handshake; attach/step open; rulings **120**, **128**, **129**). Deferred **`memory_search`** over SQLite FTS5 + `MEMORY.md` (ruling **124**); no dream/embedding tier yet.
 - **Tamper-evident, not tamper-proof.** See Features. In `untrusted` mode the guarantees are weaker still.
 
 The authoritative status table is `CURRENT_RUN.md` §5.0, and the implemented-versus-designed map is [`docs/28-implementation-status.md`](./docs/28-implementation-status.md). Many capabilities described in `docs/` (web and desktop apps, IDE bridge, SDKs, plugin marketplace, collaboration, voice) are designs, not shipped code.
@@ -350,4 +363,4 @@ Claims in documentation should cite a command that produces them; `docs/28-imple
 
 ## Licence
 
-Not yet chosen. The repository has no `LICENSE` file, so no licence is granted until one is added.
+Not yet chosen. The repository has no `LICENSE` file, so no licence is granted until one is added. Third-party attribution rows live in `NOTICE` (hygiene only, not a grant of rights).

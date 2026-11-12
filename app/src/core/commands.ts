@@ -24,6 +24,7 @@
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { builtinSlashCommandNames } from "./slash-registry";
 import { stateRoot, userConfigDir } from "./paths";
 
 export interface CustomCommand {
@@ -36,34 +37,7 @@ export interface CustomCommand {
 }
 
 /** Slash commands the TUI handles itself; a file can never take one of these names. */
-export const BUILTIN_COMMANDS: readonly string[] = [
-  "help",
-  "?",
-  "exit",
-  "quit",
-  "new",
-  "model",
-  "files",
-  "context",
-  "mode",
-  "plan",
-  "changes",
-  "apply",
-  "discard",
-  "fork",
-  "sessions",
-  "rewind",
-  "memory",
-  "instructions",
-  "init",
-  "rename",
-  "retry",
-  "stats",
-  "export",
-  "copy",
-  "think",
-  "theme",
-];
+export const BUILTIN_COMMANDS: readonly string[] = builtinSlashCommandNames();
 
 /** Largest template body kept; the rest is dropped. */
 export const COMMAND_BODY_CAP = 8000;

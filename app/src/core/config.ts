@@ -12,15 +12,24 @@
  * explicitly chosen one. Ollama needs no key at all: it is a local server.
  */
 
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
-import { catalogDefaultModel, loadCatalog, type LoadedCatalog } from "./catalog/catalog";
-import { userConfigDir } from "./paths";
+import { credentialFromStore } from "./auth/store";
+import { catalogDefaultModel, catalogModel, loadCatalog, type LoadedCatalog } from "./catalog/catalog";
+import { stateRoot, userConfigDir } from "./paths";
 import { maskSecrets } from "./compaction";
 import type { PermissionMode } from "./permission-mode";
 import { parsePermissionMode, permissionModeError } from "./permission-mode";
+import {
+  noticeUntrustedWorkspaceMcp,
+  noticeUntrustedWorkspaceProviders,
+  resolveWorkspaceMcpConfigTrust,
+  resolveWorkspaceProvidersConfigTrust,
+  workspaceMcpConfigFile,
+  workspaceProvidersConfigFile,
+} from "./trust";
 
 export type ProviderName = "anthropic" | "openai" | "google" | "ollama" | "mock";
 
@@ -96,6 +105,8 @@ export interface HzConfig {
    * leave it undefined and are handled by `makeProvider`'s switch.
    */
   resolved?: ResolvedProvider;
+  /** Active text tool protocol (`HZ_TOOL_FORMAT` or registry `toolFormat`). */
+  toolFormat?: ToolFormat;
   /**
    * Language servers, default OFF (docs/09 §4.7). As with MCP, only entries
    * from the USER config file are eligible: a language server runs with the
@@ -112,6 +123,14 @@ export interface HzConfig {
    */
   permissionMode?: PermissionMode;
   permissionModeRejected?: string;
+  /**
+   * Absolute workspace paths allowed to load workspace hooks (user config only).
+   */
+  trustedWorkspaceHooks?: string[];
+  /** Persisted TUI theme (`dark` | `light` | `auto` | `mono`). User config only. */
+  theme?: "dark" | "light" | "auto" | "mono";
+  /** User-only status-line script (stdin JSON, up to 5 lines). */
+  statusLine?: { command: string; args?: string[] };
   /** Where the values came from, for the banner and for debugging. */
   sources: {
     provider: "env" | "file" | "detected" | "default";
@@ -169,6 +188,45 @@ export interface ProviderRegistryEntry {
   apiKey?: string;
   /** Candidate models; the first is the default when none is otherwise set. */
   models?: string[];
+  /** Text tool protocol when the host has no native tools (v1: `xml` only). */
+  toolFormat?: ToolFormat;
+  /** OAuth PKCE endpoints for `hzcode login <id>` (user config only). */
+  oauth?: ProviderOAuthEndpoints;
+}
+
+export interface ProviderOAuthEndpoints {
+  authorizeUrl: string;
+  tokenUrl: string;
+  clientId: string;
+  scopes?: string[];
+  callbackPath?: string;
+  /** RFC 8628 device authorization endpoint (`hzcode login --device`). */
+  deviceAuthorizationUrl?: string;
+}
+
+/** Provider tool-call encoding; XML (forge) plus Hermes/Qwen3/Harmony/Kimi/GLM/DeepSeek/Gemini dialects. */
+export type ToolFormat =
+  | "xml"
+  | "hermes"
+  | "qwen3"
+  | "harmony"
+  | "kimi"
+  | "glm"
+  | "deepseek"
+  | "gemini"
+  | "gemma"
+  | "minimax"
+  | "anthropic";
+
+/** When the catalog marks `capabilities.tools: false`, use the XML tool protocol. */
+export function toolFormatForCatalogModel(
+  catalog: LoadedCatalog,
+  provider: string,
+  model: string,
+): ToolFormat | undefined {
+  const record = catalogModel(catalog, provider, model);
+  if (record?.capabilities?.tools === false) return "xml";
+  return undefined;
 }
 
 /** The parsed `providers` config section: what to offer, and what was skipped. */
@@ -194,6 +252,8 @@ export interface ResolvedProvider {
   credential: Credential;
   /** Whether the entry declared a key source at all (apiKey/envKey/HZ_API_KEY). */
   wantsKey: boolean;
+  toolFormat?: ToolFormat;
+  oauth?: ProviderOAuthEndpoints;
 }
 
 /** One configured language server (stdio only). */
@@ -232,11 +292,23 @@ interface ConfigFile {
   lsp?: unknown;
   providers?: unknown;
   permissionMode?: unknown;
+  trustedWorkspaceHooks?: unknown;
+  theme?: unknown;
+  statusLine?: unknown;
 }
 
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
 export function defaultConfigPath(home: string = homedir()): string {
   return path.join(userConfigDir(home), "config.json");
+}
+
+/** Infer `HOME` from `~/.config/horizon/config.json` so catalog cache is test-hermetic. */
+function homeFromConfigPath(file: string): string | undefined {
+  if (!file.endsWith(`${path.sep}config.json`)) return undefined;
+  const appDir = path.dirname(file);
+  const appName = path.basename(appDir);
+  if (appName !== "horizon" && appName !== "hzcode") return undefined;
+  return path.dirname(path.dirname(appDir));
 }
 
 function str(value: unknown): string | undefined {
@@ -248,6 +320,49 @@ function envNumber(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+}
+
+function parseTrustedWorkspaceHooks(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item.trim() !== "") out.push(path.resolve(item.trim()));
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function parseTheme(value: unknown): HzConfig["theme"] | undefined {
+  const t = str(value);
+  if (t === "dark" || t === "light" || t === "auto" || t === "mono") return t;
+  return undefined;
+}
+
+function parseStatusLine(value: unknown): HzConfig["statusLine"] | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const o = value as Record<string, unknown>;
+  const command = str(o.command);
+  if (command === undefined) return undefined;
+  const args = Array.isArray(o.args) ? o.args.map((a) => (typeof a === "string" ? a : "")).filter((a) => a !== "") : undefined;
+  return { command, ...(args && args.length > 0 ? { args } : {}) };
+}
+
+/** Merge `theme` into the user config file (user config only). */
+export function persistThemeMode(mode: HzConfig["theme"], home: string = homedir()): void {
+  if (mode === undefined) return;
+  const file = defaultConfigPath(home);
+  let current: ConfigFile = {};
+  try {
+    current = readConfigFile(file) as ConfigFile;
+  } catch {
+  }
+  const next = { ...current, theme: mode };
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  try {
+    chmodSync(file, 0o600);
+  } catch {
+    /* best effort */
+  }
 }
 
 function normalizeProvider(value: string | undefined): ProviderName | undefined {
@@ -493,11 +608,63 @@ export function parseProviderEntry(value: unknown, index: number): ProviderRegis
     }
     models = (raw.models as string[]).map((m) => m.trim());
   }
+  let toolFormat: ToolFormat | undefined;
+  if (raw.toolFormat !== undefined) {
+    const allowedFormats = new Set([
+      "xml",
+      "hermes",
+      "qwen3",
+      "harmony",
+      "kimi",
+      "glm",
+      "deepseek",
+      "gemini",
+      "gemma",
+      "minimax",
+      "anthropic",
+    ]);
+    if (typeof raw.toolFormat !== "string" || !allowedFormats.has(raw.toolFormat)) {
+      return `${where}.toolFormat must be one of xml|hermes|qwen3|harmony|kimi|glm|deepseek|gemini|gemma|minimax|anthropic (got ${JSON.stringify(raw.toolFormat)})`;
+    }
+    toolFormat = raw.toolFormat as ToolFormat;
+  }
   const entry: ProviderRegistryEntry = { id, baseUrl, protocol };
   if (envKey !== undefined) entry.envKey = envKey;
   if (apiKey !== undefined) entry.apiKey = apiKey;
   if (models !== undefined) entry.models = models;
+  if (toolFormat !== undefined) entry.toolFormat = toolFormat;
+  const oauth = parseProviderOAuth(raw.oauth, where);
+  if (typeof oauth === "string") return oauth;
+  if (oauth !== undefined) entry.oauth = oauth;
   return entry;
+}
+
+function parseProviderOAuth(value: unknown, where: string): ProviderOAuthEndpoints | undefined | string {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return `${where}.oauth must be an object`;
+  const raw = value as Record<string, unknown>;
+  const authorizeUrl = typeof raw.authorizeUrl === "string" ? raw.authorizeUrl.trim() : "";
+  const tokenUrl = typeof raw.tokenUrl === "string" ? raw.tokenUrl.trim() : "";
+  const clientId = typeof raw.clientId === "string" ? raw.clientId.trim() : "";
+  if (authorizeUrl === "" || tokenUrl === "" || clientId === "") {
+    return `${where}.oauth needs authorizeUrl, tokenUrl and clientId`;
+  }
+  if (!/^https?:\/\//i.test(authorizeUrl) || !/^https?:\/\//i.test(tokenUrl)) {
+    return `${where}.oauth URLs must be http(s)`;
+  }
+  const out: ProviderOAuthEndpoints = { authorizeUrl, tokenUrl, clientId };
+  if (Array.isArray(raw.scopes)) {
+    out.scopes = raw.scopes.map((s) => String(s).trim()).filter((s) => s !== "");
+  }
+  if (typeof raw.callbackPath === "string" && raw.callbackPath.trim() !== "") {
+    out.callbackPath = raw.callbackPath.trim();
+  }
+  if (typeof raw.deviceAuthorizationUrl === "string" && raw.deviceAuthorizationUrl.trim() !== "") {
+    const deviceUrl = raw.deviceAuthorizationUrl.trim();
+    if (!/^https?:\/\//i.test(deviceUrl)) return `${where}.oauth deviceAuthorizationUrl must be http(s)`;
+    out.deviceAuthorizationUrl = deviceUrl;
+  }
+  return out;
 }
 
 /**
@@ -544,6 +711,9 @@ export function resolveRegistryCredential(entry: ProviderRegistryEntry, env: Env
   const fromHz = str(env.HZ_API_KEY);
   const value = fromApiKey ?? fromEnvKey ?? fromHz;
   if (value !== undefined) return { credential: { kind: "apiKey", value }, wantsKey: true };
+  const home = typeof env.HOME === "string" && env.HOME !== "" ? env.HOME : homedir();
+  const fromOAuth = credentialFromStore(entry.id, home);
+  if (fromOAuth !== undefined) return { credential: fromOAuth, wantsKey: true };
   return { credential: { kind: "none" }, wantsKey };
 }
 
@@ -605,7 +775,22 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   const fileRegistered = envProvider || envRegistered ? undefined : registered(rawFileProvider);
   const selectedEntry = envRegistered ?? fileRegistered;
 
-  const provider: HzConfig["provider"] = envProvider ?? envRegistered?.id ?? fileProvider ?? fileRegistered?.id ?? detected ?? "mock";
+  const unknownEnvId =
+    rawEnvProvider && !envProvider && !envRegistered ? rawEnvProvider.trim().toLowerCase() : undefined;
+  const unknownFileId =
+    !unknownEnvId && rawFileProvider && !fileProvider && !fileRegistered
+      ? rawFileProvider.trim().toLowerCase()
+      : undefined;
+
+  const provider: HzConfig["provider"] =
+    envProvider ??
+    envRegistered?.id ??
+    fileProvider ??
+    fileRegistered?.id ??
+    unknownEnvId ??
+    unknownFileId ??
+    detected ??
+    "mock";
   const providerSource: HzConfig["sources"]["provider"] = envProvider || envRegistered
     ? "env"
     : fileProvider || fileRegistered
@@ -619,8 +804,34 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   let resolved: ResolvedProvider | undefined;
   if (selectedEntry) {
     const { credential, wantsKey } = resolveRegistryCredential(selectedEntry, env);
-    resolved = { name: selectedEntry.id, baseUrl: selectedEntry.baseUrl, protocol: selectedEntry.protocol, credential, wantsKey };
+    resolved = {
+      name: selectedEntry.id,
+      baseUrl: selectedEntry.baseUrl,
+      protocol: selectedEntry.protocol,
+      credential,
+      wantsKey,
+      toolFormat: selectedEntry.toolFormat,
+      oauth: selectedEntry.oauth,
+    };
   }
+
+  const envToolFormat = str(env.HZ_TOOL_FORMAT);
+  let toolFormat: ToolFormat | undefined;
+  const envFormats = new Set([
+    "xml",
+    "hermes",
+    "qwen3",
+    "harmony",
+    "kimi",
+    "glm",
+    "deepseek",
+    "gemini",
+    "gemma",
+    "minimax",
+    "anthropic",
+  ]);
+  if (envFormats.has(envToolFormat)) toolFormat = envToolFormat as ToolFormat;
+  else if (resolved?.toolFormat !== undefined) toolFormat = resolved.toolFormat;
 
   // The default model for a built-in provider goes THROUGH the catalog
   // (FEAT-003): `builtinDefaultModel` returns the catalog's default when it
@@ -634,12 +845,17 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   // ("" = no model configured), which `makeProvider` surfaces as a readable
   // error. A built-in with no explicit model still gets the catalog default
   // (falling back to DEFAULT_MODELS), exactly as before.
-  const catalog = loadCatalog(env);
+  const catalogHome = str(env.HOME) ?? homeFromConfigPath(file) ?? homedir();
+  const catalog = loadCatalog(env, catalogHome);
   const envModel = str(env.HZ_MODEL);
   const fileModel = str(fromFile.model);
   const registryModel = selectedEntry?.models?.[0];
   const builtinModel = selectedEntry ? "" : builtinDefaultModel(provider as ProviderName, catalog);
   const model = envModel ?? fileModel ?? registryModel ?? builtinModel ?? builtinDefaultModel("mock", catalog);
+
+  if (toolFormat === undefined && model !== "") {
+    toolFormat = toolFormatForCatalogModel(catalog, selectedEntry?.id ?? provider, model);
+  }
 
   const envBase = str(env.HZ_BASE_URL);
   const fileBase = str(fromFile.baseUrl);
@@ -671,6 +887,9 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
 
   const mcp = parseMcpConfig(fromFile.mcp);
   const lsp = parseLspConfig(fromFile.lsp);
+  const trustedWorkspaceHooks = parseTrustedWorkspaceHooks(fromFile.trustedWorkspaceHooks);
+  const theme = parseTheme(fromFile.theme);
+  const statusLine = parseStatusLine(fromFile.statusLine);
 
   // Where the registry key came from, for the banner: an inline apiKey or the
   // entry's envKey var read as "file"/"env"; HZ_API_KEY stays "env".
@@ -690,8 +909,12 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
     lsp,
     permissionMode,
     permissionModeRejected,
+    trustedWorkspaceHooks,
+    theme,
+    statusLine,
     providers: registry,
     resolved,
+    toolFormat,
     sources: {
       provider: providerSource,
       model: envModel ? "env" : fileModel ? "file" : registryModel ? "file" : "default",
@@ -699,6 +922,147 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
       apiKey: envKey ? "env" : fileKey ? "file" : detectedKey ? "env" : (registryKeySource ?? "none"),
     },
   };
+}
+
+/**
+ * Workspace config path that MUST NOT set `statusLine` (user-config only).
+ * Checked under the workspace state root (`.hz/` or legacy `.hzcode/`).
+ */
+export function workspaceConfigFile(workspace: string): string {
+  return path.join(stateRoot(workspace), "config.json");
+}
+
+/**
+ * If the workspace ships a `statusLine` key, ignore it and notice — a cloned
+ * repo must not pick a program that runs on every TUI redraw (docs/33 §5.13).
+ */
+export function noticeIgnoredWorkspaceStatusLine(
+  workspace: string,
+  onNotice: (message: string) => void,
+): void {
+  const file = workspaceConfigFile(workspace);
+  if (!existsSync(file)) return;
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw) && "statusLine" in raw) {
+      onNotice(
+        `workspace statusLine ignored (user-config only): remove statusLine from ${file}`,
+      );
+    }
+  } catch {
+    /* unreadable / invalid JSON — not our concern here */
+  }
+}
+
+/** Parse trusted workspace `mcp.json` under the workspace state root. */
+export function readWorkspaceMcpConfig(workspace: string): McpConfig | undefined {
+  const file = workspaceMcpConfigFile(workspace);
+  if (!existsSync(file)) return undefined;
+  try {
+    return parseMcpConfig(JSON.parse(readFileSync(file, "utf8")) as unknown);
+  } catch {
+    return { servers: [], rejected: ["workspace mcp.json is unreadable or invalid JSON"] };
+  }
+}
+
+/** Parse trusted workspace `providers.json` (array or `{ providers: [] }`). */
+export function readWorkspaceProvidersConfig(workspace: string): ProviderRegistry | undefined {
+  const file = workspaceProvidersConfigFile(workspace);
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "providers" in parsed) {
+      return parseProviderRegistry((parsed as { providers: unknown }).providers);
+    }
+    return parseProviderRegistry(parsed);
+  } catch {
+    return { providers: [], rejected: ["workspace providers.json is unreadable or invalid JSON"] };
+  }
+}
+
+/** User servers first; workspace servers append; duplicate ids are rejected. */
+export function mergeMcpConfigs(user: McpConfig | undefined, workspace: McpConfig | undefined): McpConfig | undefined {
+  if (user === undefined && workspace === undefined) return undefined;
+  const servers = [...(user?.servers ?? [])];
+  const rejected = [...(user?.rejected ?? []), ...(workspace?.rejected ?? [])];
+  const ids = new Set(servers.map((s) => s.id));
+  for (const server of workspace?.servers ?? []) {
+    if (ids.has(server.id)) {
+      rejected.push(`workspace mcp server id ${JSON.stringify(server.id)} duplicates user config; skipped`);
+      continue;
+    }
+    servers.push(server);
+    ids.add(server.id);
+  }
+  if (servers.length === 0 && rejected.length === 0) return undefined;
+  return { servers, rejected };
+}
+
+/** User providers first; workspace providers append; duplicate ids are rejected. */
+export function mergeProviderRegistries(
+  user: ProviderRegistry | undefined,
+  workspace: ProviderRegistry | undefined,
+): ProviderRegistry | undefined {
+  if (user === undefined && workspace === undefined) return undefined;
+  const providers = [...(user?.providers ?? [])];
+  const rejected = [...(user?.rejected ?? []), ...(workspace?.rejected ?? [])];
+  const ids = new Set(providers.map((p) => p.id));
+  for (const entry of workspace?.providers ?? []) {
+    if (ids.has(entry.id)) {
+      rejected.push(`workspace provider id ${JSON.stringify(entry.id)} duplicates user config; skipped`);
+      continue;
+    }
+    providers.push(entry);
+    ids.add(entry.id);
+  }
+  if (providers.length === 0 && rejected.length === 0) return undefined;
+  return { providers, rejected };
+}
+
+/**
+ * Merge trusted workspace `mcp.json` and `providers.json` into a user config.
+ * Untrusted or digest-mismatched workspace files are ignored and may emit notices.
+ */
+export function augmentConfigWithTrustedWorkspace(
+  config: HzConfig,
+  workspace: string,
+  env: EnvLike = process.env,
+  home: string = homedir(),
+  onNotice?: (message: string) => void,
+): HzConfig {
+  const notice = onNotice ?? (() => undefined);
+  const trusted = config.trustedWorkspaceHooks;
+  noticeUntrustedWorkspaceMcp(workspace, trusted, home, notice);
+  noticeUntrustedWorkspaceProviders(workspace, trusted, home, notice);
+  noticeIgnoredWorkspaceStatusLine(workspace, notice);
+
+  const wsMcp = readWorkspaceMcpConfig(workspace);
+  const wsProviders = readWorkspaceProvidersConfig(workspace);
+  let mcp = config.mcp;
+  let providers = config.providers;
+  if (wsMcp !== undefined && resolveWorkspaceMcpConfigTrust(workspace, trusted, home, notice)) {
+    mcp = mergeMcpConfigs(config.mcp, wsMcp);
+  }
+  if (wsProviders !== undefined && resolveWorkspaceProvidersConfigTrust(workspace, trusted, home, notice)) {
+    providers = mergeProviderRegistries(config.providers, wsProviders);
+  }
+  if (mcp === config.mcp && providers === config.providers) return config;
+
+  let resolved = config.resolved;
+  const providerId = config.provider.toLowerCase();
+  const entry = providers?.providers.find((p) => p.id === providerId);
+  if (entry !== undefined) {
+    const { credential, wantsKey } = resolveRegistryCredential(entry, env);
+    resolved = {
+      name: entry.id,
+      baseUrl: entry.baseUrl,
+      protocol: entry.protocol,
+      credential,
+      wantsKey,
+      toolFormat: entry.toolFormat,
+    };
+  }
+  return { ...config, mcp, providers, resolved };
 }
 
 /** One short line for the UI: `mock · mock-1` or `anthropic · claude-sonnet-4-5`. */
@@ -730,11 +1094,30 @@ export interface ConfigCheck {
   rejected: string[];
 }
 
-const TOP_KEYS = ["provider", "model", "baseUrl", "apiKey", "mcp", "lsp", "providers", "permissionMode"];
+/** Machine-readable config surface for `hzcode config check` and `hzcode.schema.json`. */
+export const CONFIG_KEYS: Record<string, { type: string; description: string; enum?: readonly string[] }> = {
+  provider: { type: "string", description: "Built-in provider id or a registered provider id." },
+  model: { type: "string", description: "Model id for the active provider." },
+  baseUrl: { type: "string", description: "Override the provider API base URL." },
+  apiKey: { type: "string", description: "Inline API key (prefer env vars)." },
+  mcp: { type: "object", description: "MCP stdio servers (user config only)." },
+  lsp: { type: "object", description: "Language servers to start (user config only)." },
+  providers: { type: "array", description: "Registered OpenAI-compatible providers." },
+  permissionMode: {
+    type: "string",
+    description: "Starting permission mode.",
+    enum: ["default", "plan", "accept-edits", "read-only"],
+  },
+  trustedWorkspaceHooks: { type: "array", description: "Absolute workspace paths allowed to load workspace hooks.json." },
+  theme: { type: "string", description: "Default TUI palette.", enum: ["dark", "light", "auto", "mono"] },
+  statusLine: { type: "object", description: "User status-line script: command + optional args (JSON on stdin)." },
+};
+
+const TOP_KEYS = Object.keys(CONFIG_KEYS);
 const ENTRY_KEYS: Record<string, readonly string[]> = {
   "mcp.servers": ["id", "command", "args", "env", "cwd"],
   "lsp.servers": ["id", "command", "args", "env", "extensions", "rootMarkers"],
-  providers: ["id", "baseUrl", "protocol", "envKey", "apiKey", "models"],
+  providers: ["id", "baseUrl", "protocol", "envKey", "apiKey", "models", "toolFormat"],
 };
 
 function unknownEntryKeys(list: unknown, label: string, out: string[]): void {

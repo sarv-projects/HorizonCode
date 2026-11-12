@@ -44,7 +44,12 @@
  * no model-name string matching in this module.
  */
 
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { canonicalJson } from "../canon";
+import { userConfigDir } from "../paths";
 import curatedSnapshot from "./models-dev.curated.json";
 
 /** opencode's build-time floor (packages/core/script/models-snapshot.ts). */
@@ -95,7 +100,49 @@ export interface Catalog {
 }
 
 /** Where a loaded catalog came from, for the banner and for debugging. */
-export type CatalogSource = "override" | "curated" | "fetch";
+export type CatalogSource = "override" | "snapshot" | "cache" | "curated" | "fetch";
+
+/** Shipped models.dev bundle (§5.7); absent from the repo until `refresh-models-snapshot.ts` is run. */
+export const COMMITTED_CATALOG_SNAPSHOT = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "models-dev.snapshot.json",
+);
+
+function committedSnapshotPath(env: CatalogEnv): string {
+  const override = typeof env.HZ_MODELS_COMMITTED_SNAPSHOT === "string" ? env.HZ_MODELS_COMMITTED_SNAPSHOT.trim() : "";
+  return override !== "" ? override : COMMITTED_CATALOG_SNAPSHOT;
+}
+
+function committedSnapshotDisabled(env: CatalogEnv): boolean {
+  const off = env.HZ_NO_COMMITTED_SNAPSHOT ?? process.env.HZ_NO_COMMITTED_SNAPSHOT;
+  return off === "1" || off === "true" || off === "yes";
+}
+
+function loadCommittedCatalog(env: CatalogEnv): Catalog | undefined {
+  if (committedSnapshotDisabled(env)) return undefined;
+  const file = committedSnapshotPath(env);
+  if (!existsSync(file)) return undefined;
+  return loadSnapshotFile(file);
+}
+
+/** User-cache file written by `hzcode models refresh` (docs/33 §5.8). */
+export function catalogCachePath(home: string = homedir()): string {
+  return path.join(userConfigDir(home), "models-dev.cache.json");
+}
+
+export interface CatalogCacheMeta {
+  etag?: string;
+  fetchedAt: string;
+  source: string;
+  providerCount: number;
+  modelCount: number;
+}
+
+export interface CatalogFetchResult {
+  catalog: Catalog;
+  notModified: boolean;
+  etag?: string;
+}
 
 export interface LoadedCatalog extends Catalog {
   source: CatalogSource;
@@ -239,11 +286,141 @@ export function curatedCatalog(): Catalog {
  * without pulling the network into the build. Wiring it on would also add the
  * deferred ETag/digest refresh (opencode's `ModelsDev.refresh`).
  */
-export async function fetchLiveCatalog(_source: string = DEFAULT_CATALOG_SOURCE): Promise<Catalog> {
-  throw new Error(
-    "live models.dev fetch is a documented extension point, not wired in v1 (no-network); " +
-      "set HZ_MODELS_SNAPSHOT to a validated JSON snapshot instead",
-  );
+export type CatalogHttpFetch = (
+  url: string,
+  headers: Record<string, string>,
+) => Promise<{ status: number; body: string; etag?: string }>;
+
+async function defaultCatalogHttpFetch(
+  url: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: string; etag?: string }> {
+  const res = await fetch(url, { headers });
+  const etag = res.headers.get("etag") ?? undefined;
+  const body = await res.text();
+  return { status: res.status, body, etag };
+}
+
+/**
+ * Conditional GET against models.dev (or mirror). `previousEtag` yields 304 →
+ * `notModified: true` with an empty catalog object (caller keeps the cache).
+ */
+/** Called with the fetch URL before any HTTP I/O (docs/33 §5.8 — net.fetch guard). */
+export type CatalogFetchGuard = (url: string) => void | Promise<void>;
+
+export async function fetchLiveCatalog(
+  source: string = DEFAULT_CATALOG_SOURCE,
+  opts: {
+    etag?: string;
+    fetcher?: CatalogHttpFetch;
+    minProviders?: number;
+    /** Guard hook: throw or reject to block the fetch (egress / policy). */
+    assertNetFetch?: CatalogFetchGuard;
+  } = {},
+): Promise<CatalogFetchResult> {
+  const fetcher = opts.fetcher ?? defaultCatalogHttpFetch;
+  const url = source.replace(/\/+$/, "") + CATALOG_PATH;
+  if (opts.assertNetFetch) await opts.assertNetFetch(url);
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (opts.etag) headers["if-none-match"] = opts.etag;
+  const res = await fetcher(url, headers);
+  if (res.status === 304) return { catalog: { providers: {}, rejected: [] }, notModified: true, etag: opts.etag };
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`models catalog fetch failed: HTTP ${res.status}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(res.body);
+  } catch {
+    throw new Error("models catalog fetch returned non-JSON");
+  }
+  const catalog = validateCatalog(decodeCatalog(parsed), { minProviders: opts.minProviders });
+  return { catalog, notModified: false, etag: res.etag ?? opts.etag };
+}
+
+export function countCatalogModels(catalog: Catalog): number {
+  let n = 0;
+  for (const p of Object.values(catalog.providers)) n += Object.keys(p.models).length;
+  return n;
+}
+
+/** One-line diff summary for `hzcode models refresh` (docs/33 §5.8). */
+export function summarizeCatalogDiff(before: Catalog, after: Catalog): string {
+  const bp = new Set(Object.keys(before.providers));
+  const ap = new Set(Object.keys(after.providers));
+  const added = [...ap].filter((id) => !bp.has(id));
+  const removed = [...bp].filter((id) => !ap.has(id));
+  const parts = [
+    `providers ${bp.size}→${ap.size}`,
+    `models ${countCatalogModels(before)}→${countCatalogModels(after)}`,
+  ];
+  if (added.length > 0) {
+    const shown = added.slice(0, 5).join(", ");
+    parts.push(`+providers: ${shown}${added.length > 5 ? ` (+${added.length - 5} more)` : ""}`);
+  }
+  if (removed.length > 0) {
+    const shown = removed.slice(0, 5).join(", ");
+    parts.push(`-providers: ${shown}${removed.length > 5 ? ` (+${removed.length - 5} more)` : ""}`);
+  }
+  return parts.join("; ");
+}
+
+/** Write the validated cache atomically (mode 0600). */
+export function writeCatalogCache(catalog: Catalog, meta: Omit<CatalogCacheMeta, "providerCount" | "modelCount">, home: string = homedir()): string {
+  const file = catalogCachePath(home);
+  const dir = path.dirname(file);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const payload = {
+    meta: {
+      ...meta,
+      providerCount: Object.keys(catalog.providers).length,
+      modelCount: countCatalogModels(catalog),
+    },
+    catalog,
+  };
+  const tmp = file + ".tmp";
+  writeFileSync(tmp, canonicalJson(payload) + "\n", { mode: 0o600 });
+  renameSync(tmp, file);
+  try {
+    chmodSync(file, 0o600);
+  } catch {
+    /* best effort */
+  }
+  return file;
+}
+
+export function readCatalogCache(home: string = homedir()): { catalog: Catalog; meta: CatalogCacheMeta } | undefined {
+  const file = catalogCachePath(home);
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const top = asRecord(parsed);
+  if (!top) return undefined;
+  const catalog = decodeCatalog(top.catalog);
+  const metaRaw = asRecord(top.meta);
+  if (!metaRaw || typeof metaRaw.fetchedAt !== "string") return undefined;
+  const meta: CatalogCacheMeta = {
+    fetchedAt: metaRaw.fetchedAt,
+    source: typeof metaRaw.source === "string" ? metaRaw.source : DEFAULT_CATALOG_SOURCE,
+    etag: typeof metaRaw.etag === "string" ? metaRaw.etag : undefined,
+    providerCount: typeof metaRaw.providerCount === "number" ? metaRaw.providerCount : Object.keys(catalog.providers).length,
+    modelCount: typeof metaRaw.modelCount === "number" ? metaRaw.modelCount : countCatalogModels(catalog),
+  };
+  try {
+    validateCatalog(catalog, { minProviders: MINIMUM_PROVIDERS });
+  } catch {
+    return undefined;
+  }
+  return { catalog, meta };
 }
 
 /**
@@ -279,16 +456,21 @@ export type CatalogEnv = Record<string, string | undefined>;
 /**
  * Resolve the effective catalog (pure; the environment is injectable). Precedence:
  *   (1) `HZ_MODELS_SNAPSHOT` — a validated external snapshot file, if present;
- *   (2) the committed curated snapshot (the offline floor);
- * the live-fetch path (3) stays an explicit, test-skipped extension point and is
- * not consulted here. The returned `source` records which branch won.
+ *   (2) the committed `models-dev.snapshot.json` when present (human refresh script);
+ *   (3) the user cache from `hzcode models refresh`;
+ *   (4) the committed curated snapshot (the offline floor).
+ * The live-fetch path stays an explicit extension point and is not consulted here.
  */
-export function loadCatalog(env: CatalogEnv = process.env): LoadedCatalog {
+export function loadCatalog(env: CatalogEnv = process.env, home: string = homedir()): LoadedCatalog {
   const override = typeof env.HZ_MODELS_SNAPSHOT === "string" ? env.HZ_MODELS_SNAPSHOT.trim() : "";
   if (override !== "") {
     const fromFile = loadSnapshotFile(override);
     if (fromFile) return { ...fromFile, source: "override" };
   }
+  const committed = loadCommittedCatalog(env);
+  if (committed) return { ...committed, source: "snapshot" };
+  const cached = readCatalogCache(home);
+  if (cached) return { ...cached.catalog, source: "cache" };
   return { ...curatedCatalog(), source: "curated" };
 }
 

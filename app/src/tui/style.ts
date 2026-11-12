@@ -168,7 +168,7 @@ export function errorMessage(err: unknown): string {
  */
 export function sanitizeText(input: unknown): string {
   const s = input === undefined || input === null ? "" : String(input);
-  return s.replace(ANSI_RE, "").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
+  return s.replace(ANSI_RE, "").replace(/[\u0000-\u0008\u000b-\u001f\u007f\u0080-\u009f]/g, "");
 }
 
 /* ------------------------ colour levels and role table ------------------------ */

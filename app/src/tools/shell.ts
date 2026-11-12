@@ -620,6 +620,9 @@ export const shellTool: Tool = {
             // Own process group: `kill` below then reaches the whole tree, not just bash.
             detached: true,
             longLived: false,
+            sandboxWrap: "auto",
+            sandboxMode: "workspace-write",
+            kernel: ctx.kernel,
           })
         ).proc;
       } catch (e) {
@@ -697,8 +700,17 @@ export const shellTool: Tool = {
         () => {},
         () => {},
       );
+      const abortExitCap = new Promise<void>((resolve) => {
+        if (ctx.signal.aborted) resolve();
+        else ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+      }).then(async () => {
+        if (!(await settlesWithin(proc.exited, KILL_GRACE_MS + 500))) {
+          hardKill();
+          await settlesWithin(proc.exited, 500);
+        }
+      });
       try {
-        await proc.exited;
+        await Promise.race([proc.exited, abortExitCap]);
         // The pipes normally close as the child exits. A process that outlived it — a
         // background job, or a descendant that escaped the group kill — can keep them
         // open, so the drain wait is bounded and the readers are then dropped.

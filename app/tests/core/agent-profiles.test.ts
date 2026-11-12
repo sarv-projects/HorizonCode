@@ -123,7 +123,7 @@ describe("the agent tool", () => {
 
 describe("delegated run with a profile", () => {
   async function run(workspace: string, script: ReturnType<typeof createScriptedProvider>, events: RuntimeEvent[]) {
-    const runtime = await createRuntime({ workspace, mock: true });
+    const runtime = await createRuntime({ workspace, mock: true, model: "mistral-7b-instruct" });
     (runtime as unknown as { provider: unknown }).provider = script;
     runtime.setApprovalHandler(async () => true);
     try {

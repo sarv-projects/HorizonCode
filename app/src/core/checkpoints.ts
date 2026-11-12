@@ -10,8 +10,7 @@
  *
  * One checkpoint is {id, at, sessionId, messageIndex, label, changes} where
  * `changes` is the set of journal entry ids the turn created and `messageIndex`
- * is the session's message count at record time (see the residual below: the
- * transcript has no truncation API yet, so the index is recorded, not acted on).
+ * is the session's message count at record time (used by `rewindTo` to truncate).
  * Records live in `<state root>/checkpoints.jsonl` (`workspaceStateDir()` from
  * `./paths`: canonical `<workspace>/.hz/state/checkpoints.jsonl`, legacy
  * `<workspace>/.hzcode/checkpoints.jsonl` honoured in place).
@@ -54,20 +53,16 @@
  *
  * Residuals, named honestly:
  *
- *   - Conversational rewind does not exist: SessionStore (core/session.ts) has
- *     no truncation API -- `messageIndex` is recorded so a future slice can
- *     cut the transcript back, but nothing acts on it today. Truncating would
- *     need a new store operation (delete messages after index / fork-and-
- *     replay), which this slice deliberately does not add.
+ *   - Conversational rewind is wired through `HzRuntime.rewindTo` (core/index.ts),
+ *     which calls `SessionStore.truncateMessages` at the checkpoint's
+ *     `messageIndex` (group-safe boundary). `recordCheckpoint` runs after
+ *     successful write/edit turns from the runtime.
  *   - The file side restores content only; a file a later turn created is
  *     reported skipped (`created`) instead of removed.
  *   - There is no cross-process lock (the journal's concurrency note applies
  *     verbatim: whole-record appends interleave safely, nothing else is
  *     guaranteed); labels are caller-supplied with no ranking; a checkpoint
  *     whose append failed is memory-only for this process.
- *   - Nothing calls `recordCheckpoint` yet: the runtime seam (`checkpoints()` /
- *     `rewindTo(n)` on core/index.ts) is the integrator's wiring, and the
- *     exact call sites are named in this slice's report.
  */
 
 import { randomUUID } from "node:crypto";
@@ -193,6 +188,8 @@ export interface RecordCheckpointOptions {
   now?: number;
   /** Id seam: the record's id; default a fresh randomUUID(). */
   id?: string;
+  /** Called when a disk append fails after one retry (memory-only for this process). */
+  onAppendFailure?: (message: string) => void;
 }
 
 /** The checkpoint file's name inside the workspace state directory. */
@@ -441,10 +438,17 @@ export function recordCheckpoint(
   };
 
   const state = stateFor(workspace);
+  const line = persistedRecord(record);
+  const persist = () => appendRecordToDisk(state.file, line);
   try {
-    appendRecordToDisk(state.file, persistedRecord(record));
-  } catch {
-    state.pending.push(record);
+    persist();
+  } catch (err) {
+    try {
+      persist();
+    } catch {
+      state.pending.push(record);
+      opts.onAppendFailure?.(`checkpoint not persisted to disk (${msg(err)}); kept for this process only`);
+    }
   }
   return record;
 }

@@ -1,0 +1,20 @@
+HorizonCode — third-party notice (2026-11-10)
+
+No project LICENSE is chosen yet (see README.md). This file records known
+adapted or verbatim material that may require attribution when a license ships.
+
+Upstream licenses (per docs Provenance tables; verify before release):
+- OpenAI Codex — Apache-2.0 (sandbox patterns, provider shapes)
+- oh-my-pi — MIT (toolconv specs, fuzzy constants, OAuth patterns)
+- opencode / Cline — MIT (hooks, apply_patch grammar)
+- deepseek-harness — MIT (sandbox marker strings, repeat-tool reminder text)
+- grok-build — project LICENSE (egress/sandbox design references)
+- forgecode — project LICENSE (T-8..T-20 take list)
+
+models.dev catalog snapshot (`app/src/core/catalog/models-dev.snapshot.json`):
+  Normalized provider/model metadata fetched from the opencode mirror
+  (`https://models.opencode.ai`, same JSON shape as models.dev). Refreshed by
+  `app/scripts/refresh-models-snapshot.ts`. Third-party data — verify models.dev /
+  opencode license terms before distribution; this row is attribution hygiene only.
+
+This file does not grant any license; it is hygiene only (docs/33 section 6 item 1).

@@ -62,6 +62,6 @@ if (mode === "counter") {
     const args = JSON.parse(c!) as Record<string, unknown>;
     if (typeof args.path === "string") await readTool.execute({ path: args.path }, ctx as never);
     const tool = { write: writeTool, apply_patch: applyPatchTool, ast_edit: astEditTool }[b as "write"];
-    console.log(JSON.stringify(await tool.execute(args, ctx as never)));
+    console.log(JSON.stringify(await tool!.execute(args, ctx as never)));
   }
 }

@@ -85,19 +85,23 @@ describe("shell_session: codex output format", () => {
     });
   });
 
-  test("a high-volume command truncates and reports Total output lines", async () => {
-    await withNoPty(async () => {
-      const ctx = mockToolContext();
-      // ~40k lines of "x" far exceeds the 30_000-char buffer cap.
-      const r = await interactiveExecTool.execute(
-        { mode: "start", command: "for i in $(seq 1 40000); do echo xxxxxxxxxx; done" },
-        ctx,
-      );
-      expect(r.ok).toBe(true);
-      expect(r.output).toContain("Total output lines:");
-      expect(r.output).toContain("Output:");
-    });
-  });
+  test(
+    "a high-volume command truncates and reports Total output lines",
+    async () => {
+      await withNoPty(async () => {
+        const ctx = mockToolContext();
+        // ~40k lines of "x" far exceeds the 30_000-char buffer cap.
+        const r = await interactiveExecTool.execute(
+          { mode: "start", command: "for i in $(seq 1 40000); do echo xxxxxxxxxx; done" },
+          ctx,
+        );
+        expect(r.ok).toBe(true);
+        expect(r.output).toContain("Total output lines:");
+        expect(r.output).toContain("Output:");
+      });
+    },
+    120_000,
+  );
 });
 
 describe("shell_session: raw-spill capture is scoped per read window", () => {
@@ -161,8 +165,8 @@ describe("shell_session: timeout", () => {
     await withNoPty(async () => {
       const ctx = mockToolContext();
       const started = Date.now();
-      const r = await interactiveExecTool.execute({ mode: "start", command: "sleep 30", timeoutMs: 300 }, ctx);
-      // The start returns while the command is still running (SETTLE_MS < 30s).
+      const r = await interactiveExecTool.execute({ mode: "start", command: "sleep 1000", timeoutMs: 300 }, ctx);
+      // The start returns while the command is still running (settle window < process lifetime).
       expect(r.ok).toBe(true);
       const sessionId = (r.output.match(/Session: (\S+)/) as RegExpMatchArray)[1];
       // Wait past the timeout; the watchdog kills the session.

@@ -26,6 +26,7 @@ import {
   sanitizeHookContext,
   type HookContextFragment,
   type HookPoint,
+  type HooksOptions,
   type LifecycleHookContext,
   type PostToolHookContext,
 } from "../../src/core/hooks";
@@ -51,6 +52,10 @@ function writeHooks(ws: string, doc: unknown): void {
   const file = path.join(ws, ".hz", "hooks.json");
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, typeof doc === "string" ? doc : JSON.stringify(doc, null, 2), "utf8");
+}
+
+function loadTestHooks(ws: string, home: string, extra: HooksOptions = {}): ReturnType<typeof loadHooks> {
+  return loadHooks(ws, { home, trustWorkspaceHooks: true, ...extra });
 }
 
 const jsHook = (script: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -115,7 +120,7 @@ describe("the broadened lifecycle taxonomy loads (H1)", () => {
         subagentStop: [jsHook("lifecycle-note.js")],
       },
     });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("ready");
     if (config.state !== "ready") return;
     for (const point of [
@@ -135,7 +140,7 @@ describe("the broadened lifecycle taxonomy loads (H1)", () => {
   test("an unknown point name is a typed refusal naming the allowed set", () => {
     const { ws, home } = fixtureWorld("hz-hooks-badpoint");
     writeHooks(ws, { hooks: { commitPre: [jsHook("lifecycle-note.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     expect(config.state).toBe("refused");
     if (config.state !== "refused") return;
     expect(config.refusals[0].error).toContain('unknown key hooks."commitPre"');
@@ -149,7 +154,7 @@ describe("lifecycle points are observation-only (H2/H4)", () => {
   test("a lifecycle hook returning a note is observed, never a block, and attributed", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-life-note");
     writeHooks(ws, { hooks: { turnStart: [jsHook("lifecycle-note.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = lifecycleCtx(ws, "turnStart", { foo: "bar" });
     const fragments = await runLifecycleHooks(config, ctx);
@@ -169,7 +174,7 @@ describe("lifecycle points are observation-only (H2/H4)", () => {
     writeHooks(ws, {
       hooks: { sessionStart: [{ command: "bash", args: [path.join(FIXTURES, "exit-code-3.sh")] }] },
     });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = lifecycleCtx(ws, "sessionStart");
     const fragments = await runLifecycleHooks(config, ctx);
@@ -182,7 +187,7 @@ describe("lifecycle points are observation-only (H2/H4)", () => {
   test("runLifecycleHooks refuses to run a deciding point (preTool) and returns nothing", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-life-deciding");
     writeHooks(ws, { hooks: { preTool: [jsHook("lifecycle-note.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     const ctx = lifecycleCtx(ws, "preTool");
     const fragments = await runLifecycleHooks(config, ctx);
     expect(fragments).toEqual([]);
@@ -196,7 +201,7 @@ describe("H9 context channel (docs/15 §2.4 H9)", () => {
   test("a post hook's context note is collected, bounded-attributed, and reaches a render block", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-h9-post");
     writeHooks(ws, { hooks: { postTool: [jsHook("post-context-note.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = postCtx(ws, "write");
     const fragments = await runPostToolHooks(config, ctx);
@@ -211,7 +216,7 @@ describe("H9 context channel (docs/15 §2.4 H9)", () => {
   test("NON-FORGEABILITY: a fence-close / role-forge attempt is neutralised", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-h9-forge");
     writeHooks(ws, { hooks: { postTool: [jsHook("post-context-note.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const fragments = await runPostToolHooks(config, postCtx(ws, "write"));
     const block = renderHookContextBlock(fragments);
@@ -229,7 +234,7 @@ describe("H9 context channel (docs/15 §2.4 H9)", () => {
   test("SIZE BOUND: an oversize note is truncated at MAX_HOOK_CONTEXT_BYTES with a marker", async () => {
     const { ws, home } = fixtureWorld("hz-hooks-h9-big");
     writeHooks(ws, { hooks: { postTool: [jsHook("oversize-note.js")] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = postCtx(ws, "read");
     const fragments = await runPostToolHooks(config, ctx);
@@ -273,7 +278,7 @@ describe("the deny/observe/proceed mapping and stderr-to-model (H3)", () => {
       "utf8",
     );
     writeHooks(ws, { hooks: { preTool: [{ command: "bash", args: [script] }] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const notices: string[] = [];
     const decision = await runPreToolHooks(config, {
@@ -301,7 +306,7 @@ describe("the deny/observe/proceed mapping and stderr-to-model (H3)", () => {
       "utf8",
     );
     writeHooks(ws, { hooks: { preTool: [{ command: "bash", args: [script] }] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const decision = await runPreToolHooks(config, {
       sessionId: "s",
@@ -324,7 +329,7 @@ describe("the deny/observe/proceed mapping and stderr-to-model (H3)", () => {
       "utf8",
     );
     writeHooks(ws, { hooks: { postTool: [{ command: "bash", args: [script] }] } });
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
 
     const ctx = postCtx(ws, "read");
     const fragments = await runPostToolHooks(config, ctx);
@@ -337,7 +342,7 @@ describe("the deny/observe/proceed mapping and stderr-to-model (H3)", () => {
 
 describe("the worked grep->rg validator example hook", () => {
   async function decide(ws: string, home: string, command: string): Promise<{ decision: string; reason?: string }> {
-    const config = loadHooks(ws, { home });
+    const config = loadTestHooks(ws, home);
     return runPreToolHooks(config, {
       sessionId: "s",
       workspace: ws,

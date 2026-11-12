@@ -2274,6 +2274,40 @@ fn guard_grant_mints_one_fresh_lease_per_effect() {
     assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
 }
 
+/// MEMORY.md next to `.hz/state/kernel` needs approval even when policy allows
+/// fs.write (docs/33 §5.4; ruling 148).
+#[test]
+fn guard_memory_manifest_write_asks_despite_policy_allow() {
+    let hz = TempDir::new("mem-manifest-hz");
+    let state_dir = hz.path().join("state").join("kernel");
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(
+        state_dir.join("policy.json"),
+        serde_json::to_string(&json!([
+            { "kind": "fs.write", "scope": "workspace", "decision": "allow" },
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut kernel = Kernel::start(&state_dir);
+    let manifest = hz.path().join("MEMORY.md");
+    let manifest = manifest.to_str().expect("utf8");
+    let decision = guard_check(&mut kernel, "fs.write", manifest, Some("workspace"), None);
+    assert_eq!(decision["decision"], json!("ask"), "{}", decision);
+    assert!(
+        decision["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("memory-manifest-protected"),
+        "{}",
+        decision
+    );
+    let ordinary = hz.path().join("ok.txt");
+    let ordinary = ordinary.to_str().expect("utf8");
+    let allowed = guard_check(&mut kernel, "fs.write", ordinary, Some("workspace"), None);
+    assert_eq!(allowed["decision"], json!("allow"), "{}", allowed);
+}
+
 /// A grant is an answer to `ask`, never a bypass: policy deny still wins over a
 /// matching grant, and a surface a plain allow rule already covers is decided
 /// by that rule — no grant is consulted, and no lease id is fabricated.
@@ -2967,16 +3001,11 @@ fn malformed_egress_policy_is_a_typed_refusal() {
 
 /* --------------------------- 9. sandbox-mode ladder --------------------------- */
 
-// FEAT-004: the fail-closed SandboxMode ladder is reachable over the additive
-// NDJSON method `sandbox.report`. The kernel applies NO OS confinement
-// mechanism on any host, so these assertions are HOST-INDEPENDENT (identical on
-// a Landlock-capable runner and on a host without Landlock): FS-confined modes
-// (read-only / workspace-write) must FAIL CLOSED: a SANDBOX_UNAVAILABLE outcome by default,
-// or a completeness=partial report with a non-empty residual + explicit backend
-// when the caller opts into a partial boundary — NEVER a silent 'enforced',
-// NEVER silently unconfined. danger-full-access reports no enforced dimension
-// (docs/11 S4). Escalation args are validated (paired + non-empty) before
-// anything. Every test drives the real binary over the NDJSON protocol.
+// FEAT-004: the fail-closed SandboxMode ladder over `sandbox.report`.
+// Host-aware: when Landlock is usable AND hz-sandbox-exec applies a ruleset,
+// FS-confined modes report `enforced`; otherwise they fail closed (or partial
+// with a residual). Never silently unconfined. danger-full-access reports no
+// enforced dimension (docs/11 S4).
 
 #[test]
 fn sandbox_report_fs_mode_is_unavailable_not_silently_enforced() {
@@ -2985,21 +3014,35 @@ fn sandbox_report_fs_mode_is_unavailable_not_silently_enforced() {
 
     for mode in ["read-only", "workspace-write"] {
         let result = kernel.ok("sandbox.report", json!({ "mode": mode }));
-        assert_eq!(
-            result["status"],
-            json!("sandbox_unavailable"),
-            "FS-confined mode {} must fail closed, not report enforced: {}",
-            mode,
-            result
-        );
+        let landlock = result["hostCapabilities"]["landlockFs"].as_bool().unwrap_or(false);
+        if landlock {
+            assert_eq!(
+                result["status"],
+                json!("report"),
+                "Landlock-capable host should report FS confinement for {}: {}",
+                mode,
+                result
+            );
+            let dims = result["dimensions"].as_array().expect("dimensions");
+            let fs = dims.iter().find(|d| d["dimension"] == json!("filesystem")).expect("fs dim");
+            assert_eq!(fs["guarantee"], json!("enforced"), "{}", result);
+            assert_eq!(fs["backend"], json!("landlock"), "{}", result);
+        } else {
+            assert_eq!(
+                result["status"],
+                json!("sandbox_unavailable"),
+                "FS-confined mode {} must fail closed without Landlock: {}",
+                mode,
+                result
+            );
+            let reason = result["reason"].as_str().unwrap_or("");
+            assert!(
+                reason.contains("SANDBOX_UNAVAILABLE"),
+                "the reason must be the typed SANDBOX_UNAVAILABLE outcome: {}",
+                result
+            );
+        }
         assert_eq!(result["mode"], json!(mode));
-        let reason = result["reason"].as_str().unwrap_or("");
-        assert!(
-            reason.contains("SANDBOX_UNAVAILABLE"),
-            "the reason must be the typed SANDBOX_UNAVAILABLE outcome: {}",
-            result
-        );
-        assert!(!reason.is_empty(), "the reason must be non-empty: {}", result);
         assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
     }
 }
@@ -3009,42 +3052,41 @@ fn sandbox_report_partial_has_nonempty_residual_and_explicit_backend() {
     let dir = TempDir::new("sandbox-partial");
     let mut kernel = Kernel::start(dir.path());
 
-    // A tolerant caller (allowPartial) receives a PARTIAL report with the FS
-    // dimension unsupported, a non-empty residual, and an explicit backend
-    // name or 'none' (docs/11 S2/S5) — never a silent 'enforced'.
     let result = kernel.ok(
         "sandbox.report",
         json!({ "mode": "workspace-write", "allowPartial": true }),
     );
     assert_eq!(result["status"], json!("report"), "{}", result);
-    assert_eq!(result["completeness"], json!("partial"), "{}", result);
-    assert_eq!(result["backend"], json!("none"), "{}", result);
-
+    let landlock = result["hostCapabilities"]["landlockFs"].as_bool().unwrap_or(false);
     let dims = result["dimensions"].as_array().expect("dimensions array");
     let fs = dims
         .iter()
         .find(|d| d["dimension"] == json!("filesystem"))
         .expect("a filesystem dimension");
-    assert_eq!(fs["guarantee"], json!("unsupported"), "FS must not be enforced: {}", result);
-    assert_ne!(fs["guarantee"], json!("enforced"));
-    assert_eq!(fs["backend"], json!("none"), "{}", result);
-    // Detection is never enforcement: no dimension is enforced on ANY host, and
-    // the host capabilities are reported separately (additive field).
-    assert!(
-        result["dimensions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|d| d["guarantee"] != json!("enforced") && d["backend"] == json!("none")),
-        "{}",
-        result
-    );
+    if landlock {
+        // rlimits stay best_effort, so completeness may be partial even with FS enforced.
+        assert_eq!(result["backend"], json!("landlock"), "{}", result);
+        assert_eq!(fs["guarantee"], json!("enforced"), "{}", result);
+        assert_eq!(fs["backend"], json!("landlock"), "{}", result);
+    } else {
+        assert_eq!(result["completeness"], json!("partial"), "{}", result);
+        assert_eq!(result["backend"], json!("none"), "{}", result);
+        assert_eq!(fs["guarantee"], json!("unsupported"), "FS must not be enforced: {}", result);
+        assert_eq!(fs["backend"], json!("none"), "{}", result);
+        assert!(
+            !fs["residual"].as_str().unwrap_or("").is_empty(),
+            "FS residual must be non-empty (docs/11 S2): {}",
+            result
+        );
+    }
+    let proc = dims
+        .iter()
+        .find(|d| d["dimension"] == json!("process"))
+        .expect("process dimension");
+    if proc["guarantee"] == json!("enforced") {
+        assert_eq!(proc["backend"], json!("seccomp"), "{}", result);
+    }
     assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
-    assert!(
-        !fs["residual"].as_str().unwrap_or("").is_empty(),
-        "FS residual must be non-empty (docs/11 S2): {}",
-        result
-    );
 
     // Every below-enforced dimension carries a non-empty residual and an
     // explicit backend (a name or 'none') — no silent fallback (S5).
@@ -3108,8 +3150,7 @@ fn sandbox_report_validates_escalation_args_over_the_protocol() {
     let message = kernel.err("sandbox.report", json!({ "mode": "wide-open" }));
     assert!(message.contains("not a known mode"), "{}", message);
 
-    // a well-formed escalation pairing is accepted (still fails closed on FS):
-    // the args validate, then the FS-confined mode yields SANDBOX_UNAVAILABLE.
+    // a well-formed escalation pairing is accepted; outcome depends on Landlock.
     let result = kernel.ok(
         "sandbox.report",
         json!({
@@ -3118,5 +3159,11 @@ fn sandbox_report_validates_escalation_args_over_the_protocol() {
             "justification": "need full access for this one call"
         }),
     );
-    assert_eq!(result["status"], json!("sandbox_unavailable"), "{}", result);
+    let landlock = result["hostCapabilities"]["landlockFs"].as_bool().unwrap_or(false);
+    if landlock {
+        assert_eq!(result["status"], json!("report"), "{}", result);
+        assert_eq!(result["backend"], json!("landlock"), "{}", result);
+    } else {
+        assert_eq!(result["status"], json!("sandbox_unavailable"), "{}", result);
+    }
 }

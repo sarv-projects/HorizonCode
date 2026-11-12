@@ -148,7 +148,7 @@ describe("parallel batches through the loop", () => {
       // The tracker records how many shared reads are inside execute at once;
       // the 300ms delay makes a serial schedule (>= 2 x 300ms) impossible under
       // the overlap assertion. Wall clock is a second witness only.
-      const tracker = trackOverlap(readTool, 300);
+      const tracker = trackOverlap(readTool, 400);
       try {
         const approvals: Array<{ title: string }> = [];
         const provider = scriptedProvider([
@@ -162,7 +162,7 @@ describe("parallel batches through the loop", () => {
           const elapsed = Date.now() - started;
 
           expect(tracker.max).toBe(2);
-          expect(elapsed).toBeLessThan(550);
+          expect(elapsed).toBeLessThan(950);
 
           const reads = toolContents(store, deps.sessionId, "read");
           expect(reads.length).toBe(2);

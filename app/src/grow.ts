@@ -11,6 +11,7 @@
  *
  *   bun run grow --list              proposals in the store, with status
  *   bun run grow --from-postmortems  curate the recorded post-mortems (idempotent)
+ *   bun run grow --dream             write a memory consolidation plan (applies nothing)
  *   bun run grow --apply <id>        print the proposal + intended write (exit 2)
  *   bun run grow --apply <id> --yes  guard-checked write + receipt
  *
@@ -102,6 +103,7 @@ import {
 } from "./core/curator";
 import { KernelClient } from "./core/kernel";
 import { scopeFor } from "./core/loop";
+import { writeDreamPlan } from "./core/memory/dream";
 import { kernelStateDir, workspaceStateDir } from "./core/paths";
 import { loadPostmortems, postmortemPath, type PostmortemRecord } from "./core/postmortem";
 import { TITLE_MAX_CHARS, type ReviewProposalV1 } from "./core/review";
@@ -125,10 +127,11 @@ const DEFAULT_IO: GrowCliIo = {
   err: (line) => console.error(line),
 };
 
-const USAGE = "usage: bun run src/grow.ts (--list | --from-postmortems | --apply <id> [--yes]) [--workspace <dir>]";
+const USAGE =
+  "usage: bun run src/grow.ts (--list | --from-postmortems | --dream | --apply <id> [--yes]) [--workspace <dir>]";
 
 /** The flags this CLI understands; anything else is a usage error. */
-const KNOWN_FLAGS = new Set(["--list", "--from-postmortems", "--apply", "--yes", "--workspace"]);
+const KNOWN_FLAGS = new Set(["--list", "--from-postmortems", "--dream", "--apply", "--yes", "--workspace"]);
 
 export interface GrowCliIo {
   out(line: string): void;
@@ -672,9 +675,10 @@ export async function runGrowCli(argv: readonly string[], io: GrowCliIo = DEFAUL
   const applyId = argValue(argv, "--apply");
   const list = argv.includes("--list");
   const fromPostmortems = argv.includes("--from-postmortems");
-  const modes = [list, fromPostmortems, applyId !== undefined].filter(Boolean).length;
+  const dream = argv.includes("--dream");
+  const modes = [list, fromPostmortems, dream, applyId !== undefined].filter(Boolean).length;
   if (modes !== 1) {
-    io.err(`exactly one of --list, --from-postmortems or --apply <id> is required\n${USAGE}`);
+    io.err(`exactly one of --list, --from-postmortems, --dream or --apply <id> is required\n${USAGE}`);
     return 2;
   }
   if (applyId !== undefined && applyId === "") {
@@ -720,6 +724,14 @@ export async function runGrowCli(argv: readonly string[], io: GrowCliIo = DEFAUL
 
   if (list) return runList(io, workspace, stateDir);
   if (fromPostmortems) return runFromPostmortems(io, workspace, stateDir);
+  if (dream) {
+    const result = writeDreamPlan(workspace);
+    io.out(
+      `grow --dream: wrote ${result.planPath}` +
+        (result.empty ? " (empty — no facts)" : ` (${result.factCount} fact(s); not applied)`),
+    );
+    return 0;
+  }
   return runApply(io, workspace, stateDir, applyId as string, argv.includes("--yes"));
 }
 

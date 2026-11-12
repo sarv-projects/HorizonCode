@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { tools as registeredTools } from "../tools";
 import { stateRoot, userConfigDir } from "./paths";
+import { digestWorkspaceAgents, resolveWorkspaceProjectAgentsTrust, type WorkspaceTrustOptions } from "./trust";
 
 export type PresetSource = "builtin" | "user" | "workspace";
 
@@ -210,7 +211,7 @@ export function parsePresetFile(
   };
 }
 
-export interface PresetOptions {
+export interface PresetOptions extends WorkspaceTrustOptions {
   /** Home directory for the user config dir; defaults to the OS home. */
   home?: string;
 }
@@ -239,7 +240,22 @@ export function loadPresets(workspace: string, opts: PresetOptions = {}): Preset
   const refused: PresetRefusal[] = [];
   for (const preset of BUILTIN_PRESETS) presets.set(preset.name, preset);
   const ceiling = presetCeiling();
+  const projectAgentsOk =
+    opts.trustedWorkspaceHooks === undefined
+      ? true
+      : resolveWorkspaceProjectAgentsTrust(
+          workspace,
+          opts.trustedWorkspaceHooks,
+          opts.home ?? "",
+          opts.onNotice,
+        );
   for (const { dir, source } of presetDirs(workspace, opts)) {
+    if (source === "workspace" && !projectAgentsOk) {
+      if (digestWorkspaceAgents(workspace) !== null) {
+        opts.onNotice?.("workspace agent presets ignored (untrusted workspace or digest changed)");
+      }
+      continue;
+    }
     let entries: string[];
     try {
       entries = readdirSync(dir)

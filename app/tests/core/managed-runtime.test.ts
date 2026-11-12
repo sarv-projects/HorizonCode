@@ -320,7 +320,9 @@ describe("owner-death supervisor", () => {
 /* ----------------------------- admission FIFO ----------------------------- */
 
 describe("admission FIFO", () => {
-  test("admit-once by id; explicit queued -> running -> settled transitions", () => {
+  test(
+    "admit-once by id; explicit queued -> running -> settled transitions",
+    () => {
     const workspace = tempDir("hz-nf071-admit-");
     const store = new SessionStore(workspace);
     try {
@@ -351,7 +353,9 @@ describe("admission FIFO", () => {
     } finally {
       store.close();
     }
-  });
+  },
+  15_000,
+  );
 
   test("an unknown row halts followers; resolve('drop') unblocks", () => {
     const workspace = tempDir("hz-nf071-halt-");

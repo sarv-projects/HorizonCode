@@ -12,15 +12,17 @@
  */
 
 import { expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import {
   builtinDefaultModel,
   DEFAULT_MODELS,
 } from "../../src/core/config";
 import {
+  COMMITTED_CATALOG_SNAPSHOT,
   CATALOG_PATH,
   catalogDefaultModel,
+  countCatalogModels,
   catalogModel,
   catalogWindow,
   curatedCatalog,
@@ -34,6 +36,9 @@ import {
   type Catalog,
 } from "../../src/core/catalog/catalog";
 import { cleanupTemps, tempDir } from "./helpers";
+
+/** Keep the offline curated floor unless a test explicitly loads the committed bundle. */
+const CURATED_ONLY = { HZ_NO_COMMITTED_SNAPSHOT: "1" } as const;
 
 /** A synthetic external snapshot with `count` throwaway providers (for the floor). */
 function bigSnapshot(count: number): Record<string, unknown> {
@@ -49,7 +54,7 @@ function bigSnapshot(count: number): Record<string, unknown> {
 }
 
 test("loadCatalog returns the curated snapshot by default, with the 5 built-ins", () => {
-  const catalog = loadCatalog({});
+  const catalog = loadCatalog(CURATED_ONLY);
   expect(catalog.source).toBe("curated");
   expect(catalog.rejected).toEqual([]);
   expect(Object.keys(catalog.providers).sort()).toEqual(["anthropic", "google", "mock", "ollama", "openai"]);
@@ -79,7 +84,7 @@ test("catalog lookups return the curated window and capabilities as DATA", () =>
 
 test("builtinDefaultModel resolves through the catalog, else the DEFAULT_MODELS fallback", () => {
   // Catalog hit: equals the curated default (which equals DEFAULT_MODELS).
-  expect(builtinDefaultModel("google", loadCatalog({}))).toBe("gemini-2.5-flash");
+  expect(builtinDefaultModel("google", loadCatalog(CURATED_ONLY))).toBe("gemini-2.5-flash");
   // Catalog MISS: an empty external override that passes no floor would fall
   // back; simulate a catalog that lacks the provider and assert the fallback.
   const empty: Catalog & { source: "curated" } = { providers: {}, rejected: [], source: "curated" };
@@ -104,7 +109,23 @@ test("the curated floor is deliberately NOT floor-validated (it is small by desi
   // loadCatalog serves it without error because the floor applies only to
   // externally-sourced snapshots, never the curated boot-time floor.
   expect(Object.keys(curatedCatalog().providers).length).toBeLessThan(MINIMUM_PROVIDERS);
-  expect(loadCatalog({}).source).toBe("curated");
+  expect(loadCatalog(CURATED_ONLY).source).toBe("curated");
+});
+
+test("committed models-dev.snapshot.json passes the provider floor when shipped", () => {
+  if (!existsSync(COMMITTED_CATALOG_SNAPSHOT)) return;
+  const prev = process.env.HZ_NO_COMMITTED_SNAPSHOT;
+  delete process.env.HZ_NO_COMMITTED_SNAPSHOT;
+  try {
+    const loaded = loadCatalog({});
+    expect(loaded.source).toBe("snapshot");
+    expect(Object.keys(loaded.providers).length).toBeGreaterThanOrEqual(MINIMUM_PROVIDERS);
+    expect(countCatalogModels(loaded)).toBeGreaterThan(1000);
+    expect(statSync(COMMITTED_CATALOG_SNAPSHOT).size).toBeLessThan(2 * 1024 * 1024);
+  } finally {
+    if (prev === undefined) delete process.env.HZ_NO_COMMITTED_SNAPSHOT;
+    else process.env.HZ_NO_COMMITTED_SNAPSHOT = prev;
+  }
 });
 
 test("decoding is tolerant: an unparseable model is skipped and surfaced, never fatal", () => {
@@ -162,20 +183,27 @@ test("an override below the floor is rejected and loadCatalog falls back to cura
   writeFileSync(file, JSON.stringify(bigSnapshot(3)), "utf8");
 
   expect(loadSnapshotFile(file)).toBeUndefined();
-  const loaded = loadCatalog({ HZ_MODELS_SNAPSHOT: file });
+  const loaded = loadCatalog({ ...CURATED_ONLY, HZ_MODELS_SNAPSHOT: file });
   expect(loaded.source).toBe("curated");
 
   cleanupTemps();
 });
 
 test("a missing or unreadable override file falls back to curated, never throws", () => {
-  const loaded = loadCatalog({ HZ_MODELS_SNAPSHOT: "/does/not/exist/snapshot.json" });
+  const loaded = loadCatalog({ ...CURATED_ONLY, HZ_MODELS_SNAPSHOT: "/does/not/exist/snapshot.json" });
   expect(loaded.source).toBe("curated");
 });
 
-test("the live-fetch path is a documented extension point that rejects when called", async () => {
-  // It is NEVER reached by loadCatalog; calling it directly proves it is a
-  // disabled seam, not a live network call in the test.
+test("fetchLiveCatalog uses conditional GET when a fetcher is injected", async () => {
   expect(CATALOG_PATH).toContain("type=chat");
-  await expect(fetchLiveCatalog()).rejects.toThrow(/extension point/);
+  const seen: string[] = [];
+  await fetchLiveCatalog("https://example.test", {
+    etag: '"v1"',
+    fetcher: async (url, headers) => {
+      seen.push(url);
+      expect(headers["if-none-match"]).toBe('"v1"');
+      return { status: 304, body: "" };
+    },
+  });
+  expect(seen[0]).toContain("example.test");
 });

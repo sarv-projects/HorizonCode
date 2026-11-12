@@ -17,6 +17,10 @@ target/
 .hz/state/
 .hzcode/
 
+# Local secrets (provider keys, etc.)
+.env
+.env.local
+
 # Reference clones of studied projects live OUTSIDE the repo (repo-tour/).
 # Guard against accidental copies inside the worktree (a 1.5G move-in happened once).
 repo-tour/

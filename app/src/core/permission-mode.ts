@@ -78,7 +78,7 @@ export function permissionModeError(value: unknown): string {
  */
 export function modeRefusal(mode: PermissionMode | undefined, action: GuardAction): string | undefined {
   if (mode !== "read-only") return undefined;
-  if (action.kind === "fs.write" || action.kind === "shell.exec" || action.kind === "mcp.invoke") {
+  if (action.kind === "fs.write" || action.kind === "shell.exec" || action.kind === "spawn" || action.kind === "mcp.invoke") {
     return `read-only permission mode refuses ${action.kind}`;
   }
   return undefined;

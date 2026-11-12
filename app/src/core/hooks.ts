@@ -168,7 +168,7 @@
  * only fragments, never a block.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { scrubEnv } from "../tools/helpers";
@@ -306,6 +306,10 @@ export type HooksConfig =
 export interface HooksOptions {
   /** Override the home directory (tests, or a caller with its own notion of home). */
   home?: string;
+  /** When not true, workspace `hooks.json` is never loaded (docs/33 §6.2). */
+  trustWorkspaceHooks?: boolean;
+  /** Optional notice when workspace hooks are skipped. */
+  onNotice?: (message: string) => void;
 }
 
 /** What `runPreToolHooks` returns; a deny names its cause (deciding-only, no H9 note). */
@@ -391,7 +395,14 @@ export function hooksConfigFiles(workspace: string, opts: HooksOptions = {}): st
     }
   }
   if (home !== "") files.push(path.join(userConfigDir(home), "hooks.json"));
-  files.push(path.join(stateRoot(workspace), "hooks.json"));
+  const wsHooks = path.join(stateRoot(workspace), "hooks.json");
+  if (opts.trustWorkspaceHooks === true) {
+    files.push(wsHooks);
+  } else if (existsSync(wsHooks)) {
+    opts.onNotice?.(
+      `workspace hooks ignored (untrusted): add ${JSON.stringify(path.resolve(workspace))} to trustedWorkspaceHooks in user config`,
+    );
+  }
   return files;
 }
 

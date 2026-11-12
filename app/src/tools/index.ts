@@ -9,11 +9,13 @@ import { applyPatchTool } from "./apply-patch";
 import { astEditTool } from "./ast-edit";
 import { astSearchTool } from "./ast-search";
 import { codemodeTool } from "./codemode";
+import { debugTool } from "./debug";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
 import { interactiveExecTool } from "./interactive-exec";
 import { lspTool } from "./lsp";
+import { memorySearchTool } from "./memory-search";
 import { previewTool } from "./preview";
 import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
@@ -39,6 +41,8 @@ export const tools: Tool[] = [
   applyPatchTool,
   interactiveExecTool,
   lspTool,
+  debugTool,
+  memorySearchTool,
   toolSearchTool,
   astSearchTool,
   astEditTool,

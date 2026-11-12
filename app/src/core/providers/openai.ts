@@ -7,6 +7,8 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import { applyQuirks } from "./quirks";
+import { maybeDumpProviderRequest } from "./request-dump";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 
@@ -30,6 +32,10 @@ export interface OpenAiWireSettings {
   maxTokens?: number;
   /** The full Authorization header value, or `undefined` for a keyless host. */
   authorization?: string;
+  /** When set, used on each attempt (e.g. after oauth refresh). */
+  getAuthorization?: () => string | undefined;
+  /** On HTTP 401, return true when credentials were refreshed and the request may be retried once. */
+  onUnauthorized?: () => Promise<boolean>;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com";
@@ -101,6 +107,13 @@ function mapFinishReason(reason: unknown): "end" | "tool_use" | "max_tokens" {
  * `openai-compatible` adapter both stream through this one function — there is
  * no second SSE loop, tool-call assembler, finish-reason map or retry policy.
  */
+/** OpenAI-compatible chat URL: accepts roots with or without a trailing `/v1`. */
+export function openAiChatCompletionsUrl(baseUrl: string): string {
+  const root = baseUrl.replace(/\/+$/, "");
+  if (root.endsWith("/v1")) return `${root}/chat/completions`;
+  return `${root}/v1/chat/completions`;
+}
+
 export async function* streamOpenAiCompatible(
   settings: OpenAiWireSettings,
   req: ProviderRequest,
@@ -127,19 +140,24 @@ export async function* streamOpenAiCompatible(
   else if (settings.maxTokens && settings.maxTokens > 0) body.max_tokens = settings.maxTokens;
   else body.max_tokens = DEFAULT_MAX_TOKENS;
 
+  const quirksApplied = applyQuirks({ provider: name, model: req.model, baseUrl }, body);
+  if (quirksApplied.length > 0) yield { type: "quirks", applied: quirksApplied };
+  maybeDumpProviderRequest(name, body);
+
   const headers: Record<string, string> = {
     "content-type": "application/json",
     accept: "text/event-stream",
   };
   // A keyless host (Credential kind "none") gets no Authorization header; the
   // header is data, never derived from the provider id.
-  if (settings.authorization && settings.authorization.trim() !== "") headers.authorization = settings.authorization;
+  const authHeader = settings.getAuthorization?.() ?? settings.authorization;
+  if (authHeader && authHeader.trim() !== "") headers.authorization = authHeader;
 
   let response: Response;
   const retries: string[] = [];
-  try {
-    response = await fetchWithRetry(
-      baseUrl + "/v1/chat/completions",
+  const post = () =>
+    fetchWithRetry(
+      openAiChatCompletionsUrl(baseUrl),
       {
         method: "POST",
         headers,
@@ -152,6 +170,8 @@ export async function* streamOpenAiCompatible(
         onRetry: (info) => retries.push(retryNotice(name, info, DEFAULT_RETRY_ATTEMPTS)),
       },
     );
+  try {
+    response = await post();
   } catch (err) {
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
@@ -161,6 +181,30 @@ export async function* streamOpenAiCompatible(
     return;
   }
   for (const message of retries) yield { type: "notice", message };
+
+  if (response.status === 401 && settings.onUnauthorized) {
+    const refreshed = await settings.onUnauthorized();
+    if (refreshed) {
+      const nextAuth = settings.getAuthorization?.() ?? settings.authorization;
+      if (nextAuth && nextAuth.trim() !== "") headers.authorization = nextAuth;
+      else delete headers.authorization;
+      try {
+        response = await fetch(openAiChatCompletionsUrl(baseUrl), {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: req.signal,
+        });
+      } catch (err) {
+        if (isAbortError(err, req.signal)) {
+          yield { type: "done", stopReason: "abort" };
+          return;
+        }
+        yield { type: "error", message: `${name} request failed: ${errorText(err)}` };
+        return;
+      }
+    }
+  }
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -179,7 +223,7 @@ export async function* streamOpenAiCompatible(
 
   try {
     for await (const message of readSse(response.body)) {
-      if (req.signal.aborted) {
+      if (req.signal?.aborted) {
         aborted = true;
         break;
       }
@@ -230,7 +274,7 @@ export async function* streamOpenAiCompatible(
     return;
   }
 
-  if (aborted || req.signal.aborted) {
+  if (aborted || req.signal?.aborted) {
     yield { type: "done", stopReason: "abort" };
     return;
   }

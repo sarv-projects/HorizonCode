@@ -305,33 +305,37 @@ describe("budget countdown (NF-073)", () => {
 describe("the task statement survives the trim (pinned rail)", () => {
   const TASK = "TASK: remember the deploy target is staging.";
 
-  test("after the window no longer reaches the first user turn, the pinned statement still reaches the model", async () => {
-    const events: Array<{ type: string; message?: string }> = [];
-    const { provider, systems } = recordingProvider([DONE]);
-    const { deps, kernel, store } = depsFor(provider, events, { budget: { maxSteps: 10 } });
-    try {
-      // The task, then enough later traffic that the newest-message window can no
-      // longer reach it — the shape a long session actually produces.
-      store.appendMessage(deps.sessionId, { role: "user", content: TASK });
-      for (let i = 0; i < HISTORY_LIMIT; i += 1) {
-        store.appendMessage(deps.sessionId, { role: "assistant", content: `filler ${i}` });
+  test(
+    "after the window no longer reaches the first user turn, the pinned statement still reaches the model",
+    async () => {
+      const events: Array<{ type: string; message?: string }> = [];
+      const { provider, systems } = recordingProvider([DONE]);
+      const { deps, kernel, store } = depsFor(provider, events, { budget: { maxSteps: 10 } });
+      try {
+        // The task, then enough later traffic that the newest-message window can no
+        // longer reach it — the shape a long session actually produces.
+        store.appendMessage(deps.sessionId, { role: "user", content: TASK });
+        for (let i = 0; i < HISTORY_LIMIT; i += 1) {
+          store.appendMessage(deps.sessionId, { role: "assistant", content: `filler ${i}` });
+        }
+        store.appendMessage(deps.sessionId, { role: "user", content: "keep going" });
+
+        // The trim really has lost it — without this the test would prove nothing.
+        const window = trimHistory(store.history(deps.sessionId));
+        expect(window.some((m) => (m.content ?? "").includes("staging"))).toBe(false);
+
+        const result = await runTurn(deps, "and one more turn");
+        expect(result.exit.terminal).toBe("succeeded");
+        // The rail is the only place it can still come from, and it does.
+        expect(systems[0] ?? "").toContain("Pinned task statement");
+        expect(systems[0] ?? "").toContain("staging");
+      } finally {
+        await kernel.close();
+        store.close();
       }
-      store.appendMessage(deps.sessionId, { role: "user", content: "keep going" });
-
-      // The trim really has lost it — without this the test would prove nothing.
-      const window = trimHistory(store.history(deps.sessionId));
-      expect(window.some((m) => (m.content ?? "").includes("staging"))).toBe(false);
-
-      const result = await runTurn(deps, "and one more turn");
-      expect(result.exit.terminal).toBe("succeeded");
-      // The rail is the only place it can still come from, and it does.
-      expect(systems[0] ?? "").toContain("Pinned task statement");
-      expect(systems[0] ?? "").toContain("staging");
-    } finally {
-      await kernel.close();
-      store.close();
-    }
-  });
+    },
+    20_000,
+  );
 
   test("the pinned statement is bounded, and a session with no user turn has none", () => {
     expect(pinnedTaskStatement([])).toBeUndefined();

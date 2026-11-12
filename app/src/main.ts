@@ -11,6 +11,7 @@
  * ./contracts.ts and may expose optional extras; every extra is feature-detected.
  */
 
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
@@ -21,11 +22,25 @@ import { doctorExitCode, realDoctorEnv, renderDoctor, renderDoctorJson, runDocto
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
 import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
+import { checkKeymapOverrides, defaultKeymap } from "./tui/keymap";
+import { fullscreenNotImplementedMessage, resolveTuiScreenMode, type TuiScreenMode } from "./tui/screen-mode";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
 import { checkConfigFile, renderConfigCheck } from "./core/config";
 import { cleanCommitMessage, commitCommand, commitPrompt, stagedDiff, withReceiptTrailer } from "./core/commit";
 import { resolveCommandForMessage } from "./core/commands";
+import { cleanSuggestedCommand, suggestPrompt } from "./core/suggest";
+import { validateWorktreeName, worktreeAddCommand, worktreeSiblingPath } from "./core/worktree";
+import {
+  catalogCachePath,
+  CATALOG_PATH,
+  DEFAULT_CATALOG_SOURCE,
+  fetchLiveCatalog,
+  readCatalogCache,
+  summarizeCatalogDiff,
+  writeCatalogCache,
+} from "./core/catalog/catalog";
+import { KernelClient } from "./core/kernel";
 
 const VERSION = "0.1.0";
 
@@ -35,8 +50,11 @@ const HELP = [
   "  hzcode [message]     start chatting (optionally with an opening message)",
   "  hzcode serve         run the single-attach server (NDJSON JSON-RPC on stdio)",
   "  hzcode config check  report unknown and rejected keys in the config file",
+  "  hzcode keybind check  validate optional keybind overrides JSON (docs/33 §5.19)",
   "  hzcode commit        write a commit message for the staged diff and commit it through the guard (--preview, --receipt)",
+  "  hzcode suggest       print one shell command for a task (never executes it)",
   "  hzcode doctor        diagnose this install (OK/WARN/FAIL + a fix per problem; --json, --workspace <path>)",
+  "  --worktree <name>    create a git worktree beside the repo and start there (not OS sandbox)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
   "  --mock               offline demo, no key   --version    print the version",
@@ -45,6 +63,8 @@ const HELP = [
   "  --permission-mode <m>  default | plan | accept-edits | read-only (no bypass mode; /mode in chat)",
   "  --max-steps <n>      cap model steps per turn (0 = unlimited)",
   "  --max-tokens <n>     cap tokens per turn    --max-wall-ms <n>  cap wall clock per turn",
+  "  --fullscreen         not implemented (scrollback chat is the default; docs/33 §5.17)",
+  "  --tui-mode <m>       scrollback (default) or fullscreen (not implemented)",
 ].join("\n");
 
 interface CliOptions {
@@ -61,6 +81,8 @@ interface CliOptions {
   outputFormat?: PrintFormat;
   budget?: RunBudget;
   permissionMode?: PermissionMode;
+  worktree?: string;
+  tuiScreenMode?: TuiScreenMode;
   errors: string[];
 }
 
@@ -147,6 +169,27 @@ function parseArgs(argv: string[]): CliOptions {
       case "--mock":
         opts.mock = true;
         break;
+      case "--fullscreen":
+        opts.tuiScreenMode = "fullscreen";
+        break;
+      case "--tui-mode": {
+        const value = nextValue();
+        if (value === undefined || value.trim() === "") {
+          opts.errors.push("--tui-mode needs scrollback or fullscreen");
+          break;
+        }
+        const key = value.trim().toLowerCase();
+        if (key === "scrollback" || key === "default" || key === "minimal") opts.tuiScreenMode = "scrollback";
+        else if (key === "fullscreen" || key === "full" || key === "alt") opts.tuiScreenMode = "fullscreen";
+        else opts.errors.push("--tui-mode needs scrollback or fullscreen");
+        break;
+      }
+      case "--worktree": {
+        const value = nextValue();
+        if (value === undefined || value === "") opts.errors.push("--worktree needs a name");
+        else opts.worktree = value;
+        break;
+      }
       case "--workspace": {
         const value = nextValue();
         if (value === undefined || value === "") opts.errors.push("--workspace needs a folder");
@@ -275,6 +318,281 @@ function runConfigCommand(args: string[]): number {
   return check.unknown.length > 0 || check.rejected.length > 0 ? 1 : 0;
 }
 
+/** Re-run this entry with `--workspace` after creating a worktree. */
+function reexecInWorkspace(dest: string, argvTail: string[]): number {
+  const script = process.argv[1] ?? "";
+  const filtered: string[] = [];
+  for (let i = 0; i < argvTail.length; i += 1) {
+    const arg = argvTail[i] ?? "";
+    if (arg === "--worktree") {
+      const next = argvTail[i + 1];
+      if (next !== undefined && !String(next).startsWith("--")) i += 1;
+      continue;
+    }
+    if (arg.startsWith("--worktree=")) continue;
+    filtered.push(arg);
+  }
+  const args = [script, "--workspace", dest, ...filtered];
+  const res = spawnSync(process.execPath, args, { stdio: "inherit", cwd: dest });
+  const code = res.status;
+  return typeof code === "number" ? code : 1;
+}
+
+async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promise<number> {
+  const name = opts.worktree ?? "";
+  const why = validateWorktreeName(name);
+  if (why !== undefined) {
+    process.stderr.write(`hzcode: ${why}\n`);
+    return 2;
+  }
+  const mod = core as unknown as CoreModule;
+  const createRuntime = typeof mod.createRuntime === "function" ? mod.createRuntime : mod?.default?.createRuntime;
+  if (typeof createRuntime !== "function") {
+    process.stderr.write("hzcode: the runtime is missing from this build (app/src/core)\n");
+    return 1;
+  }
+  let runtime: Runtime;
+  try {
+    runtime = await createRuntime({ workspace, mock: opts.mock, permissionMode: "default" });
+  } catch (err) {
+    process.stderr.write(`hzcode: worktree: ${errorMessage(err)}\n`);
+    return 1;
+  }
+  const extras = runtime as Runtime & { runGuardedShell?: (command: string) => Promise<{ ok: boolean; output: string }> };
+  const dest = worktreeSiblingPath(workspace, name);
+  try {
+    const ui = createApprovalUi(Boolean(process.stdin.isTTY));
+    ui.runtime = runtime;
+    installApprovalHandler(ui);
+    if (typeof extras.runGuardedShell !== "function") {
+      process.stderr.write("hzcode: worktree: this build cannot run a guarded command\n");
+      return 1;
+    }
+    const out = await extras.runGuardedShell(worktreeAddCommand(workspace, name));
+    if (!out.ok) {
+      process.stderr.write(`hzcode: worktree: ${out.output.trim() || "git worktree add failed"}\n`);
+      return 1;
+    }
+    process.stderr.write(`hzcode: worktree ${dest} (branch hz/${name.trim()})\n`);
+  } finally {
+    try {
+      await runtime.close();
+    } catch {
+      /* closing */
+    }
+  }
+  return reexecInWorkspace(dest, process.argv.slice(2));
+}
+
+/** `hzcode login|logout <provider>` — OAuth PKCE when the registry entry has `oauth` (docs/33 §5.6). */
+async function runLoginCommand(args: string[]): Promise<number> {
+  const verb = args[0];
+  const device = args.includes("--device");
+  const provider = args.find((a, i) => i > 0 && !a.startsWith("-"))?.trim();
+  if (!provider) {
+    process.stderr.write(`usage: hzcode ${verb} <provider> [--device]\n`);
+    return 2;
+  }
+  const { loadConfig } = await import("./core/config");
+  const { providerHasOAuth, runOAuthLogout, runPkceLogin } = await import("./core/auth/login");
+  const { providerHasDeviceOAuth, runDeviceCodeLogin } = await import("./core/auth/device");
+  const config = loadConfig();
+  const entry = config.providers?.providers.find((p) => p.id === provider.toLowerCase());
+  if (verb === "logout") {
+    try {
+      runOAuthLogout(provider.toLowerCase());
+      return 0;
+    } catch (e) {
+      process.stderr.write(`hzcode logout: ${errorMessage(e)}\n`);
+      return 1;
+    }
+  }
+  if (entry === undefined) {
+    process.stderr.write(`hzcode login: unknown provider id ${JSON.stringify(provider)} in user config providers[]\n`);
+    return 1;
+  }
+  if (device) {
+    if (!providerHasDeviceOAuth(entry)) {
+      process.stderr.write(
+        `hzcode login: provider ${entry.id} needs oauth.deviceAuthorizationUrl, tokenUrl and clientId for --device\n`,
+      );
+      return 1;
+    }
+    try {
+      await runDeviceCodeLogin(entry);
+      return 0;
+    } catch (e) {
+      process.stderr.write(`hzcode login: ${errorMessage(e)}\n`);
+      return 1;
+    }
+  }
+  if (!providerHasOAuth(entry)) {
+    process.stderr.write(
+      `hzcode login: provider ${entry.id} has no oauth block (authorizeUrl, tokenUrl, clientId); use HZ_API_KEY or apiKey until configured\n`,
+    );
+    return 1;
+  }
+  try {
+    await runPkceLogin(entry);
+    return 0;
+  } catch (e) {
+    process.stderr.write(`hzcode login: ${errorMessage(e)}\n`);
+    return 1;
+  }
+}
+
+/** `hzcode keybind check [file]` — validate keybind override JSON (docs/33 §5.19). */
+function runKeybindCommand(args: string[]): number {
+  if (args[0] !== "check") {
+    process.stderr.write("usage: hzcode keybind check [overrides.json]\n");
+    return 2;
+  }
+  const file = args[1];
+  let overrides: Record<string, string> = {};
+  if (file !== undefined) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        process.stderr.write(`hzcode keybind check: ${file} must be a JSON object of actionId → chord\n`);
+        return 1;
+      }
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof v !== "string") {
+          process.stderr.write(`hzcode keybind check: ${file}: ${k} must be a string chord\n`);
+          return 1;
+        }
+        overrides[k] = v;
+      }
+    } catch (e) {
+      process.stderr.write(`hzcode keybind check: ${errorMessage(e)}\n`);
+      return 1;
+    }
+  }
+  const errors = checkKeymapOverrides(overrides, defaultKeymap());
+  if (errors.length > 0) {
+    for (const err of errors) process.stderr.write(`hzcode keybind check: ${err}\n`);
+    return 1;
+  }
+  const n = Object.keys(overrides).length;
+  process.stdout.write(
+    n === 0
+      ? `keybind check ok (defaults, ${defaultKeymap().actions.length} actions)\n`
+      : `keybind check ok (${n} override(s))\n`,
+  );
+  return 0;
+}
+
+/** `hzcode models refresh` — conditional fetch + user cache (docs/33 §5.8). */
+async function runModelsCommand(args: string[]): Promise<number> {
+  if (args[0] !== "refresh") {
+    process.stderr.write("usage: hzcode models refresh\n");
+    return 2;
+  }
+  const workspace = process.cwd();
+  const kernel = new KernelClient({ workspace });
+  await kernel.start();
+  const catalogUrl = DEFAULT_CATALOG_SOURCE.replace(/\/+$/, "") + CATALOG_PATH;
+  const guard = await kernel.checkGuard({ kind: "net.fetch", target: catalogUrl });
+  if (guard.decision === "deny") {
+    process.stderr.write(`hzcode models refresh: egress denied — ${guard.reason ?? "net.fetch"}\n`);
+    return 1;
+  }
+  if (guard.decision === "ask") {
+    process.stderr.write(
+      "hzcode models refresh: net.fetch requires approval (not available in this command); adjust egress policy or run from a session\n",
+    );
+    return 1;
+  }
+  const prev = readCatalogCache();
+  try {
+    const fetched = await fetchLiveCatalog(DEFAULT_CATALOG_SOURCE, {
+      etag: prev?.meta.etag,
+      assertNetFetch: (url) => {
+        if (url !== catalogUrl) throw new Error("unexpected catalog URL");
+      },
+    });
+    if (fetched.notModified) {
+      process.stdout.write(`models cache unchanged (304) at ${catalogCachePath()}\n`);
+      return 0;
+    }
+    const file = writeCatalogCache(fetched.catalog, {
+      fetchedAt: new Date().toISOString(),
+      source: DEFAULT_CATALOG_SOURCE,
+      etag: fetched.etag,
+    });
+    const n = Object.keys(fetched.catalog.providers).length;
+    const diffLine = prev !== undefined ? summarizeCatalogDiff(prev.catalog, fetched.catalog) : undefined;
+    process.stdout.write(
+      `models cache updated: ${n} providers → ${file}${diffLine !== undefined ? `\ncatalog diff: ${diffLine}` : ""}\n`,
+    );
+    return 0;
+  } catch (err) {
+    process.stderr.write(`hzcode models refresh: ${errorMessage(err)}\n`);
+    return 1;
+  }
+}
+
+/** `hzcode suggest [task...]` — one model turn, print a command, never run it (T-16). */
+async function runSuggestCommand(args: string[]): Promise<number> {
+  let workspace = process.cwd();
+  let mock = false;
+  const parts: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--mock") mock = true;
+    else if (arg === "--workspace" && args[i + 1] !== undefined) workspace = args[(i += 1)];
+    else if (arg.startsWith("--")) {
+      process.stderr.write(`hzcode: suggest: unknown option ${arg}\nusage: hzcode suggest [--workspace <path>] [task...]\n`);
+      return 2;
+    } else parts.push(arg);
+  }
+  workspace = path.resolve(workspace);
+  if (parts.join(" ").trim() === "" && !process.stdin.isTTY) {
+    try {
+      parts.push((await Bun.stdin.text()).trim());
+    } catch {
+      /* no stdin */
+    }
+  }
+  const request = parts.join(" ").trim();
+  if (request === "") {
+    process.stderr.write("hzcode: suggest: give a task on the command line or stdin\n");
+    return 2;
+  }
+  const mod = core as unknown as CoreModule;
+  const createRuntime = typeof mod.createRuntime === "function" ? mod.createRuntime : mod?.default?.createRuntime;
+  if (typeof createRuntime !== "function") {
+    process.stderr.write("hzcode: the runtime is missing from this build (app/src/core)\n");
+    return 1;
+  }
+  let runtime: Runtime;
+  try {
+    runtime = await createRuntime({ workspace, mock, permissionMode: "default" });
+  } catch (err) {
+    process.stderr.write(`hzcode: suggest: ${errorMessage(err)}\n`);
+    return 1;
+  }
+  try {
+    const ui = createApprovalUi(false);
+    ui.runtime = runtime;
+    installApprovalHandler(ui);
+    const res = await runtime.send(suggestPrompt(request), { onEvent: () => {} });
+    const line = cleanSuggestedCommand(res.text);
+    if (res.aborted || line === "") {
+      process.stderr.write("hzcode: suggest: no command was produced\n");
+      return 1;
+    }
+    process.stdout.write(line + "\n");
+    return 0;
+  } finally {
+    try {
+      await runtime.close();
+    } catch {
+      /* closing */
+    }
+  }
+}
+
 /** `hzcode commit [--preview] [--receipt] [--workspace <path>] [context...]` (T-16). */
 async function runCommitCommand(args: string[]): Promise<number> {
   let preview = false;
@@ -360,7 +678,11 @@ async function main(): Promise<number> {
   // flag behaviour changes: `serve` is additive, everything else is unchanged.
   const rawArgs = process.argv.slice(2);
   if (rawArgs[0] === "commit") return runCommitCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "suggest") return runSuggestCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "models") return runModelsCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "login" || rawArgs[0] === "logout") return runLoginCommand(rawArgs);
   if (rawArgs[0] === "config") return runConfigCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "keybind") return runKeybindCommand(rawArgs.slice(1));
   if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
   if (rawArgs[0] === "serve") {
     const serveOpts = parseArgs(rawArgs.slice(1));
@@ -421,9 +743,19 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  if (opts.worktree !== undefined) {
+    return runWorktreeBootstrap(opts, workspace);
+  }
+
   // A human is attached when they typed into a terminal; a pipe is a script.
   // -p is always a script: never a chat bar, never an approval prompt.
   const interactive = !opts.print && Boolean(process.stdin.isTTY);
+
+  const screenMode = resolveTuiScreenMode(process.env as Record<string, string | undefined>, opts.tuiScreenMode);
+  if (interactive && screenMode === "fullscreen") {
+    process.stderr.write(fullscreenNotImplementedMessage());
+    return 2;
+  }
 
   let printPrompt = "";
   if (opts.print) {

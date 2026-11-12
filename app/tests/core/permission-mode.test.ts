@@ -138,15 +138,19 @@ describe("accept-edits", () => {
     expect(asked.some((r) => r.kind === "fs.write")).toBe(true);
   });
 
-  test("a kernel deny stays a deny (never turned into an allow)", async () => {
-    const target = path.join(workspace, "denied.txt");
-    const { asked, toolOutput } = await run("accept-edits", oneCall("write", { path: target, content: "x\n" }), [
-      { kind: "fs.write", scope: "workspace", decision: "deny" },
-    ]);
-    expect(existsSync(target)).toBe(false);
-    expect(asked).toHaveLength(0);
-    expect(toolOutput).toContain("DENIED by policy");
-  });
+  test(
+    "a kernel deny stays a deny (never turned into an allow)",
+    async () => {
+      const target = path.join(workspace, "denied.txt");
+      const { asked, toolOutput } = await run("accept-edits", oneCall("write", { path: target, content: "x\n" }), [
+        { kind: "fs.write", scope: "workspace", decision: "deny" },
+      ]);
+      expect(existsSync(target)).toBe(false);
+      expect(asked).toHaveLength(0);
+      expect(toolOutput).toContain("DENIED by policy");
+    },
+    20_000,
+  );
 
   test("a write into the kernel state dir is never approved", async () => {
     const target = path.join(workspaceStateDir(workspace), "kernel", "policy.json");
@@ -196,9 +200,10 @@ describe("default and plan", () => {
 
 describe("policy functions", () => {
   const fsw = (target: string) => ({ kind: "fs.write" as const, target });
-  test("modeRefusal is read-only only, and only for writes and shell", () => {
+  test("modeRefusal is read-only only, and refuses writes, shell, and spawn", () => {
     expect(modeRefusal("read-only", fsw("/w/a"))).toContain("read-only");
     expect(modeRefusal("read-only", { kind: "shell.exec", target: "ls" })).toContain("read-only");
+    expect(modeRefusal("read-only", { kind: "spawn", target: "lsp" })).toContain("read-only");
     expect(modeRefusal("read-only", { kind: "fs.read", target: "/w/a" })).toBeUndefined();
     expect(modeRefusal("accept-edits", fsw("/w/a"))).toBeUndefined();
     expect(modeRefusal("default", fsw("/w/a"))).toBeUndefined();

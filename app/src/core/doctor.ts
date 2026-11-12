@@ -17,9 +17,11 @@ import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSy
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import { catalogModel, loadCatalog } from "./catalog/catalog";
+import { readOAuthToken } from "./auth/store";
 import { defaultConfigPath, loadConfig, missingKey, type EnvLike } from "./config";
-import { resolveKernelBinary } from "./kernel";
+import { resolveKernelBinary, resolveSandboxExecBinary } from "./kernel";
 import { kernelStateDir } from "./paths";
+import { resolveTuiScreenMode } from "../tui/screen-mode";
 import { detectColorLevel } from "../tui/style";
 
 export type DoctorStatus = "ok" | "warn" | "fail";
@@ -177,6 +179,21 @@ function checkConfig(d: DoctorEnv): DoctorCheck[] {
   return out;
 }
 
+function checkCatalogSource(d: DoctorEnv): DoctorCheck {
+  const loaded = loadCatalog(d.env, d.home);
+  const detail =
+    loaded.source === "cache"
+      ? `user cache (${Object.keys(loaded.providers).length} providers)`
+      : loaded.source === "override"
+        ? "HZ_MODELS_SNAPSHOT override"
+        : loaded.source === "snapshot"
+          ? `committed models-dev.snapshot.json (${Object.keys(loaded.providers).length} providers)`
+          : loaded.source === "curated"
+            ? "committed curated snapshot"
+            : loaded.source;
+  return ok("catalog.source", "model catalog", `source: ${detail}`);
+}
+
 function checkProvider(d: DoctorEnv): DoctorCheck[] {
   const out: DoctorCheck[] = [];
   const file = defaultConfigPath(d.home);
@@ -195,9 +212,13 @@ function checkProvider(d: DoctorEnv): DoctorCheck[] {
     out.push(fail("provider.key", "provider key", `${config.provider} needs a key and none is set`, `export ${missing}=... (the value is never printed by hzcode)`));
   } else if (config.provider === "mock" || config.provider === "ollama") {
     out.push(ok("provider.key", "provider key", "not required"));
+  } else if (config.resolved?.credential.kind === "oauth") {
+    out.push(ok("provider.key", "provider key", "oauth (value not shown)"));
   } else {
     out.push(ok("provider.key", "provider key", `present (source: ${config.sources.apiKey}; value not shown)`));
   }
+  const oauth = checkOAuthToken(d, config);
+  if (oauth !== undefined) out.push(oauth);
   // Model resolution against the catalog.
   const catalog = loadCatalog(d.env);
   if (config.provider === "mock") {
@@ -259,6 +280,85 @@ function checkWorkspace(d: DoctorEnv): DoctorCheck[] {
   return out;
 }
 
+/** Reduced sandbox helper (docs/33 §5.3): report binary presence only — not enforcement. */
+function checkSandboxExec(d: DoctorEnv): DoctorCheck {
+  if (d.env.HZ_SANDBOX_EXEC === "0") {
+    return ok("sandbox.exec", "hz-sandbox-exec", "disabled (HZ_SANDBOX_EXEC=0)");
+  }
+  const bin = resolveSandboxExecBinary(d.env);
+  if (bin === undefined) {
+    return warn(
+      "sandbox.exec",
+      "hz-sandbox-exec",
+      "binary not found (shell auto-wrap inactive)",
+      "build `hz-sandbox-exec` from kernel/ or set HZ_SANDBOX_EXEC_BIN; set HZ_SANDBOX_EXEC=1 to force wrap when the binary exists",
+    );
+  }
+  return ok("sandbox.exec", "hz-sandbox-exec", `found (${bin}); optional shell child confinement when the kernel reports process enforced`);
+}
+
+/** Honest Landlock posture (docs/33 §5.3): host capability only — never `enforced`. */
+function checkLandlockHost(d: DoctorEnv): DoctorCheck {
+  try {
+    const lsm = readFileSync("/sys/kernel/security/lsm", "utf8").toLowerCase();
+    if (lsm.includes("landlock")) {
+      return ok(
+        "sandbox.landlock",
+        "host Landlock LSM",
+        "landlock in LSM list; hz-sandbox-exec applies a workspace FS fence (HZ_SANDBOX_FS_ROOT)",
+      );
+    }
+    return ok("sandbox.landlock", "host Landlock LSM", "landlock not named in LSM list (see ops/landlock-probe.sh canary)");
+  } catch {
+    return warn(
+      "sandbox.landlock",
+      "host Landlock LSM",
+      "LSM list unreadable (common on WSL); hz-sandbox-exec still applies Landlock when the create canary works",
+      "run sh ops/landlock-probe.sh — exit 0 means Landlock is usable; docs/33 §5.3",
+    );
+  }
+}
+
+/** Stage 0 (docs/33 §5.2): report outer egress firewall marker only — never claim enforcement. */
+function checkOuterEgressFirewall(d: DoctorEnv): DoctorCheck {
+  const marker = d.env.HZ_OUTER_EGRESS_FIREWALL;
+  if (typeof marker === "string" && marker !== "" && marker !== "0" && marker !== "false") {
+    return ok(
+      "egress.outer",
+      "outer egress firewall",
+      "HZ_OUTER_EGRESS_FIREWALL is set (outer layer; unverifiable from inside and does not confine shell children)",
+    );
+  }
+  return warn(
+    "egress.outer",
+    "outer egress firewall",
+    "no HZ_OUTER_EGRESS_FIREWALL marker",
+    "use the container/devcontainer egress recipe (docs/33 §5.2 stage 0) if you rely on an outer firewall; shell children still reach the network unless HZ_SANDBOX_EXEC=1",
+  );
+}
+
+function checkOAuthToken(d: DoctorEnv, config: ReturnType<typeof loadConfig>): DoctorCheck | undefined {
+  const id = config.provider;
+  if (id === "mock" || id === "ollama") return undefined;
+  const tok = readOAuthToken(id, d.home);
+  const usesOAuth = config.resolved?.credential.kind === "oauth";
+  if (!usesOAuth && tok === undefined) return undefined;
+  if (tok === undefined) {
+    return fail(
+      "provider.oauth",
+      "oauth token",
+      `provider ${id} expects OAuth but no token file is stored`,
+      "run hzcode login when the PKCE flow is configured, or store a dev token under the user oauth directory",
+    );
+  }
+  const exp = tok.expiresAt ? Date.parse(tok.expiresAt) : Number.NaN;
+  if (!Number.isNaN(exp) && exp < Date.now()) {
+    return warn("provider.oauth", "oauth token", "stored token is expired", "refresh or re-login when token refresh is wired");
+  }
+  const detail = tok.expiresAt ? `present (expires ${tok.expiresAt}; value not shown)` : "present (value not shown)";
+  return ok("provider.oauth", "oauth token", detail);
+}
+
 function checkGit(d: DoctorEnv): DoctorCheck {
   const r = d.run("git", ["--version"], 5_000);
   return r.ok
@@ -297,16 +397,32 @@ function checkTerminal(d: DoctorEnv): DoctorCheck[] {
   return out;
 }
 
+function checkTuiScreen(d: DoctorEnv): DoctorCheck {
+  const mode = resolveTuiScreenMode(d.env);
+  if (mode === "fullscreen") {
+    return warn(
+      "tui.screen",
+      "TUI mode",
+      "fullscreen requested but not implemented",
+      "unset HZ_TUI_MODE / --fullscreen and use scrollback (default); see docs/33 §5.17",
+    );
+  }
+  return ok("tui.screen", "TUI mode", "scrollback (native terminal scrollback)");
+}
+
 /** Run every check, in table order. Never throws: a check that blows up is reported as a FAIL line. */
 export function runDoctor(d: DoctorEnv): DoctorCheck[] {
   const groups: Array<[string, () => DoctorCheck | DoctorCheck[]]> = [
     ["bun", () => checkBun(d)],
     ["kernel", () => checkKernel(d)],
     ["config", () => checkConfig(d)],
+    ["catalog", () => checkCatalogSource(d)],
     ["provider", () => checkProvider(d)],
     ["workspace", () => checkWorkspace(d)],
     ["git", () => checkGit(d)],
-    ["terminal", () => checkTerminal(d)],
+    ["sandbox", () => [checkSandboxExec(d), checkLandlockHost(d)]],
+    ["egress", () => checkOuterEgressFirewall(d)],
+    ["terminal", () => [...checkTerminal(d), checkTuiScreen(d)]],
   ];
   const out: DoctorCheck[] = [];
   for (const [name, fn] of groups) {

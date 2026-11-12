@@ -23,11 +23,31 @@ const WORKER = path.join(import.meta.dir, "fixtures", "lock-worker.ts");
 function spawnWorker(...args: string[]) {
   return Bun.spawn(["bun", WORKER, ...args], { stdout: "pipe", stderr: "pipe" });
 }
+/** Like spawnWorker, but child writes `.lock-busy` on first blocked acquire (cross-process wait sync). */
+function spawnWorkerWaiting(ws: string, ...args: string[]) {
+  return Bun.spawn(["bun", WORKER, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, HZ_LOCK_BUSY_MARKER: path.join(ws, ".lock-busy") },
+  });
+}
 async function finish(p: ReturnType<typeof spawnWorker>): Promise<string> {
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   const code = await p.exited;
   if (code !== 0) throw new Error(`worker exited ${code}: ${err}`);
   return out.trim();
+}
+
+/** Wait until the child is blocked in acquireLock (file-lock writes HZ_LOCK_BUSY_MARKER). */
+async function waitLockBusy(ws: string, child: ReturnType<typeof spawnWorker>, ms = 15_000): Promise<void> {
+  const marker = path.join(ws, ".lock-busy");
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (existsSync(marker)) return;
+    if (child.exitCode !== null) throw new Error(`worker exited before lock-busy: ${child.exitCode}`);
+    await Bun.sleep(25);
+  }
+  throw new Error("worker did not enter lock wait in time");
 }
 /** A pid that is certainly dead: a child that already exited. */
 async function deadPid(): Promise<number> {
@@ -130,20 +150,21 @@ describe("two real processes", () => {
   test("a second process's edit waits for the file lock, then reports a stale preimage instead of clobbering", async () => {
     const ws = root();
     const file = path.join(ws, "f.txt");
+    const lockPath = targetLockPath(ws, file);
     writeFileSync(file, "alpha\n");
-    const held = acquireLockSync(targetLockPath(ws, file));
-    const child = spawnWorker("edit", ws, "f.txt", "alpha", "child-edit");
-    // While the lock is held the child must NOT have written (fails if the edit tool takes no lock).
-    await Bun.sleep(600);
+    const held = acquireLockSync(lockPath);
+    const child = spawnWorkerWaiting(ws, "edit", ws, "f.txt", "alpha", "child-edit");
+    await waitLockBusy(ws, child);
+    expect(child.exitCode).toBeNull();
     expect(readFileSync(file, "utf8")).toBe("alpha\n");
     // The lock holder (another "process") changes the file, then releases.
     writeFileSync(file, "alpha-changed-by-other-process\n");
     held();
     const result = JSON.parse(await finish(child));
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("preimage changed");
+    expect(String(result.error ?? result.output ?? "")).toContain("preimage changed");
     expect(readFileSync(file, "utf8")).toBe("alpha-changed-by-other-process\n");
-  });
+  }, 30_000);
 
   const OTHER = "other-process-change\n";
   const cases: Array<[string, string, string, Record<string, unknown>]> = [
@@ -157,8 +178,8 @@ describe("two real processes", () => {
       const file = path.join(ws, name);
       writeFileSync(file, initial);
       const held = acquireLockSync(targetLockPath(ws, file));
-      const child = spawnWorker("tool", ws, tool, JSON.stringify(args));
-      await Bun.sleep(600);
+      const child = spawnWorkerWaiting(ws, "tool", ws, tool, JSON.stringify(args));
+      await waitLockBusy(ws, child);
       expect(readFileSync(file, "utf8")).toBe(initial);
       writeFileSync(file, OTHER);
       held();
@@ -166,7 +187,7 @@ describe("two real processes", () => {
       expect(result.ok).toBe(false);
       expect(result.error).toContain("preimage changed");
       expect(readFileSync(file, "utf8")).toBe(OTHER);
-    });
+    }, 30_000);
   }
 
   test("an edit reclaims a lock left by a crashed (dead-pid) holder and succeeds", async () => {

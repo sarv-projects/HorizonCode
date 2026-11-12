@@ -69,7 +69,8 @@ function depsFor(provider: Provider): { deps: LoopDeps; seen: RuntimeEvent[] } {
     callbacks: { onEvent: (ev) => seen.push(ev) },
     sessionLeases: [],
     approve: async () => true,
-    hooks: loadHooks(workspace, { home }),
+    hooks: loadHooks(workspace, { home, trustWorkspaceHooks: true }),
+    trustedWorkspaceHooks: [path.resolve(workspace)],
   };
   return { deps, seen };
 }
@@ -218,6 +219,7 @@ describe("hooks at the loop", () => {
       kernel,
       store,
       signal: new AbortController().signal,
+      trustedWorkspaceHooks: [path.resolve(workspace)],
     });
     expect(result.ok).toBe(true);
 

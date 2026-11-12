@@ -12,6 +12,7 @@
 
 import { readdirSync } from "node:fs";
 import * as path from "node:path";
+import { visibleWidth } from "./style";
 
 /** Directories never offered for `@` completion. */
 const SKIP_DIRS = new Set([".git", "node_modules", ".hz", ".hzcode"]);
@@ -85,6 +86,50 @@ export function complete(line: string, ctx: CompletionContext): [string[], strin
   return [hits, token];
 }
 
+/** Max rows shown in the scrollback completion popup (docs/33 §5.18). */
+export const DROPDOWN_MAX_ROWS = 8;
+
+/**
+ * Format a completion popup for scrollback mode (print-once above the prompt).
+ * Pure: no terminal I/O. Selected row is marked with `>`; others with a space.
+ * When there are more hits than `maxRows`, a footer names the remainder.
+ */
+export function formatCompletionDropdown(
+  hits: readonly string[],
+  selectedIndex = 0,
+  maxRows = DROPDOWN_MAX_ROWS,
+): string {
+  if (hits.length === 0) return "";
+  const cap = Math.max(1, maxRows);
+  const selected = Math.min(Math.max(0, selectedIndex), hits.length - 1);
+  // Keep the selected row in the visible window.
+  let start = 0;
+  if (selected >= cap) start = selected - cap + 1;
+  const slice = hits.slice(start, start + cap);
+  const width = Math.min(
+    40,
+    Math.max(12, ...slice.map((h) => visibleWidth(h)), visibleWidth("… +N more")),
+  );
+  const lines: string[] = [];
+  lines.push("┌" + "─".repeat(width + 2) + "┐");
+  for (let i = 0; i < slice.length; i += 1) {
+    const hit = slice[i]!;
+    const abs = start + i;
+    const mark = abs === selected ? ">" : " ";
+    const label = visibleWidth(hit) > width ? hit.slice(0, Math.max(1, width - 1)) + "…" : hit;
+    const pad = " ".repeat(Math.max(0, width - visibleWidth(label)));
+    lines.push(`│${mark}${label}${pad}│`);
+  }
+  const remaining = hits.length - slice.length;
+  if (remaining > 0) {
+    const footer = `… +${remaining} more`;
+    const pad = " ".repeat(Math.max(0, width - visibleWidth(footer)));
+    lines.push(`│ ${footer}${pad}│`);
+  }
+  lines.push("└" + "─".repeat(width + 2) + "┘");
+  return lines.join("\n");
+}
+
 /**
  * The dim suffix shown after the cursor: the rest of the first candidate when
  * something was typed. "" when nothing sensible can be suggested.
@@ -94,5 +139,7 @@ export function ghostFor(line: string, ctx: CompletionContext): string {
   const { hits, token } = candidates(line, ctx);
   const first = hits[0];
   if (first === undefined || first === token || !first.startsWith(token)) return "";
-  return first.slice(token.length);
+  const suffix = first.slice(token.length);
+  if (visibleWidth(suffix) === 0) return "";
+  return suffix;
 }

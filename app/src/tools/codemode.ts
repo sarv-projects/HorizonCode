@@ -319,6 +319,9 @@ export const codemodeTool: Tool = {
         env: { ...scrubEnv(), [FRAME_KEY_ENV]: bootstrapKey },
         stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         detached: true,
+        sandboxWrap: "auto",
+        sandboxMode: "workspace-write",
+        kernel: ctx.kernel,
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

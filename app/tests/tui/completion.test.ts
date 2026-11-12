@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { candidates, complete, ghostFor } from "../../src/tui/completion";
+import { candidates, complete, formatCompletionDropdown, ghostFor } from "../../src/tui/completion";
 
 const ws = mkdtempSync(path.join(tmpdir(), "hz-complete-"));
 mkdirSync(path.join(ws, "src", "deep"), { recursive: true });
@@ -34,6 +34,11 @@ describe("slash completion", () => {
     expect(ghostFor("/", ctx)).toBe("");
     expect(ghostFor("/zzz", ctx)).toBe("");
   });
+
+  test("ghost suffix for wide-character command names", () => {
+    const wide = { ...ctx, commands: ["測試", "help"] };
+    expect(ghostFor("/測", wide)).toBe("試");
+  });
 });
 
 describe("@file completion", () => {
@@ -57,5 +62,22 @@ describe("unsafe file names", () => {
     const hits = candidates("@e", ctx).hits;
     expect(hits.some((h) => h.includes("\u001b"))).toBe(false);
     expect(ghostFor("@evil", ctx)).toBe("");
+  });
+});
+
+describe("completion dropdown", () => {
+  test("formatCompletionDropdown marks selection and caps rows", () => {
+    const hits = ["/help", "/mode", "/model", "/plan", "/review", "/think", "/stats", "/theme", "/quit"];
+    const box = formatCompletionDropdown(hits, 0, 3);
+    expect(box).toContain(">/help");
+    expect(box).toContain(" /mode");
+    expect(box).toContain("… +6 more");
+    expect(box.split("\n").length).toBe(6); // top + 3 rows + footer + bottom
+    const mid = formatCompletionDropdown(hits, 5, 3);
+    expect(mid).toContain(">/think");
+  });
+
+  test("empty hits yield empty string", () => {
+    expect(formatCompletionDropdown([])).toBe("");
   });
 });

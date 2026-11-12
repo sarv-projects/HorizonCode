@@ -14,7 +14,10 @@
  * id (no `id.includes(...)` anywhere).
  */
 
+import { homedir } from "node:os";
 import type { Credential, Provider, ProviderEvent, ProviderRequest } from "../../contracts";
+import { refreshOAuthAccessToken } from "../auth/refresh";
+import type { ProviderOAuthEndpoints } from "../config";
 import { streamOpenAiCompatible } from "./openai";
 
 export interface OpenAiCompatibleOptions {
@@ -25,6 +28,8 @@ export interface OpenAiCompatibleOptions {
   /** How the host is authenticated (contracts.ts `Credential`). */
   credential: Credential;
   maxTokens?: number;
+  oauth?: ProviderOAuthEndpoints;
+  home?: string;
 }
 
 /**
@@ -45,10 +50,25 @@ function authorizationHeader(credential: Credential): string | undefined {
  * itself.
  */
 export function createOpenAiCompatibleProvider(opts: OpenAiCompatibleOptions): Provider {
-  const authorization = authorizationHeader(opts.credential);
+  let credential = opts.credential;
+  const home = opts.home ?? homedir();
+  const wire = (): Parameters<typeof streamOpenAiCompatible>[0] => ({
+    name: opts.name,
+    baseUrl: opts.baseUrl,
+    maxTokens: opts.maxTokens,
+    getAuthorization: () => authorizationHeader(credential),
+    onUnauthorized:
+      opts.oauth && credential.kind === "oauth"
+        ? async () => {
+            const next = await refreshOAuthAccessToken(opts.name, opts.oauth!, home);
+            if (!next || next.kind !== "oauth") return false;
+            credential = next;
+            return true;
+          }
+        : undefined,
+  });
   return {
     name: opts.name,
-    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> =>
-      streamOpenAiCompatible({ name: opts.name, baseUrl: opts.baseUrl, maxTokens: opts.maxTokens, authorization }, req),
+    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> => streamOpenAiCompatible(wire(), req),
   };
 }

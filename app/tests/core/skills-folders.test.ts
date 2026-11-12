@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { activeSkillSection, getSkill, listSkills } from "../../src/core/skills";
+import type { WorkspaceTrustOptions } from "../../src/core/trust";
 
 let ws: string;
 let home: string;
@@ -24,11 +25,15 @@ function put(file: string, text: string): void {
   writeFileSync(file, text);
 }
 
+function skillOpts(trusted = false): WorkspaceTrustOptions {
+  return trusted ? { home, trustedWorkspaceHooks: [path.resolve(ws)] } : { home };
+}
+
 test("folder skill loads SKILL.md and lists resources", () => {
   const dir = path.join(ws, ".claude", "skills", "deploy");
   put(path.join(dir, "SKILL.md"), "---\ndescription: Ship it\n---\nRun the steps.");
   put(path.join(dir, "scripts", "go.sh"), "echo");
-  const skill = getSkill(ws, "deploy")!;
+  const skill = getSkill(ws, "deploy", skillOpts())!;
   expect(skill.description).toBe("Ship it");
   expect(skill.resources).toEqual(["scripts/go.sh"]);
   expect(activeSkillSection(skill)).toContain("- scripts/go.sh");
@@ -36,10 +41,10 @@ test("folder skill loads SKILL.md and lists resources", () => {
 
 test("precedence: project hz > project .claude", () => {
   put(path.join(ws, ".claude", "skills", "a", "SKILL.md"), "project claude");
-  expect(getSkill(ws, "a")!.body).toBe("project claude");
+  expect(getSkill(ws, "a", skillOpts())!.body).toBe("project claude");
   put(path.join(ws, ".hz", "state", "skills", "a", "SKILL.md"), "project hz");
-  expect(getSkill(ws, "a")!.body).toBe("project hz");
-  expect(listSkills(ws).filter((s) => s.name === "a")).toHaveLength(1);
+  expect(getSkill(ws, "a", skillOpts(true))!.body).toBe("project hz");
+  expect(listSkills(ws, skillOpts(true)).filter((s) => s.name === "a")).toHaveLength(1);
 });
 
 test("symlinked skill files and folders are refused", () => {
@@ -53,12 +58,12 @@ test("symlinked skill files and folders are refused", () => {
   const outside = path.join(ws, "outside");
   put(path.join(outside, "SKILL.md"), "body");
   symlinkSync(outside, path.join(dir, "linked"));
-  expect(listSkills(ws).map((s) => s.name)).toEqual([]);
+  expect(listSkills(ws, skillOpts()).map((s) => s.name)).toEqual([]);
 });
 
 test("the built-in execute-plan skill resolves but is not listed, and a workspace skill shadows it", () => {
-  expect(getSkill(ws, "execute-plan")?.source).toBe("builtin:execute-plan");
-  expect(listSkills(ws).map((s) => s.name)).not.toContain("execute-plan");
+  expect(getSkill(ws, "execute-plan", skillOpts())?.source).toBe("builtin:execute-plan");
+  expect(listSkills(ws, skillOpts()).map((s) => s.name)).not.toContain("execute-plan");
   put(path.join(ws, ".hz", "state", "skills", "execute-plan.md"), "---\ndescription: mine\n---\nmine");
-  expect(getSkill(ws, "execute-plan")?.body).toBe("mine");
+  expect(getSkill(ws, "execute-plan", skillOpts(true))?.body).toBe("mine");
 });
