@@ -2025,7 +2025,9 @@ async function executeTool(
     } else if (call.name === "edit" && editArgsEligibleForKernelRoute(parsed.args)) {
       routed = await tryKernelEditRoute(deps.kernel, deps.workspace, deps.sessionId, effectId, parsed.args);
     } else if (call.name === "shell" && shellArgsEligibleForKernelRoute(parsed.args)) {
-      routed = await tryKernelShellRoute(deps.kernel, deps.workspace, effectId, parsed.args);
+      routed = await tryKernelShellRoute(deps.kernel, deps.workspace, effectId, parsed.args, {
+        sessionId: deps.sessionId, admittedByLoop: true,
+      });
     } else if (call.name === "apply_patch" && applyPatchArgsEligibleForKernelRoute(parsed.args)) {
       routed = await tryKernelApplyPatchRoute(
         deps.kernel,

@@ -25,6 +25,10 @@ pub struct Kernel {
     events: EventLog,
     receipts: Receipts,
     guard: Guard,
+    /// Bound at process launch, not from a caller's effect.execute params.
+    /// A raw RPC may narrow to this workspace, never widen it. Standalone
+    /// kernels started without the variable remain explicitly unbound.
+    workspace_root: Option<std::path::PathBuf>,
     egress_connect: Mutex<egress_connect::ListenerSlot>,
     effect_hermetic: effect_host::SharedHermeticLedger,
 }
@@ -35,6 +39,9 @@ impl Kernel {
             events: EventLog::new_with_anchor(state_dir, anchor.clone()),
             receipts: Receipts::new_with_anchor(state_dir, anchor),
             guard: Guard::new(state_dir),
+            workspace_root: std::env::var_os("HZ_KERNEL_WORKSPACE_ROOT")
+                .filter(|s| !s.is_empty())
+                .map(std::path::PathBuf::from),
             egress_connect: Mutex::new(egress_connect::ListenerSlot::new()),
             effect_hermetic: Mutex::new(effect_host::HermeticEffectLedger::default()),
         }
@@ -284,6 +291,23 @@ impl Kernel {
             // Kernel-owned, cross-process five-phase effect execution.
             // The OS owner lock covers prepare, execute, postimage and settle.
             "effect.execute" => {
+                if effect_owner::is_mutating(params) {
+                    if let Some(bound) = &self.workspace_root {
+                        let supplied = params.get("sandboxRoot")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| "HZ_PRECONDITION_FAILED: bound effect.execute requires sandboxRoot".to_string())?;
+                        let bound_resolved = guard::lexical_resolve(bound).ok_or_else(|| {
+                            "HZ_PRECONDITION_FAILED: kernel workspace binding could not resolve".to_string()
+                        })?;
+                        let requested_resolved = guard::lexical_resolve(Path::new(supplied)).ok_or_else(|| {
+                            "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot could not resolve".to_string()
+                        })?;
+                        if !Path::new(supplied).is_absolute() || requested_resolved != bound_resolved {
+                            return Err("HZ_PRECONDITION_FAILED: effect.execute sandboxRoot does not equal kernel-bound workspace root".into());
+                        }
+                    }
+                }
                 let mut ledger = self
                     .effect_hermetic
                     .lock()
@@ -293,6 +317,7 @@ impl Kernel {
                     &self.receipts,
                     self.guard.state_dir(),
                     params,
+                    &self.guard,
                     &mut ledger,
                 )
             }

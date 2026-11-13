@@ -19,6 +19,65 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       expect(KERNEL_METHODS).toContain(method);
     }
   });
+  test.skipIf(!hasRustKernel)("approved shell route transfers an exact session-bound one-use Guard lease", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-guard-shell-route-"));
+    const client = new KernelClient({ workspace: root, stateDir: path.join(root, ".hzcode", "kernel") });
+    try {
+      expect(await client.start()).toBe("trusted");
+      // Direct usage with no loop-admitted proof never manufactures a lease.
+      const raw = await tryKernelShellRoute(client, root, "raw-shell", { command: "echo hello" });
+      expect(raw?.result.ok).toBe(false);
+      expect(raw?.result.error).toContain("Guard ask");
+      expect((await client.ownerStatus()).events).toBe(0);
+      const approved = await tryKernelShellRoute(
+        client, root, "approved-shell", { command: "echo hello" },
+        { sessionId: "shell-session", admittedByLoop: true },
+      );
+      expect(approved?.result.ok).toBe(true);
+      expect((await client.ownerVerify()).receiptsVerified).toBe(1);
+      const events = await client.readEvents("owner:effects");
+      const prepare = events.find((e) => e.type === "owner.prepare");
+      const settle = events.find((e) => e.type === "owner.settled");
+      expect(prepare?.payload?.details?.guardDecision).toBe("allow");
+      expect(typeof prepare?.payload?.details?.guardLeaseId).toBe("string");
+      expect(settle?.payload?.details?.guardLeaseId).toBe(prepare?.payload?.details?.guardLeaseId);
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("trusted kernel workspace binding rejects raw sandboxRoot widening before OwnerLog prepare", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-bound-client-"));
+    const elsewhere = mkdtempSync(path.join(tmpdir(), "hz-bound-elsewhere-"));
+    const client = new KernelClient({ workspace: root, stateDir: path.join(root, ".hzcode", "kernel") });
+    try {
+      expect(await client.start()).toBe("trusted");
+      await expect(client.executeEffect({
+        effectId: "widen-scope", sandboxRoot: elsewhere,
+        dispatch: { kind: "fs.write", spec: { path: "outside.txt", text: "NO" } },
+      })).rejects.toThrow(/kernel-bound workspace root/);
+      expect(() => readFileSync(path.join(elsewhere, "outside.txt"))).toThrow();
+      expect((await client.ownerStatus()).events).toBe(0);
+      const authorized = await client.executeEffect({
+        effectId: "widen-scope", sandboxRoot: root,
+        dispatch: { kind: "fs.write", spec: { path: "inside.txt", text: "YES" } },
+      });
+      expect(authorized.ownerLogSettled).toBe(true);
+      expect(readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("YES");
+    } finally {
+      await client.close();
+      rmSync(elsewhere, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
   test.skipIf(!hasRustKernel)("two independent trusted clients see durable UNKNOWN and refuse next write", async () => {
     const snapshot = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath });

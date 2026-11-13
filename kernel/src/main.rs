@@ -551,6 +551,11 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     }
 
     let shell_stdout_expected = canon::sha256_bytes(b"hz-selftest-shell\n");
+    // Shell policy is ASK by default: mint a kernel-owned single-use lease
+    // rather than treating a caller's sandboxRoot as authorization.
+    let _ = call(&kernel, "guard.lease", json!({
+        "kind": "shell.exec", "pattern": "echo hz-selftest-shell", "ttlMs": 60_000
+    }));
     match call(
         &kernel,
         "effect.execute",

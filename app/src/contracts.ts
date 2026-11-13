@@ -930,6 +930,8 @@ export interface KernelRequestMap {
       effectId: string;
       dispatch: { kind: string; spec?: Record<string, unknown> };
       leaseId?: string;
+      /** Bound to the human-approved tool session, never trusted as a caller permit. */
+      sessionId?: string;
       /** Required for `fs.read` / `fs.write` / `fs.edit` / `fs.delete` / `fs.rename` / `shell.exec`; paths/cwd must resolve inside this root only. */
       sandboxRoot?: string;
     };
@@ -965,6 +967,9 @@ export interface KernelRequestMap {
       ownerReceiptId?: string;
       ownerReceiptSeq?: number;
       ownerResultDigest?: string;
+      /** All consumed Guard leases for this direct effect; rename may need two. */
+      ownerGuardLeaseIds?: string[];
+      ownerGuardLeaseId?: string;
       ownerLogSettled?: boolean;
     };
   };

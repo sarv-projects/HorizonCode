@@ -1323,7 +1323,10 @@ export class KernelClient {
         // platform's default env handling diverged by runtime version (an
         // auditor on bun 1.3.14 saw the mutation not reach the child while the
         // in-process fallback read it live — divergent anchors).
-        env: { ...process.env },
+        // A mutating raw effect.execute RPC must not be able to replace the
+        // workspace selected at kernel launch with an arbitrary sandboxRoot.
+        // Override ambient env; the trusted client owns this binding.
+        env: { ...process.env, HZ_KERNEL_WORKSPACE_ROOT: this.workspace },
       });
       this.child = child;
       this.wire(child);
