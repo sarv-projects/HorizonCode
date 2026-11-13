@@ -1512,6 +1512,10 @@ export class KernelClient {
         return this.local.issueReceipt(p as unknown as ReceiptInput) as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "receipt.verify":
         return this.local.verifyReceipts() as unknown as Promise<KernelRequestMap[M]["result"]>;
+      case "effect.owner.status":
+      case "effect.owner.verify":
+        // A Bun fallback cannot assert a Rust-owned cross-process fence.
+        return Promise.reject(new Error("HZ_PRECONDITION_FAILED: OwnerLog requires the trusted Rust kernel"));
       case "guard.check":
         return this.local.checkGuard(
           p.action as GuardAction,
@@ -2032,6 +2036,9 @@ export class KernelClient {
 
   /** Append one event; the log assigns seq, prevHash and hash. */
   async appendEvent(stream: string, seed: EventSeed): Promise<EventEnvelope> {
+    if (stream.startsWith("owner:")) {
+      throw new Error("HZ_PRECONDITION_FAILED: owner event streams are kernel-only");
+    }
     return this.rpc("log.append", { stream, event: seed });
   }
 
@@ -2103,7 +2110,17 @@ export class KernelClient {
     return this.rpc("sandbox.report", { mode, ...opts });
   }
 
-  /** Kernel hermetic effect.execute stub (ruling 243, sandboxed fs/shell 267/275/277/278); Bun owns live tools. */
+  /** R170 precursor: kernel-owned, durable cross-process admission status; no local stand-in. */
+  async ownerStatus(): Promise<KernelRequestMap["effect.owner.status"]["result"]> {
+    return this.rpc("effect.owner.status", {});
+  }
+
+  /** Verify the independent owner EventLog and shared receipts chain. */
+  async ownerVerify(): Promise<KernelRequestMap["effect.owner.verify"]["result"]> {
+    return this.rpc("effect.owner.verify", {});
+  }
+
+  /** Kernel hermetic effect.execute, now with default-on Rust OwnerLog for supported mutations. */
   async executeEffect(
     params: KernelRequestMap["effect.execute"]["params"],
   ): Promise<KernelRequestMap["effect.execute"]["result"]> {

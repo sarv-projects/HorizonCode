@@ -11,13 +11,13 @@
 | ID | Completion proof required | Current evidence | State |
 |---|---|---|---|
 | P0-1 | All mutations kernel-owned or refused, complete edit/patch parity | `kernel/src/effect_host.rs`, `app/src/core/loop.ts`, `app/tests/core/effect-execute-kernel.test.ts` | PARTIAL |
-| P0-2 | Independent observation, replay, postimage and receipt settlement all effects | `kernel/src/effect_evidence.rs`, `app/src/core/receipt-postimage.ts` | PARTIAL |
-| P0-3 | Rust OwnerLog + atomic cross-process admission + durable mandatory R170 latch | `app/src/core/effect-reconcile-latch-store.ts`; opt-in only | PARTIAL |
-| P0-4 | Product default routed netns/proxy, real socket bypass denial tests | `kernel/src/egress.rs`, `ops/netns-spawn-routed-veth-probe.sh` | PARTIAL; UNPROVEN |
+| P0-2 | Independent observation, replay, postimage and receipt settlement all effects | `kernel/src/effect_owner.rs` owner-issued receipts and durable settle for direct Rust effects; `kernel/src/effect_evidence.rs`; replay/other classes OPEN | PARTIAL |
+| P0-3 | Rust OwnerLog + atomic cross-process admission + durable mandatory R170 latch | `kernel/src/effect_owner.rs`, `kernel/tests/integration.rs`, `app/tests/core/effect-owner-kernel.test.ts`; atomic for direct Rust effects only; other entrypoints OPEN | PARTIAL |
+| P0-4 | Product default routed netns/proxy, real socket bypass denial tests | `kernel/src/egress.rs`, `ops/usernetns-direct-tcp-denial-smoke.sh` (disposable user+net namespace only, NOT product), `ops/netns-spawn-routed-veth-probe.sh` | PARTIAL; PRODUCT UNPROVEN |
 | R172 | Nested streams, verification chain, RC-7 terminal and entrypoint parity | `app/src/core/effect-reconcile-attach.ts` | PARTIAL |
 | RC-18 | 44 expected canonical event kinds emitted and validated | `app/src/core/event-catalogue.ts` (23/44 recorded) | PARTIAL |
 | Patch parity | All strict-mode cross-file/ambiguous/fuzzy projection decisions | `app/src/core/effect-kernel-tool-projection.ts` | PARTIAL |
-| Cross-process consistency | Atomic owner/fencing and replay after crashes | `app/src/core/effect-reconcile-attach.ts` | PARTIAL |
+| Cross-process consistency | Atomic owner/fencing and replay after crashes | `kernel/src/effect_owner.rs` direct-effect flock and UNKNOWN (348); `app/src/core/effect-reconcile-attach.ts`; universal replay/release OPEN | PARTIAL |
 
 ## 47 open primary adoption requirements
 

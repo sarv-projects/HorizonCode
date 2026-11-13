@@ -28,7 +28,7 @@
 
 | Fact | Evidence |
 |---|---|
-| Branch | Baseline `main` at `7722dce` was clean when Batch 1 started; implementation on `fix/p0-effecthost-batch1` (rulings **343–347**, owner authorized commit/push; confirm remote state with git) |
+| Branch | Baseline `main` at `7722dce` was clean when Batch 1 started; implementation on `fix/p0-effecthost-batch1` (rulings **343–348**, topic-branch follow-up; confirm commit/push in git, never assume merged) |
 | Research | `repo_take/little-coder` @ `89d4fa0…`, `repo_take/aider` @ `5dc9490…` (gitignored) |
 | Never claim | Shell-net **`enforced`** |
 | WSL caveat | `kernel/tests/sandbox_exec.rs` may fail without CAP/Landlock |
@@ -40,8 +40,8 @@
 
 ## Z. What to implement first (P0 order)
 
-1. EffectHost: **343** completed attach/strict facade; **345** opt-in relative-indent/UTF-8 repair; **347** adds unique trim-style reindent/line-patch anchors and closes lint command-admission bypass. **OPEN:** complete general 3-way/line-patch/fuzz parity, kernel pre-read proofs and universal Rust execute/observe ownership
-2. R170: **344** added durable opt-in latch-until-explicit-clean-release, first-admission checks and fail-closed unknown/multi-file paths. **OPEN:** default-on kernel-owned latch, atomic cross-process admission, full docs/13 guarantees.
+1. EffectHost: **343** attach/facade strict gate; **345/347** opt-in edit parity; **348** default-on *direct Rust* OwnerLog and raw kernel-state/shell refusals. **OPEN:** universal kernel Guard-authorize+execute/observe, missing entrypoints, complete merge/patch/fuzz, replay/recovery.
+2. R170: **344** opt-in TypeScript durable latch; **348** adds default-on Rust OwnerLog + OS cross-process flock fencing for *kernel-owned direct* effects and independent receipt chain. **OPEN:** universal all-entrypoint owner, cross-process Bun/TS admission, UNKNOWN clean-release/recovery proof, full docs/13 protocol.
 3. Egress: product netns path without `enforced`  
 4. Wave 0: R172 verify + hz.* honesty  
 5. Then §7 OPEN rows (§C) by family; Wave E after spine moves  
@@ -65,10 +65,10 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 
 | # | Area | Still open | Done bar | Docs / code |
 |---:|---|---|---|---|
-| 1 | Full EffectHost | **343** closes attach/facade bypass; **347** reduces opt-in kernel unique trim/anchor edits and adds lint shell admission. Bun fallback, general patch/merge/fuzz parity and universal Rust ownership remain OPEN | Kernel owns or refuses every effect, full independent observe, `=require` kernel edit parity | `effect-host-runtime.ts`, `effect-reconcile-attach.ts`, `index.ts` |
-| 2 | Postimage / Rust observe | Not all tools on kernel; replay default off | Rust observes all; replay tested | `effect_host.rs`, `receipt-postimage.ts` |
-| 3 | Full R170 | **344** closes opt-in sticky/durable latch, first-admission gate, unknown-target and multi-path bypasses. Default-on Rust OwnerLog and atomic cross-process fencing remain OPEN | Kernel-owned mandatory barrier and independent execute/observe settlement | `13-tui.md`, `effect-reconcile-block.ts`, `effect-reconcile-latch-store.ts` |
-| 4 | MITM / routed egress | **315–341** probes; not product default | Product netns E2E; never `enforced` | `egress-*.ts`, `kernel/` |
+| 1 | Full EffectHost | **343–347** reduce strict/edit gaps; **348** kernel-owned five-step journal + output-only unconfined shell refusal on direct Rust path. Bun/other entrypoints, Guard-bound owner authorization, full patch/merge/fuzz and universal ownership remain OPEN | Kernel owns or refuses every effect, full independent observe, `=require` kernel edit parity | `effect-host-runtime.ts`, `effect-reconcile-attach.ts`, `index.ts` |
+| 2 | Postimage / Rust observe | **348** owner-issued receipt bound to independently observed result for direct Rust mutators; other tools not on kernel, independent replay/clean UNKNOWN recovery default unavailable | Rust observes all; replay tested | `effect_host.rs`, `receipt-postimage.ts` |
+| 3 | Full R170 | **344** opt-in TS latch + **348** default-on kernel-owned OwnerLog and atomic POSIX flock around **direct Rust effect.execute only**. Bun/hook/MCP/extension cross-process fencing, owner-wide default, UNKNOWN release/replay and alias races OPEN | Kernel-owned mandatory barrier and independent execute/observe settlement | `13-tui.md`, `effect-reconcile-block.ts`, `effect-reconcile-latch-store.ts` |
+| 4 | MITM / routed egress | **315–341** probe prototypes; **348** rejects unconfined raw kernel arbitrary shell and adds `ops/usernetns-direct-tcp-denial-smoke.sh` (disposable user+net namespace TCP denial only). Product shell/proxy/TLS E2E and default routing OPEN | Product netns E2E; never `enforced` | `egress-*.ts`, `kernel/` |
 
 ## B. Wave 0 spine residuals
 
@@ -78,8 +78,8 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | R172 | Verify chain; nested stream; RC-7 terminal | **284**, **289**, **292**, **322** |
 | kernel fs.edit | **345** relative-indent + **347** per-line trim/3-way-style replacement rebase and unique anchored equal-length patch behind opt-in repair flag; generalized merge/patch/fuzz, pre-read and universal strict routing still open | **335–339**, **345**, **347** |
 | apply_patch | cross-file/ambiguous; **313** Bun fuzz | **306**, **313**, **323** |
-| **338** hydrate | **343** closes same-process `switchSession` refresh from independently persisted ledger; broader cross-process fencing/owner identity still open | **338**, **343** |
-| Batches 1–4 branch | **343–347** source/tests/docs on `fix/p0-effecthost-batch1`; audit `audit/p0-effecthost-baseline-2026-11-13.md`. Push/PR state must be checked in git; no release claim | §0 above |
+| **338** hydrate / owner | **343** switchSession reload + **348** Rust direct-effect cross-process OwnerLog, duplicate ID/UNKNOWN fence; *universal* cross-process admission and recovered UNKNOWN clean release still OPEN | **338**, **343**, **348** |
+| Batches 1–5 topic branch | **343–348** on `fix/p0-effecthost-batch1`; baseline audit and `audit/p0-ownerlog-fence-2026-11-13.md`. Push/PR state must be verified; no merge or release implied | §0 above |
 
 ### B.1 Queued (not formal §7 yet)
 

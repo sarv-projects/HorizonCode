@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::canon::error_response;
 use crate::effect_host;
+use crate::effect_owner;
 use crate::egress_connect;
 use crate::eventlog::{AnchorConfig, EventLog};
 use crate::guard::{self, Guard, GuardAction, Lease};
@@ -64,6 +65,11 @@ impl Kernel {
 
             "log.append" => {
                 let stream = string_param(params, "stream")?;
+                // The owner stream is exclusively kernel-generated. Letting
+                // caller log.append forge a settlement defeats R170.
+                if stream.starts_with("owner:") {
+                    return Err("HZ_PRECONDITION_FAILED: owner event streams are kernel-only".into());
+                }
                 let event = params
                     .get("event")
                     .ok_or_else(|| "log.append.event is required".to_string())?;
@@ -272,18 +278,29 @@ impl Kernel {
                 Ok(outcome.to_json())
             }
 
-            // EffectHost settle mirror (docs/28): Bun emits hz.effect.*; kernel
-            // agrees on settled|unknown from the same phase/receipt facts.
+            // EffectHost mirror for callers not entering the direct owner seam.
             "effect.reconcile" => effect_host::reconcile_params(params),
 
-            // Ruling 243: fail-closed execute stub; hermetic pure/echo only.
+            // Kernel-owned, cross-process five-phase effect execution.
+            // The OS owner lock covers prepare, execute, postimage and settle.
             "effect.execute" => {
                 let mut ledger = self
                     .effect_hermetic
                     .lock()
                     .map_err(|_| "effect.execute: hermetic ledger lock poisoned".to_string())?;
-                effect_host::execute_params(params, &mut ledger)
+                effect_owner::execute(
+                    &self.events,
+                    &self.receipts,
+                    self.guard.state_dir(),
+                    params,
+                    &mut ledger,
+                )
             }
+
+            // Read-only inspection/verification. A malformed/tampered chain
+            // fails closed, never turns into an empty clean status.
+            "effect.owner.status" => effect_owner::status(&self.events, self.guard.state_dir()),
+            "effect.owner.verify" => effect_owner::verify(&self.events, &self.receipts, self.guard.state_dir()),
 
             // §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced).
             "egress.connect.listen" => {

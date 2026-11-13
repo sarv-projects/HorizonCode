@@ -73,6 +73,273 @@ impl Drop for TempDir {
     }
 }
 
+/*
+ * P0 R170 kernel-owner admission tests. These deliberately open two real
+ * independent hz-kernel processes against one state directory.
+ */
+#[test]
+fn owner_effects_serialise_and_block_unknown_across_processes() {
+    let state = TempDir::new("owner-fence");
+    let sandbox = TempDir::new("owner-workspace");
+    fs::write(sandbox.path().join("file.txt"), b"original").unwrap();
+    let mut first = Kernel::start(state.path());
+    let mut second = Kernel::start(state.path());
+
+    let settled = first.ok("effect.execute", json!({
+        "effectId": "owner-one", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "file.txt", "text": "first" } }
+    }));
+    assert_eq!(settled["verdict"], "settled");
+    assert_eq!(first.ok("effect.owner.status", json!({}))["blocked"], false);
+    assert_eq!(second.ok("effect.owner.status", json!({}))["unresolved"], 0);
+
+    // An edit error after durable prepare is conservatively UNKNOWN: the
+    // owner cannot establish that a future mutation is safe from one caller.
+    let failed = first.err("effect.execute", json!({
+        "effectId": "owner-broken", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.edit", "spec": {
+            "path": "file.txt", "oldString": "missing", "newString": "hijack"
+        } }
+    }));
+    assert!(failed.contains("oldString"), "{failed}");
+    assert_eq!(first.ok("effect.owner.status", json!({}))["blocked"], true);
+    let refused = second.err("effect.execute", json!({
+        "effectId": "owner-two", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "file.txt", "text": "second" } }
+    }));
+    assert!(refused.contains("HZ_PRECONDITION_FAILED"), "{refused}");
+    assert!(refused.contains("UNKNOWN"), "{refused}");
+    assert_eq!(fs::read(sandbox.path().join("file.txt")).unwrap(), b"first");
+    assert_eq!(second.ok("effect.owner.verify", json!({}))["ok"], true);
+}
+
+#[test]
+fn raw_effect_execute_never_mutates_its_own_kernel_state_through_alias_or_rename() {
+    let ws = TempDir::new("owner-protected-ws");
+    let state = ws.path().join(".hzcode").join("kernel");
+    fs::create_dir_all(&state).unwrap();
+    let mut kernel = Kernel::start(&state);
+    let original = fs::read(state.join("owner-admission.lock")).unwrap_or_default();
+    let refused = kernel.err("effect.execute", json!({
+        "effectId": "owner-state-write", "sandboxRoot": ws.path(),
+        "dispatch": { "kind": "fs.write", "spec": {
+            "path": ".hzcode/kernel/owner-admission.lock", "text": "OVERWRITE"
+        }}
+    }));
+    assert!(refused.contains("kernel-state-protected"), "{refused}");
+    assert_eq!(fs::read(state.join("owner-admission.lock")).unwrap_or_default(), original);
+
+    #[cfg(unix)]
+    {
+        let alias = ws.path().join("alias-to-kernel");
+        std::os::unix::fs::symlink(&state, &alias).unwrap();
+        let denied = kernel.err("effect.execute", json!({
+            "effectId": "owner-state-symlink", "sandboxRoot": ws.path(),
+            "dispatch": { "kind": "fs.write", "spec": {
+                "path": "alias-to-kernel/owner-admission.lock", "text": "OVERWRITE"
+            }}
+        }));
+        assert!(denied.contains("kernel-state-protected"), "{denied}");
+    }
+
+    fs::write(ws.path().join("safe.txt"), "safe").unwrap();
+    let denied = kernel.err("effect.execute", json!({
+        "effectId": "owner-state-rename", "sandboxRoot": ws.path(),
+        "dispatch": { "kind": "fs.rename", "spec": {
+            "from": "safe.txt", "to": ".hzcode/kernel/owner-admission.lock"
+        }}
+    }));
+    assert!(denied.contains("kernel-state-protected"), "{denied}");
+    assert_eq!(fs::read(ws.path().join("safe.txt")).unwrap(), b"safe");
+}
+
+#[test]
+fn unconfined_shell_interpreter_is_explicitly_refused_before_spawn() {
+    let state = TempDir::new("owner-shell-unconfined");
+    let ws = TempDir::new("owner-shell-reject");
+    let mut k = Kernel::start(state.path());
+    let refused = k.err("effect.execute", json!({
+        "effectId": "shell-untrusted", "sandboxRoot": ws.path(),
+        "dispatch": { "kind": "shell.exec", "spec": {
+            "argv": ["sh", "-c", "printf UNSAFE > denied.txt"]
+        }}
+    }));
+    assert!(refused.contains("HZ_PRECONDITION_FAILED"), "{refused}");
+    assert!(refused.contains("unconfined"), "{refused}");
+    assert!(!ws.path().join("denied.txt").exists());
+    assert_eq!(k.ok("effect.owner.status", json!({}))["unresolved"], 0);
+}
+
+#[test]
+fn owner_shell_receipt_binds_observed_streams_and_does_not_poison_next_effect() {
+    let state = TempDir::new("owner-shell");
+    let sandbox = TempDir::new("owner-shell-workspace");
+    let mut kernel = Kernel::start(state.path());
+    let shell = kernel.ok("effect.execute", json!({
+        "effectId": "shell-one", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "shell.exec", "spec": { "argv": ["echo", "hello"] } }
+    }));
+    assert_eq!(shell["verdict"], "settled");
+    assert_eq!(shell["ownerLogSettled"], true);
+    assert!(shell["ownerReceiptId"].as_str().is_some());
+    assert!(shell["ownerResultDigest"].as_str().is_some());
+    let write = kernel.ok("effect.execute", json!({
+        "effectId": "shell-followup", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "after.txt", "text": "okay" } }
+    }));
+    assert_eq!(write["ownerLogSettled"], true);
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["receiptsVerified"], 2);
+}
+
+#[test]
+fn mixed_case_dispatch_cannot_evade_kernel_owner_fence() {
+    let state = TempDir::new("owner-case");
+    let sandbox = TempDir::new("owner-case-workspace");
+    let mut a = Kernel::start(state.path());
+    let mut b = Kernel::start(state.path());
+    let first = a.ok("effect.execute", json!({
+        "effectId": "case-write", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "FS.WRITE", "spec": { "path": "case.txt", "text": "FIRST" } }
+    }));
+    assert_eq!(first["ownerLogSettled"], true, "mixed-case write must be owner-recorded");
+    assert_eq!(a.ok("effect.owner.status", json!({}))["events"], 2);
+    let again = b.err("effect.execute", json!({
+        "effectId": "case-write", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "Fs.WrItE", "spec": { "path": "case.txt", "text": "SECOND" } }
+    }));
+    assert!(again.contains("duplicate EffectHost effectId"), "{again}");
+    assert_eq!(fs::read(sandbox.path().join("case.txt")).unwrap(), b"FIRST");
+}
+
+#[test]
+fn owner_effect_id_replay_cannot_write_twice() {
+    let state = TempDir::new("owner-replay");
+    let sandbox = TempDir::new("owner-replay-sandbox");
+    let mut a = Kernel::start(state.path());
+    let mut b = Kernel::start(state.path());
+    let first = a.ok("effect.execute", json!({
+        "effectId": "same-id", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "x", "text": "FIRST" } }
+    }));
+    assert_eq!(first["verdict"], "settled");
+    let second = b.err("effect.execute", json!({
+        "effectId": "same-id", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "x", "text": "SECOND" } }
+    }));
+    assert!(second.contains("duplicate EffectHost effectId"), "{second}");
+    assert_eq!(fs::read(sandbox.path().join("x")).unwrap(), b"FIRST");
+    assert_eq!(b.ok("effect.owner.status", json!({}))["events"], 2);
+}
+
+#[test]
+fn tampered_owner_chain_refuses_inspection_and_mutation() {
+    let state = TempDir::new("owner-tamper");
+    let sandbox = TempDir::new("owner-tamper-sandbox");
+    let mut a = Kernel::start(state.path());
+    a.ok("effect.execute", json!({
+        "effectId": "tamper-first", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "x", "text": "FIRST" } }
+    }));
+    let owner_log = state.path().join("events").join("owner__effects.jsonl");
+    let original = fs::read_to_string(&owner_log).unwrap();
+    fs::write(&owner_log, original.replace("owner.prepare", "owner.prepareX")).unwrap();
+    let mut b = Kernel::start(state.path());
+    let refusal = b.err("effect.owner.status", json!({}));
+    assert!(refusal.contains("verification failed"), "{refusal}");
+    let blocked = b.err("effect.execute", json!({
+        "effectId": "tamper-second", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "x", "text": "SECOND" } }
+    }));
+    assert!(blocked.contains("verification failed"), "{blocked}");
+    assert_eq!(fs::read(sandbox.path().join("x")).unwrap(), b"FIRST");
+}
+
+#[test]
+fn owner_verification_cross_checks_receipt_identity_sidecar_even_when_receipt_chain_is_valid() {
+    let state = TempDir::new("owner-receipt-link");
+    let sandbox = TempDir::new("owner-receipt-link-workspace");
+    let mut a = Kernel::start(state.path());
+    a.ok("effect.execute", json!({
+        "effectId": "receipt-linked", "sandboxRoot": sandbox.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "a.txt", "text": "ORIGINAL"}}
+    }));
+    // Receipt.effectId is an additive sidecar outside RECEIPT_FIELDS/hash.
+    // A valid receipt hash chain alone cannot prove the owner settlement points
+    // to the right effect; bind the two ledgers independently as well.
+    let file = state.path().join("receipts.jsonl");
+    let original = fs::read_to_string(&file).unwrap();
+    assert!(original.contains("receipt-linked"));
+    fs::write(&file, original.replace("receipt-linked", "receipt-forged")).unwrap();
+    let mut b = Kernel::start(state.path());
+    assert_eq!(b.ok("receipt.verify", json!({}))["ok"], true);
+    let message = b.err("effect.owner.verify", json!({}));
+    assert!(message.contains("owner receipt linkage"), "{message}");
+    let blocked = b.err("effect.execute", json!({
+        "effectId": "after-receipt-tamper", "sandboxRoot": sandbox.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "a.txt", "text": "WRONG"}}
+    }));
+    assert!(blocked.contains("owner receipt linkage"), "{blocked}");
+    assert_eq!(fs::read(sandbox.path().join("a.txt")).unwrap(), b"ORIGINAL");
+}
+
+#[test]
+fn owner_crash_after_durable_prepare_blocks_replay_in_new_kernel_process() {
+    let state = TempDir::new("owner-crash-prepared");
+    let sandbox = TempDir::new("owner-crash-workspace");
+    // A debug-only kernel fault injection exits immediately AFTER fsynced
+    // prepare, BEFORE execute/observe/settle. No successful response exists.
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_AFTER_PREPARE", "1")],
+    );
+    let request = json!({
+        "id": 333, "method": "effect.execute",
+        "params": {
+            "effectId": "crashed-before-execute", "sandboxRoot": sandbox.path(),
+            "dispatch": {"kind": "fs.write", "spec": {"path": "never.txt", "text": "NO"}}
+        }
+    });
+    crashed.send_line(&request.to_string());
+    let status = (0..100).find_map(|_| {
+        let status = crashed.child.try_wait().expect("poll kernel process");
+        if status.is_none() { std::thread::sleep(Duration::from_millis(20)); }
+        status
+    });
+    if status.is_none() {
+        let _ = crashed.child.kill();
+        let _ = crashed.child.wait();
+    }
+    assert_eq!(
+        status.and_then(|s| s.code()),
+        Some(86),
+        "fault-injected kernel should terminate without settlement",
+    );
+    assert!(!sandbox.path().join("never.txt").exists());
+
+    let mut resumed = Kernel::start(state.path());
+    let status = resumed.ok("effect.owner.status", json!({}));
+    assert_eq!(status["blocked"], true);
+    assert_eq!(status["unresolved"], 1);
+    assert_eq!(resumed.ok("effect.owner.verify", json!({}))["ok"], true);
+    let denied = resumed.err("effect.execute", json!({
+        "effectId": "after-crash", "sandboxRoot": sandbox.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "never.txt", "text": "NO"}}
+    }));
+    assert!(denied.contains("OwnerLog UNKNOWN"), "{denied}");
+    assert!(!sandbox.path().join("never.txt").exists());
+}
+
+#[test]
+fn owner_event_stream_is_not_caller_appendable() {
+    let state = TempDir::new("owner-private");
+    let mut kernel = Kernel::start(state.path());
+    let denied = kernel.err("log.append", json!({
+        "stream": "owner:effects", "event": { "type": "effect.settled" }
+    }));
+    assert!(denied.contains("HZ_PRECONDITION_FAILED"), "{denied}");
+    assert_eq!(kernel.ok("effect.owner.status", json!({}))["unresolved"], 0);
+}
+
 /* ------------------------------ kernel harness ------------------------------ */
 
 /// One live `hz-kernel` process speaking NDJSON over stdio.
@@ -3327,11 +3594,14 @@ fn effect_execute_fs_read_under_sandbox_root() {
 #[test]
 fn effect_execute_fs_write_under_sandbox_root() {
     let dir = TempDir::new("effect-execute-write");
+    // The workspace and the kernel's own durable authority state cannot
+    // coincide: raw kernel mutations must never rewrite its OwnerLog.
+    let state = TempDir::new("effect-execute-write-kernel");
     let sandbox = dir.path().join("sandbox");
     std::fs::create_dir_all(&sandbox).expect("sandbox dir");
     let expected = sha256_bytes(b"integration-write");
 
-    let mut kernel = Kernel::start(dir.path());
+    let mut kernel = Kernel::start(state.path());
     let result = kernel.ok(
         "effect.execute",
         json!({
@@ -3369,12 +3639,13 @@ fn effect_execute_fs_write_under_sandbox_root() {
 #[test]
 fn effect_execute_fs_edit_under_sandbox_root() {
     let dir = TempDir::new("effect-execute-edit");
+    let state = TempDir::new("effect-execute-edit-kernel");
     let sandbox = dir.path().join("sandbox");
     std::fs::create_dir_all(&sandbox).expect("sandbox dir");
     std::fs::write(sandbox.join("src.txt"), b"alpha-beta").expect("seed file");
     let expected = sha256_bytes(b"alpha-OMEGA");
 
-    let mut kernel = Kernel::start(dir.path());
+    let mut kernel = Kernel::start(state.path());
     let result = kernel.ok(
         "effect.execute",
         json!({

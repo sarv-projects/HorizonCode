@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use crate::canon::hash_receipt;
 use crate::eventlog::{
-    anchor_digest, ensure_anchor_matches, read_head, tail_of, verify_chain, AnchorConfig, ChainKind,
-    LockFile, VerifyReport,
+    anchor_digest, ensure_anchor_matches, read_head, tail_of, verify_chain, AnchorConfig,
+    ChainKind, LockFile, VerifyReport,
 };
 use crate::permm;
 use crate::time::now_iso;
@@ -146,6 +146,39 @@ impl Receipts {
             &self.anchor,
             &self.path.display().to_string(),
         )
+    }
+
+    /// Obtain an internally consistent receipt snapshot for the kernel OwnerLog.
+    /// Hold the SAME cross-process receipt lock as issue() while checking the
+    /// hash chain and parsing, so a concurrent appender cannot create a false
+    /// missing receipt between a log read and a head-anchor update. OwnerLog
+    /// then validates its settlement-to-receipt links independently.
+    pub fn read_verified(&self) -> Result<Vec<Value>, String> {
+        let _lock = LockFile::acquire(&self.path)?;
+        let lines = crate::eventlog::read_lines(&self.path)?;
+        let verified = verify_chain(
+            lines.clone(),
+            ChainKind::Receipt,
+            read_head(&self.path),
+            &self.anchor,
+            &self.path.display().to_string(),
+        )?;
+        if !verified.ok {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: owner receipt linkage: receipt chain broken at {:?}",
+                verified.broken_at,
+            ));
+        }
+        lines
+            .iter()
+            .map(|line| {
+                serde_json::from_str(line).map_err(|error| {
+                    format!(
+                        "HZ_PRECONDITION_FAILED: owner receipt linkage: malformed record: {error}"
+                    )
+                })
+            })
+            .collect()
     }
 }
 

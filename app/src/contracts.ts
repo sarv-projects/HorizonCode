@@ -850,6 +850,16 @@ export interface KernelRequestMap {
     };
     result: EnforcementOutcome;
   };
+  /** Kernel-owned R170 precursor: read-only OwnerLog status after cross-process lock. */
+  "effect.owner.status": {
+    params: Record<string, never>;
+    result: { blocked: boolean; unresolved: number; unresolvedIds: string[]; events: number };
+  };
+  /** Verify owner EventLog plus receipt chain; refusal if either is unreadable. */
+  "effect.owner.verify": {
+    params: Record<string, never>;
+    result: { ok: boolean; events: number; blocked: boolean; unresolved: number; receiptsVerified: number };
+  };
   /** EffectHost settle mirror — phases + receipt facts → settled|unknown. */
   "effect.reconcile": {
     params: {
@@ -866,11 +876,15 @@ export interface KernelRequestMap {
     result: { verdict: "settled" | "unknown" };
   };
   /**
-   * Ruling 243 + **267** + **275** + **277** + **278** — kernel execute stub only. Mutating dispatch kinds
-   * fail closed (`HZ_PRECONDITION_FAILED`); hermetic `pure`/`echo`, sandboxed `fs.read`,
-   * sandboxed `fs.write`, sandboxed `fs.edit`, sandboxed `fs.delete`, sandboxed `fs.rename`, and sandboxed `shell.exec` (caller `sandboxRoot`)
-   * record allow→execute→observe in-kernel. NOT netns/Landlock shell-net enforced. Bun still owns
-   * unrestricted workspace writes, edits, and ambient shell.
+   * Rulings 243, 267/275/277/278 and 348 — direct Rust execution for `pure`,
+   * `echo`, contained `fs.read` and sandboxRoot-scoped `fs.write/edit/delete/rename`.
+   * Supported mutators enter a default-on, kernel-owned cross-process OwnerLog
+   * transaction with independent observation and a kernel-issued receipt.
+   * Raw `shell.exec` is limited to fixed output-only binaries until network/FS
+   * confinement is proven; unsupported effect kinds fail closed on this RPC.
+   * The caller supplies sandboxRoot, which is path scoping, NOT independent
+   * authorization. Legacy Bun default writes/edits/shell still exist outside
+   * this OwnerLog and universal EffectHost, R170 and P0-4 remain OPEN.
    */
   "effect.execute": {
     params: {
@@ -908,6 +922,11 @@ export interface KernelRequestMap {
       shellCwd?: string;
       stdoutTruncated?: boolean;
       stderrTruncated?: boolean;
+      /** Kernel-owned OwnerLog receipt/settlement (only trusted Rust mutation path). */
+      ownerReceiptId?: string;
+      ownerReceiptSeq?: number;
+      ownerResultDigest?: string;
+      ownerLogSettled?: boolean;
     };
   };
   /** §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced). */
