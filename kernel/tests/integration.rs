@@ -202,7 +202,7 @@ fn mixed_case_dispatch_cannot_evade_kernel_owner_fence() {
         "dispatch": { "kind": "FS.WRITE", "spec": { "path": "case.txt", "text": "FIRST" } }
     }));
     assert_eq!(first["ownerLogSettled"], true, "mixed-case write must be owner-recorded");
-    assert_eq!(a.ok("effect.owner.status", json!({}))["events"], 2);
+    assert_eq!(a.ok("effect.owner.status", json!({}))["events"], 3);
     let again = b.err("effect.execute", json!({
         "effectId": "case-write", "sandboxRoot": sandbox.path(),
         "dispatch": { "kind": "Fs.WrItE", "spec": { "path": "case.txt", "text": "SECOND" } }
@@ -228,7 +228,7 @@ fn owner_effect_id_replay_cannot_write_twice() {
     }));
     assert!(second.contains("duplicate EffectHost effectId"), "{second}");
     assert_eq!(fs::read(sandbox.path().join("x")).unwrap(), b"FIRST");
-    assert_eq!(b.ok("effect.owner.status", json!({}))["events"], 2);
+    assert_eq!(b.ok("effect.owner.status", json!({}))["events"], 3);
 }
 
 #[test]
@@ -327,6 +327,102 @@ fn owner_crash_after_durable_prepare_blocks_replay_in_new_kernel_process() {
     }));
     assert!(denied.contains("OwnerLog UNKNOWN"), "{denied}");
     assert!(!sandbox.path().join("never.txt").exists());
+}
+
+#[test]
+fn owner_prepare_only_crash_can_be_recovered_without_reexecuting_effect() {
+    let state = TempDir::new("owner-recover-safe");
+    let sandbox = TempDir::new("owner-recover-workspace");
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_AFTER_PREPARE", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1001, "method": "effect.execute", "params": {
+            "effectId": "prepared-only", "sandboxRoot": sandbox.path(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "X" } }
+        }
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for debug crash");
+    assert_eq!(status.code(), Some(86));
+    assert!(!sandbox.path().join("new.txt").exists());
+
+    let mut owner = Kernel::start(state.path());
+    assert_eq!(owner.ok("effect.owner.status", json!({}))["blocked"], true);
+    let released = owner.ok("effect.owner.recover", json!({"effectId": "prepared-only"}));
+    assert_eq!(released["released"], true);
+    assert_eq!(released["blocked"], false);
+    assert_eq!(owner.ok("effect.owner.status", json!({}))["unresolved"], 0);
+    assert_eq!(owner.ok("effect.owner.verify", json!({}))["ok"], true);
+    // Recovery releases the fence; it does NOT permit reusing the old effectId.
+    let replay = owner.err("effect.execute", json!({
+        "effectId": "prepared-only", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "REPLAY" } }
+    }));
+    assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
+    let next = owner.ok("effect.execute", json!({
+        "effectId": "new-admission", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "SAFE" } }
+    }));
+    assert_eq!(next["verdict"], "settled");
+    assert_eq!(fs::read(sandbox.path().join("new.txt")).unwrap(), b"SAFE");
+}
+
+#[test]
+fn owner_crash_after_executing_fence_never_auto_releases() {
+    let state = TempDir::new("owner-recover-unsafe");
+    let sandbox = TempDir::new("owner-recover-unsafe-workspace");
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1002, "method": "effect.execute", "params": {
+            "effectId": "maybe-executed", "sandboxRoot": sandbox.path(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "X" } }
+        }
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for injected crash");
+    assert_eq!(status.code(), Some(87));
+    let mut owner = Kernel::start(state.path());
+    let blocked = owner.ok("effect.owner.status", json!({}));
+    assert_eq!(blocked["blocked"], true);
+    let denial = owner.err("effect.owner.recover", json!({"effectId": "maybe-executed"}));
+    assert!(denial.contains("execution may have started"), "{denial}");
+    let mutation = owner.err("effect.execute", json!({
+        "effectId": "next-effect", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "NOT_ALLOWED" } }
+    }));
+    assert!(mutation.contains("OwnerLog UNKNOWN"), "{mutation}");
+    assert!(!sandbox.path().join("new.txt").exists());
+}
+
+#[test]
+fn owner_preimage_pin_refuses_stale_edit_before_prepare_and_preserves_admission() {
+    let state = TempDir::new("owner-preimage-pin");
+    let sandbox = TempDir::new("owner-preimage-pin-workspace");
+    fs::write(sandbox.path().join("src.txt"), b"before").unwrap();
+    let mut k = Kernel::start(state.path());
+    let refused = k.err("effect.execute", json!({
+        "effectId": "stale-edit", "sandboxRoot": sandbox.path(),
+        "dispatch": {"kind": "fs.edit", "spec": {
+            "path": "src.txt", "oldString": "before", "newString": "after",
+            "expectedPreimageDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+        }}
+    }));
+    assert!(refused.contains("preimage digest mismatch"), "{refused}");
+    assert_eq!(k.ok("effect.owner.status", json!({}))["events"], 0);
+    assert_eq!(fs::read(sandbox.path().join("src.txt")).unwrap(), b"before");
+    let correct = sha256_bytes(b"before");
+    let done = k.ok("effect.execute", json!({
+        "effectId": "valid-edit", "sandboxRoot": sandbox.path(),
+        "dispatch": {"kind": "fs.edit", "spec": {
+            "path": "src.txt", "oldString": "before", "newString": "after",
+            "expectedPreimageDigest": correct
+        }}
+    }));
+    assert_eq!(done["ownerLogSettled"], true);
+    assert_eq!(fs::read(sandbox.path().join("src.txt")).unwrap(), b"after");
 }
 
 #[test]

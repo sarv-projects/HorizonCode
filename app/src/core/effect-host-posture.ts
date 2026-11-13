@@ -64,7 +64,7 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
   const mode = effectHostKernelMode(env);
   const covered =
     "kernel `effect.execute` covers eligible workspace `write` (path+content), `edit` (exact old→new, no anchors), " +
-    "argv-only `shell` (no shell metachar/interpreter), sequential Add/exact-Update/Delete/exact-Move `apply_patch`, " +
+    "argv-only `shell` (no shell metachar/interpreter), one-step Add/exact-Update/Delete/exact-Move `apply_patch`, " +
     "and literal or metavar `ast_edit` (incl. variadic `$$$` when shape-eligible) when rewriteMatches yields one exact old→new (kernel fs.edit)";
   const repairResidual = effectHostEditRepairEnabled(env)
     ? `kernel fs.edit + apply_patch projection: trim/newline + fs.edit relative-indent replacement rebase (**345**), reindented trim three-way and unique anchored line-patch (**347**) + trimEnd + per-line trim + per-line unicode-fold line-windows (**335**/**337**/**339**) + apply_patch trimEnd + per-line trim (3-way merge) + relative-indent + unicode-fold + unique line-patch anchors + unique dominant score (≥0.97, Δ0.08) + unique max-score Levenshtein (≥0.66) when \`HZ_EFFECT_HOST_EDIT_REPAIR=1\`; ${APPLY_PATCH_FIRST_HIT_RESIDUAL}`
@@ -72,9 +72,9 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
   const shellResidual =
     "shell: argv-only simple commands may kernel-route; compound/interpreter shell strings cannot — under `=require` they are refused; under `=default`/`=1` they fall back to ambient Bun `shell` (not hermetic kernel `shell.exec`)";
   const multiChunkResidual =
-    "apply_patch Update residual: cross-file / ambiguous context / below-threshold or tied Levenshtein chunks stay Bun-owned; " +
-    "single-file EOF-anchored exact chunk → kernel fs.edit when unique on-disk match (**300** reduced); " +
-    "same-file sequential exact-chunk multi-Update → ordered kernel fs.edit when on-disk bytes resolve";
+    "apply_patch residual: every multi-step/multi-file/same-file multi-hunk projection refuses BEFORE the first kernel effect (ruling **349**, no atomic kernel fs.batch); " +
+    "ambiguous context / below-threshold or tied Levenshtein chunks remain Bun-owned if the user explicitly permits ambient mode; " +
+    "single-step unique exact/EOF-anchored chunk → one kernel fs.edit when on-disk bytes resolve";
   const astResidual =
     "ast_edit residual: variadic `$$$` kernel-routes only when rewriteMatches unique-projects to one old→new; " +
     "multi-match / lexer / truncation refused under `=require` with named reason (**322**); Bun-owned under default/=1";

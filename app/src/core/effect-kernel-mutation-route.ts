@@ -3,19 +3,25 @@
  *
  * When `HZ_EFFECT_HOST_KERNEL=1` or `=default`, eligible `write` / `edit` / simple `shell` calls
  * may execute via kernel `effect.execute` (sandboxRoot = workspace) after guard
- * approval in `loop.ts`. Eligible sequential Add/exact-Update `apply_patch` / literal `ast_edit` project
- * into kernel fs.write/fs.edit (**287**). Falls back to Bun tools on refusal,
- * ineligible args, or when the flag is off. Kernel still owns the write bytes; TS
+ * approval in `loop.ts`. Only one-step eligible Add/exact-Update/Delete/Move
+ * `apply_patch` and unique-projectable `ast_edit` may route into a kernel
+ * effect. Ineligible or disabled routes may use Bun in non-strict mode; a
+ * Rust refusal or uncertain kernel transport result NEVER falls back to Bun.
+ * Kernel still owns the routed write bytes; TS
  * records the change journal after settled write/edit (**281**); kernel owns
- * temp+rename atomic write under sandboxRoot (**283**). Full edit.ts repair ladder
- * stays on Bun; kernel path has optional reduced repair via `HZ_EFFECT_HOST_EDIT_REPAIR`.
+ * temp+rename atomic write under sandboxRoot (**283**). Since ruling **349**,
+ * explicit Rust refusals and lost effect.execute replies NEVER fall back to Bun,
+ * and multi-operation apply_patch refuses BEFORE any write without atomic
+ * fs.batch ownership. Kernel checks additive caller-pinned preimage digests.
+ * Full edit.ts repair ladder stays on Bun; kernel path has optional reduced
+ * repair via `HZ_EFFECT_HOST_EDIT_REPAIR`.
  */
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { sha256Hex, type KernelRequestMap, type ToolResult } from "../contracts";
-import type { KernelClient } from "./kernel";
+import { KernelRefusal, type KernelClient } from "./kernel";
 import type { KernelExecutePostimageObserve } from "./receipt-postimage";
 import { analyzeShellCompound } from "./shell-split";
 import { bindJournalWorkspace, recordChange } from "../tools/change-journal";
@@ -33,13 +39,26 @@ function kernelProjectionPath(proj: KernelToolProjection): string {
   return proj.path;
 }
 
-import {
-  kernelApplyPatchMultiOpSuccessOutput,
-  kernelFsMutationSuccessOutput,
-  observeKernelApplyPatchMultiOpResultDigest,
-} from "./effect-evidence";
+import { kernelFsMutationSuccessOutput } from "./effect-evidence";
 
 const KERNEL_ROUTE_TAG = "[effect-host-kernel]";
+
+/** A kernel refusal is final: it may represent an OwnerLog UNKNOWN or a
+ * denied policy decision. Treating it as an unavailable route and running Bun
+ * instead would make the kernel's authority advisory. Transport UNKNOWN is
+ * surfaced as KernelRefusal by KernelClient.rpc for the same reason. */
+function refusedKernelRoute(
+  error: unknown,
+  journalSkipped: boolean,
+): KernelMutationRouteOutcome | undefined {
+  if (!(error instanceof KernelRefusal)) return undefined;
+  const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: kernel mutation refused — ${error.message}`;
+  return {
+    journalSkipped,
+    kernelObserve: {},
+    result: { ok: false, output: message, error: message },
+  };
+}
 
 /** Emitted only when kernel write/edit succeeded but change-journal recording failed. */
 export const EFFECT_HOST_KERNEL_JOURNAL_FAIL_NOTICE =
@@ -294,7 +313,20 @@ export async function tryKernelWriteRoute(
     const result = await kernel.executeEffect({
       effectId,
       sandboxRoot: workspace,
-      dispatch: { kind: "fs.write", spec: { path: rel, text: String(args.content) } },
+      dispatch: {
+        kind: "fs.write",
+        spec: {
+          path: rel,
+          text: String(args.content),
+          // Kernel checks the caller's pre-read bytes independently under
+          // the OwnerLog lock; null asserts this is a new (missing) file.
+          ...(preimage.before !== null
+            ? { expectedPreimageDigest: sha256Hex(preimage.before) }
+            : !existsSync(resolved)
+              ? { expectedPreimageDigest: null }
+              : {}),
+        },
+      },
     });
     let journalRecordFailed: boolean | undefined;
     if (result.verdict === "settled") {
@@ -318,8 +350,8 @@ export async function tryKernelWriteRoute(
       }`,
       { journalSkipped: false, journalRecordFailed },
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refusedKernelRoute(error, false);
   }
 }
 
@@ -354,6 +386,9 @@ export async function tryKernelEditRoute(
           path: rel,
           oldString: String(args.old),
           newString: String(args.new),
+          ...(preimage.before !== null
+            ? { expectedPreimageDigest: sha256Hex(preimage.before) }
+            : {}),
         },
       },
     });
@@ -379,8 +414,8 @@ export async function tryKernelEditRoute(
       }`,
       { journalSkipped: false, journalRecordFailed },
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refusedKernelRoute(error, false);
   }
 }
 
@@ -492,7 +527,15 @@ export async function tryKernelRenameRoute(
     const result = await kernel.executeEffect({
       effectId,
       sandboxRoot: workspace,
-      dispatch: { kind: "fs.rename", spec: { from: fromRel, to: toRel } },
+      dispatch: {
+        kind: "fs.rename",
+        spec: {
+          from: fromRel, to: toRel,
+          ...(sourcePre.before !== null
+            ? { expectedPreimageDigest: sha256Hex(sourcePre.before) }
+            : {}),
+        },
+      },
     });
     let journalRecordFailed: boolean | undefined;
     if (result.verdict === "settled") {
@@ -525,8 +568,8 @@ export async function tryKernelRenameRoute(
       }`,
       { journalSkipped: false, journalRecordFailed },
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refusedKernelRoute(error, false);
   }
 }
 
@@ -555,7 +598,15 @@ export async function tryKernelDeleteRoute(
     const result = await kernel.executeEffect({
       effectId,
       sandboxRoot: workspace,
-      dispatch: { kind: "fs.delete", spec: { path: rel } },
+      dispatch: {
+        kind: "fs.delete",
+        spec: {
+          path: rel,
+          ...(preimage.before !== null
+            ? { expectedPreimageDigest: sha256Hex(preimage.before) }
+            : {}),
+        },
+      },
     });
     const afterSha256 = sha256Hex("");
     let journalRecordFailed: boolean | undefined;
@@ -579,8 +630,8 @@ export async function tryKernelDeleteRoute(
       }`,
       { journalSkipped: false, journalRecordFailed },
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refusedKernelRoute(error, false);
   }
 }
 
@@ -593,6 +644,20 @@ export async function tryKernelApplyPatchRoute(
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const projections = applyPatchKernelProjections(args);
   if (!projections || projections.length === 0) return undefined;
+  // A multi-operation patch is NOT one kernel transaction today. Executing
+  // its first step then failing on a reused effectId or an ambiguous later
+  // hunk leaves an unrecoverable partial patch. Never claim atomic patch
+  // parity; refuse before any mutation until kernel fs.batch owns the plan.
+  if (projections.length > 1) {
+    const message =
+      `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: multi-operation apply_patch requires an atomic kernel batch; ` +
+      "refused before executing any operation";
+    return {
+      journalSkipped: false,
+      kernelObserve: {},
+      result: { ok: false, output: message, error: message },
+    };
+  }
   const input =
     typeof args.input === "string" && args.input !== ""
       ? args.input
@@ -655,31 +720,9 @@ export async function tryKernelApplyPatchRoute(
     }
   }
 
-  if (!lastOutcome) return undefined;
-  if (projections.length === 1) {
-    return { ...lastOutcome, journalRecordFailed };
-  }
-  const paths = projections.map((p) => kernelProjectionPath(p)).join(", ");
-  const okOutput = kernelApplyPatchMultiOpSuccessOutput(
-    projections.length,
-    paths,
-    lastOutcome.kernelObserve.contentDigest,
-  );
-  const multiObs = observeKernelApplyPatchMultiOpResultDigest(
-    projections.length,
-    paths,
-    lastOutcome.kernelObserve.contentDigest,
-  );
-  return {
-    journalSkipped: lastOutcome.journalSkipped,
-    journalRecordFailed,
-    kernelObserve: {
-      ...lastOutcome.kernelObserve,
-      resultDigest: multiObs.resultDigest ?? lastOutcome.kernelObserve.resultDigest,
-      resultDigestStable: multiObs.resultDigestStable,
-    },
-    result: { ok: true, output: okOutput },
-  };
+  // The preflight rejects >1 projections. A single settled operation is
+  // the only honest kernel apply_patch result until fs.batch is implemented.
+  return lastOutcome ? { ...lastOutcome, journalRecordFailed } : undefined;
 }
 
 export async function tryKernelAstEditRoute(
@@ -724,7 +767,7 @@ export async function tryKernelShellRoute(
       `${KERNEL_ROUTE_TAG} kernel shell.exec ${result.verdict}`,
       { journalSkipped: true },
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refusedKernelRoute(error, true);
   }
 }

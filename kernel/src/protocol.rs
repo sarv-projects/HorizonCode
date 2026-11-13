@@ -301,6 +301,12 @@ impl Kernel {
             // fails closed, never turns into an empty clean status.
             "effect.owner.status" => effect_owner::status(&self.events, self.guard.state_dir()),
             "effect.owner.verify" => effect_owner::verify(&self.events, &self.receipts, self.guard.state_dir()),
+            // V2 OwnerLog: a PREPARE-only interrupted effect has a durable
+            // no-execute proof; anything past owner.executing stays UNKNOWN.
+            "effect.owner.recover" => {
+                let effect_id = string_param(params, "effectId")?;
+                effect_owner::recover(&self.events, &self.receipts, self.guard.state_dir(), &effect_id)
+            },
 
             // §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced).
             "egress.connect.listen" => {

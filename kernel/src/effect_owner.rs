@@ -120,6 +120,9 @@ fn record(events: &EventLog, kind: &str, effect_id: &str, payload: Value) -> Res
 struct OwnerState {
     seen: BTreeSet<String>,
     unresolved: BTreeMap<String, String>,
+    /// Only versioned prepare records have a durable execute boundary.
+    /// Legacy v1 prepares may have already mutated disk; NEVER auto-release.
+    prepare_v2: BTreeSet<String>,
     count: usize,
 }
 
@@ -152,15 +155,57 @@ fn rebuild(events: &EventLog) -> Result<OwnerState, String> {
                 if !state.seen.insert(effect_id.to_string()) {
                     return Err("HZ_PRECONDITION_FAILED: duplicate owner effect id in log".into());
                 }
+                let version = payload["details"]["protocolVersion"].as_u64();
+                match version {
+                    None | Some(1) => {}
+                    Some(2) => {
+                        state.prepare_v2.insert(effect_id.into());
+                    }
+                    Some(other) => {
+                        return Err(format!(
+                            "HZ_PRECONDITION_FAILED: unsupported owner protocolVersion {other}"
+                        ))
+                    }
+                }
                 state.unresolved.insert(effect_id.into(), "prepared".into());
+            }
+            "owner.executing" => {
+                if !state.prepare_v2.contains(effect_id)
+                    || state.unresolved.get(effect_id).map(String::as_str) != Some("prepared")
+                {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: orphan or duplicate owner executing marker".into(),
+                    );
+                }
+                state
+                    .unresolved
+                    .insert(effect_id.into(), "executing".into());
+            }
+            "owner.released" => {
+                if !state.prepare_v2.contains(effect_id)
+                    || state.unresolved.get(effect_id).map(String::as_str) != Some("prepared")
+                {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: owner release lacks a v2 prepare-only boundary"
+                            .into(),
+                    );
+                }
+                state.unresolved.remove(effect_id);
             }
             "owner.settled" | "owner.unknown" => {
                 let prior = state
                     .unresolved
                     .get(effect_id)
                     .ok_or_else(|| "HZ_PRECONDITION_FAILED: orphan owner settlement".to_string())?;
-                if prior != "prepared" {
-                    return Err("HZ_PRECONDITION_FAILED: duplicate owner settlement".into());
+                let expected = if state.prepare_v2.contains(effect_id) {
+                    "executing"
+                } else {
+                    "prepared"
+                };
+                if prior != expected {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: duplicate or out-of-order owner settlement".into(),
+                    );
                 }
                 if kind == "owner.settled" {
                     state.unresolved.remove(effect_id);
@@ -249,10 +294,18 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
 
 fn status_json(state: OwnerState) -> Value {
     let unresolved_ids: Vec<_> = state.unresolved.keys().take(32).cloned().collect();
+    let recoverable_ids: Vec<_> = state
+        .unresolved
+        .iter()
+        .filter(|(id, phase)| phase.as_str() == "prepared" && state.prepare_v2.contains(*id))
+        .take(32)
+        .map(|(id, _)| id.clone())
+        .collect();
     json!({
         "blocked": !state.unresolved.is_empty(),
         "unresolved": state.unresolved.len(),
         "unresolvedIds": unresolved_ids,
+        "recoverableIds": recoverable_ids,
         "events": state.count,
     })
 }
@@ -260,6 +313,48 @@ fn status_json(state: OwnerState) -> Value {
 pub fn status(events: &EventLog, state_dir: &Path) -> Result<Value, String> {
     let _lock = OwnerLock::acquire(state_dir)?;
     Ok(status_json(rebuild(events)?))
+}
+
+/// Narrow clean release for v2 PREPARE-only crash. The kernel never calls any
+/// effect primitive before an fsynced owner.executing marker. Acquiring the
+/// SAME OS lock as execute proves no concurrent owner is between the two
+/// phases. A v1 prepare or an executing/UNKNOWN v2 is not safely recoverable.
+/// Duplicate effect IDs remain reserved after release (no reexecution).
+pub fn recover(
+    events: &EventLog,
+    receipts: &Receipts,
+    state_dir: &Path,
+    effect_id: &str,
+) -> Result<Value, String> {
+    if effect_id.trim().is_empty() {
+        return Err(
+            "HZ_PRECONDITION_FAILED: effect.owner.recover.effectId must be non-empty".into(),
+        );
+    }
+    let _lock = OwnerLock::acquire(state_dir)?;
+    let state = rebuild(events)?;
+    verify_settlement_receipt_links(events, receipts)?;
+    if !state.prepare_v2.contains(effect_id)
+        || state.unresolved.get(effect_id).map(String::as_str) != Some("prepared")
+    {
+        return Err(format!(
+            "HZ_PRECONDITION_FAILED: owner recovery refused for {effect_id}: execution may have started, effect is UNKNOWN, or record predates v2"
+        ));
+    }
+    record(
+        events,
+        "owner.released",
+        effect_id,
+        json!({
+            "protocolVersion": 2,
+            "reason": "prepare_only_no_execute_marker"
+        }),
+    )?;
+    let after = rebuild(events)?;
+    let mut value = status_json(after);
+    value["released"] = json!(true);
+    value["effectId"] = json!(effect_id);
+    Ok(value)
 }
 
 pub fn verify(events: &EventLog, receipts: &Receipts, state_dir: &Path) -> Result<Value, String> {
@@ -440,6 +535,9 @@ pub fn execute(
         return Err("HZ_PRECONDITION_FAILED: receipt chain broken; mutation denied".into());
     }
     verify_settlement_receipt_links(events, receipts)?;
+    // A stale Bun patch/AST projection must be rejected BEFORE durable prepare,
+    // so an ineligible preimage cannot poison OwnerLog with a fake UNKNOWN.
+    effect_host::verify_expected_preimage(params, kind)?;
     let args_digest = crate::canon::sha256_hex(&crate::canon::canonical_json(params));
     record(
         events,
@@ -448,6 +546,7 @@ pub fn execute(
         json!({
             "dispatchKind": kind,
             "argsDigest": args_digest,
+            "protocolVersion": 2,
         }),
     )?;
 
@@ -461,6 +560,24 @@ pub fn execute(
         == Some("1")
     {
         std::process::exit(86);
+    }
+
+    // The only boundary after which any mutation may occur. If the process
+    // dies with this marker, independent replay must remain UNKNOWN even if
+    // the disk happens to resemble the preimage (ABA cannot be ruled out).
+    record(
+        events,
+        "owner.executing",
+        id,
+        json!({ "protocolVersion": 2 }),
+    )?;
+    #[cfg(debug_assertions)]
+    if std::env::var("HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        std::process::exit(87);
     }
 
     let result = effect_host::execute_params(params, ledger);
@@ -535,6 +652,12 @@ mod tests {
         let events = EventLog::new_with_anchor(&root, AnchorConfig::default());
         assert_eq!(status(&events, &root).unwrap()["blocked"], false);
         record(&events, "owner.prepare", "pending", json!({})).unwrap();
+        let receipts = Receipts::new_with_anchor(&root, AnchorConfig::default());
+        // Legacy v1 had no "executing" marker, so an unpaired preparation
+        // might ALREADY have executed: it cannot be released as clean.
+        let refused = recover(&events, &receipts, &root, "pending").unwrap_err();
+        assert!(refused.contains("execution may have started"), "{refused}");
+        assert_eq!(status(&events, &root).unwrap()["recoverableIds"], json!([]));
         assert_eq!(status(&events, &root).unwrap()["unresolved"], 1);
         assert_eq!(status(&events, &root).unwrap()["blocked"], true);
         record(&events, "owner.settled", "pending", json!({})).unwrap();
