@@ -165,7 +165,7 @@ describe("kernel shell argv route", () => {
 });
 
 describe("kernel apply_patch / ast_edit route", () => {
-  test("multi-op apply_patch via ordered kernel writes (ruling 293)", async () => {
+  test("multi-op apply_patch refuses before the first kernel write until batch is atomic", async () => {
     const kernel = new KernelClient({
       workspace,
       stateDir: path.join(workspace, ".hzcode", "kernel"),
@@ -178,12 +178,11 @@ describe("kernel apply_patch / ast_edit route", () => {
 *** End Patch`;
     try {
       const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-ap-m", "eff-ap-m", { input: patch });
-      expect(out?.result.ok).toBe(true);
-      expect(readFileSync(path.join(workspace, "one.txt"), "utf8")).toBe("1\n");
-      expect(readFileSync(path.join(workspace, "two.txt"), "utf8")).toBe("2\n");
-      expect(lastChangeFor("s-ap-m", path.join(workspace, "two.txt"))?.tool).toBe("write");
-      expect(out?.kernelObserve.resultDigestStable).toBe(true);
-      expect(out?.kernelObserve.resultDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(out?.result.ok).toBe(false);
+      expect(out?.result.error).toContain("atomic kernel batch");
+      expect(() => readFileSync(path.join(workspace, "one.txt"), "utf8")).toThrow();
+      expect(() => readFileSync(path.join(workspace, "two.txt"), "utf8")).toThrow();
+      expect(lastChangeFor("s-ap-m", path.join(workspace, "two.txt"))).toBeUndefined();
     } finally {
       await kernel.close();
     }
@@ -206,7 +205,8 @@ describe("kernel apply_patch / ast_edit route", () => {
     try {
       const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-ap-fail", "eff-ap-fail", { input: patch });
       expect(out?.result.ok).toBe(false);
-      expect(readFileSync(path.join(workspace, "fresh.txt"), "utf8")).toBe("new\n");
+      expect(out?.result.error).toContain("atomic kernel batch");
+      expect(() => readFileSync(path.join(workspace, "fresh.txt"), "utf8")).toThrow();
       expect(readFileSync(path.join(workspace, "ok.txt"), "utf8")).toBe("keep\n");
     } finally {
       await kernel.close();

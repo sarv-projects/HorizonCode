@@ -1221,7 +1221,8 @@ export function resolveSandboxExecBinary(env: Record<string, string | undefined>
  * and lifecycle failures (exit, timeout, malformed output) stay plain Error and
  * are the only ones that trigger the fallback.
  */
-class KernelRefusal extends Error {}
+/** A security-significant kernel decision. Never fall back to Bun after this. */
+export class KernelRefusal extends Error {}
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -1248,6 +1249,10 @@ export class KernelClient {
   private nextId = 1;
   private closed = false;
   private modeValue: KernelMode = "untrusted";
+  /** Once a trusted kernel is lost, its pending effect outcome is unknowable.
+   * The same KernelClient must never resume local mutations as a substitute. */
+  private everTrusted = false;
+  private lostTrustedKernel = false;
   private binaryPath?: string;
   private reason = "local fallback";
   private startPromise?: Promise<KernelMode>;
@@ -1284,6 +1289,8 @@ export class KernelClient {
   }
 
   private setMode(mode: KernelMode, reason: string): void {
+    if (mode === "trusted") this.everTrusted = true;
+    if (mode === "untrusted" && this.everTrusted) this.lostTrustedKernel = true;
     if (this.modeValue === mode && this.reason === reason) return;
     this.modeValue = mode;
     this.reason = reason;
@@ -1514,6 +1521,7 @@ export class KernelClient {
         return this.local.verifyReceipts() as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "effect.owner.status":
       case "effect.owner.verify":
+      case "effect.owner.recover":
         // A Bun fallback cannot assert a Rust-owned cross-process fence.
         return Promise.reject(new Error("HZ_PRECONDITION_FAILED: OwnerLog requires the trusted Rust kernel"));
       case "guard.check":
@@ -2023,6 +2031,13 @@ export class KernelClient {
         if (err instanceof KernelRefusal) throw err;
         this.fallBack(`kernel call ${method} failed: ${errorMessage(err)}`);
         this.capture(`${method}: ${errorMessage(err)}`);
+        if (method === "effect.execute") {
+          // This request may have executed before transport failed. A local
+          // replay is a second mutation that bypasses OwnerLog; refuse it.
+          throw new KernelRefusal(
+            "HZ_PRECONDITION_FAILED: effect.execute transport lost after dispatch; outcome UNKNOWN, local replay refused",
+          );
+        }
       }
     }
     return this.callLocal(method, params);
@@ -2071,6 +2086,36 @@ export class KernelClient {
     // refuses it again on its side (defense in depth).
     const refusal = protectedPathRefusal(action, this.stateDir);
     if (refusal !== undefined) throw new Error(refusal);
+
+    // A trusted Rust OwnerLog UNKNOWN is an authorization barrier for the
+    // ambient Bun paths as well as for direct effect.execute. This is a
+    // *preflight*, not an atomic Bun admit/execute transaction: no claim that
+    // default Bun tools are kernel-owned. Refuse if the owner/receipt chain
+    // cannot be verified (never interpret a read error as a clean ledger).
+    if (["fs.write", "shell.exec", "net.fetch", "spawn", "mcp.invoke"].includes(action.kind)) {
+      if (this.lostTrustedKernel) {
+        return {
+          decision: "deny",
+          reason: "HZ_PRECONDITION_FAILED: OwnerLog unavailable after trusted kernel loss; mutation refused",
+        };
+      }
+      if (this.modeValue === "trusted") {
+        try {
+          const status = await this.ownerVerify();
+          if (status.blocked) {
+            return {
+              decision: "deny",
+              reason: `HZ_PRECONDITION_FAILED: OwnerLog UNKNOWN (${status.unresolved} unresolved effect(s)); mutation refused`,
+            };
+          }
+        } catch (err) {
+          return {
+            decision: "deny",
+            reason: `HZ_PRECONDITION_FAILED: OwnerLog verification unavailable; mutation refused: ${errorMessage(err)}`,
+          };
+        }
+      }
+    }
     return this.rpc(
       "guard.check",
       { action, scope, leases, sessionId } as unknown as KernelRequestMap["guard.check"]["params"],
@@ -2120,10 +2165,28 @@ export class KernelClient {
     return this.rpc("effect.owner.verify", {});
   }
 
+  /** Recover only a verifiable v2 prepare-only crash, never an execution/UNKNOWN. */
+  async ownerRecover(effectId: string): Promise<KernelRequestMap["effect.owner.recover"]["result"]> {
+    return this.rpc("effect.owner.recover", { effectId });
+  }
+
   /** Kernel hermetic effect.execute, now with default-on Rust OwnerLog for supported mutations. */
   async executeEffect(
     params: KernelRequestMap["effect.execute"]["params"],
   ): Promise<KernelRequestMap["effect.execute"]["result"]> {
+    const kind = params.dispatch?.kind?.trim().toLowerCase() ?? "";
+    const mutating = !["pure", "echo", "test", "fs.read"].includes(kind);
+    if (mutating && this.lostTrustedKernel) {
+      throw new KernelRefusal(
+        "HZ_PRECONDITION_FAILED: trusted kernel was lost; effect outcome UNKNOWN, local mutation refused",
+      );
+    }
+    if (mutating && this.modeValue !== "trusted" &&
+        process.env.HZ_EFFECT_HOST_KERNEL?.trim().toLowerCase() === "require") {
+      throw new KernelRefusal(
+        "HZ_PRECONDITION_FAILED: HZ_EFFECT_HOST_KERNEL=require needs a trusted Rust kernel; Bun mutation refused",
+      );
+    }
     return this.rpc("effect.execute", params);
   }
 

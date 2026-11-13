@@ -853,7 +853,22 @@ export interface KernelRequestMap {
   /** Kernel-owned R170 precursor: read-only OwnerLog status after cross-process lock. */
   "effect.owner.status": {
     params: Record<string, never>;
-    result: { blocked: boolean; unresolved: number; unresolvedIds: string[]; events: number };
+    result: { blocked: boolean; unresolved: number; unresolvedIds: string[]; recoverableIds: string[]; events: number };
+  };
+  /** Recover a v2 owner prepare-only crash, with no execution marker.
+   * Cannot release v1 prepares, executing/UNKNOWN effects, or settled ids.
+   * The original effectId remains permanently reserved against replay. */
+  "effect.owner.recover": {
+    params: { effectId: string };
+    result: {
+      released: boolean;
+      effectId: string;
+      blocked: boolean;
+      unresolved: number;
+      unresolvedIds: string[];
+      recoverableIds: string[];
+      events: number;
+    };
   };
   /** Verify owner EventLog plus receipt chain; refusal if either is unreadable. */
   "effect.owner.verify": {

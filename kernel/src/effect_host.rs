@@ -126,6 +126,56 @@ fn dispatch_spec(params: &Value) -> Result<&serde_json::Map<String, Value>, Stri
         .ok_or_else(|| "effect.execute dispatch requires dispatch.spec".to_string())
 }
 
+/// Additive preimage compare-and-observe contract. Caller-pinned bytes are
+/// independently double-read by Rust under OwnerLog before durable prepare
+/// and rechecked just before file effects. External filesystem TOCTOU remains.
+pub fn verify_expected_preimage(params: &Value, kind: &str) -> Result<(), String> {
+    let Some(spec) = params
+        .get("dispatch")
+        .and_then(|v| v.get("spec"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    let Some(expected) = spec.get("expectedPreimageDigest") else {
+        return Ok(());
+    };
+    let raw_path = spec.get(if kind == "fs.rename" { "from" } else { "path" })
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: preimage pin requires a path".to_string())?;
+    let root = PathBuf::from(string_param(params, "sandboxRoot")?);
+    let candidate = candidate_read_path(&root, raw_path);
+    if !crate::guard::path_contained_in(&root, &candidate) {
+        return Err("HZ_PRECONDITION_FAILED: preimage target outside sandboxRoot".into());
+    }
+    let resolved = crate::guard::lexical_resolve(&candidate)
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: cannot resolve preimage target".to_string())?;
+    match expected {
+        Value::Null if kind == "fs.write" => {
+            // Catch even a dangling symlink at the candidate spelling.
+            if fs::symlink_metadata(&candidate).is_ok() {
+                return Err("HZ_PRECONDITION_FAILED: preimage missing-file assertion failed".into());
+            }
+        }
+        Value::String(s) if s.len() == 64 && s.bytes().all(|b|
+            b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+        ) => {
+            let obs = crate::receipt_postimage::observe_file_postimage(&resolved);
+            if !obs.observation_stable {
+                return Err("HZ_PRECONDITION_FAILED: independent preimage observation unstable".into());
+            }
+            if obs.digest.as_deref() != Some(s.as_str()) {
+                return Err("HZ_PRECONDITION_FAILED: preimage digest mismatch".into());
+            }
+        }
+        _ => {
+            return Err("HZ_PRECONDITION_FAILED: expectedPreimageDigest must be lowercase sha256 hex (or null for new fs.write)".into());
+        }
+    }
+    Ok(())
+}
+
 fn read_path_from_spec(params: &Value) -> Result<String, String> {
     let spec = dispatch_spec(params)?;
     spec.get("path")
@@ -296,6 +346,7 @@ fn execute_fs_edit(
     let raw_path = edit_path_from_spec(params)?;
     let spec = dispatch_spec(params)?;
     let (old, new) = edit_old_new_from_spec(spec)?;
+    verify_expected_preimage(params, "fs.edit")?;
     let root = Path::new(&sandbox_root);
     let candidate = candidate_read_path(root, &raw_path);
     if !crate::guard::path_contained_in(root, &candidate) {
@@ -496,6 +547,7 @@ fn execute_fs_delete(
 ) -> Result<Value, String> {
     let sandbox_root = string_param(params, "sandboxRoot")?;
     let raw_path = read_path_from_spec(params)?;
+    verify_expected_preimage(params, "fs.delete")?;
     let root = Path::new(&sandbox_root);
     let candidate = candidate_read_path(root, &raw_path);
     if !crate::guard::path_contained_in(root, &candidate) {
@@ -555,6 +607,7 @@ fn execute_fs_rename(
 ) -> Result<Value, String> {
     let sandbox_root = string_param(params, "sandboxRoot")?;
     let (raw_from, raw_to) = rename_paths_from_spec(params)?;
+    verify_expected_preimage(params, "fs.rename")?;
     let root = Path::new(&sandbox_root);
     let from_candidate = candidate_read_path(root, &raw_from);
     let to_candidate = candidate_read_path(root, &raw_to);
@@ -596,6 +649,7 @@ fn execute_fs_write(
     let sandbox_root = string_param(params, "sandboxRoot")?;
     let raw_path = write_path_from_spec(params)?;
     let payload = write_payload_from_spec(params)?;
+    verify_expected_preimage(params, "fs.write")?;
     let root = Path::new(&sandbox_root);
     let candidate = candidate_read_path(root, &raw_path);
     if !crate::guard::path_contained_in(root, &candidate) {
