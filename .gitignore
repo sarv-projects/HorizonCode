@@ -17,6 +17,9 @@ target/
 .hz/state/
 .hzcode/
 
+# Local verification logs and scratch toolchain artifacts (never commit)
+.scratch/
+
 # Local secrets (provider keys, etc.)
 .env
 .env.local

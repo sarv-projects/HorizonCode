@@ -270,6 +270,92 @@ describe("kernel effect.execute", () => {
     }
   });
 
+  test.skipIf(!hasRustKernel)("trusted kernel fs.edit rebases a uniquely indented block (ruling 345)", async () => {
+    const snap = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+    const kernel = new KernelClient({
+      workspace, stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-indent-trusted-"));
+    const before = "fn main() {\n    if ready {\n        emit();\n    }\n}\n";
+    const after = "fn main() {\n    if ready {\n        send();\n    }\n}\n";
+    writeFileSync(path.join(sandbox, "src.rs"), before);
+    try {
+      await kernel.start();
+      expect(kernel.mode).toBe("trusted");
+      const result = await kernel.executeEffect({
+        effectId: "eff-edit-indent",
+        sandboxRoot: sandbox,
+        dispatch: { kind: "fs.edit", spec: {
+          path: "src.rs",
+          oldString: "if ready {\n    emit();\n}",
+          newString: "if ready {\n    send();\n}",
+        } },
+      });
+      expect(result.verdict).toBe("settled");
+      expect(readFileSync(path.join(sandbox, "src.rs"), "utf8")).toBe(after);
+      expect(result.contentDigest).toBe(createHash("sha256").update(after).digest("hex"));
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+      await kernel.close();
+      restoreEnv(snap);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("trusted kernel fs.edit applies one anchored line-patch with independently observed digest", async () => {
+    const snap = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+    const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-line-patch-"));
+    const before = "top\n  begin\n    unexpected();\n  end\nbottom\n";
+    const after = "top\n  begin\n      replacement();\n  end\nbottom\n";
+    writeFileSync(path.join(sandbox, "source.ts"), before);
+    try {
+      await kernel.start();
+      expect(kernel.mode).toBe("trusted");
+      const result = await kernel.executeEffect({
+        effectId: "eff-edit-anchored",
+        sandboxRoot: sandbox,
+        dispatch: { kind: "fs.edit", spec: {
+          path: "source.ts", oldString: "begin\n    expected();\nend",
+          newString: "begin\n    replacement();\nend",
+        } },
+      });
+      expect(result.verdict).toBe("settled");
+      expect(result.postimageObservationStable).toBe(true);
+      expect(result.resultDigestStable).toBe(true);
+      expect(readFileSync(path.join(sandbox, "source.ts"), "utf8")).toBe(after);
+      expect(result.contentDigest).toBe(createHash("sha256").update(after).digest("hex"));
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+      await kernel.close();
+      restoreEnv(snap);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("trusted kernel fs.edit refuses ambiguous anchors without touching disk", async () => {
+    const snap = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+    const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
+    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-line-ambiguous-"));
+    const before = "  begin\n  first();\n  end\n  begin\n  second();\n  end\n";
+    writeFileSync(path.join(sandbox, "source.ts"), before);
+    try {
+      await kernel.start();
+      await expect(kernel.executeEffect({
+        effectId: "eff-edit-ambiguous", sandboxRoot: sandbox,
+        dispatch: { kind: "fs.edit", spec: {
+          path: "source.ts", oldString: "begin\nunknown();\nend", newString: "overwrite",
+        } },
+      })).rejects.toThrow(/exactly once/);
+      expect(readFileSync(path.join(sandbox, "source.ts"), "utf8")).toBe(before);
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+      await kernel.close();
+      restoreEnv(snap);
+    }
+  });
+
   test("fs.edit fails closed when oldString is missing", async () => {
     const kernel = new KernelClient({
       workspace,

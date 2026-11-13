@@ -1,22 +1,24 @@
 /**
  * Opt-in blocking gate when reconcile probe / unpaired ledger / UNKNOWN is open (ruling **293**, **303**, **304**).
  *
- * Reduced precursor to docs/13 R170 full protocol: `=1` session latch; `=resource` blocks only
- * mutating tools whose postimage path overlaps paths extracted from mismatched/UNKNOWN effects
- * (see `effect-resource-gate.ts` for in-run same-path freeze).
+ * Reduced precursor to docs/13 R170 full protocol: `=1` session latch; `=resource` blocks
+ * potential host effects on overlapping resources and fails closed when a target is unscoped.
+ * Ruling 344 persists latch/release transitions, retains barriers until explicit clean
+ * reconciliation, and assesses at first mutator admission. Still opt-in, not Rust OwnerLog.
  */
 
 import * as path from "node:path";
+import { realpathish } from "./paths";
 import type { EffectHost, EffectRecord } from "./effect-host";
 import { loadEffectLedger } from "./effect-ledger";
+import { appendReconcileLatch, loadReconcileLatch } from "./effect-reconcile-latch-store";
 import { formatEffectReconcileProbeSummary, probeEffectReconcile } from "./effect-reconcile-probe";
 import { resourceKeyFromEffectRecord } from "./effect-reconcile-probe-io";
 import {
   observePendingEffectIdsOverlappingPath,
   observePendingResourceKeys,
-  observePendingTargetForTool,
+  mutationResourceTargets,
 } from "./effect-resource-gate";
-import { postimagePathForTool } from "./receipt-postimage";
 import {
   formatUnpairedSessionKernelNotice,
   reconcileSessionKernel,
@@ -33,14 +35,11 @@ export const EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE =
 /** @deprecated Use mode-specific notices; kept for test substring stability. */
 export const EFFECT_RECONCILE_BLOCK_NOTICE = EFFECT_RECONCILE_BLOCK_SESSION_NOTICE;
 
-const BLOCKED_MUTATION_TOOLS = new Set([
-  "write",
-  "edit",
-  "shell",
-  "apply_patch",
-  "ast_edit",
-  "multi_edit",
-  "undo",
+/** Only tools whose admission is known not to mutate host state can pass
+ * a reconciliation latch. Newly registered or MCP tools are not presumed safe. */
+const RECONCILE_READ_ONLY_TOOLS = new Set([
+  "read", "grep", "glob", "repo_map", "ast_search", "memory_search",
+  "handoff_search", "tool_search",
 ]);
 
 type ReconcileBlockLatch = { reason: string; latchedAt: number; blockedPaths: string[] };
@@ -49,6 +48,51 @@ const latches = new Map<string, ReconcileBlockLatch>();
 
 function latchKey(workspace: string, sessionId: string): string {
   return `${workspace}\0${sessionId}`;
+}
+
+/** Read durable transitions on each admission: a separate runtime can latch or
+ * explicitly release without leaving this runtime's map stale. */
+function currentLatch(workspace: string, sessionId: string): ReconcileBlockLatch | undefined {
+  const key = latchKey(workspace, sessionId);
+  const persisted = loadReconcileLatch(workspace, sessionId);
+  if (persisted.present) {
+    if (persisted.latch) {
+      latches.set(key, persisted.latch);
+      return persisted.latch;
+    }
+    latches.delete(key);
+    return undefined;
+  }
+  return latches.get(key);
+}
+
+function persistLatch(workspace: string, sessionId: string, next: ReconcileBlockLatch): void {
+  const prev = currentLatch(workspace, sessionId);
+  // [] is a SESSION-WIDE, unscoped barrier: there is no proof that its
+  // dependencies are limited to particular paths. Once an unscoped mismatch
+  // joins a latch, never narrow it again until an explicit clean release.
+  const unscoped = next.blockedPaths.length === 0 ||
+    (prev !== undefined && prev.blockedPaths.length === 0);
+  const paths = unscoped
+    ? []
+    : [...new Set([...(prev?.blockedPaths ?? []), ...next.blockedPaths])].sort();
+  // If the set is too large for a single reliable JSONL append, session-wide
+  // refusal is safer than losing a blocked path through truncation.
+  const full: ReconcileBlockLatch = {
+    ...next,
+    latchedAt: prev?.latchedAt ?? next.latchedAt,
+    blockedPaths: paths.length > 256 ? [] : paths,
+  };
+  if (prev && prev.reason === full.reason &&
+      prev.blockedPaths.length === full.blockedPaths.length &&
+      prev.blockedPaths.every((p, i) => p === full.blockedPaths[i])) return;
+  appendReconcileLatch(workspace, sessionId, full);
+  latches.set(latchKey(workspace, sessionId), full);
+}
+
+function persistRelease(workspace: string, sessionId: string): void {
+  appendReconcileLatch(workspace, sessionId, null);
+  latches.delete(latchKey(workspace, sessionId));
 }
 
 export function effectReconcileBlockMode(
@@ -77,12 +121,15 @@ export function effectReconcileBlockDoctorHint(
   if (mode === "resource") {
     return (
       "HZ_EFFECT_RECONCILE_BLOCK=resource: path-filtered mutating-tool gate (reduced R170; status chip + /unknown status wire **304**); " +
-      "write/edit/apply_patch/ast_edit also blocked until observe settles on the same path (**333**; **334** reduced); shell when postimage or explicit path/cwd resolves (**336** reduced); status/inset observe-pending drivers (**342** reduced)"
+      "durable latch until explicit clean /unknown release, first-admission preflight, unknown-target fail-closed (**344**); " +
+      "all projected apply_patch paths and rename ends gated; unscoped shell denied during observe-pending; status/inset drivers (**342**)"
     );
   }
   return (
-    "HZ_EFFECT_RECONCILE_BLOCK=1: session-wide mutating-tool gate until /unknown reconcile (status chip + /unknown status; reduced vs full R170); " +
-    "write/edit/apply_patch/ast_edit blocked until observe settles on overlapping path when enabled (**333**; **334** reduced); shell when postimage or explicit path/cwd resolves (**336** reduced); scrollback/fullscreen inset observe-pending barrier (**342** reduced)"
+    "HZ_EFFECT_RECONCILE_BLOCK=1: session-wide potential-effect gate (reduced R170); " +
+    "durable latch persists across restarts, admission preflight, and clean explicit /unknown release (**344**); " +
+    "observe-pending overlap checks all projected apply_patch paths; unscoped shell denied until observe; " +
+    "scrollback/fullscreen status and inset barrier (**342** reduced)"
   );
 }
 
@@ -91,8 +138,10 @@ function reconcileBlockNoticePrefix(mode: EffectReconcileBlockMode): string {
 }
 
 function resourcePathsOverlap(a: string, b: string): boolean {
-  const ra = path.resolve(a);
-  const rb = path.resolve(b);
+  // Resolve existing symlink aliases before comparing. A write to alias.ts
+  // must not bypass a barrier protecting the file it points at.
+  const ra = realpathish(a);
+  const rb = realpathish(b);
   if (ra === rb) return true;
   return ra.startsWith(rb + path.sep) || rb.startsWith(ra + path.sep);
 }
@@ -240,7 +289,7 @@ export function __latchEffectReconcileBlockForTests(
   reason = "test latch",
   blockedPaths: string[] = [],
 ): void {
-  latches.set(latchKey(workspace, sessionId), { reason, latchedAt: Date.now(), blockedPaths });
+  persistLatch(workspace, sessionId, { reason, latchedAt: Date.now(), blockedPaths });
 }
 
 function openUnknownEffectCount(
@@ -311,14 +360,21 @@ export function latchEffectReconcileBlock(
 ): string | undefined {
   if (!effectReconcileBlockEnabled()) return undefined;
   const assessment = assessEffectReconcileBlock(workspace, sessionId, host);
-  const key = latchKey(workspace, sessionId);
   if (!assessment.shouldBlock) {
-    latches.delete(key);
-    return undefined;
+    // R170: a clean end-of-turn snapshot is NOT the user's explicit
+    // reconciliation. Keep the barrier until tryReleaseEffectReconcileBlock.
+    const held = currentLatch(workspace, sessionId);
+    return held
+      ? `${reconcileBlockNoticePrefix(effectReconcileBlockMode())}: ${held.reason} (still latched; run /unknown release after clean reconciliation)`
+      : undefined;
   }
   const mode = effectReconcileBlockMode();
   const blockedPaths = mode === "resource" ? reconcileBlockResourcePaths(workspace, sessionId, host) : [];
-  latches.set(key, { reason: assessment.summary, latchedAt: Date.now(), blockedPaths });
+  persistLatch(workspace, sessionId, {
+    reason: assessment.summary,
+    latchedAt: Date.now(),
+    blockedPaths,
+  });
   const resourceHint =
     mode === "resource"
       ? blockedPaths.length > 0
@@ -333,7 +389,7 @@ export function latchEffectReconcileBlock(
 
 export function isEffectReconcileBlockLatched(workspace: string, sessionId: string): boolean {
   if (!effectReconcileBlockEnabled()) return false;
-  return latches.has(latchKey(workspace, sessionId));
+  return currentLatch(workspace, sessionId) !== undefined;
 }
 
 export type ObservePendingResourceDependency = {
@@ -412,7 +468,7 @@ export function effectReconcileBlockLatchBlockedPaths(
   host?: ReconcileBlockHostPeek,
 ): readonly string[] {
   if (!effectReconcileBlockEnabled()) return [];
-  const latch = latches.get(latchKey(workspace, sessionId));
+  const latch = currentLatch(workspace, sessionId);
   if (!latch) return [];
   if (latch.blockedPaths.length > 0) return latch.blockedPaths;
   return reconcileBlockResourcePaths(workspace, sessionId, host);
@@ -438,7 +494,7 @@ export function effectReconcileBlockLatchView(
   if (!effectReconcileBlockEnabled()) {
     return { latched: false, mode: "off", ...observeFields };
   }
-  const latch = latches.get(latchKey(workspace, sessionId));
+  const latch = currentLatch(workspace, sessionId);
   if (!latch) return { latched: false, mode, ...observeFields };
   const blockedPaths = effectReconcileBlockLatchBlockedPaths(workspace, sessionId, host);
   const resourceDependencies =
@@ -545,20 +601,19 @@ export function tryReleaseEffectReconcileBlock(
   host?: EffectHost,
 ): boolean {
   if (!effectReconcileBlockEnabled()) return false;
-  const key = latchKey(workspace, sessionId);
-  if (!latches.has(key)) return false;
+  const held = currentLatch(workspace, sessionId);
+  if (!held) return false;
   const assessment = assessEffectReconcileBlock(workspace, sessionId, host);
   if (assessment.shouldBlock) {
     const mode = effectReconcileBlockMode();
-    const blockedPaths = mode === "resource" ? reconcileBlockResourcePaths(workspace, sessionId, host) : [];
-    latches.set(key, {
+    persistLatch(workspace, sessionId, {
       reason: assessment.summary,
-      latchedAt: latches.get(key)!.latchedAt,
-      blockedPaths,
+      latchedAt: held.latchedAt,
+      blockedPaths: mode === "resource" ? reconcileBlockResourcePaths(workspace, sessionId, host) : [],
     });
     return false;
   }
-  latches.delete(key);
+  persistRelease(workspace, sessionId);
   return true;
 }
 
@@ -587,17 +642,27 @@ export function effectReconcileBlockObservePendingRefusal(
 ): string | undefined {
   if (!effectReconcileBlockEnabled()) return undefined;
   if (!OBSERVE_PENDING_BLOCK_TOOLS.has(tool)) return undefined;
-  const target = args ? observePendingTargetForTool(tool, args, workspace) : undefined;
-  if (!target) return undefined;
-  const drivers = observePendingEffectIdsOverlappingPath(host, target);
-  if (drivers.length === 0) return undefined;
-  const shown = drivers.slice(0, 3).map((id) => (id.length > 14 ? `${id.slice(0, 13)}…` : id));
-  const extra =
-    drivers.length > shown.length ? ` (+${drivers.length - shown.length} more in-flight effect(s))` : "";
-  return (
-    `${EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE}: resource ${target} — ` +
-    `refusing ${tool} until receipt observe settles (HZ_EFFECT_RECONCILE_BLOCK; driving effect(s): ${shown.join(", ")}${extra})`
-  );
+  const targets = args ? mutationResourceTargets(tool, args, workspace) : undefined;
+  if (!targets || targets.length === 0) {
+    // Shell with no declared cwd and unprojectable patches cannot prove they
+    // avoid any of the resources for which a receipt has not been observed.
+    if (tool !== "shell" && tool !== "apply_patch") return undefined;
+    const pending = observePendingResourceKeys(host);
+    if (pending.size === 0) return undefined;
+    const driving = [...new Set([...pending.values()].flat())];
+    const shown = driving.slice(0, 3).map((id) => (id.length > 14 ? `${id.slice(0, 13)}…` : id));
+    return `${EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE}: unknown resource target — ` +
+      `refusing ${tool} until receipt observe settles (driving effect(s): ${shown.join(", ")})`;
+  }
+  for (const target of targets) {
+    const drivers = observePendingEffectIdsOverlappingPath(host, target);
+    if (drivers.length === 0) continue;
+    const shown = drivers.slice(0, 3).map((id) => (id.length > 14 ? `${id.slice(0, 13)}…` : id));
+    const extra = drivers.length > shown.length ? ` (+${drivers.length - shown.length} more in-flight effect(s))` : "";
+    return `${EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE}: resource ${target} — ` +
+      `refusing ${tool} until receipt observe settles (HZ_EFFECT_RECONCILE_BLOCK; driving effect(s): ${shown.join(", ")}${extra})`;
+  }
+  return undefined;
 }
 
 export function effectReconcileBlockRefusal(
@@ -605,21 +670,34 @@ export function effectReconcileBlockRefusal(
   sessionId: string,
   tool: string,
   args?: Record<string, unknown>,
+  host?: EffectHost,
+  opts?: { preflighted?: boolean },
 ): string | undefined {
   if (!effectReconcileBlockEnabled()) return undefined;
-  if (!BLOCKED_MUTATION_TOOLS.has(tool)) return undefined;
-  const latch = latches.get(latchKey(workspace, sessionId));
+  if (RECONCILE_READ_ONLY_TOOLS.has(tool)) return undefined;
+  let latch = currentLatch(workspace, sessionId);
+  if (!latch && opts?.preflighted !== true) {
+    // Assess BEFORE this tool's tool.call event is appended. runOneToolCall
+    // preflights ahead of that append and then only reads the latched verdict
+    // here; otherwise a normal in-flight call would count as its own orphan.
+    latchEffectReconcileBlock(workspace, sessionId, host);
+    latch = currentLatch(workspace, sessionId);
+  }
   if (!latch) return undefined;
   const mode = effectReconcileBlockMode();
   if (mode === "resource") {
     const blocked = latch.blockedPaths;
     if (blocked.length > 0) {
-      const target = args ? observePendingTargetForTool(tool, args, workspace) : undefined;
-      if (!target) return undefined;
-      if (!blocked.some((p) => resourcePathsOverlap(p, target))) return undefined;
+      const targets = args ? mutationResourceTargets(tool, args, workspace) : undefined;
+      if (!targets || targets.length === 0) {
+        return `${EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE}: ${latch.reason} ` +
+          `(refusing ${tool}: unknown resource target cannot prove disjoint from blocked path(s))`;
+      }
+      const overlap = targets.find((target) => blocked.some((p) => resourcePathsOverlap(p, target)));
+      if (!overlap) return undefined;
       return (
         `${EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE}: ${latch.reason} ` +
-        `(refusing ${tool} on ${target}; run /unknown reconcile when ledger is clean)`
+        `(refusing ${tool} on ${overlap}; run /unknown reconcile when ledger is clean)`
       );
     }
   }

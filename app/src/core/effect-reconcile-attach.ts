@@ -56,7 +56,7 @@ function toolCallArgsForRecord(
     }
     const callId = asString(payload.callId) ?? asString(payload.id);
     const name = asString(payload.name);
-    if (callId === record.callId && name === record.tool) {
+    if (effectId === undefined && callId === record.callId && name === record.tool) {
       const args = payload.args;
       return args && typeof args === "object" && !Array.isArray(args)
         ? (args as Record<string, unknown>)
@@ -182,7 +182,9 @@ export function enrichEffectFromLogs(workspace: string, sessionId: string, recor
       const callId = asString(row.callId);
       const effectId = asString(row.effectId);
       const tool = asString(row.tool);
-      if (effectId === record.effectId || (callId === record.callId && tool === record.tool)) {
+      // An explicit effectId is authoritative. Never pair a different effect's
+      // receipt by callId alone (call ids can be reused across sessions).
+      if (effectId === record.effectId || (effectId === undefined && callId === record.callId && tool === record.tool)) {
         const executeOk = next.steps.find((s) => s.phase === "execute")?.ok === true;
         const postimagePath = asString(row.postimagePath);
         const postimageMissingAtObserve =
@@ -210,6 +212,36 @@ export function enrichEffectFromLogs(workspace: string, sessionId: string, recor
 }
 
 /**
+ * Refresh the shared workspace ledger whenever a session is attached or switched.
+ * A second runtime may have persisted effects after this host first hydrated;
+ * first-time hydrate alone would hide those effects from the UNKNOWN inspector
+ * and resource gate until the process restarts. Never replace newer in-memory
+ * evidence with a shorter snapshot or overwrite an identity collision.
+ */
+export function refreshEffectHostFromDurableLedger(
+  workspace: string,
+  host: EffectHost,
+): ReturnType<typeof loadEffectLedger> {
+  const snapshot = loadEffectLedger(workspace);
+  for (const disk of snapshot.records) {
+    const memory = host.getRecord(disk.effectId);
+    if (!memory) {
+      host.hydrate([disk]);
+      continue;
+    }
+    if (memory.tool !== disk.tool || memory.callId !== disk.callId) continue;
+    // A local unstable observation is never silently replaced by disk evidence.
+    const hasUnsafeObserve = memory.steps.some((step) => step.phase === "observe" && (
+      step.postimageObservationStable === false ||
+      step.resultDigestEvidenceStable === false ||
+      step.postimageMissingAtObserve === true
+    ));
+    if (!hasUnsafeObserve && disk.steps.length > memory.steps.length) host.replaceRecord(disk);
+  }
+  return snapshot;
+}
+
+/**
  * Reload durable ledger into `host`, enrich open effects from logs, reconcile.
  * Returns rows where UNKNOWN/open effects newly settled (emit hz.effect.reconciled).
  */
@@ -218,10 +250,10 @@ export function reconcileEffectsOnAttach(
   sessionId: string,
   host: EffectHost,
 ): EffectAttachReconcile[] {
+  const { verdicts: persistedVerdicts } = refreshEffectHostFromDurableLedger(workspace, host);
   restoreObservePendingFromDurableLedger(host, workspace);
   const open = host.listEffectIds();
   const out: EffectAttachReconcile[] = [];
-  const { verdicts: persistedVerdicts } = loadEffectLedger(workspace);
 
   for (const effectId of open) {
     const before = host.getRecord(effectId);

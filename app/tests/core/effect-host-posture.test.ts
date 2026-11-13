@@ -52,6 +52,30 @@ describe("effectHostKernelRequireRefusal", () => {
     }
   });
 
+  test("require refuses unclassified built-in and MCP effect paths by default", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "require" });
+      for (const tool of [
+        "undo", "shell_session", "code_mode", "preview", "agent",
+        "debug", "lsp", "lint", "present", "todo", "handoff_create",
+        "handoff_resume", "mcp__untrusted__write", "future_custom_tool",
+      ]) {
+        const refusal = effectHostKernelRequireRefusal(tool, {}, false);
+        expect(refusal).toContain(EFFECT_HOST_KERNEL_REQUIRE_NOTICE);
+        expect(refusal).toContain(`no kernel EffectHost route for ${tool}`);
+      }
+      for (const local of [
+        "read", "grep", "glob", "repo_map", "ast_search",
+        "memory_search", "handoff_search", "tool_search",
+      ]) {
+        expect(effectHostKernelRequireRefusal(local, {}, false)).toBeUndefined();
+      }
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+
   test("doctor residual names variadic unique-projection honesty (ruling 320)", () => {
     const posture = effectHostDoctorPosture({});
     expect(posture.detail.toLowerCase()).toContain("variadic");

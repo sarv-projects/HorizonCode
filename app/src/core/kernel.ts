@@ -25,7 +25,7 @@ import { appendJsonl } from "./jsonl-append";
 import { deleteFileInSandbox } from "./effect-host-atomic-delete";
 import { renameFileInSandbox } from "./effect-host-atomic-rename";
 import { writeBytesAtomicInSandbox } from "./effect-host-atomic-write";
-import { resolveKernelFsEditOldString } from "./effect-host-edit-repair";
+import { resolveKernelFsEditOldString, renderKernelFsEditReplacement } from "./effect-host-edit-repair";
 import {
   observeCapturedShellStreamDigest,
   observeKernelFsMutationResultDigest,
@@ -1690,7 +1690,9 @@ export class KernelClient {
             return Promise.reject(new Error(msg));
           }
           const updated =
-            content.slice(0, resolvedOld.start) + newString + content.slice(resolvedOld.end);
+            content.slice(0, resolvedOld.start) +
+            renderKernelFsEditReplacement(newString, resolvedOld, content) +
+            content.slice(resolvedOld.end);
           const payload = Buffer.from(updated, "utf8");
           return writeBytesAtomicInSandbox(sandboxRoot, candidate, payload)
             .then(() => {

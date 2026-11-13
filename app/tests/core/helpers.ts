@@ -52,6 +52,17 @@ export const ENV_KEYS = [
   "OPENAI_API_KEY",
   "HZ_ANCHOR_KEY",
   "HZ_ACCEPT_LEGACY_ANCHORS",
+  // EffectHost tests modify these process-global toggles. An incomplete
+  // snapshot previously leaked require mode into later rewind/tool suites.
+  "HZ_EFFECT_HOST_KERNEL",
+  "HZ_EFFECT_HOST_EDIT_REPAIR",
+  "HZ_EFFECT_RECONCILE_BLOCK",
+  // Sandbox wiring tests toggle these globally; missing restoration previously
+  // caused later hook, MCP, LSP and child-spawn suites to inherit confinement.
+  "HZ_SANDBOX_EXEC",
+  "HZ_SANDBOX_REQUIRE",
+  "HZ_SANDBOX_CHILD_NET",
+  "HZ_SANDBOX_NETNS",
 ] as const;
 
 export type EnvSnapshot = Array<readonly [string, string | undefined]>;

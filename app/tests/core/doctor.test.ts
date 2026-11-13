@@ -277,6 +277,39 @@ test("effect.host doctor line documents kernel route coverage", () => {
   expect(req.hint.toLowerCase()).toContain("variadic");
 });
 
+test("effect.host doctor reports effective user config while respecting explicit env override", () => {
+  writeConfig(JSON.stringify({ effectHostKernel: "require" }));
+  const configMode = byId(runDoctor(fakeEnv()), "effect.host");
+  expect(configMode.detail).toContain("HZ_EFFECT_HOST_KERNEL=require");
+  expect(configMode.detail).toContain("effective mode from user config");
+
+  const override = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EFFECT_HOST_KERNEL: "default" } })),
+    "effect.host",
+  );
+  expect(override.detail).toContain("HZ_EFFECT_HOST_KERNEL=default");
+  expect(override.detail).toContain("effective mode from environment/default");
+
+  const disabled = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EFFECT_HOST_KERNEL: "0" } })),
+    "effect.host",
+  );
+  expect(disabled.detail).toContain("HZ_EFFECT_HOST_KERNEL unset");
+});
+
+test("effect.host doctor distinguishes provisional sandbox-wrap projection", () => {
+  const check = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_SANDBOX_EXEC: "1" } })),
+    "effect.host",
+  );
+  if (process.platform === "linux") {
+    expect(check.detail).toContain("projected Linux sandbox-wrap default");
+    expect(check.detail).toContain("HZ_EFFECT_HOST_KERNEL=default");
+  } else {
+    expect(check.detail).toContain("HZ_EFFECT_HOST_KERNEL unset");
+  }
+});
+
 test("effect.postimage.replay doctor names ast_edit kernel route (ruling 320)", () => {
   const line = byId(runDoctor(fakeEnv()), "effect.postimage.replay");
   expect(line.detail.toLowerCase()).toContain("ast_edit");
