@@ -870,6 +870,30 @@ export interface KernelRequestMap {
       events: number;
     };
   };
+  /** On-demand independently re-read only the latest settled postimage per
+   * file path. Historic overwritten state and shell/network effects are
+   * explicitly out of scope; legacyUnverifiable remains visible. */
+  "effect.owner.postimage.verify": {
+    params: Record<string, never>;
+    result: {
+      ok: boolean;
+      checked: number;
+      legacyUnverifiable: number;
+      /** Shell/proc effects whose side-effects cannot be re-read as file postimages. */
+      unsupportedEffects: number;
+      unresolved: number;
+      scope: "latest_settled_file_postimage_only";
+      mismatches: Array<{
+        effectId: string;
+        path: string;
+        expectedState: string;
+        observedState: string;
+        expectedDigest?: string | null;
+        observedDigest?: string | null;
+        observationStable: boolean;
+      }>;
+    };
+  };
   /** Verify owner EventLog plus receipt chain; refusal if either is unreadable. */
   "effect.owner.verify": {
     params: Record<string, never>;
@@ -968,6 +992,10 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "sandbox.report",
   "effect.reconcile",
   "effect.execute",
+  "effect.owner.status",
+  "effect.owner.verify",
+  "effect.owner.recover",
+  "effect.owner.postimage.verify",
   "egress.connect.listen",
 ];
 

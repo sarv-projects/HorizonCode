@@ -292,6 +292,213 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
     Ok(())
 }
 
+/// Distinguish a real absent postimage from an inaccessible or unstable path.
+/// A permission error is NOT proof that the file no longer exists.
+fn independently_absent(path: &Path) -> Result<bool, String> {
+    for _ in 0..2 {
+        match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => return Ok(false),
+            Err(e) => {
+                return Err(format!(
+                    "HZ_PRECONDITION_FAILED: cannot observe postimage absence: {e}"
+                ))
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Record the kernel-observed file postimage as a signed OwnerLog fact. These
+/// evidence items are *not* a historical blob snapshot: later kernel effects
+/// may legitimately supersede them. The standalone replay verifier compares
+/// only the last settled observation per path against fresh disk reads.
+fn settled_file_evidence(params: &Value, out: &Value, kind: &str) -> Result<Value, String> {
+    let field = match kind {
+        "fs.write" => "writePath",
+        "fs.edit" => "editPath",
+        "fs.delete" => "deletePath",
+        "fs.rename" => "renameToPath",
+        _ => return Ok(json!([])),
+    };
+    let target = out.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("HZ_PRECONDITION_FAILED: settled {kind} missing kernel postimage path")
+    })?;
+    if !Path::new(target).is_absolute() {
+        return Err("HZ_PRECONDITION_FAILED: postimage evidence path must be absolute".into());
+    }
+    let mut records = Vec::new();
+    if kind == "fs.delete" {
+        // A dangling symlink is not an absent resource.
+        if !independently_absent(Path::new(target))? {
+            return Err("HZ_PRECONDITION_FAILED: delete postimage not independently absent".into());
+        }
+        records.push(json!({"path": target, "state": "absent"}));
+    } else {
+        let digest = out
+            .get("contentDigest")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: settled file mutation missing independent digest"
+                    .to_string()
+            })?;
+        records.push(json!({"path": target, "state": "present", "digest": digest}));
+    }
+    if kind == "fs.rename" {
+        let root = params
+            .get("sandboxRoot")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: rename evidence missing sandboxRoot".to_string()
+            })?;
+        let raw = params
+            .get("dispatch")
+            .and_then(|v| v.get("spec"))
+            .and_then(|v| v.get("from"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "HZ_PRECONDITION_FAILED: rename evidence missing from".to_string())?;
+        let from = Path::new(raw);
+        let candidate = if from.is_absolute() {
+            from.to_path_buf()
+        } else {
+            Path::new(root).join(from)
+        };
+        let _resolved = crate::guard::lexical_resolve(&candidate).ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: rename evidence cannot resolve source".to_string()
+        })?;
+        // Check the SOURCE SPELLING with lstat, not the resolved target:
+        // a dangling symlink at source must not be mistaken for an absent
+        // post-rename path, nor be omitted from later replay checks.
+        if !independently_absent(&candidate)? {
+            return Err("HZ_PRECONDITION_FAILED: rename source not independently absent".into());
+        }
+        records.push(json!({
+            "path": candidate.to_string_lossy(), "state": "absent",
+        }));
+    }
+    Ok(json!(records))
+}
+
+/// Independent *latest-state* verifier. It never pretends to reconstruct an
+/// overwritten historical postimage. Each path is checked using the latest
+/// kernel-owned settled evidence. Legacy owner settlements without evidence
+/// remain explicitly UNVERIFIABLE and cannot count toward full P0-2.
+pub fn verify_latest_postimages(
+    events: &EventLog,
+    receipts: &Receipts,
+    state_dir: &Path,
+) -> Result<Value, String> {
+    let _lock = OwnerLock::acquire(state_dir)?;
+    let state = rebuild(events)?;
+    verify_settlement_receipt_links(events, receipts)?;
+    let mut latest: BTreeMap<String, (String, String, Option<String>)> = BTreeMap::new();
+    let mut legacy_unverifiable = 0usize;
+    let mut unsupported_effects = 0usize;
+    for event in events.read(STREAM, None, None)? {
+        if event["type"] != "owner.settled" {
+            continue;
+        }
+        let id = event["payload"]["effectId"]
+            .as_str()
+            .ok_or_else(|| "HZ_PRECONDITION_FAILED: owner evidence has no effect id".to_string())?;
+        let details = &event["payload"]["details"];
+        let Some(evidence) = details.get("postimages") else {
+            legacy_unverifiable += 1;
+            continue;
+        };
+        let rows = evidence.as_array().ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: owner postimage evidence must be an array".to_string()
+        })?;
+        if rows.is_empty() {
+            // A settled shell has verifiable output streams, but this
+            // verifier cannot prove its filesystem or network side effects.
+            unsupported_effects += 1;
+        }
+        for row in rows {
+            let p = row["path"]
+                .as_str()
+                .filter(|p| Path::new(p).is_absolute())
+                .ok_or_else(|| {
+                    "HZ_PRECONDITION_FAILED: owner postimage evidence path invalid".to_string()
+                })?;
+            let state = row["state"].as_str().ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: owner postimage evidence state invalid".to_string()
+            })?;
+            let digest = match state {
+                "present" => Some(
+                    row["digest"]
+                        .as_str()
+                        .filter(|v| {
+                            v.len() == 64
+                                && v.bytes()
+                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        })
+                        .ok_or_else(|| {
+                            "HZ_PRECONDITION_FAILED: owner postimage evidence digest invalid"
+                                .to_string()
+                        })?
+                        .to_string(),
+                ),
+                "absent" => None,
+                _ => {
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: owner postimage evidence state unknown".into(),
+                    )
+                }
+            };
+            latest.insert(p.to_string(), (id.to_string(), state.to_string(), digest));
+        }
+    }
+    let mut mismatches = Vec::new();
+    for (path, (id, expected_state, expected_digest)) in &latest {
+        let actual_state = if fs::symlink_metadata(path)
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            "absent"
+        } else {
+            "present"
+        };
+        let mut observed_digest = None;
+        let stable = if expected_state == "present" && actual_state == "present" {
+            let obs = crate::receipt_postimage::observe_file_postimage(Path::new(path));
+            observed_digest = obs.digest;
+            obs.observation_stable
+        } else {
+            // Two independent lstat probes; permission errors must not look
+            // like an absent file (and dangling symlinks are present).
+            let probe = || match fs::symlink_metadata(path) {
+                Ok(_) => Some("present"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("absent"),
+                Err(_) => None,
+            };
+            probe() == Some(actual_state) && probe() == Some(actual_state)
+        };
+        if !stable
+            || actual_state != expected_state
+            || (expected_state == "present" && observed_digest.as_ref() != expected_digest.as_ref())
+        {
+            mismatches.push(json!({
+                "effectId": id,
+                "path": path,
+                "expectedState": expected_state,
+                "observedState": actual_state,
+                "expectedDigest": expected_digest,
+                "observedDigest": observed_digest,
+                "observationStable": stable,
+            }));
+        }
+    }
+    Ok(json!({
+        "ok": mismatches.is_empty() && legacy_unverifiable == 0 && unsupported_effects == 0 && state.unresolved.is_empty(),
+        "checked": latest.len(),
+        "legacyUnverifiable": legacy_unverifiable,
+        "unsupportedEffects": unsupported_effects,
+        "unresolved": state.unresolved.len(),
+        "mismatches": mismatches,
+        "scope": "latest_settled_file_postimage_only",
+    }))
+}
+
 fn status_json(state: OwnerState) -> Value {
     let unresolved_ids: Vec<_> = state.unresolved.keys().take(32).cloned().collect();
     let recoverable_ids: Vec<_> = state
@@ -347,7 +554,8 @@ pub fn recover(
         effect_id,
         json!({
             "protocolVersion": 2,
-            "reason": "prepare_only_no_execute_marker"
+            "reason": "prepare_only_no_execute_marker",
+            "terminal": "interrupted"
         }),
     )?;
     let after = rebuild(events)?;
@@ -595,6 +803,32 @@ pub fn execute(
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(|| crate::canon::sha256_hex(&crate::canon::canonical_json(&out)));
+            let postimages = match settled_file_evidence(params, &out, kind) {
+                Ok(postimages) => postimages,
+                Err(error) => {
+                    // Observation is part of settlement, never an advisory
+                    // best effort. If evidence cannot be reconstructed,
+                    // do not issue a settled receipt.
+                    record(
+                        events,
+                        "owner.unknown",
+                        id,
+                        json!({
+                            "cause": "postimage_evidence_unstable", "detail": error, "terminal": "unknown",
+                        }),
+                    )?;
+                    return Err(error);
+                }
+            };
+            // RC-7 outcome spelling is independent of receipt settlement:
+            // a nonzero shell exit still has a verifiable, settled receipt,
+            // but its *terminal outcome* is failed, not succeeded.
+            let terminal =
+                if kind == "shell.exec" && out.get("exitCode").and_then(Value::as_i64) != Some(0) {
+                    "failed"
+                } else {
+                    "succeeded"
+                };
             let receipt = receipts.issue(&json!({
                 "action": "effect.execute", "tool": kind,
                 "argsDigest": args_digest, "resultDigest": digest, "effectId": id,
@@ -610,6 +844,8 @@ pub fn execute(
                     "receiptId": receipt_id,
                     "receiptSeq": receipt_seq,
                     "receiptHash": receipt["hash"],
+                    "postimages": postimages,
+                    "terminal": terminal,
                 }),
             )?;
             out["ownerReceiptId"] = json!(receipt_id);
@@ -623,7 +859,7 @@ pub fn execute(
                 events,
                 "owner.unknown",
                 id,
-                json!({"cause": "missing_or_unstable_independent_observation"}),
+                json!({"cause": "missing_or_unstable_independent_observation", "terminal": "unknown"}),
             )?;
             Ok(out)
         }
@@ -634,7 +870,7 @@ pub fn execute(
                 events,
                 "owner.unknown",
                 id,
-                json!({"cause": "execute_error"}),
+                json!({"cause": "execute_error", "terminal": "unknown"}),
             )?;
             Err(error)
         }
