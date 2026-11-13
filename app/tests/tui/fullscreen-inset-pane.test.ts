@@ -3,6 +3,7 @@ import {
   buildFullscreenInsetLogicalLines,
   buildFullscreenInsetScrollbackLines,
   buildInsetReconcileBlockLogicalLines,
+  buildInsetObservePendingLogicalLines,
 } from "../../src/tui/fullscreen-inset-pane";
 import { fullscreenTranscriptScrollBackMax, sliceTranscriptViewport } from "../../src/tui/fullscreen-layout";
 
@@ -37,6 +38,33 @@ describe("fullscreen inset pane content (ruling 300)", () => {
     });
     expect(lines[0]).toContain("Ctrl+B");
     expect(lines[0]).toContain("wheel on main");
+  });
+
+  test("observe-pending inset banner without latch (ruling 342)", () => {
+    const prev = process.env.HZ_EFFECT_RECONCILE_BLOCK;
+    process.env.HZ_EFFECT_RECONCILE_BLOCK = "1";
+    try {
+      const view = {
+        latched: false,
+        mode: "session" as const,
+        observePendingActive: true,
+        observePendingDependencies: [{ resourcePath: "/w/pending.ts", effectIds: ["eff-observe"] }],
+      };
+      const only = buildInsetObservePendingLogicalLines(view);
+      expect(only[0]).toContain("BLOCK observe");
+      expect(only.some((l) => l.includes("pending.ts"))).toBe(true);
+      const lines = buildFullscreenInsetLogicalLines({
+        transcript: ["buried"],
+        mainScrollUp: 5,
+        unknownRows: [{ effectId: "ef1", tool: "write", callId: "c1", receiptId: "r1" }],
+        reconcileBlock: view,
+      });
+      expect(lines[0]).toContain("BLOCK observe");
+      expect(lines.some((l) => l.includes("ef1"))).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.HZ_EFFECT_RECONCILE_BLOCK;
+      else process.env.HZ_EFFECT_RECONCILE_BLOCK = prev;
+    }
   });
 
   test("reconcile-block latched shows BLOCK banner and path summary (ruling 309)", () => {

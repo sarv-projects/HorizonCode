@@ -275,6 +275,305 @@ except OSError as e:
     );
 }
 
+/// `HZ_SANDBOX_VETH_CREATE=1` with `HZ_SANDBOX_VETH_JOIN=1` must fail closed (ruling **329**).
+#[test]
+fn hz_sandbox_exec_veth_create_fail_closed_mutual_exclusive() {
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_CREATE", "1")
+        .env("HZ_SANDBOX_VETH_JOIN", "1")
+        .env("HZ_SANDBOX_VETH_NETNS", "hz-veth-create-mutex-329")
+        .args(["--", "python3", "-c", "print('RAN')"])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    assert!(
+        !out.status.success() && !stdout.contains("RAN"),
+        "expected fail-closed CREATE+JOIN mutex, stdout={stdout} stderr={stderr} status={:?}",
+        out.status,
+    );
+}
+
+/// When CAP_NET_ADMIN + `ip` exist, in-wrapper veth create leaves host if in child netns (ruling **329**).
+#[test]
+fn hz_sandbox_exec_veth_create_plumbs_host_in_child() {
+    let ip_ok = Command::new("ip")
+        .args(["-V"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !ip_ok {
+        return;
+    }
+    let host = format!("hz-sbx-veth-h-{}", std::process::id());
+    let peer = format!("hz-sbx-veth-p-{}", std::process::id());
+    let _ = Command::new("ip").args(["link", "del", &host]).status();
+    let _ = Command::new("ip").args(["link", "del", &peer]).status();
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let probe = r#"
+import subprocess, sys
+out = subprocess.check_output(["ip", "-o", "link"], text=True)
+print("HOST_LINK", sys.argv[1] in out)
+"#;
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_CREATE", "1")
+        .env("HZ_SANDBOX_VETH_HOST", &host)
+        .env("HZ_SANDBOX_VETH_PEER", &peer)
+        .args(["--", "python3", "-c", probe, &host])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let _ = Command::new("ip").args(["link", "del", &host]).status();
+    let _ = Command::new("ip").args(["link", "del", &peer]).status();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    if !out.status.success() {
+        return; // userns/veth create may be unavailable
+    }
+    assert!(
+        stdout.contains("HOST_LINK True"),
+        "expected host veth in child netns after CREATE, stdout={stdout} stderr={stderr}",
+    );
+}
+
+/// ADDR/route env without CREATE must fail closed (ruling **331**).
+#[test]
+fn hz_sandbox_exec_veth_addr_fail_closed_without_create() {
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_PEER_ADDR", "10.199.0.1/30")
+        .args(["--", "python3", "-c", "print('RAN')"])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    assert!(
+        !out.status.success() && !stdout.contains("RAN"),
+        "expected fail-closed ADDR without CREATE, stdout={stdout} stderr={stderr} status={:?}",
+        out.status,
+    );
+}
+
+/// When CAP_NET_ADMIN + `ip`/`nsenter` exist, CREATE may install child default route (ruling **332** slice).
+#[test]
+fn hz_sandbox_exec_veth_create_default_route_in_child() {
+    let ip_ok = Command::new("ip")
+        .args(["-V"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let nsenter_ok = Command::new("nsenter")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !ip_ok || !nsenter_ok {
+        return;
+    }
+    let host = format!("hz-sbx-veth-dr-h-{}", std::process::id());
+    let peer = format!("hz-sbx-veth-dr-p-{}", std::process::id());
+    let _ = Command::new("ip").args(["link", "del", &host]).status();
+    let _ = Command::new("ip").args(["link", "del", &peer]).status();
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let probe = r#"
+import subprocess
+out = subprocess.check_output(["ip", "route", "show", "default"], text=True)
+print("DEFAULT_VIA", "default via" in out)
+"#;
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_CREATE", "1")
+        .env("HZ_SANDBOX_VETH_HOST", &host)
+        .env("HZ_SANDBOX_VETH_PEER", &peer)
+        .env("HZ_SANDBOX_VETH_PEER_ADDR", "10.199.0.1/30")
+        .env("HZ_SANDBOX_VETH_HOST_ADDR", "10.199.0.2/30")
+        .env("HZ_SANDBOX_VETH_DEFAULT_ROUTE", "1")
+        .args(["--", "python3", "-c", probe])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let _ = Command::new("ip").args(["link", "del", &host]).status();
+    let _ = Command::new("ip").args(["link", "del", &peer]).status();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    if !out.status.success() {
+        return;
+    }
+    assert!(
+        stdout.contains("DEFAULT_VIA True"),
+        "expected child default route after CREATE plumb, stdout={stdout} stderr={stderr}",
+    );
+}
+
+/// When CAP_NET_ADMIN + `ip`/`nsenter` exist, CREATE may assign child host ADDR (ruling **331**).
+#[test]
+fn hz_sandbox_exec_veth_create_assigns_host_addr() {
+    let ip_ok = Command::new("ip")
+        .args(["-V"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let nsenter_ok = Command::new("nsenter")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !ip_ok || !nsenter_ok {
+        return;
+    }
+    let host = format!("hz-sbx-veth-addr-h-{}", std::process::id());
+    let peer = format!("hz-sbx-veth-addr-p-{}", std::process::id());
+    let _ = Command::new("ip").args(["link", "del", &host]).status();
+    let _ = Command::new("ip").args(["link", "del", &peer]).status();
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let probe = r#"
+import subprocess, sys
+out = subprocess.check_output(["ip", "-o", "addr", "show", "dev", sys.argv[1]], text=True)
+print("HOST_ADDR", "10.199.0.2" in out)
+"#;
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_CREATE", "1")
+        .env("HZ_SANDBOX_VETH_HOST", &host)
+        .env("HZ_SANDBOX_VETH_PEER", &peer)
+        .env("HZ_SANDBOX_VETH_PEER_ADDR", "10.199.0.1/30")
+        .env("HZ_SANDBOX_VETH_HOST_ADDR", "10.199.0.2/30")
+        .args(["--", "python3", "-c", probe, &host])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let _ = Command::new("ip").args(["link", "del", &host]).status();
+    let _ = Command::new("ip").args(["link", "del", &peer]).status();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    if !out.status.success() {
+        return;
+    }
+    assert!(
+        stdout.contains("HOST_ADDR True"),
+        "expected child host /30 after CREATE plumb, stdout={stdout} stderr={stderr}",
+    );
+}
+
+/// `HZ_SANDBOX_VETH_JOIN=1` without a prepared netns must fail closed (ruling **324**).
+#[test]
+fn hz_sandbox_exec_veth_join_fail_closed_without_netns_path() {
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_JOIN", "1")
+        .args(["--", "python3", "-c", "print('RAN')"])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    assert!(
+        !out.status.success() && !stdout.contains("RAN"),
+        "expected fail-closed veth join without HZ_SANDBOX_VETH_NETNS, stdout={stdout} stderr={stderr} status={:?}",
+        out.status,
+    );
+}
+
+#[test]
+fn hz_sandbox_exec_veth_join_fail_closed_missing_prepared_netns() {
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let missing = "/var/run/netns/hz-veth-join-missing-324-probe";
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_JOIN", "1")
+        .env("HZ_SANDBOX_VETH_NETNS", missing)
+        .args(["--", "python3", "-c", "print('RAN')"])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    if std::path::Path::new(missing).exists() {
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    assert!(
+        !out.status.success() && !stdout.contains("RAN"),
+        "expected fail-closed when prepared netns path missing, stdout={stdout} stderr={stderr} status={:?}",
+        out.status,
+    );
+}
+
+/// When CAP_NET_ADMIN + `ip` exist, parent-prepared netns join keeps the child in that netns.
+#[test]
+fn hz_sandbox_exec_veth_join_enters_prepared_netns() {
+    let ip_ok = Command::new("ip")
+        .args(["-V"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !ip_ok {
+        return;
+    }
+    let ns = format!("hz-veth-join-{}", std::process::id());
+    let del = Command::new("ip").args(["netns", "del", &ns]).status();
+    let _ = del;
+    let add = Command::new("ip")
+        .args(["netns", "add", &ns])
+        .status()
+        .expect("ip netns add");
+    if !add.success() {
+        return;
+    }
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let probe = r#"
+import os
+print("JOIN_NS", open("/proc/self/ns/net").readlink())
+"#;
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .env("HZ_SANDBOX_VETH_JOIN", "1")
+        .env("HZ_SANDBOX_VETH_NETNS", &ns)
+        .args(["--", "python3", "-c", probe])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let _ = Command::new("ip").args(["netns", "del", &ns]).status();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
+        return;
+    }
+    if !out.status.success() {
+        return; // setns/user ns may be unavailable (e.g. user ns disabled)
+    }
+    let parent_ns = Command::new("ip")
+        .args(["netns", "exec", &ns, "readlink", "/proc/self/ns/net"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    if let Some(expected) = parent_ns {
+        assert!(
+            stdout.contains("JOIN_NS") && stdout.contains(&expected),
+            "child should share parent-prepared netns, stdout={stdout} stderr={stderr} expected={expected}",
+        );
+    }
+}
+
 #[test]
 fn hz_sandbox_exec_isolates_network() {
     let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");

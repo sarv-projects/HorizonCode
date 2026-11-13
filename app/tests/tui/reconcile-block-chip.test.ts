@@ -41,6 +41,20 @@ describe("reconcile block chip (ruling 304)", () => {
     expect(strip(bar)).toContain("BLOCK mutate");
   });
 
+  test("BLOCK observe chip when observe-pending without latch (ruling 342)", () => {
+    setColorEnabled(false);
+    const view = {
+      latched: false,
+      mode: "session" as const,
+      observePendingActive: true,
+      observePendingDependencies: [{ resourcePath: "/w/pending.ts", effectIds: ["eff-1"] }],
+    };
+    expect(strip(formatReconcileBlockStatusChip(view))).toBe("BLOCK observe");
+    const lines = formatReconcileBlockScrollbackNoticeLines(view);
+    expect(lines.some((l) => l.includes("observe-pending barrier"))).toBe(true);
+    expect(reconcileBlockScrollbackNoticeKey(view)).toContain("pending.ts");
+  });
+
   test("scrollback notice lines list BLOCK label and blocked paths (ruling 310)", () => {
     const view = {
       latched: true,

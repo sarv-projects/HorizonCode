@@ -140,6 +140,8 @@ describe("kernel effect.execute", () => {
       expect(result.verdict).toBe("settled");
       expect(result.contentDigest).toBe(expected);
       expect(result.postimageObservationStable).toBe(true);
+      expect(result.resultDigestStable).toBe(true);
+      expect(result.resultDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(readFileSync(path.join(sandbox, "out.txt"), "utf8")).toBe("kernel-write");
     } finally {
       rmSync(sandbox, { recursive: true, force: true });
@@ -184,6 +186,8 @@ describe("kernel effect.execute", () => {
       expect(result.verdict).toBe("settled");
       expect(result.contentDigest).toBe(expected);
       expect(result.postimageObservationStable).toBe(true);
+      expect(result.resultDigestStable).toBe(true);
+      expect(result.resultDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(() => readFileSync(path.join(sandbox, "src.txt"))).toThrow();
       expect(readFileSync(path.join(sandbox, "dest.txt"), "utf8")).toBe("payload");
     } finally {
@@ -209,6 +213,8 @@ describe("kernel effect.execute", () => {
       expect(result.verdict).toBe("settled");
       expect(result.contentDigest).toBe(empty);
       expect(result.postimageObservationStable).toBe(true);
+      expect(result.resultDigestStable).toBe(true);
+      expect(result.resultDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(() => readFileSync(path.join(sandbox, "gone.txt"))).toThrow();
     } finally {
       rmSync(sandbox, { recursive: true, force: true });
@@ -408,6 +414,7 @@ describe("kernel effect.execute", () => {
       });
       expect(result.verdict).toBe("settled");
       expect(result.contentDigest).toBe(expected);
+      expect(result.resultDigestStable).toBe(true);
       expect(readFileSync(path.join(sandbox, "note.txt"), "utf8")).toBe("rust-write");
     } finally {
       rmSync(sandbox, { recursive: true, force: true });

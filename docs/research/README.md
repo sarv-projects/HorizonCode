@@ -1,6 +1,8 @@
 # Research notes (imported)
 
-These ten files are the Phase 1 research reports that produced `docs/30-steal-list.md`, the provider, hook, edit-engine, LSP, TUI and safety work, and the product README plan. They were written by earlier research passes as read-only deep dives of upstream agent repositories. They are kept here verbatim in substance so a new engineer or coding agent can see the evidence behind each design decision.
+> **Agents:** [`../FULL-BACKLOG-2026-11-13.md`](../FULL-BACKLOG-2026-11-13.md) · **`repo_take/`** [`upstream-pins.md`](upstream-pins.md) · steal matrix [`steal-little-coder-aider.md`](steal-little-coder-aider.md).
+
+These research reports produced `docs/30-steal-list.md`, the provider, hook, edit-engine, LSP, TUI and safety work, and the product README plan. They were written by earlier research passes as read-only deep dives of upstream agent repositories. They are kept here verbatim in substance so a new engineer or coding agent can see the evidence behind each design decision.
 
 ## How to read the links
 
@@ -25,6 +27,7 @@ These ten files are the Phase 1 research reports that produced `docs/30-steal-li
 | [compare-providers.md](compare-providers.md) | The implementation spec for the provider superset: opencode's provider lifecycle, how many providers and models exist and the compat flag model, the oh-my-pi catalog and KDL compat rules, a capability comparison with HorizonCode, a concrete reuse plan (fail loud on unknown provider, one openai-compatible adapter, catalog snapshot and refresh, auth and OAuth shapes), and an exact path evidence index. models.dev is the shared catalog source. |
 | [forgecode-deep.md](forgecode-deep.md) | Deep dive of forgecode (agents forge, sage and muse, doom loop hook, compaction, read-before-edit, provider transformers) classified against HorizonCode, plus a quality-practices section, a first look at the Grok Build TUI, an analysis of forgecode's README as a product README, a recommended HorizonCode README outline, and a list of things HorizonCode must not claim without verification on main. Includes the author's own measurements (startup time, selftest) with the method used. |
 | [grok-tui-deep.md](grok-tui-deep.md) | Deep analysis of the Grok Build TUI (the pager crates under `crates/codegen/`): the two TUIs, architecture, layout, exact transcript cell formats, animation, theme, input, minimal mode and the PTY test harness, followed by the HorizonCode TUI Part 2 specification derived from it. This is the main source for the TUI work tracked in `docs/13-tui.md` (see its provenance sections). |
+| [steal-little-coder-aider.md](steal-little-coder-aider.md) | 2026-11-13 deep dive of [little-coder](https://github.com/itayinbarr/little-coder) (local/small-model scaffold policies on pi) plus an aider git-tools recheck against the verified `repo_take/aider` clone. Disposition matrices: TAKE / ALREADY / SKIP / DEFER. Pins in [upstream-pins.md](upstream-pins.md). |
 
 ## Where the findings landed
 

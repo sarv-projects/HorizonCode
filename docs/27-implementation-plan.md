@@ -5,7 +5,7 @@
 >
 > **Companion:** `docs/26-learning-synthesis-2.md` (what the deep-dive pass taught us and which of it we adopt). This plan assumes that learning; where a plan item is sourced from a specific reference or from that synthesis, it is cited.
 >
-> **Execution precedence (RC-16(h)).** The concrete build order is the action queue in [`docs/30-steal-list.md`](./30-steal-list.md) §4; the V0–V7 ladder below is the coarse capability map. Where the two appear to disagree, the newest ratified queue (`docs/30` §4) wins.
+> **Execution precedence (RC-16(h)).** **Full open-work register:** [`FULL-BACKLOG-2026-11-13.md`](./FULL-BACKLOG-2026-11-13.md). **P0 order:** [`HANDOFF-BACKLOG-2026-11-13.md`](./HANDOFF-BACKLOG-2026-11-13.md). Historical action queue: [`30-steal-list.md`](./30-steal-list.md) §4. V0–V7 below = coarse capability map.
 
 ---
 

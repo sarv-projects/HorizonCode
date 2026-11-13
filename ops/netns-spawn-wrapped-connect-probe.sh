@@ -1,9 +1,10 @@
 #!/usr/bin/env sh
-# spawnOwned-wrapped CONNECT via bridge proxy (ruling **321**).
-# Advisory only — hermetic child_net=on path; does NOT plumb veth inside hz-sandbox-exec.
+# spawnOwned-wrapped CONNECT via bridge proxy (rulings **321**, **326**).
+# Advisory only — parent-side veth plumbing; does NOT create veth in-wrapper.
 #
 # Requires parent veth plumbing (see netns-veth-connect-probe.sh) + ROUTED spawn env.
-# Optionally runs wrapped CONNECT helper when HZ_SANDBOX_EXEC_BIN + CONNECT_AUTHORITY set.
+# When HZ_SANDBOX_EXEC_BIN set: hermetic child_net=on probe + production child_net=off
+# CONNECT after veth join (**326**).
 #
 # Usage:
 #   HZ_EGRESS_PROXY=http://127.0.0.1:4317 \
@@ -20,6 +21,7 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTED_PROBE="${ROOT}/ops/netns-spawn-routed-veth-probe.sh"
 
 BRIDGE_HOST="${HZ_EGRESS_NETNS_BRIDGE_HOST:-10.199.0.1}"
+VETH_NS="${HZ_SANDBOX_VETH_NETNS:-hz-veth-reach-ns}"
 ROUTED="${HZ_EGRESS_NETNS_PROXY_ROUTED:-}"
 SBX_BIN="${HZ_SANDBOX_EXEC_BIN:-}"
 
@@ -49,30 +51,48 @@ if [ -n "$SBX_BIN" ] && [ -x "$SBX_BIN" ]; then
       CHILD_PROXY="$PARENT_PROXY"
       ;;
   esac
-  echo "hz-sandbox-exec hermetic child_net=on CONNECT probe (not production child_net=off)"
-  OUT="$(
-    HZ_SANDBOX_CHILD_NET=on HTTP_PROXY="$CHILD_PROXY" HTTPS_PROXY="$CHILD_PROXY" \
-      "$SBX_BIN" -- python3 -c "
+  CONNECT_PY='
 import socket
-bridge='${BRIDGE_HOST}'
-port=${PROXY_PORT}
-authority='${CONNECT_AUTHORITY}'
+bridge="'"${BRIDGE_HOST}"'"
+port='"${PROXY_PORT}"'
+authority="'"${CONNECT_AUTHORITY}"'"
 s=socket.socket(); s.settimeout(5)
 s.connect((bridge, port))
-req=('CONNECT '+authority+' HTTP/1.1\\r\\nHost: '+authority+'\\r\\n\\r\\n').encode('latin1')
+req=("CONNECT "+authority+" HTTP/1.1\r\nHost: "+authority+"\r\n\r\n").encode("latin1")
 s.sendall(req)
-head=b''
-while b'\\r\\n\\r\\n' not in head and len(head)<8192:
+head=b""
+while b"\r\n\r\n" not in head and len(head)<8192:
     chunk=s.recv(4096)
     if not chunk: break
     head+=chunk
-status=head.split(b'\\r\\n')[0].decode('latin1','replace')
-print('CONNECT_VIA_SPAWN_PROXY_OK' if ' 200 ' in status else 'CONNECT_VIA_SPAWN_PROXY_FAIL:'+status[:120])
-" 2>&1
+status=head.split(b"\r\n")[0].decode("latin1","replace")
+print("CONNECT_VIA_SPAWN_PROXY_OK" if " 200 " in status else "CONNECT_VIA_SPAWN_PROXY_FAIL:"+status[:120])
+'
+  echo "hz-sandbox-exec hermetic child_net=on CONNECT probe (advisory parity)"
+  OUT="$(
+    HZ_SANDBOX_CHILD_NET=on HTTP_PROXY="$CHILD_PROXY" HTTPS_PROXY="$CHILD_PROXY" \
+      "$SBX_BIN" -- python3 -c "$CONNECT_PY" 2>&1
   )" || true
   echo "$OUT"
   echo "$OUT" | grep -q CONNECT_VIA_SPAWN_PROXY_OK || {
-    echo "wrapped CONNECT hermetic probe failed — in-wrapper veth still open" >&2
+    echo "wrapped CONNECT hermetic child_net=on probe failed" >&2
+    exit 3
+  }
+
+  if ! ip netns list | grep -q "^${VETH_NS} "; then
+    echo "parent netns ${VETH_NS} missing — skip production veth join CONNECT (**326**)" >&2
+    exit 0
+  fi
+
+  echo "hz-sandbox-exec production child_net=off CONNECT after veth join (**326**)"
+  OUT_PROD="$(
+    HZ_SANDBOX_CHILD_NET=off HZ_SANDBOX_VETH_JOIN=1 HZ_SANDBOX_VETH_NETNS="$VETH_NS" \
+      HTTP_PROXY="$CHILD_PROXY" HTTPS_PROXY="$CHILD_PROXY" \
+      "$SBX_BIN" -- python3 -c "$CONNECT_PY" 2>&1
+  )" || true
+  echo "$OUT_PROD"
+  echo "$OUT_PROD" | grep -q CONNECT_VIA_SPAWN_PROXY_OK || {
+    echo "production child_net=off veth join CONNECT failed — in-wrapper veth create still open" >&2
     exit 3
   }
 fi

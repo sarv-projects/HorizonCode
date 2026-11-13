@@ -33,13 +33,21 @@ Notes on specific pins:
 - **Short SHAs in prose:** several notes cite 7 character short SHAs (for example `a22b492`). They are prefixes of the full SHAs above.
 - **HorizonCode itself:** research notes refer to HorizonCode commits `79f525c` (main at the time of forgecode-deep) and `d1838f8` (branch `feat/tui-polish`, grok-tui-deep). Those are this repository's history, not upstream.
 
+## Cloned for research (gitignored `repo_take/` — not in git)
+
+These clones exist on developer machines under `repo_take/` (see `.gitignore`). Pins are verified with `git rev-parse HEAD`. Research notes may cite blob URLs at these SHAs.
+
+| Local clone name | GitHub repo | Full pinned SHA | URL base | Studied in |
+|---|---|---|---|---|
+| little-coder | [itayinbarr/little-coder](https://github.com/itayinbarr/little-coder) | `89d4fa0af864230527ab75d12604ed0eb320e6df` | `https://github.com/itayinbarr/little-coder/blob/89d4fa0af864230527ab75d12604ed0eb320e6df/` | `steal-little-coder-aider.md` |
+| aider | [Aider-AI/aider](https://github.com/Aider-AI/aider) | `5dc9490bb35f9729ef2c95d00a19ccd30c26339c` | `https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/` | `docs/audit/pass3/audit-aider-report.md`, `docs/30-steal-list.md`, `steal-little-coder-aider.md` |
+
 ## Not cloned (paths cannot be verified here)
 
 These repositories were audited in earlier passes (see `docs/30-steal-list.md` and `docs/audit/`) from separate clones that are not available in the current sandbox. No file path for them can be checked now. The owner column is the commonly known GitHub owner and has NOT been confirmed from a clone; confirm it on GitHub and pin a SHA before adding any blob link. Until then, cite them as `path not verified`.
 
 | Name | Likely GitHub repo (unconfirmed) | Pinned SHA | Where it was used |
 |---|---|---|---|
-| aider | Aider-AI/aider | not recorded | `docs/audit/`, `docs/30-steal-list.md` (35 steal items) |
 | mini-swe-agent | SWE-agent/mini-swe-agent | not recorded | `docs/audit/pass3/audit-mini-swe-report.md` (41 items) |
 | hermes-agent | NousResearch/hermes-agent | not recorded | `docs/audit/` (38 items) |
 | OpenHands | All-Hands-AI/OpenHands (may have moved to OpenHands/OpenHands) | not recorded | `docs/audit/audit-oh-swe-wsh-delta.md` |

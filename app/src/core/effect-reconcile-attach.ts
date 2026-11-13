@@ -6,8 +6,9 @@
  */
 
 import { EventTypes, nowIso } from "../contracts";
-import type { EffectHost, EffectRecord } from "./effect-host";
+import type { EffectHost, EffectRecord, EffectStep } from "./effect-host";
 import { loadEffectLedger } from "./effect-ledger";
+import { postimagePathForTool } from "./receipt-postimage";
 import { receiptsPath, sessionEventsPath } from "./session-kernel-reconcile";
 import { existsSync, readFileSync } from "node:fs";
 
@@ -39,7 +40,87 @@ function asString(v: unknown): string | undefined {
   return typeof v === "string" && v !== "" ? v : undefined;
 }
 
-function enrichFromSessionEvents(record: EffectRecord, events: Record<string, unknown>[]): EffectRecord {
+function toolCallArgsForRecord(
+  events: Record<string, unknown>[],
+  record: EffectRecord,
+): Record<string, unknown> | undefined {
+  for (const ev of events) {
+    if (ev.type !== EventTypes.toolCall) continue;
+    const payload = (ev.payload ?? {}) as Record<string, unknown>;
+    const effectId = asString(payload.effectId);
+    if (effectId === record.effectId) {
+      const args = payload.args;
+      return args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    }
+    const callId = asString(payload.callId) ?? asString(payload.id);
+    const name = asString(payload.name);
+    if (callId === record.callId && name === record.tool) {
+      const args = payload.args;
+      return args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    }
+  }
+  return undefined;
+}
+
+function plannedResourceKey(
+  workspace: string,
+  tool: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  return postimagePathForTool(tool, args, workspace);
+}
+
+function patchExecuteResourceKey(record: EffectRecord, resourceKey: string): EffectRecord {
+  const execIdx = record.steps.findIndex((s) => s.phase === "execute");
+  if (execIdx < 0) return record;
+  const steps = record.steps.map((s, i) => (i === execIdx ? { ...s, resourceKey } : { ...s }));
+  return { ...record, steps };
+}
+
+/** Restore planned `resourceKey` on unsettled execute rows (ruling **338**). */
+function restoreObservePendingExecuteResourceKey(
+  workspace: string,
+  record: EffectRecord,
+  events: Record<string, unknown>[],
+): EffectRecord {
+  const phases = new Set(record.steps.map((s) => s.phase));
+  if (!phases.has("execute") || phases.has("observe")) return record;
+  const execute = record.steps.find((s) => s.phase === "execute");
+  if (execute?.resourceKey) return record;
+  const args = toolCallArgsForRecord(events, record);
+  if (!args) return record;
+  const resourceKey = plannedResourceKey(workspace, record.tool, args);
+  return resourceKey ? patchExecuteResourceKey(record, resourceKey) : record;
+}
+
+/** Merge execute `resourceKey` from latest durable snapshot without inventing observe. */
+export function restoreObservePendingFromDurableLedger(host: EffectHost, workspace: string): void {
+  const { records } = loadEffectLedger(workspace);
+  for (const disk of records) {
+    const mem = host.getRecord(disk.effectId);
+    if (!mem) continue;
+    if (mem.steps.some((s) => s.phase === "observe")) continue;
+    const diskExecute = disk.steps.find((s) => s.phase === "execute");
+    if (!diskExecute?.resourceKey) continue;
+    const execIdx = mem.steps.findIndex((s) => s.phase === "execute");
+    if (execIdx < 0) continue;
+    if (mem.steps[execIdx]?.resourceKey) continue;
+    const steps: EffectStep[] = mem.steps.map((s, i) =>
+      i === execIdx ? { ...s, resourceKey: diskExecute.resourceKey } : { ...s },
+    );
+    host.replaceRecord({ ...mem, steps });
+  }
+}
+
+function enrichFromSessionEvents(
+  workspace: string,
+  record: EffectRecord,
+  events: Record<string, unknown>[],
+): EffectRecord {
   const steps = [...record.steps];
   const has = (phase: string) => steps.some((s) => s.phase === phase);
 
@@ -70,24 +151,29 @@ function enrichFromSessionEvents(record: EffectRecord, events: Record<string, un
       }
     } else if (type === EventTypes.toolResult) {
       if (!has("execute")) {
+        const args = toolCallArgsForRecord(events, record);
+        const resourceKey = args ? plannedResourceKey(workspace, record.tool, args) : undefined;
         steps.push({
           phase: "execute",
           at: nowIso(),
           tool: record.tool,
           callId: record.callId,
           ok: payload.ok === true,
+          ...(resourceKey ? { resourceKey } : {}),
         });
       }
     }
   }
 
-  return { ...record, steps };
+  let next = { ...record, steps };
+  return restoreObservePendingExecuteResourceKey(workspace, next, events);
 }
 
 /** Session-scoped event scan + receipt fallback for missing observe rows. */
 export function enrichEffectFromLogs(workspace: string, sessionId: string, record: EffectRecord): EffectRecord {
   const events = readJsonl(sessionEventsPath(workspace, sessionId));
-  let next = enrichFromSessionEvents(record, events);
+  let next = restoreObservePendingExecuteResourceKey(workspace, record, events);
+  next = enrichFromSessionEvents(workspace, next, events);
 
   const phases = new Set(next.steps.map((s) => s.phase));
   if (!phases.has("observe")) {
@@ -132,6 +218,7 @@ export function reconcileEffectsOnAttach(
   sessionId: string,
   host: EffectHost,
 ): EffectAttachReconcile[] {
+  restoreObservePendingFromDurableLedger(host, workspace);
   const open = host.listEffectIds();
   const out: EffectAttachReconcile[] = [];
   const { verdicts: persistedVerdicts } = loadEffectLedger(workspace);

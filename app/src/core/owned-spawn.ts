@@ -55,7 +55,10 @@ import { kernelEnforcesProcessSandbox, SANDBOX_AUTO_LABELS } from "./sandbox-spa
 import { mergeEgressProxyEnv } from "./egress-env";
 import { mergeNetnsEgressProxySpawnEnv } from "./sandbox-netns-proxy";
 import { mergeSandboxChildNetSpawnEnv } from "./sandbox-child-net";
+import { mergeSandboxExecVethCreateSpawnEnv } from "./sandbox-exec-veth-create";
+import { mergeSandboxExecVethJoinSpawnEnv } from "./sandbox-exec-veth-join";
 import { mergeSandboxNetnsHonestySpawnEnv } from "./sandbox-netns-route";
+import { mergeSandboxNetnsProductDefaultSpawnEnv } from "./sandbox-netns-spawn-product-default";
 
 function sandboxRequireClosed(): boolean {
   return process.env.HZ_SANDBOX_REQUIRE === "1";
@@ -478,10 +481,21 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
 
   const argv = await resolveSpawnArgv(cmd, opts);
   const wrapped = argv[0] !== undefined && argv[0] !== cmd[0];
+  const spawnPid = process.pid;
+  const productBase = mergeSandboxNetnsProductDefaultSpawnEnv(
+    { ...(opts.env ?? process.env) },
+    { sandboxWrapped: wrapped, spawnPid },
+  );
   let spawnEnv = mergeSandboxChildNetSpawnEnv(
     mergeSandboxNetnsHonestySpawnEnv(
       mergeEgressProxyEnv(
-        mergeNetnsEgressProxySpawnEnv({ ...(opts.env ?? process.env) }, { sandboxWrapped: wrapped }),
+        mergeSandboxExecVethCreateSpawnEnv(
+          mergeSandboxExecVethJoinSpawnEnv(
+            mergeNetnsEgressProxySpawnEnv(productBase, { sandboxWrapped: wrapped }),
+            { sandboxWrapped: wrapped },
+          ),
+          { sandboxWrapped: wrapped },
+        ),
       ),
     ),
   );

@@ -901,7 +901,9 @@ export interface KernelRequestMap {
       stderrDigest?: string;
       stdoutConfirmDigest?: string;
       stderrConfirmDigest?: string;
-      /** Independent double-hash on capped stdout/stderr (**314**); false → `unknown` at reconcile. */
+      /** sha256 hex of canonical kernel-routed tool success output (**327** write/edit; shell streams **314**). */
+      resultDigest?: string;
+      /** Independent double-hash on result observe payload (**314** shell; **327** write/edit); false → `unknown`. */
       resultDigestStable?: boolean;
       shellCwd?: string;
       stdoutTruncated?: boolean;

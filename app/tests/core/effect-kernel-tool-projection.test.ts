@@ -6,8 +6,10 @@ import {
   applyPatchArgsEligibleForKernelRoute,
   applyPatchKernelProjection,
   applyPatchKernelProjections,
+  applyPatchProjectionMissRequireDetail,
   astEditArgsEligibleForKernelRoute,
   astEditKernelProjection,
+  classifyApplyPatchKernelProjectionMiss,
 } from "../../src/core/effect-kernel-tool-projection";
 
 const ADD_PATCH = `*** Begin Patch
@@ -221,5 +223,57 @@ describe("astEditKernelProjection", () => {
         out: "baz($$$A)",
       }),
     ).toBe("multi_match");
+  });
+});
+
+describe("classifyApplyPatchKernelProjectionMiss (ruling 323)", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-apply-patch-miss-"));
+  });
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  test("names parse_fail for empty patch and shape_ineligible for non-kernel ops", async () => {
+    expect(
+      await classifyApplyPatchKernelProjectionMiss(workspace, {
+        input: "*** Begin Patch\n*** End Patch",
+      }),
+    ).toBe("parse_fail");
+    // Multi-chunk Move is structurally refused by fileOpKernelProjections.
+    const moveMulti = `*** Begin Patch
+*** Update File: a.txt
+*** Move to: b.txt
+@@
+-old1
++new1
+@@
+-old2
++new2
+*** End Patch`;
+    expect(applyPatchArgsEligibleForKernelRoute({ input: moveMulti })).toBe(false);
+    expect(await classifyApplyPatchKernelProjectionMiss(workspace, { input: moveMulti })).toBe(
+      "shape_ineligible",
+    );
+    expect(applyPatchProjectionMissRequireDetail("shape_ineligible")).toContain("kernel-eligible");
+  });
+
+  test("names bun_fuzz_only when chunk is below Levenshtein threshold", async () => {
+    writeFileSync(path.join(workspace, "src.txt"), "short\n", "utf8");
+    const patch = `*** Begin Patch
+*** Update File: src.txt
+@@
+-totally different chunk
++replacement
+*** End Patch`;
+    expect(applyPatchArgsEligibleForKernelRoute({ input: patch })).toBe(true);
+    expect(await classifyApplyPatchKernelProjectionMiss(workspace, { input: patch })).toBe("bun_fuzz_only");
+    expect(applyPatchProjectionMissRequireDetail("bun_fuzz_only")).toContain("Bun-only fuzz");
+  });
+
+  test("returns undefined when exact update resolves", async () => {
+    writeFileSync(path.join(workspace, "src.txt"), "old\n", "utf8");
+    expect(await classifyApplyPatchKernelProjectionMiss(workspace, { input: UPDATE_PATCH })).toBeUndefined();
   });
 });

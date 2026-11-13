@@ -112,7 +112,9 @@ export interface KernelExecutePostimageObserve {
   contentDigest?: string;
   postimageObservationStable?: boolean;
   postimageConfirmDigest?: string;
-  /** Kernel `shell.exec` stdout/stderr double-hash observe (**314**). */
+  /** Kernel canonical tool-output digest for write/edit/shell observe (**314**, **327**). */
+  resultDigest?: string;
+  /** Kernel double-hash observe on result payload (**314** shell; **327** write/edit). */
   resultDigestStable?: boolean;
   stdoutDigest?: string;
   stderrDigest?: string;

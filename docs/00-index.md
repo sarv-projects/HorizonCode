@@ -2,7 +2,9 @@
 
 > **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-17 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
 >
-> **Implementation note (2026-11-10, branch `docs/handoff` on top of `feat/tui-part3`, pull requests #1 to #28).** Measured on this tree as root: `bun run typecheck` 0 errors; `bun test` 1800 tests in 148 files, **1792 pass / 8 skip / 0 fail** (the 8 skips are chmod based tests that cannot bind for uid 0); `cargo test --locked` 49 unit + 50 integration pass; `hz-kernel --selftest` `SELFTEST OK (25 checks)`; `bash ops/gates.sh` **8/8** green. Nothing is RELEASED. The per-feature map and the 91 numbered rulings are in `28-implementation-status.md`; the done / partial / not-started table is `../CURRENT_RUN.md` §5.0; the hand-off for a new coding agent is [`33-handoff.md`](33-handoff.md).
+> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Goal **NOT COMPLETE**; rulings **342** in `28` §3. Header counts below = historical 2026-11-10.
+>
+> **Implementation note (2026-11-10, branch `docs/handoff` on top of `feat/tui-part3`, pull requests #1 to #28).** Measured on that cut: `bun run typecheck` 0 errors; `bun test` 1800 tests in 148 files, **1792 pass / 8 skip / 0 fail**; `cargo test --locked` 49 unit + 50 integration pass; `hz-kernel --selftest` `SELFTEST OK (25 checks)`; `bash ops/gates.sh` **8/8** green. Nothing is RELEASED. Per-feature map: `28-implementation-status.md`; historical table: `../CURRENT_RUN.md` §5.0; build commands: [`33-handoff.md`](33-handoff.md).
 >
 > Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-17).
 
@@ -14,6 +16,10 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 
 | # | Document | What it decides |
 |---|---|---|
+| — | [`../AGENTS.md`](../AGENTS.md) | **Coding agents:** onboarding, backlog-first, docs≠full truth |
+| — | [`FULL-BACKLOG-2026-11-13.md`](./FULL-BACKLOG-2026-11-13.md) | **Work queue** (what to build) — not architecture |
+| — | [`33-handoff.md`](./33-handoff.md) | Build, test, gates |
+| — | [`GOAL-PROGRESS.md`](./GOAL-PROGRESS.md) | Goal **NOT COMPLETE** |
 | — | [`../README.md`](../README.md) | Product overview: what runs today, how to build and use it, and its limits |
 | 31 | [`31-design-summary.md`](./31-design-summary.md) | The designed capability list (the former long README; cited elsewhere as "README §N") |
 | 32 | [`32-plan-files.md`](./32-plan-files.md) | The `.hz/plans/` plan-file convention and the built-in `execute-plan` skill |

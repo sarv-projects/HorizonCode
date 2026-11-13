@@ -4,7 +4,10 @@ import { EffectHost, createEffectId } from "../../src/core/effect-host";
 import {
   frozenUnknownResourceKeys,
   mutatingToolResourceKey,
+  observePendingResourceKeys,
+  observePendingTargetForTool,
   r170ResourceGateRefusal,
+  shellExplicitResourceTarget,
   unknownEffectIdsForResourceKey,
 } from "../../src/core/effect-resource-gate";
 
@@ -65,6 +68,30 @@ describe("effect-resource-gate (R170 reduced)", () => {
     );
     expect(refusal).toContain("blocked_by_unknown");
     expect(refusal).toContain(effectId.slice(0, 13));
+  });
+
+  test("observePendingTargetForTool shell uses explicit cwd not default workspace (ruling 336)", () => {
+    expect(observePendingTargetForTool("shell", { command: "pwd" }, workspace)).toBeUndefined();
+    expect(shellExplicitResourceTarget({ command: "pwd" }, workspace)).toBeUndefined();
+    expect(observePendingTargetForTool("shell", { command: "pwd", cwd: "pkg" }, workspace)).toBe(
+      path.resolve(workspace, "pkg"),
+    );
+    expect(observePendingTargetForTool("write", { path: "a.ts" }, workspace)).toBe(
+      path.resolve(workspace, "a.ts"),
+    );
+  });
+
+  test("observePendingResourceKeys tracks execute without observe (ruling 333)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const resource = path.resolve(workspace, "inflight.ts");
+    host.begin(effectId, "write", "call-1");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: resource });
+    const pending = observePendingResourceKeys(host);
+    expect(pending.get(resource)).toEqual([effectId]);
+    host.recordObserve(effectId, { receiptId: "r2", receiptSeq: 2, resourceKey: resource });
+    expect(observePendingResourceKeys(host).size).toBe(0);
   });
 
   test("allows edit on different path", () => {

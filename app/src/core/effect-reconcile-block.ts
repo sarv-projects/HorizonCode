@@ -11,6 +11,11 @@ import type { EffectHost, EffectRecord } from "./effect-host";
 import { loadEffectLedger } from "./effect-ledger";
 import { formatEffectReconcileProbeSummary, probeEffectReconcile } from "./effect-reconcile-probe";
 import { resourceKeyFromEffectRecord } from "./effect-reconcile-probe-io";
+import {
+  observePendingEffectIdsOverlappingPath,
+  observePendingResourceKeys,
+  observePendingTargetForTool,
+} from "./effect-resource-gate";
 import { postimagePathForTool } from "./receipt-postimage";
 import {
   formatUnpairedSessionKernelNotice,
@@ -70,9 +75,15 @@ export function effectReconcileBlockDoctorHint(
     return "HZ_EFFECT_RECONCILE_BLOCK unset: optional session (`=1`) or per-resource (`=resource`) mutating-tool gate after reconcile mismatch";
   }
   if (mode === "resource") {
-    return "HZ_EFFECT_RECONCILE_BLOCK=resource: path-filtered mutating-tool gate (reduced R170; status chip + /unknown status wire **304**)";
+    return (
+      "HZ_EFFECT_RECONCILE_BLOCK=resource: path-filtered mutating-tool gate (reduced R170; status chip + /unknown status wire **304**); " +
+      "write/edit/apply_patch/ast_edit also blocked until observe settles on the same path (**333**; **334** reduced); shell when postimage or explicit path/cwd resolves (**336** reduced); status/inset observe-pending drivers (**342** reduced)"
+    );
   }
-  return "HZ_EFFECT_RECONCILE_BLOCK=1: session-wide mutating-tool gate until /unknown reconcile (status chip + /unknown status; reduced vs full R170)";
+  return (
+    "HZ_EFFECT_RECONCILE_BLOCK=1: session-wide mutating-tool gate until /unknown reconcile (status chip + /unknown status; reduced vs full R170); " +
+    "write/edit/apply_patch/ast_edit blocked until observe settles on overlapping path when enabled (**333**; **334** reduced); shell when postimage or explicit path/cwd resolves (**336** reduced); scrollback/fullscreen inset observe-pending barrier (**342** reduced)"
+  );
 }
 
 function reconcileBlockNoticePrefix(mode: EffectReconcileBlockMode): string {
@@ -325,6 +336,60 @@ export function isEffectReconcileBlockLatched(workspace: string, sessionId: stri
   return latches.has(latchKey(workspace, sessionId));
 }
 
+export type ObservePendingResourceDependency = {
+  resourcePath: string;
+  effectIds: readonly string[];
+};
+
+/** In-flight execute-without-observe rows on the session host (ruling **342** reduced R170 inspector). */
+export function reconcileBlockObservePendingDependencies(
+  host?: ReconcileBlockHostPeek,
+): ObservePendingResourceDependency[] {
+  if (!host) return [];
+  const pending = observePendingResourceKeys(host as EffectHost);
+  const deps: ObservePendingResourceDependency[] = [];
+  for (const [resourcePath, effectIds] of pending) {
+    deps.push({ resourcePath, effectIds: [...effectIds] });
+  }
+  return deps.sort((a, b) => a.resourcePath.localeCompare(b.resourcePath));
+}
+
+/** Lines for `/unknown status`, scrollback, and fullscreen inset observe-pending barrier (**342**). */
+export function formatObservePendingDependencyLines(
+  deps: readonly ObservePendingResourceDependency[],
+  opts?: { maxRows?: number },
+): string[] {
+  if (deps.length === 0) return [];
+  const max = Math.max(1, Math.floor(opts?.maxRows ?? 16));
+  const lines = [
+    "  observe-pending block drivers (reduced R170): overlapping mutating tools blocked until receipt observe",
+  ];
+  for (const d of deps.slice(0, max)) {
+    const ids = d.effectIds
+      .slice(0, 3)
+      .map((id) => (id.length > 14 ? `${id.slice(0, 13)}…` : id))
+      .join(", ");
+    const extra = d.effectIds.length > 3 ? ` (+${d.effectIds.length - 3} more)` : "";
+    lines.push(`    · ${d.resourcePath} ← ${ids}${extra}`);
+  }
+  if (deps.length > max) {
+    lines.push(`    · … (${deps.length - max} more observe-pending row(s))`);
+  }
+  return lines;
+}
+
+/** Plain inspector block for scrollback / fullscreen inset when observe-pending is active (**342**). */
+export function formatObservePendingInspectorLines(view: EffectReconcileBlockLatchView): string[] {
+  if (!view.observePendingDependencies?.length || view.mode === "off") return [];
+  const lines = [
+    `observe-pending barrier — mutating tools blocked on overlapping path(s) until receipt observe settles`,
+    `  path(s): ${view.observePendingDependencies.length}`,
+    ...formatObservePendingDependencyLines(view.observePendingDependencies),
+    "  clear: wait for receipt observe (not /unknown release); /unknown status for live list",
+  ];
+  return lines;
+}
+
 export type EffectReconcileBlockLatchView = {
   latched: boolean;
   mode: EffectReconcileBlockMode;
@@ -334,6 +399,10 @@ export type EffectReconcileBlockLatchView = {
   blockedPaths?: readonly string[];
   /** Effect rows that explain why each blocked resource path is latched (**316**). */
   resourceDependencies?: readonly ReconcileBlockResourceDependency[];
+  /** Execute-without-observe drivers when `HZ_EFFECT_RECONCILE_BLOCK` enabled (**342**). */
+  observePendingDependencies?: readonly ObservePendingResourceDependency[];
+  /** True when observe-pending overlap gate may refuse mutating tools (**342**). */
+  observePendingActive?: boolean;
 };
 
 /** Blocked resource paths for an active latch (from latch store or live reconcile extract). */
@@ -356,9 +425,21 @@ export function effectReconcileBlockLatchView(
   host?: ReconcileBlockHostPeek,
 ): EffectReconcileBlockLatchView {
   const mode = effectReconcileBlockMode();
-  if (!effectReconcileBlockEnabled()) return { latched: false, mode: "off" };
+  const observePendingDependencies = effectReconcileBlockEnabled()
+    ? reconcileBlockObservePendingDependencies(host)
+    : [];
+  const observeFields =
+    observePendingDependencies.length > 0
+      ? {
+          observePendingDependencies,
+          observePendingActive: true as const,
+        }
+      : {};
+  if (!effectReconcileBlockEnabled()) {
+    return { latched: false, mode: "off", ...observeFields };
+  }
   const latch = latches.get(latchKey(workspace, sessionId));
-  if (!latch) return { latched: false, mode };
+  if (!latch) return { latched: false, mode, ...observeFields };
   const blockedPaths = effectReconcileBlockLatchBlockedPaths(workspace, sessionId, host);
   const resourceDependencies =
     mode === "resource" && blockedPaths.length > 0
@@ -372,7 +453,17 @@ export function effectReconcileBlockLatchView(
     blockedPaths: blockedPaths.length > 0 ? blockedPaths : undefined,
     resourceDependencies:
       resourceDependencies !== undefined && resourceDependencies.length > 0 ? resourceDependencies : undefined,
+    ...observeFields,
   };
+}
+
+function appendObservePendingStatusLines(view: EffectReconcileBlockLatchView, lines: string[]): void {
+  if (view.observePendingDependencies === undefined || view.observePendingDependencies.length === 0) return;
+  lines.push(
+    `effect reconcile block: observe-pending (${view.observePendingDependencies.length} resource path(s)) — overlapping mutating tools blocked`,
+  );
+  lines.push(...formatObservePendingDependencyLines(view.observePendingDependencies));
+  lines.push("  clear observe-pending: receipt observe settles in-flight effect (not /unknown release)");
 }
 
 /** Plain lines for `/unknown status` and inspector notices. */
@@ -383,7 +474,9 @@ export function formatEffectReconcileBlockStatusLines(
     return ["effect reconcile block: disabled (HZ_EFFECT_RECONCILE_BLOCK unset)"];
   }
   if (!view.latched) {
-    return [`effect reconcile block: off (${view.mode} mode enabled; no active latch)`];
+    const lines = [`effect reconcile block: off (${view.mode} mode enabled; no active latch)`];
+    appendObservePendingStatusLines(view, lines);
+    return lines;
   }
   const modeLabel = view.mode === "resource" ? "resource path filter" : "session-wide";
   const lines = [
@@ -407,6 +500,7 @@ export function formatEffectReconcileBlockStatusLines(
   if (view.resourceDependencies !== undefined && view.resourceDependencies.length > 0) {
     lines.push(...formatReconcileBlockResourceDependencyLines(view.resourceDependencies));
   }
+  appendObservePendingStatusLines(view, lines);
   return lines;
 }
 
@@ -427,6 +521,20 @@ export function formatReconcileBlockListLines(view: EffectReconcileBlockLatchVie
     }
   }
   lines.push("clear: /unknown release · /unknown reconcile --probe when clean");
+  if (view.observePendingDependencies !== undefined && view.observePendingDependencies.length > 0) {
+    lines.push("");
+    lines.push(
+      `observe-pending: ${view.observePendingDependencies.length} resource path(s) — overlapping mutators blocked until observe`,
+    );
+    for (const d of view.observePendingDependencies.slice(0, 12)) {
+      const id = d.effectIds[0];
+      const short = id && id.length > 14 ? `${id.slice(0, 13)}…` : id ?? "—";
+      lines.push(`  · ${d.resourcePath} ← ${short}`);
+    }
+    if (view.observePendingDependencies.length > 12) {
+      lines.push(`  · … (${view.observePendingDependencies.length - 12} more)`);
+    }
+  }
   return lines;
 }
 
@@ -454,6 +562,44 @@ export function tryReleaseEffectReconcileBlock(
   return true;
 }
 
+const OBSERVE_PENDING_BLOCK_TOOLS = new Set([
+  "write",
+  "edit",
+  "multi_edit",
+  "apply_patch",
+  "ast_edit",
+  "shell",
+]);
+
+export const EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE =
+  "[effect-reconcile-block] observe not settled";
+
+/**
+ * Refuse path-keyed mutators when an effect on the same path finished execute but observe/receipt
+ * has not landed yet (rulings **333** `apply_patch`/`ast_edit`, **334** `write`/`edit`/`multi_edit`;
+ * `shell` when postimage or explicit path/cwd resolves (**336** reduced) — requires `HZ_EFFECT_RECONCILE_BLOCK`).
+ */
+export function effectReconcileBlockObservePendingRefusal(
+  workspace: string,
+  tool: string,
+  args: Record<string, unknown> | undefined,
+  host?: EffectHost,
+): string | undefined {
+  if (!effectReconcileBlockEnabled()) return undefined;
+  if (!OBSERVE_PENDING_BLOCK_TOOLS.has(tool)) return undefined;
+  const target = args ? observePendingTargetForTool(tool, args, workspace) : undefined;
+  if (!target) return undefined;
+  const drivers = observePendingEffectIdsOverlappingPath(host, target);
+  if (drivers.length === 0) return undefined;
+  const shown = drivers.slice(0, 3).map((id) => (id.length > 14 ? `${id.slice(0, 13)}…` : id));
+  const extra =
+    drivers.length > shown.length ? ` (+${drivers.length - shown.length} more in-flight effect(s))` : "";
+  return (
+    `${EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE}: resource ${target} — ` +
+    `refusing ${tool} until receipt observe settles (HZ_EFFECT_RECONCILE_BLOCK; driving effect(s): ${shown.join(", ")}${extra})`
+  );
+}
+
 export function effectReconcileBlockRefusal(
   workspace: string,
   sessionId: string,
@@ -468,7 +614,7 @@ export function effectReconcileBlockRefusal(
   if (mode === "resource") {
     const blocked = latch.blockedPaths;
     if (blocked.length > 0) {
-      const target = args ? postimagePathForTool(tool, args, workspace) : undefined;
+      const target = args ? observePendingTargetForTool(tool, args, workspace) : undefined;
       if (!target) return undefined;
       if (!blocked.some((p) => resourcePathsOverlap(p, target))) return undefined;
       return (

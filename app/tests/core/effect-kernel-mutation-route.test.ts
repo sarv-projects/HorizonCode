@@ -87,6 +87,7 @@ describe("kernel write/edit route", () => {
       expect(entry?.afterSha256).toBe(out!.kernelObserve.contentDigest);
       expect(out?.kernelObserve.contentDigest).toBeDefined();
       expect(out?.kernelObserve.postimageObservationStable).not.toBe(false);
+      expect(out?.kernelObserve.resultDigestStable).toBe(true);
       const postimage = computeReceiptPostimageFromKernel(
         "write",
         { path: "note.txt" },
@@ -181,6 +182,8 @@ describe("kernel apply_patch / ast_edit route", () => {
       expect(readFileSync(path.join(workspace, "one.txt"), "utf8")).toBe("1\n");
       expect(readFileSync(path.join(workspace, "two.txt"), "utf8")).toBe("2\n");
       expect(lastChangeFor("s-ap-m", path.join(workspace, "two.txt"))?.tool).toBe("write");
+      expect(out?.kernelObserve.resultDigestStable).toBe(true);
+      expect(out?.kernelObserve.resultDigest).toMatch(/^[a-f0-9]{64}$/);
     } finally {
       await kernel.close();
     }
