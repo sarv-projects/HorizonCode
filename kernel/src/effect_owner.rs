@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::effect_host::{self, HermeticEffectLedger};
 use crate::eventlog::EventLog;
+use crate::guard::{Guard, GuardAction};
 use crate::receipts::Receipts;
 
 pub const STREAM: &str = "owner:effects";
@@ -242,7 +243,7 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
             );
         }
     }
-    let mut prepared: BTreeMap<String, (Value, Value)> = BTreeMap::new();
+    let mut prepared: BTreeMap<String, (Value, Value, Value, Value)> = BTreeMap::new();
     let mut used: BTreeSet<String> = BTreeSet::new();
     for event in events.read(STREAM, None, None)? {
         let kind = event["type"].as_str().unwrap_or("");
@@ -256,6 +257,8 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
                 (
                     details["argsDigest"].clone(),
                     details["dispatchKind"].clone(),
+                    details["guardLeaseId"].clone(),
+                    details["guardLeaseIds"].clone(),
                 ),
             );
         }
@@ -269,7 +272,9 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
         let receipt = by_id.get(receipt_id).ok_or_else(|| {
             "HZ_PRECONDITION_FAILED: owner receipt linkage: settlement receipt absent".to_string()
         })?;
-        let Some((args_digest, dispatch_kind)) = prepared.get(effect_id) else {
+        let Some((args_digest, dispatch_kind, guard_lease_id, guard_lease_ids)) =
+            prepared.get(effect_id)
+        else {
             return Err(
                 "HZ_PRECONDITION_FAILED: owner receipt linkage: settlement without prepare".into(),
             );
@@ -281,6 +286,10 @@ fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Re
             || receipt["resultDigest"] != details["resultDigest"]
             || receipt["argsDigest"] != *args_digest
             || receipt["tool"] != *dispatch_kind
+            || (event["payload"]["details"]["guardDecision"] == "allow"
+                && (receipt["leaseId"] != *guard_lease_id
+                    || details["guardLeaseId"] != *guard_lease_id
+                    || details["guardLeaseIds"] != *guard_lease_ids))
             || receipt["effectId"] != json!(effect_id)
             || receipt["action"] != json!("effect.execute")
         {
@@ -680,6 +689,121 @@ fn refuse_unconfined_shell(params: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Authorize an effect *inside* the same owner admission lock as execute
+/// and settlement. A caller's previous guard.check result (or claimed leaseId)
+/// is not authority: it may be stale, consumed, or minted in another process.
+///
+/// The existing Guard vocabulary has one mutating file kind, fs.write. Edits,
+/// deletes and both rename endpoints map to that kind; inventing fs.edit or
+/// fs.rename would make malformed policy rules silently inapplicable.
+/// A shell request checks the exact argv-derived target as shell.exec, even
+/// though its present kernel implementation permits only output-only commands.
+/// No ask/deny ever creates a durable prepare or executes a primitive.
+fn authorize_direct_effect(
+    guard: &Guard,
+    params: &Value,
+    kind: &str,
+) -> Result<Vec<String>, String> {
+    let root = params
+        .get("sandboxRoot")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot required for authorization"
+                .to_string()
+        })?;
+    let root = Path::new(root);
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let mut targets: Vec<(String, String)> = Vec::new();
+    if kind == "shell.exec" {
+        let argv = params
+            .get("dispatch")
+            .and_then(|v| v.get("spec"))
+            .and_then(|v| v.get("argv"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: shell.exec authorization requires argv".to_string()
+            })?;
+        if argv.is_empty() || argv.iter().any(|v| v.as_str().is_none_or(str::is_empty)) {
+            return Err("HZ_PRECONDITION_FAILED: shell.exec authorization argv invalid".into());
+        }
+        let target = argv
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(" ");
+        targets.push(("shell.exec".to_string(), target));
+    } else {
+        let spec = params
+            .get("dispatch")
+            .and_then(|v| v.get("spec"))
+            .ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: file authorization requires spec".to_string()
+            })?;
+        let fields: &[&str] = if kind == "fs.rename" {
+            &["from", "to"]
+        } else {
+            &["path"]
+        };
+        for field in fields {
+            let raw = spec
+                .get(field)
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| {
+                    format!("HZ_PRECONDITION_FAILED: mutation authorization missing {field}")
+                })?;
+            let path = Path::new(raw);
+            let candidate = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                root.join(path)
+            };
+            // Never send a lexical escape or an unresolvable symlink walk to
+            // policy as "workspace". The Guard decision is in addition to,
+            // not a substitute for, the actual primitive's containment check.
+            if !crate::guard::path_contained_in(root, &candidate) {
+                return Err(format!(
+                    "HZ_PRECONDITION_FAILED: Guard mutation target {field} outside sandboxRoot"
+                ));
+            }
+            let resolved = crate::guard::lexical_resolve(&candidate)
+                .ok_or_else(|| "HZ_PRECONDITION_FAILED: Guard target cannot resolve".to_string())?;
+            targets.push((
+                "fs.write".to_string(),
+                resolved.to_string_lossy().into_owned(),
+            ));
+        }
+    }
+    let mut admitted_leases = Vec::new();
+    for (guard_kind, target) in targets {
+        let decision = guard
+            .check(
+                &GuardAction {
+                    kind: guard_kind,
+                    target,
+                },
+                Some("workspace"),
+                &[],
+                session_id,
+            )
+            .map_err(|e| format!("HZ_PRECONDITION_FAILED: Guard policy invalid: {e}"))?;
+        if decision.decision != "allow" {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: Guard {}: {}",
+                decision.decision, decision.reason
+            ));
+        }
+        if let Some(lease_id) = decision.lease_id {
+            admitted_leases.push(lease_id);
+        }
+    }
+    Ok(admitted_leases)
+}
+
 /// The kernel's durable five-step mutation seam. The OS lock is held across
 /// the entire effect, independent postimage/digest observation and settlement.
 /// A crash after prepare leaves a durably observable unresolved record; all
@@ -689,6 +813,7 @@ pub fn execute(
     receipts: &Receipts,
     state_dir: &Path,
     params: &Value,
+    guard: &Guard,
     ledger: &mut HermeticEffectLedger,
 ) -> Result<Value, String> {
     if !is_mutating(params) {
@@ -746,6 +871,14 @@ pub fn execute(
     // A stale Bun patch/AST projection must be rejected BEFORE durable prepare,
     // so an ineligible preimage cannot poison OwnerLog with a fake UNKNOWN.
     effect_host::verify_expected_preimage(params, kind)?;
+    // This Guard policy decision is made under the same cross-process lock
+    // as prepare→execute→observe→settle. A separate caller-supplied guard.check
+    // answer or leaseId is NEVER trusted as evidence of permission.
+    let guard_lease_ids = authorize_direct_effect(guard, params, kind)?;
+    // Legacy receipt v1 hashes at most one leaseId. Preserve its terminal
+    // field, but record ALL consumed approval leases in the hashed OwnerLog
+    // prepare/settle rows (rename can require two distinct approvals).
+    let guard_lease_id = guard_lease_ids.last().cloned();
     let args_digest = crate::canon::sha256_hex(&crate::canon::canonical_json(params));
     record(
         events,
@@ -755,6 +888,9 @@ pub fn execute(
             "dispatchKind": kind,
             "argsDigest": args_digest,
             "protocolVersion": 2,
+            "guardDecision": "allow",
+            "guardLeaseId": guard_lease_id,
+            "guardLeaseIds": guard_lease_ids,
         }),
     )?;
 
@@ -832,6 +968,7 @@ pub fn execute(
             let receipt = receipts.issue(&json!({
                 "action": "effect.execute", "tool": kind,
                 "argsDigest": args_digest, "resultDigest": digest, "effectId": id,
+                "leaseId": guard_lease_id,
             }))?;
             let receipt_id = receipt["id"].as_str().unwrap();
             let receipt_seq = receipt["seq"].as_u64().unwrap();
@@ -846,12 +983,19 @@ pub fn execute(
                     "receiptHash": receipt["hash"],
                     "postimages": postimages,
                     "terminal": terminal,
+                    "guardDecision": "allow",
+                    "guardLeaseId": guard_lease_id,
+                    "guardLeaseIds": guard_lease_ids,
                 }),
             )?;
             out["ownerReceiptId"] = json!(receipt_id);
             out["ownerReceiptSeq"] = json!(receipt_seq);
             out["ownerResultDigest"] = json!(digest);
             out["ownerLogSettled"] = json!(true);
+            if let Some(lease_id) = &guard_lease_id {
+                out["ownerGuardLeaseId"] = json!(lease_id);
+            }
+            out["ownerGuardLeaseIds"] = json!(guard_lease_ids);
             Ok(out)
         }
         Ok(out) => {

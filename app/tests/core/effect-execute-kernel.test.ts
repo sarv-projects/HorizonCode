@@ -276,7 +276,7 @@ describe("kernel effect.execute", () => {
     const kernel = new KernelClient({
       workspace, stateDir: path.join(workspace, ".hzcode", "kernel"),
     });
-    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-indent-trusted-"));
+    const sandbox = mkdtempSync(path.join(workspace, "hz-eff-indent-trusted-"));
     const before = "fn main() {\n    if ready {\n        emit();\n    }\n}\n";
     const after = "fn main() {\n    if ready {\n        send();\n    }\n}\n";
     writeFileSync(path.join(sandbox, "src.rs"), before);
@@ -285,9 +285,9 @@ describe("kernel effect.execute", () => {
       expect(kernel.mode).toBe("trusted");
       const result = await kernel.executeEffect({
         effectId: "eff-edit-indent",
-        sandboxRoot: sandbox,
+        sandboxRoot: workspace,
         dispatch: { kind: "fs.edit", spec: {
-          path: "src.rs",
+          path: path.relative(workspace, path.join(sandbox, "src.rs")),
           oldString: "if ready {\n    emit();\n}",
           newString: "if ready {\n    send();\n}",
         } },
@@ -306,7 +306,7 @@ describe("kernel effect.execute", () => {
     const snap = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
     const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
-    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-line-patch-"));
+    const sandbox = mkdtempSync(path.join(workspace, "hz-eff-line-patch-"));
     const before = "top\n  begin\n    unexpected();\n  end\nbottom\n";
     const after = "top\n  begin\n      replacement();\n  end\nbottom\n";
     writeFileSync(path.join(sandbox, "source.ts"), before);
@@ -315,9 +315,9 @@ describe("kernel effect.execute", () => {
       expect(kernel.mode).toBe("trusted");
       const result = await kernel.executeEffect({
         effectId: "eff-edit-anchored",
-        sandboxRoot: sandbox,
+        sandboxRoot: workspace,
         dispatch: { kind: "fs.edit", spec: {
-          path: "source.ts", oldString: "begin\n    expected();\nend",
+          path: path.relative(workspace, path.join(sandbox, "source.ts")), oldString: "begin\n    expected();\nend",
           newString: "begin\n    replacement();\nend",
         } },
       });
@@ -337,15 +337,15 @@ describe("kernel effect.execute", () => {
     const snap = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
     const kernel = new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") });
-    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-line-ambiguous-"));
+    const sandbox = mkdtempSync(path.join(workspace, "hz-eff-line-ambiguous-"));
     const before = "  begin\n  first();\n  end\n  begin\n  second();\n  end\n";
     writeFileSync(path.join(sandbox, "source.ts"), before);
     try {
       await kernel.start();
       await expect(kernel.executeEffect({
-        effectId: "eff-edit-ambiguous", sandboxRoot: sandbox,
+        effectId: "eff-edit-ambiguous", sandboxRoot: workspace,
         dispatch: { kind: "fs.edit", spec: {
-          path: "source.ts", oldString: "begin\nunknown();\nend", newString: "overwrite",
+          path: path.relative(workspace, path.join(sandbox, "source.ts")), oldString: "begin\nunknown();\nend", newString: "overwrite",
         } },
       })).rejects.toThrow(/exactly once/);
       expect(readFileSync(path.join(sandbox, "source.ts"), "utf8")).toBe(before);
@@ -461,14 +461,18 @@ describe("kernel effect.execute", () => {
       workspace,
       stateDir: path.join(workspace, ".hzcode", "kernel"),
     });
-    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-sandbox-shell-trusted-"));
+    const sandbox = mkdtempSync(path.join(workspace, "hz-eff-sandbox-shell-trusted-"));
     const expected = createHash("sha256").update("rust-shell\n").digest("hex");
     try {
       await kernel.start();
       expect(kernel.mode).toBe("trusted");
+      // The Rust owner now checks Guard under the same cross-process lock;
+      // sandboxRoot alone is not authorization for even output-only shell.
+      const lease = await kernel.makeLease("shell.exec", "echo rust-shell", 60_000);
+      expect(lease.kind).toBe("shell.exec");
       const result = await kernel.executeEffect({
         effectId: "eff-shell-trusted",
-        sandboxRoot: sandbox,
+        sandboxRoot: workspace,
         dispatch: { kind: "shell.exec", spec: { argv: ["echo", "rust-shell"] } },
       });
       expect(result.verdict).toBe("settled");
@@ -488,15 +492,17 @@ describe("kernel effect.execute", () => {
       workspace,
       stateDir: path.join(workspace, ".hzcode", "kernel"),
     });
-    const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-sandbox-write-trusted-"));
+    const sandbox = mkdtempSync(path.join(workspace, "hz-eff-sandbox-write-trusted-"));
     const expected = createHash("sha256").update("rust-write").digest("hex");
     try {
       await kernel.start();
       expect(kernel.mode).toBe("trusted");
       const result = await kernel.executeEffect({
         effectId: "eff-write-trusted",
-        sandboxRoot: sandbox,
-        dispatch: { kind: "fs.write", spec: { path: "note.txt", text: "rust-write" } },
+        sandboxRoot: workspace,
+        dispatch: { kind: "fs.write", spec: {
+          path: path.relative(workspace, path.join(sandbox, "note.txt")), text: "rust-write",
+        } },
       });
       expect(result.verdict).toBe("settled");
       expect(result.contentDigest).toBe(expected);

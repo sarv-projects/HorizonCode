@@ -746,6 +746,7 @@ export async function tryKernelShellRoute(
   workspace: string,
   effectId: string,
   args: Record<string, unknown>,
+  approval?: { sessionId: string; admittedByLoop: true },
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const argv = simpleShellArgvFromCommand(String(args.command));
   if (!argv) return undefined;
@@ -755,9 +756,21 @@ export async function tryKernelShellRoute(
   const spec: Record<string, unknown> = { argv };
   if (cwdRel !== undefined && cwdRel !== ".") spec.cwd = cwdRel;
   try {
+    // The loop has already completed Guard/check/approval/hooks. The Rust
+    // EffectHost now independently checks Guard *inside* OwnerLog. Transfer
+    // that permission using a fresh, exact-command one-use kernel lease,
+    // bound to this session; do not mint when this helper is invoked directly.
+    // Raw callers remain subject to the kernel's own ASK/deny policy.
+    let approvedLeaseId: string | undefined;
+    if (approval?.admittedByLoop && kernel.mode === "trusted") {
+      const permit = await kernel.makeLease("shell.exec", argv.join(" "), 60_000, approval.sessionId);
+      approvedLeaseId = permit.leaseId;
+    }
     const result = await kernel.executeEffect({
       effectId,
       sandboxRoot: workspace,
+      ...(approval ? { sessionId: approval.sessionId } : {}),
+      ...(approvedLeaseId ? { leaseId: approvedLeaseId } : {}),
       dispatch: { kind: "shell.exec", spec },
     });
     const exit = result.exitCode ?? -1;

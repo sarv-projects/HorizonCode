@@ -28,7 +28,7 @@
 
 | Fact | Evidence |
 |---|---|
-| Branch | Baseline `main` at `7722dce` was clean when Batch 1 started; implementation on `fix/p0-effecthost-batch1` (rulings **343–350**, topic branch; confirm remote SHA, no merge or release implied) |
+| Branch | Baseline `main` at `7722dce` was clean when Batch 1 started; implementation on `fix/p0-effecthost-batch1` (rulings **343–351**, topic branch; confirm remote SHA, no merge or release implied) |
 | Research | `repo_take/little-coder` @ `89d4fa0…`, `repo_take/aider` @ `5dc9490…` (gitignored) |
 | Never claim | Shell-net **`enforced`** |
 | WSL caveat | `kernel/tests/sandbox_exec.rs` may fail without CAP/Landlock |
@@ -40,7 +40,7 @@
 
 ## Z. What to implement first (P0 order)
 
-1. EffectHost: **343–348** strict facades, reduced edit parity and direct Rust OwnerLog; **349** adds transport-refusal finality, trusted-kernel R170 Bun guard preflight, preimage pins and *early refusal* of nonatomic multi-op apply_patch. **OPEN:** universal kernel guard-authorize+execute, missing entrypoints, true atomic multi-op fs.batch, complete merge/fuzz, historic replay. **350** adds latest-state file replay (not historical snapshots or shell effects).
+1. EffectHost: **343–348** strict facades, reduced edit parity and direct Rust OwnerLog; **349** adds transport-refusal finality, trusted-kernel R170 Bun guard preflight, preimage pins and *early refusal* of nonatomic multi-op apply_patch. **OPEN:** universal kernel guard-authorize+execute, missing entrypoints, true atomic multi-op fs.batch, complete merge/fuzz, historic replay. **350** adds latest-state file replay (not historical snapshots or shell effects). **351** adds live Guard `allow` inside the same kernel OwnerLog lock and launch-time workspace binding for direct kernel mutations only; caller-accessible lease minting and ambient Bun effects still bypass complete trust.
 2. R170: **344** opt-in TS latch; **348** default-on Rust direct-effect OwnerLog / cross-process flock; **349** versioned durable executing marker + *provable prepare-only crash release*, not general UNKNOWN release, and trusted-guard preflight. **OPEN:** universal atomic Bun/TS admission, executing UNKNOWN recovery and resource alias races, full docs/13.
 3. Egress: product netns path without `enforced`  
 4. Wave 0: R172 verify + hz.* honesty  
@@ -65,9 +65,9 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 
 | # | Area | Still open | Done bar | Docs / code |
 |---:|---|---|---|---|
-| 1 | Full EffectHost | **343–348** strict/direct Rust foundation; **349** prevents Rust denial/transport-loss fallback, fences Bun mutator guard preflight when kernel trusted, and refuses non-atomic multi-op patches before effects. All Bun/other entrypoints, Guard-bound Rust authorization, full fs.batch/edit parity and universal ownership remain OPEN | Kernel owns or refuses every effect, full independent observe, `=require` kernel edit parity | `effect-host-runtime.ts`, `effect-reconcile-attach.ts`, `index.ts` |
+| 1 | Full EffectHost | **343–350** direct execution, OwnerLog, transport refusal and latest-file observe; **351** verifies a Rust Guard `allow` under OwnerLog for direct file effects and output-only shell, checks both rename endpoints, and binds product-launched workspace. Raw kernel `guard.lease` minting still untrusted as human proof; all Bun/other entrypoints, full fs.batch/edit parity and universal ownership OPEN | Kernel owns or refuses every effect, full independent observe, `=require` kernel edit parity | `effect-host-runtime.ts`, `effect-reconcile-attach.ts`, `index.ts` |
 | 2 | Postimage / Rust observe | **348** direct Rust receipt/result observe; **349** double-read preimage; **350** adds on-demand independent replay of the latest settled file state per path (including deletes/renames), with legacy and shell counts marked unverifiable. Historic overwritten images and all ambient/non-file effect observation remain OPEN | Rust observes all; replay tested | `effect_host.rs`, `receipt-postimage.ts` |
-| 3 | Full R170 | **344** opt-in TS latch, **348** direct Rust OS OwnerLog flock, **349** versioned prepare/executing recovery ONLY for proven no-execute crashes and trusted-Bun-guard preflight. Full Bun/hook/MCP/extension cross-process atomic fencing, executed UNKNOWN release, alias races OPEN | Kernel-owned mandatory barrier and independent execute/observe settlement | `13-tui.md`, `effect-reconcile-block.ts`, `effect-reconcile-latch-store.ts` |
+| 3 | Full R170 | **344/348/349** TS latch, kernel OS lock and narrow no-execute recovery; **351** Guard decision executes under the direct kernel OS lock, with hashed evidence for both rename permits. Bun/hook/MCP/extension cross-process atomic fencing, authenticated authorization principals, executed UNKNOWN recovery and alias races OPEN | Kernel-owned mandatory barrier and independent execute/observe settlement | `13-tui.md`, `effect-reconcile-block.ts`, `effect-reconcile-latch-store.ts` |
 | 4 | MITM / routed egress | **315–341** probe prototypes; **348** rejects unconfined raw kernel arbitrary shell and adds `ops/usernetns-direct-tcp-denial-smoke.sh` (disposable user+net namespace TCP denial only). Product shell/proxy/TLS E2E and default routing OPEN | Product netns E2E; never `enforced` | `egress-*.ts`, `kernel/` |
 
 ## B. Wave 0 spine residuals
@@ -78,8 +78,8 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | R172 | **350** adds RC-7 terminal fields to kernel OwnerLog settlements (succeeded/failed/unknown/interrupted) and on-demand latest-file replay; full receipts, nested streaming, all terminal entrypoints and RC-7 coverage still OPEN | **284**, **289**, **292**, **322**, **350** |
 | kernel fs.edit | **345/347** reduced unique indented/trim/anchored repair; **349** optional SHA-256 preimage pin before prepare and immediately before kernel edit, without external CAS. General merge/fuzz, full line patch and universal strict routing remain OPEN | **335–339**, **345**, **347**, **349** |
 | apply_patch | **349** prevents partial kernel writes: multi-step, multi-file, same-file multi-hunk and fuzzy-ineligible shapes refuse prior to mutation, not solved by fs.batch. Single-step kernel route remains; Bun fuzz path outside strict mode OPEN | **306**, **313**, **323**, **349** |
-| **338** hydrate / owner | **343** reload, **348** direct Rust flock/duplicate/UNKNOWN, **349** v2 no-execute recovery + trusted Bun guard preflight (non-atomic). Universal Bun/kernel transactional session fencing and executed-UNKNOWN release OPEN | **338**, **343**, **348**, **349** |
-| Batches 1–7 topic branch | **343–350** on `fix/p0-effecthost-batch1`; audit chain through `audit/p0-latest-postimage-replay-2026-11-14.md`. Verify push/PR in Git; never assume merge/release | §0 above |
+| **338** hydrate / owner | **343** reload, **348** direct Rust flock/duplicate/UNKNOWN, **349** v2 no-execute recovery + trusted Bun guard preflight; **351** Guard policy admission now under Rust owner lock for direct effects, not Bun/SQLite. Universal transactional session fencing and executed-UNKNOWN release OPEN | **338**, **343**, **348**, **349**, **351** |
+| Batches 1–8 topic branch | **343–351** on `fix/p0-effecthost-batch1`; audit chain through `audit/p0-direct-guard-admission-2026-11-14.md`. Verify push/PR in Git; never assume merge/release | §0 above |
 
 ### B.1 Queued (not formal §7 yet)
 

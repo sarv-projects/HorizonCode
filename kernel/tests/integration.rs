@@ -175,10 +175,156 @@ fn unconfined_shell_interpreter_is_explicitly_refused_before_spawn() {
 }
 
 #[test]
+fn bound_kernel_workspace_cannot_be_widened_by_raw_sandbox_root_argument() {
+    let state = TempDir::new("kernel-workspace-binding-state");
+    let workspace = TempDir::new("kernel-workspace-binding-ws");
+    let outside = TempDir::new("kernel-workspace-binding-elsewhere");
+    let mut kernel = Kernel::start_with_env(state.path(), &[(
+        "HZ_KERNEL_WORKSPACE_ROOT", workspace.path().to_str().unwrap(),
+    )]);
+    let denied = kernel.err("effect.execute", json!({
+        "effectId": "root-widen", "sandboxRoot": outside.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "outside.txt", "text": "NO"}}
+    }));
+    assert!(denied.contains("kernel-bound workspace root"), "{denied}");
+    assert!(!outside.path().join("outside.txt").exists());
+    assert_eq!(kernel.ok("effect.owner.status", json!({}))["events"], 0);
+    let yes = kernel.ok("effect.execute", json!({
+        "effectId": "root-widen", "sandboxRoot": workspace.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "inside.txt", "text": "YES"}}
+    }));
+    assert_eq!(yes["ownerLogSettled"], true);
+    assert_eq!(fs::read(workspace.path().join("inside.txt")).unwrap(), b"YES");
+}
+
+#[test]
+fn owner_direct_file_effect_respects_guard_deny_and_ask_before_prepare() {
+    let state = TempDir::new("owner-guard-file-policy");
+    let ws = TempDir::new("owner-guard-file-workspace");
+    fs::write(state.path().join("policy.json"), serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "workspace", "decision": "deny" },
+        { "kind": "fs.read", "scope": "workspace", "decision": "allow" }
+    ])).unwrap()).unwrap();
+    let mut kernel = Kernel::start(state.path());
+    let denied = kernel.err("effect.execute", json!({
+        "effectId": "deny-file", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "no.txt", "text": "NEVER"}}
+    }));
+    assert!(denied.contains("Guard"), "{denied}");
+    assert!(denied.contains("deny"), "{denied}");
+    assert!(!ws.path().join("no.txt").exists());
+    assert_eq!(kernel.ok("effect.owner.status", json!({}))["events"], 0);
+
+    fs::write(state.path().join("policy.json"), serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "workspace", "decision": "ask" }
+    ])).unwrap()).unwrap();
+    let asked = kernel.err("effect.execute", json!({
+        "effectId": "ask-file", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "no.txt", "text": "NEVER"}}
+    }));
+    assert!(asked.contains("Guard"), "{asked}");
+    assert!(asked.contains("ask"), "{asked}");
+    assert!(!ws.path().join("no.txt").exists());
+    assert_eq!(kernel.ok("effect.owner.status", json!({}))["events"], 0);
+
+    // A previously refused effect ID never creates an OwnerLog admission.
+    fs::write(state.path().join("policy.json"), serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "workspace", "decision": "allow" }
+    ])).unwrap()).unwrap();
+    let accepted = kernel.ok("effect.execute", json!({
+        "effectId": "ask-file", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "no.txt", "text": "YES"}}
+    }));
+    assert_eq!(accepted["ownerLogSettled"], true);
+    assert_eq!(fs::read(ws.path().join("no.txt")).unwrap(), b"YES");
+}
+
+#[test]
+fn owner_rename_checks_both_endpoints_against_guard_under_same_fence() {
+    let state = TempDir::new("owner-guard-rename");
+    let ws = TempDir::new("owner-guard-rename-workspace");
+    fs::write(ws.path().join("from.txt"), b"original").unwrap();
+    // The policy class is fs.write for BOTH rename endpoints, not a made-up
+    // "fs.rename" kind that could fail open outside the Guard vocabulary.
+    fs::write(state.path().join("policy.json"), serde_json::to_string(&json!([
+        { "kind": "fs.write", "scope": "workspace", "decision": "ask" }
+    ])).unwrap()).unwrap();
+    let mut kernel = Kernel::start(state.path());
+    let refused = kernel.err("effect.execute", json!({
+        "effectId": "rename-ask", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.rename", "spec": {
+            "from": "from.txt", "to": "to.txt"
+        }}
+    }));
+    assert!(refused.contains("Guard"), "{refused}");
+    assert!(ws.path().join("from.txt").exists());
+    assert!(!ws.path().join("to.txt").exists());
+    assert_eq!(kernel.ok("effect.owner.status", json!({}))["events"], 0);
+    let source = kernel.ok("guard.lease", json!({
+        "kind": "fs.write",
+        "pattern": ws.path().join("from.txt").to_string_lossy(),
+        "ttlMs": 60000,
+    }));
+    let destination = kernel.ok("guard.lease", json!({
+        "kind": "fs.write",
+        "pattern": ws.path().join("to.txt").to_string_lossy(),
+        "ttlMs": 60000,
+    }));
+    let settled = kernel.ok("effect.execute", json!({
+        "effectId": "rename-ask", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.rename", "spec": {
+            "from": "from.txt", "to": "to.txt"
+        }}
+    }));
+    assert_eq!(settled["ownerLogSettled"], true);
+    assert_eq!(settled["ownerGuardLeaseIds"][0], source["leaseId"]);
+    assert_eq!(settled["ownerGuardLeaseIds"][1], destination["leaseId"]);
+    assert_eq!(settled["ownerGuardLeaseId"], destination["leaseId"]);
+    assert_eq!(fs::read(ws.path().join("to.txt")).unwrap(), b"original");
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    assert_eq!(events["events"][0]["payload"]["details"]["guardLeaseIds"][0], source["leaseId"]);
+    assert_eq!(events["events"][2]["payload"]["details"]["guardLeaseIds"][1], destination["leaseId"]);
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
+}
+
+#[test]
+fn owner_shell_guard_requires_authorization_even_for_output_only_argv() {
+    let state = TempDir::new("owner-guard-shell");
+    let ws = TempDir::new("owner-guard-shell-workspace");
+    let mut kernel = Kernel::start(state.path());
+    let refused = kernel.err("effect.execute", json!({
+        "effectId": "shell-needs-guard", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "shell.exec", "spec": {"argv": ["echo", "hello"]}}
+    }));
+    assert!(refused.contains("Guard"), "{refused}");
+    assert!(refused.contains("ask"), "{refused}");
+    assert_eq!(kernel.ok("effect.owner.status", json!({}))["events"], 0);
+    let minted = kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "echo hello", "ttlMs": 60000
+    }));
+    let allowed = kernel.ok("effect.execute", json!({
+        "effectId": "shell-needs-guard", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "shell.exec", "spec": {"argv": ["echo", "hello"]}}
+    }));
+    assert_eq!(allowed["ownerLogSettled"], true);
+    assert_eq!(allowed["ownerGuardLeaseId"], minted["leaseId"]);
+    let receipts_file = fs::read_to_string(state.path().join("receipts.jsonl")).unwrap();
+    let issued: Value = serde_json::from_str(receipts_file.lines().last().unwrap()).unwrap();
+    assert_eq!(issued["leaseId"], minted["leaseId"]);
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    assert_eq!(events["events"][0]["payload"]["details"]["guardDecision"], "allow");
+    assert_eq!(events["events"][0]["payload"]["details"]["guardLeaseId"], minted["leaseId"]);
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
+}
+
+#[test]
 fn owner_shell_receipt_binds_observed_streams_and_does_not_poison_next_effect() {
     let state = TempDir::new("owner-shell");
     let sandbox = TempDir::new("owner-shell-workspace");
     let mut kernel = Kernel::start(state.path());
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "echo hello", "ttlMs": 60_000
+    }));
     let shell = kernel.ok("effect.execute", json!({
         "effectId": "shell-one", "sandboxRoot": sandbox.path(),
         "dispatch": { "kind": "shell.exec", "spec": { "argv": ["echo", "hello"] } }
@@ -206,6 +352,9 @@ fn owner_terminal_rc7_distinguishes_settled_failure_from_unknown() {
     let state = TempDir::new("owner-terminal-rc7");
     let sandbox = TempDir::new("owner-terminal-rc7-workspace");
     let mut kernel = Kernel::start(state.path());
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "false", "ttlMs": 60_000
+    }));
     let process = kernel.ok("effect.execute", json!({
         "effectId": "shell-nonzero", "sandboxRoot": sandbox.path(),
         "dispatch": { "kind": "shell.exec", "spec": { "argv": ["false"] } }
@@ -3902,6 +4051,9 @@ fn effect_execute_shell_exec_under_sandbox_root() {
     let expected_stdout = sha256_bytes(b"hello\n");
 
     let mut kernel = Kernel::start(dir.path());
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "echo hello", "ttlMs": 60_000
+    }));
     let result = kernel.ok(
         "effect.execute",
         json!({
@@ -3925,6 +4077,9 @@ fn effect_execute_shell_exec_under_sandbox_root() {
     assert!(unrestricted.contains("HZ_PRECONDITION_FAILED"), "{}", unrestricted);
     assert!(unrestricted.contains("shell.exec"), "{}", unrestricted);
 
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "pwd", "ttlMs": 60_000
+    }));
     let cwd_escape = kernel.err(
         "effect.execute",
         json!({
