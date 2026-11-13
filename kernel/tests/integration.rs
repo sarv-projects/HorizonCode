@@ -102,6 +102,10 @@ fn owner_effects_serialise_and_block_unknown_across_processes() {
         } }
     }));
     assert!(failed.contains("oldString"), "{failed}");
+    let events = first.ok("log.read", json!({"stream": "owner:effects"}));
+    let last = events["events"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["type"], "owner.unknown");
+    assert_eq!(last["payload"]["details"]["terminal"], "unknown");
     assert_eq!(first.ok("effect.owner.status", json!({}))["blocked"], true);
     let refused = second.err("effect.execute", json!({
         "effectId": "owner-two", "sandboxRoot": sandbox.path(),
@@ -189,6 +193,31 @@ fn owner_shell_receipt_binds_observed_streams_and_does_not_poison_next_effect() 
     }));
     assert_eq!(write["ownerLogSettled"], true);
     assert_eq!(kernel.ok("effect.owner.verify", json!({}))["receiptsVerified"], 2);
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    assert_eq!(events["events"][2]["payload"]["details"]["terminal"], "succeeded");
+    let replay = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(replay["ok"], false, "{replay}");
+    assert_eq!(replay["unsupportedEffects"], 1);
+    assert_eq!(replay["checked"], 1);
+}
+
+#[test]
+fn owner_terminal_rc7_distinguishes_settled_failure_from_unknown() {
+    let state = TempDir::new("owner-terminal-rc7");
+    let sandbox = TempDir::new("owner-terminal-rc7-workspace");
+    let mut kernel = Kernel::start(state.path());
+    let process = kernel.ok("effect.execute", json!({
+        "effectId": "shell-nonzero", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "shell.exec", "spec": { "argv": ["false"] } }
+    }));
+    // A nonzero process still ran and produced an independently observed
+    // receipt. Settlement and terminal success are distinct dimensions.
+    assert_eq!(process["verdict"], "settled");
+    assert_eq!(process["exitCode"], 1);
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    assert_eq!(events["events"][2]["type"], "owner.settled");
+    assert_eq!(events["events"][2]["payload"]["details"]["terminal"], "failed");
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
 }
 
 #[test]
@@ -352,6 +381,9 @@ fn owner_prepare_only_crash_can_be_recovered_without_reexecuting_effect() {
     let released = owner.ok("effect.owner.recover", json!({"effectId": "prepared-only"}));
     assert_eq!(released["released"], true);
     assert_eq!(released["blocked"], false);
+    let events = owner.ok("log.read", json!({"stream": "owner:effects"}));
+    assert_eq!(events["events"][1]["type"], "owner.released");
+    assert_eq!(events["events"][1]["payload"]["details"]["terminal"], "interrupted");
     assert_eq!(owner.ok("effect.owner.status", json!({}))["unresolved"], 0);
     assert_eq!(owner.ok("effect.owner.verify", json!({}))["ok"], true);
     // Recovery releases the fence; it does NOT permit reusing the old effectId.
@@ -423,6 +455,83 @@ fn owner_preimage_pin_refuses_stale_edit_before_prepare_and_preserves_admission(
     }));
     assert_eq!(done["ownerLogSettled"], true);
     assert_eq!(fs::read(sandbox.path().join("src.txt")).unwrap(), b"after");
+}
+
+#[test]
+fn owner_postimage_replay_detects_external_mutation_without_rewriting_receipt_chain() {
+    let state = TempDir::new("owner-replay-postimage");
+    let ws = TempDir::new("owner-replay-postimage-workspace");
+    let file = ws.path().join("tracked.txt");
+    let mut writer = Kernel::start(state.path());
+    let mut inspector = Kernel::start(state.path());
+
+    writer.ok("effect.execute", json!({
+        "effectId": "postimage-v1", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "tracked.txt", "text": "first"}}
+    }));
+    writer.ok("effect.execute", json!({
+        "effectId": "postimage-v2", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "tracked.txt", "text": "second"}}
+    }));
+    // Verification compares the newest settled observation, not the
+    // superseded first version (which is not recoverable from disk).
+    let clean = inspector.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(clean["ok"], true, "{clean}");
+    assert_eq!(clean["checked"], 1);
+    assert_eq!(clean["legacyUnverifiable"], 0);
+    assert_eq!(clean["scope"], "latest_settled_file_postimage_only");
+    fs::write(&file, b"external tamper").unwrap();
+
+    // Both cryptographic chains can still be valid; only independent disk
+    // replay exposes a post-settlement change.
+    assert_eq!(inspector.ok("effect.owner.verify", json!({}))["ok"], true);
+    let stale = inspector.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(stale["mismatches"][0]["effectId"], "postimage-v2");
+    assert_eq!(stale["mismatches"][0]["observedState"], "present");
+    assert_ne!(
+        stale["mismatches"][0]["expectedDigest"],
+        stale["mismatches"][0]["observedDigest"]
+    );
+    assert_eq!(fs::read(&file).unwrap(), b"external tamper");
+}
+
+#[test]
+fn owner_postimage_replay_tracks_delete_absence_and_both_rename_endpoints() {
+    let state = TempDir::new("owner-replay-delete");
+    let ws = TempDir::new("owner-replay-delete-workspace");
+    let mut kernel = Kernel::start(state.path());
+    fs::write(ws.path().join("source.txt"), b"original").unwrap();
+
+    kernel.ok("effect.execute", json!({
+        "effectId": "postimage-rename", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.rename", "spec": {"from": "source.txt", "to": "destination.txt"}}
+    }));
+    let clean = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(clean["ok"], true, "{clean}");
+    assert_eq!(clean["checked"], 2); // source absent, destination present
+
+    kernel.ok("effect.execute", json!({
+        "effectId": "postimage-delete", "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.delete", "spec": {"path": "destination.txt"}}
+    }));
+    let deleted = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    assert_eq!(deleted["checked"], 2);
+    fs::write(ws.path().join("source.txt"), b"recreated").unwrap();
+    let tampered = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(tampered["ok"], false);
+    assert_eq!(tampered["mismatches"][0]["expectedState"], "absent");
+    assert_eq!(tampered["mismatches"][0]["observedState"], "present");
+    #[cfg(unix)]
+    {
+        fs::remove_file(ws.path().join("source.txt")).unwrap();
+        std::os::unix::fs::symlink("missing-target", ws.path().join("source.txt")).unwrap();
+        let dangling = kernel.ok("effect.owner.postimage.verify", json!({}));
+        assert_eq!(dangling["ok"], false, "{dangling}");
+        assert_eq!(dangling["mismatches"][0]["observedState"], "present");
+        assert_eq!(dangling["mismatches"][0]["expectedState"], "absent");
+    }
 }
 
 #[test]

@@ -4,10 +4,21 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { KernelClient } from "../../src/core/kernel";
+import { KERNEL_METHODS } from "../../src/contracts";
 import { tryKernelWriteRoute, tryKernelShellRoute } from "../../src/core/effect-kernel-mutation-route";
 import { hasRustKernel, restoreEnv, rustKernelPath, setEnv, snapshotEnv } from "./helpers";
 
 describe("kernel-owned OwnerLog admission (R170 partial)", () => {
+  test("all OwnerLog operations are listed in the additive kernel RPC method catalogue", () => {
+    for (const method of [
+      "effect.owner.status",
+      "effect.owner.verify",
+      "effect.owner.recover",
+      "effect.owner.postimage.verify",
+    ]) {
+      expect(KERNEL_METHODS).toContain(method);
+    }
+  });
   test.skipIf(!hasRustKernel)("two independent trusted clients see durable UNKNOWN and refuse next write", async () => {
     const snapshot = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath });
@@ -154,6 +165,37 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     }
   });
 
+  test.skipIf(!hasRustKernel)("read-only latest postimage replay detects disk tampering across independent clients", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-owner-replay-"));
+    const file = path.join(root, "tracked.txt");
+    const stateDir = path.join(root, ".hzcode", "kernel");
+    const writer = new KernelClient({ workspace: root, stateDir });
+    const reader = new KernelClient({ workspace: root, stateDir });
+    try {
+      expect(await writer.start()).toBe("trusted");
+      expect(await reader.start()).toBe("trusted");
+      await writer.executeEffect({
+        effectId: "replay-fs", sandboxRoot: root,
+        dispatch: { kind: "fs.write", spec: { path: "tracked.txt", text: "correct" } },
+      });
+      expect((await reader.ownerPostimageVerify()).ok).toBe(true);
+      writeFileSync(file, "external-change");
+      expect((await reader.ownerVerify()).ok).toBe(true);
+      const replay = await reader.ownerPostimageVerify();
+      expect(replay.ok).toBe(false);
+      expect(replay.checked).toBe(1);
+      expect(replay.mismatches[0]?.effectId).toBe("replay-fs");
+      expect(replay.mismatches[0]?.expectedDigest).not.toBe(replay.mismatches[0]?.observedDigest);
+    } finally {
+      await writer.close();
+      await reader.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
   test("untrusted transport refuses to assert Rust OwnerLog status or receipt verification", async () => {
     const snapshot = snapshotEnv();
     const root = mkdtempSync(path.join(tmpdir(), "hz-owner-no-kernel-"));
@@ -163,6 +205,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       expect(await kernel.start()).toBe("untrusted");
       await expect(kernel.ownerStatus()).rejects.toThrow(/trusted Rust kernel/);
       await expect(kernel.ownerVerify()).rejects.toThrow(/trusted Rust kernel/);
+      await expect(kernel.ownerPostimageVerify()).rejects.toThrow(/trusted Rust kernel/);
       await expect(kernel.ownerRecover("anything")).rejects.toThrow(/trusted Rust kernel/);
       await expect(kernel.appendEvent("owner:effects", {
         id: "forge", ts: new Date().toISOString(), stream: "owner:effects",

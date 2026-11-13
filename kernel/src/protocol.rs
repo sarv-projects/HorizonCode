@@ -301,6 +301,11 @@ impl Kernel {
             // fails closed, never turns into an empty clean status.
             "effect.owner.status" => effect_owner::status(&self.events, self.guard.state_dir()),
             "effect.owner.verify" => effect_owner::verify(&self.events, &self.receipts, self.guard.state_dir()),
+            // Independent latest settled file postimage replay (not a
+            // historical snapshot and not shell/network-effect proof).
+            "effect.owner.postimage.verify" => effect_owner::verify_latest_postimages(
+                &self.events, &self.receipts, self.guard.state_dir(),
+            ),
             // V2 OwnerLog: a PREPARE-only interrupted effect has a durable
             // no-execute proof; anything past owner.executing stays UNKNOWN.
             "effect.owner.recover" => {

@@ -11,10 +11,10 @@
 | ID | Completion proof required | Current evidence | State |
 |---|---|---|---|
 | P0-1 | All mutations kernel-owned or refused, complete edit/patch parity | `kernel/src/effect_host.rs`, `app/src/core/kernel.ts`, `app/src/core/effect-kernel-mutation-route.ts`, `app/tests/core/effect-owner-kernel.test.ts`; 349 refusal/transport fail-close, multi-op safe refusal, NOT universal owner | PARTIAL |
-| P0-2 | Independent observation, replay, postimage and receipt settlement all effects | `kernel/src/effect_owner.rs`, `kernel/src/effect_host.rs`; 349 independent preimage SHA-256 before prepare/primitive; historic replay/other classes OPEN | PARTIAL |
+| P0-2 | Independent observation, replay, postimage and receipt settlement all effects | `kernel/src/effect_owner.rs`, `kernel/src/effect_host.rs`; 349 preimage SHA-256 and 350 latest-state file replay via `effect.owner.postimage.verify`; historic snapshots and shell/other classes OPEN | PARTIAL |
 | P0-3 | Rust OwnerLog + atomic cross-process admission + durable mandatory R170 latch | `kernel/src/effect_owner.rs`, `kernel/tests/integration.rs`, `app/tests/core/effect-owner-kernel.test.ts`; 349 v2 prepare-only safe recovery + Bun guard preflight, other entrypoints OPEN | PARTIAL |
 | P0-4 | Product default routed netns/proxy, real socket bypass denial tests | `kernel/src/egress.rs`, `ops/usernetns-direct-tcp-denial-smoke.sh` (disposable user+net namespace only, NOT product), `ops/netns-spawn-routed-veth-probe.sh` | PARTIAL; PRODUCT UNPROVEN |
-| R172 | Nested streams, verification chain, RC-7 terminal and entrypoint parity | `app/src/core/effect-reconcile-attach.ts` | PARTIAL |
+| R172 | Nested streams, verification chain, RC-7 terminal and entrypoint parity | `app/src/core/effect-reconcile-attach.ts`, `kernel/src/effect_owner.rs` (350 RC-7 subset + latest-file replay, NOT receipt ABI/nested streams) | PARTIAL |
 | RC-18 | 44 expected canonical event kinds emitted and validated | `app/src/core/event-catalogue.ts` (23/44 recorded) | PARTIAL |
 | Patch parity | All strict-mode cross-file/ambiguous/fuzzy projection decisions | `app/src/core/effect-kernel-tool-projection.ts`, `app/src/core/effect-kernel-mutation-route.ts`; 349 multi-op EARLY REFUSAL, atomic kernel fs.batch OPEN | PARTIAL |
 | Cross-process consistency | Atomic owner/fencing and replay after crashes | `kernel/src/effect_owner.rs` 348 flock + 349 v2 pre-execution release, `app/src/core/kernel.ts` guard preflight (NOT atomic), `app/src/core/effect-reconcile-attach.ts`; universal replay/UNKNOWN resolution OPEN | PARTIAL |

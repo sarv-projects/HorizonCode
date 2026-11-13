@@ -1521,6 +1521,7 @@ export class KernelClient {
         return this.local.verifyReceipts() as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "effect.owner.status":
       case "effect.owner.verify":
+      case "effect.owner.postimage.verify":
       case "effect.owner.recover":
         // A Bun fallback cannot assert a Rust-owned cross-process fence.
         return Promise.reject(new Error("HZ_PRECONDITION_FAILED: OwnerLog requires the trusted Rust kernel"));
@@ -2163,6 +2164,11 @@ export class KernelClient {
   /** Verify the independent owner EventLog and shared receipts chain. */
   async ownerVerify(): Promise<KernelRequestMap["effect.owner.verify"]["result"]> {
     return this.rpc("effect.owner.verify", {});
+  }
+
+  /** Independent read of latest settled file postimages, not historic state. */
+  async ownerPostimageVerify(): Promise<KernelRequestMap["effect.owner.postimage.verify"]["result"]> {
+    return this.rpc("effect.owner.postimage.verify", {});
   }
 
   /** Recover only a verifiable v2 prepare-only crash, never an execution/UNKNOWN. */
