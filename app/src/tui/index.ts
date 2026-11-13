@@ -7,6 +7,7 @@
  */
 
 export { runInteractive } from "./interactive";
+export { runFullscreenExperimentalChat } from "./fullscreen-chat";
 export type { InteractiveOptions } from "./interactive";
 export { runHeadless } from "./headless";
 export type { HeadlessOptions } from "./headless";

@@ -8,29 +8,76 @@
  */
 
 import * as readline from "node:readline";
+import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
 import { modelsForProvider } from "../core/catalog/list-models";
 import { formatModelsNotice } from "./models-slash";
 import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
-import { builtinSlashHelpRows } from "../core/slash-registry";
-import type { HzConfig } from "../core/config";
+import { defaultConfigPath, loadConfig, type HzConfig } from "../core/config";
 import { getSkill } from "../core/skills";
+import { writeSessionArchive } from "../core/archive";
 import { maskSecrets } from "../core/compaction";
-import { chainLine, convoStats, lastOfRole, osc52, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
+import { chainLine, convoStats, lastOfRole, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
+import { contextChunkRows, renderContextTokenTable } from "../core/context-token-table";
+import { renderLearnChapter, renderLearnIndex } from "../core/learn-kb";
+import { renderWorkspaceTrustReport } from "../core/trust";
+import { renderSettingsReport } from "../core/settings-report";
+import { renderWorkspaceLearningGraph } from "../core/learning-graph";
+import { homedir } from "node:os";
+import { systemPrompt } from "../core/loop";
+import { toolSpecs } from "../tools";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
-import { unifiedDiff } from "../core/plan";
+import {
+  applyHunkSelections,
+  labelDiffHunkHeaders,
+  parseHunkApplySelection,
+  unifiedDiff,
+} from "../core/plan";
+import { copyAssistantFromHistory } from "./clipboard";
+import { formatCommandPalette } from "./command-palette";
+import { bellOnTurnEnd, notifyPrefsMerged, runNotifyCommand } from "./notify";
+import { buildSessionTree } from "./session-tree";
+import { runWorktreeSlash } from "./worktree-slash";
+import { runSnapshotSlash } from "./snapshot-slash";
+import { formatTranscriptPlain } from "./transcript";
 import type { SessionInfo } from "../core/session";
 import type { PermissionMode } from "../core/permission-mode";
 import { PERMISSION_MODES, describeMode, isPermissionMode, modeBadge, parsePermissionMode, permissionModeError } from "../core/permission-mode";
+import { formatAutonomyLadderLines, runAutonomyCommand } from "./autonomy-slash";
 import { historyFilePath, stateRoot } from "../core/paths";
 import * as toolsModule from "../tools";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
 import type { ApprovalUi } from "./approval";
 import { printBanner, printGreeting, printRichBanner, shortenPath } from "./banner";
-import { clockTime, createLive, liveEnabled, pickTip, readGitBranch, turnFooter, unicodeLocale, userBlock, type Live, type StatusInfo } from "./live";
+import {
+  clockTime,
+  createLive,
+  formatIdleStatusLine,
+  liveEnabled,
+  pickTip,
+  readGitBranch,
+  turnFooter,
+  unicodeLocale,
+  userBlock,
+  type Live,
+  type StatusInfo,
+} from "./live";
 import { kernelStateDir } from "../core/paths";
+import { clearAbortedComposerDraft, saveAbortedComposerDraft, takeAbortedComposerDraft } from "./composer-draft";
+import { unknownCountAfterEvent } from "./unknown-chip";
+import { runUnknownCommand } from "./unknown-slash";
+import {
+  formatReconcileBlockScrollbackNoticeLines,
+  reconcileBlockScrollbackNoticeKey,
+} from "./reconcile-block-chip";
+import {
+  printScrollbackReceiptInspect,
+  resolveScrollbackReceiptInspectTarget,
+  scrollbackReceiptInspectNoticeNoTarget,
+  tryScrollbackHzReceiptUriLine,
+} from "./scrollback-receipt-shortcut";
 import { complete, formatCompletionDropdown, ghostFor, type CompletionContext } from "./completion";
 import { loadUserKeymap, resolveAction } from "./keymap";
 import { keyChoice, type KeyAnswer } from "./approval-card";
@@ -43,8 +90,10 @@ import {
   pasteLabel,
 } from "./paste";
 import { createRenderer, diffBlock, type Renderer } from "./render";
+import { printSlashHelp } from "./slash-help";
+import { parseSlashInput } from "./slash-dispatch";
 import { activeTheme, bold, colorLevel, cyan, dim, errorMessage, sanitizeText, setThemeMode, strip, terminalWidth, themeMode, truncate, visibleWidth, wrapText, yellow } from "./style";
-import { persistThemeMode } from "../core/config";
+import { persistNotifyConfig, persistThemeMode } from "../core/config";
 
 const PROMPT = "\u276f ";
 const HISTORY_LIMIT = 500;
@@ -52,6 +101,8 @@ const HISTORY_LIMIT = 500;
 /** What the TUI needs from one staged change; a core `StagedChange` fits as-is. */
 export interface StagedChangeView {
   rel: string;
+  resolved?: string;
+  tool?: "write" | "edit";
   /** Present when the core hands its StagedChange over: the chat diffs it here. */
   before?: string | null;
   after?: string;
@@ -74,7 +125,7 @@ export interface CheckpointView {
 }
 
 /** Extras the core runtime may or may not expose yet; each one is optional. */
-type RuntimeWithExtras = Runtime & {
+export type RuntimeWithExtras = Runtime & {
   config?: HzConfig;
   newSession?: () => unknown;
   setModel?: (model: string) => unknown;
@@ -95,6 +146,10 @@ type RuntimeWithExtras = Runtime & {
   forkSession?: (at?: number) => Promise<SessionInfo>;
   switchSession?: (sessionId: string) => unknown;
   sessions?: () => ReadonlyArray<SessionInfo>;
+  searchSessions?: (
+    query: string,
+    limit?: number,
+  ) => ReadonlyArray<SessionInfo & { snippet?: string; messageCount?: number; totalCostUsd?: number }>;
   /** Conversation verbs (T-12), optional like the rest. */
   history?: () => ChatMsg[];
   renameSession?: (title: string) => string;
@@ -111,6 +166,10 @@ export interface InteractiveOptions {
   ui: ApprovalUi;
   /** a message typed on the command line, sent as the first turn */
   initialMessage?: string;
+  /** Restored from `tui-handoff.json` after a mode relaunch (docs/13 D2). */
+  resumedDraft?: string;
+  /** When true, fullscreen-experimental skips the startup resume picker (`--continue`, first message). */
+  skipResumePickerOnStart?: boolean;
 }
 
 /* ----------------------------- history file ----------------------------- */
@@ -175,40 +234,8 @@ export function rememberHistory(file: string, text: string): void {
 
 /* ------------------------------ local text ------------------------------ */
 
-function printWrapped(r: Renderer, text: string, style: (s: string) => string = (s) => s): void {
-  const plain = strip(text);
-  if (visibleWidth(plain) <= terminalWidth()) {
-    r.line(text);
-    return;
-  }
-  for (const part of wrapText(plain, terminalWidth())) r.line(style(part));
-}
-
 function printHelp(r: Renderer, workspace?: string): void {
-  const rows = builtinSlashHelpRows();
-  const width = rows.reduce((max, [cmd]) => Math.max(max, cmd.length), 0) + 2;
-  r.line(dim("Just type what you want in plain language \u2014 no flags needed."));
-  r.line("");
-  for (const [cmd, desc] of rows) r.line("  " + bold(cmd.padEnd(width)) + dim(desc));
-  r.line("");
-  if (workspace !== undefined) {
-    let listing: ReturnType<typeof loadCommands> = { commands: [], shadowed: [] };
-    try {
-      listing = loadCommands(workspace);
-    } catch {
-      /* a bad commands dir never breaks /help */
-    }
-    if (listing.commands.length > 0) {
-      r.line("");
-      r.line(dim("Custom commands (prompt templates from .hz/commands):"));
-      const cw = listing.commands.reduce((max, c) => Math.max(max, c.name.length + 1), 0) + 2;
-      for (const c of listing.commands) r.line("  " + bold(("/" + c.name).padEnd(cw)) + dim(c.description));
-    }
-    if (listing.shadowed.length > 0) {
-      r.line(dim(`  ignored (a builtin owns the name): ${listing.shadowed.map((n) => "/" + n).join(", ")}`));
-    }
-  }
-  printWrapped(r, "  Ctrl+C  stop the current answer (again to leave)   Ctrl+D  leave   \u2191/\u2193  earlier messages", dim);
+  printSlashHelp(r, workspace);
 }
 
 /**
@@ -249,7 +276,7 @@ export function exitLine(exit: RunExit | undefined): string | undefined {
   return `turn ended: ${exit.terminal}${exit.detail !== undefined ? ` (${exit.detail})` : ""}`;
 }
 
-function showTools(r: Renderer, runtime: Runtime): void {
+export function showTools(r: Renderer, runtime: Runtime): void {
   let report: ReturnType<typeof describeTools>;
   try {
     report = describeTools(runtime);
@@ -334,7 +361,9 @@ export function runModeCommand(arg: string, runtime: Runtime, renderer: Renderer
   const extras = runtime as RuntimeWithExtras;
   const current = readPermissionMode(runtime);
   if (arg === "") {
-    renderer.notice(`permission mode: ${describeMode(current)}. Set with /mode ${PERMISSION_MODES.join("|")}`);
+    for (const line of formatAutonomyLadderLines(current)) {
+      renderer.line(line);
+    }
     return current;
   }
   const next = parsePermissionMode(arg);
@@ -402,7 +431,7 @@ export async function runPlanCommand(
       listStagedChanges(runtime, renderer);
       return true;
     case "apply":
-      await applyStagedPlan(runtime, renderer);
+      await applyStagedPlan(runtime, renderer, arg);
       return true;
     case "discard":
       discardStagedPlan(runtime, renderer);
@@ -471,11 +500,41 @@ function listStagedChanges(runtime: Runtime, renderer: Renderer): void {
     const rel = sanitizeText(change?.rel ?? "") || "(unnamed)";
     renderer.line("  " + bold(rel));
     const diff = stagedDiff(change ?? { rel: "(unnamed)" });
-    if (diff !== "") renderer.write(diffBlock(diff) + "\n");
+    if (diff !== "") renderer.write(diffBlock(labelDiffHunkHeaders(diff, rel)) + "\n");
   }
 }
 
-async function applyStagedPlan(runtime: Runtime, renderer: Renderer): Promise<void> {
+async function applyStagedPlan(runtime: Runtime, renderer: Renderer, arg = ""): Promise<void> {
+  const selection = parseHunkApplySelection(arg);
+  if (selection === undefined) {
+    renderer.notice("could not parse hunk apply arg; use 1,3 or path:1,2 path2:3");
+    return;
+  }
+  if (selection !== null) {
+    const staged = (runtime as RuntimeWithExtras).stagedChanges;
+    if (typeof staged !== "function") {
+      notSupported(renderer, "stagedChanges");
+      return;
+    }
+    const list = (staged.call(runtime) ?? []) as StagedChangeView[];
+    const coreStaged = list.map((change) => ({
+      resolved: String(change?.resolved ?? change?.rel ?? ""),
+      rel: String(change?.rel ?? ""),
+      before: typeof change?.before === "string" || change?.before === null ? change.before : null,
+      after: String(change?.after ?? ""),
+      tool: change?.tool ?? ("write" as const),
+    }));
+    const result = applyHunkSelections(runtime.sessionId, coreStaged, selection);
+    if (result.ok === false) {
+      renderer.notice(result.message);
+      return;
+    }
+    const hunks =
+      selection.hunks !== undefined
+        ? selection.hunks.join(",")
+        : (selection.files ?? []).map((f) => `${f.rel}:${f.hunks.join(",")}`).join(" ");
+    renderer.notice(`applying hunks ${hunks} on ${[...result.updated].join(", ")}`);
+  }
   const apply = (runtime as RuntimeWithExtras).applyPlan;
   if (typeof apply !== "function") {
     notSupported(renderer, "applyPlan");
@@ -561,13 +620,17 @@ function listCheckpoints(runtime: Runtime, renderer: Renderer): void {
 }
 
 /** One /sessions row: id, title, and the fork lineage when there is one. */
-export function describeSession(s: SessionInfo, currentId?: string): string {
+export function describeSession(
+  s: SessionInfo & { snippet?: string },
+  currentId?: string,
+): string {
   const mark = s.id === currentId ? "* " : "  ";
   const lineage =
     s.forkedFrom !== undefined
       ? ` (fork of ${s.forkedFrom.sessionId} at message ${s.forkedFrom.messageIndex})`
       : "";
-  return `${mark}${s.id}  ${s.title}${lineage}`;
+  const snippet = s.snippet !== undefined && s.snippet !== "" ? `\n      ${s.snippet}` : "";
+  return `${mark}${s.id}  ${s.title}${lineage}${snippet}`;
 }
 
 /**
@@ -584,6 +647,25 @@ export async function runForkCommand(
 ): Promise<boolean> {
   const rt = runtime as RuntimeWithExtras;
   if (name === "sessions") {
+    const query = arg.trim();
+    if (query.toLowerCase() === "tree") {
+      if (typeof rt.sessions !== "function") {
+        notSupported(renderer, "sessions", "sessions");
+        return true;
+      }
+      for (const line of buildSessionTree(rt.sessions(), runtime.sessionId)) renderer.line(line);
+      return true;
+    }
+    if (query !== "" && typeof rt.searchSessions === "function") {
+      const hits = rt.searchSessions(query);
+      if (hits.length === 0) renderer.notice(`no sessions matched ${JSON.stringify(query)}`);
+      else for (const s of hits) renderer.line(describeSession(s, runtime.sessionId));
+      return true;
+    }
+    if (typeof rt.searchSessions === "function") {
+      for (const s of rt.searchSessions("", 500)) renderer.line(describeSession(s, runtime.sessionId));
+      return true;
+    }
     if (typeof rt.sessions !== "function") {
       notSupported(renderer, "sessions", "sessions");
       return true;
@@ -659,21 +741,62 @@ export async function runConvoCommand(
         if (h) renderer.notice(renderStats(convoStats(h)));
         return true;
       }
+      case "tokens": {
+        const h = history();
+        if (!h) return true;
+        const usage = (runtime as RuntimeWithExtras).contextUsage?.();
+        const specs = toolSpecs(runtime.sessionId).map((s) => s.name);
+        const sys = systemPrompt(workspace, new Date(), {
+          tools: specs,
+          kernelMode: typeof (runtime as { kernelMode?: string }).kernelMode === "string" ? (runtime as { kernelMode: string }).kernelMode : "untrusted",
+        });
+        const provider = typeof (runtime as { providerName?: string }).providerName === "string" ? (runtime as { providerName: string }).providerName : "mock";
+        renderer.notice(
+          renderContextTokenTable(contextChunkRows(h, sys, usage, provider)),
+        );
+        return true;
+      }
+      case "learn": {
+        const text = arg.trim() === "" ? renderLearnIndex(workspace) : renderLearnChapter(workspace, arg);
+        renderer.notice(text);
+        return true;
+      }
+      case "trust": {
+        const home = process.env.HOME?.trim() || homedir();
+        const cfg = loadConfig(process.env, defaultConfigPath(home), workspace);
+        renderer.notice(renderWorkspaceTrustReport(workspace, home, cfg.trustedWorkspaceHooks));
+        return true;
+      }
+      case "settings": {
+        const home = process.env.HOME?.trim() || homedir();
+        const cfg = loadConfig(process.env, defaultConfigPath(home), workspace);
+        renderer.notice(renderSettingsReport({ workspace, home, config: cfg }));
+        return true;
+      }
+      case "graph": {
+        renderer.notice(renderWorkspaceLearningGraph(workspace));
+        return true;
+      }
       case "copy": {
         const h = history();
         if (!h) return true;
-        const text = lastOfRole(h, "assistant");
-        if (text === undefined) renderer.notice("nothing to copy yet");
-        else {
-          write(osc52(text));
-          renderer.notice(`copied ${text.length} character(s) via the terminal clipboard (OSC 52; needs terminal support)`);
-        }
+        const { notice } = copyAssistantFromHistory(h, write);
+        renderer.notice(notice);
         return true;
       }
       case "export": {
         const format = arg.trim().toLowerCase() || "json";
-        if (format !== "json" && format !== "html") {
-          renderer.notice("usage: /export [json|html]");
+        if (format !== "json" && format !== "html" && format !== "hzs") {
+          renderer.notice("usage: /export [json|html|hzs]");
+          return true;
+        }
+        if (format === "hzs") {
+          const result = writeSessionArchive(workspace, runtime.sessionId);
+          renderer.notice(
+            `exported .hzs: ${result.messageCount} message(s), ${result.checkpointCount} checkpoint(s)` +
+              (result.eventCount > 0 ? `, ${result.eventCount} event(s)` : "") +
+              ` → ${shortenPath(result.path)} (import not supported)`,
+          );
           return true;
         }
         const h = history();
@@ -915,6 +1038,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let contextPercent: number | undefined;
   let contextUsed: number | undefined;
   let contextWindowTokens: number | undefined;
+  let unknownCount = 0;
+  let unknownReceiptId: string | undefined;
 
   const renderer: Renderer = createRenderer({
     wrap: true,
@@ -954,9 +1079,28 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       contextWindow: contextWindowTokens,
       path: shortenPath(workspace),
       branch: branchCache.value,
+      unknownCount: unknownCount > 0 ? unknownCount : undefined,
+      unknownReceiptId: unknownCount === 1 ? unknownReceiptId : undefined,
+      reconcileBlock: hz.reconcileBlockLatch(),
     };
   };
   const hz = runtime as import("../core").HzRuntime;
+  let reconcileBlockNoticeKeySeen = "";
+  const emitReconcileBlockScrollbackNoticeIfNeeded = (): void => {
+    const view = hz.reconcileBlockLatch();
+    const key = reconcileBlockScrollbackNoticeKey(view);
+    if (key === reconcileBlockNoticeKeySeen) return;
+    reconcileBlockNoticeKeySeen = key;
+    if (view.latched && view.mode !== "off") {
+      for (const line of formatReconcileBlockScrollbackNoticeLines(view)) {
+        renderer.notice(line);
+      }
+    }
+  };
+  const syncReconcileBlockScrollbackNotice = (): void => {
+    emitReconcileBlockScrollbackNoticeIfNeeded();
+    if (!busy && answerWaiter === null) live?.showIdle();
+  };
   live = createLive({
     enabled: liveEnabled(),
     write: (chunk) => void process.stdout.write(chunk),
@@ -1039,6 +1183,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const historyFile = historyFilePath(workspace);
   loadHistory(historyFile, rl);
+  const resumedDraft = (opts.resumedDraft ?? "").trim();
+  if (resumedDraft !== "") {
+    (rl as unknown as { line: string }).line = resumedDraft;
+    renderer.notice(`restored relaunch draft (${resumedDraft.length} characters)`);
+  }
 
   const out = (chunk: string): void => renderer.write(chunk);
   const bannerInfo = { version: opts.version, model: runtime.model, provider: runtime.providerName, workspace, kernel: runtime.kernelMode };
@@ -1073,13 +1222,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     resolveDone(code);
   };
 
+  const tryRestoreAbortedDraft = (): void => {
+    const state = rl as unknown as { line?: string };
+    if (String(state.line ?? "").trim() !== "") return;
+    const draft = takeAbortedComposerDraft(workspace, runtime.sessionId);
+    if (draft === undefined || draft === "") return;
+    state.line = draft;
+    renderer.notice(`restored aborted draft (${draft.length} characters)`);
+  };
+
   const showPrompt = (blank = false): void => {
     if (exiting) return;
     typedGuardArmed = false;
     if (blank) renderer.write("\n");
     try {
       rl.setPrompt(planPrompt(planState.on, readPermissionMode(runtime)));
-      if (renderer.atLineStart()) live?.showIdle();
+      if (renderer.atLineStart()) syncReconcileBlockScrollbackNotice();
+      if (!busy && answerWaiter === null) tryRestoreAbortedDraft();
       rl.prompt();
     } catch {
       /* terminal went away */
@@ -1101,6 +1260,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const result = await runtime.send(text, {
         onEvent: (ev) => {
           if (ev && typeof ev === "object") {
+            unknownCount = unknownCountAfterEvent(unknownCount, ev);
+            if (ev.type === "effect.unknown" && typeof ev.receiptId === "string" && ev.receiptId !== "") {
+              unknownReceiptId = ev.receiptId;
+            } else if (ev.type === "effect.reconciled" && unknownCount === 0) {
+              unknownReceiptId = undefined;
+            }
             if (ev.type === "tool.card") {
               if (ev.status === "running") live?.toolStart(String(ev.name), ev.args, String(ev.callId));
               else live?.toolEnd(String(ev.callId));
@@ -1125,11 +1290,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       renderer.error(`request failed: ${errorMessage(err)}`);
     } finally {
       busy = false;
+      emitReconcileBlockScrollbackNoticeIfNeeded();
       const stats = live?.endTurn();
       renderer.ensureLineStart();
       if (stats && liveOn) {
         renderer.write(
           turnFooter({ ms: stats.ms, tools: stats.tools, inputTokens: stats.inputTokens, time: clockTime(), width: terminalWidth() - 1 }) + "\n",
+        );
+        bellOnTurnEnd(
+          stats.ms,
+          notifyPrefsMerged(loadConfig(process.env, defaultConfigPath(process.env.HOME?.trim() || homedir())).notify),
         );
       }
     }
@@ -1210,9 +1380,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     );
   };
 
-  /** Send text as if typed: queue it while an answer streams, else run it now. */
+  /** Send text as if typed: steer mid-turn when possible, else queue for next turn. */
   const sendUserText = async (text: string): Promise<void> => {
     if (busy) {
+      const interject = (runtime as { interject?: (t: string) => { accepted: boolean } }).interject;
+      if (typeof interject === "function") {
+        const outcome = interject.call(runtime, text);
+        if (outcome?.accepted === true) {
+          echoUser(text);
+          renderer.notice("steered \u2014 your message joins the current turn at the next step");
+          return;
+        }
+      }
       queued.push(text);
       renderer.notice(`queued \u2014 it goes next (${queued.length} waiting)`);
       return;
@@ -1222,10 +1401,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   };
 
   const runSlash = async (text: string): Promise<void> => {
-    const body = text.slice(1).trim();
-    const spaceAt = body.search(/\s/);
-    const name = (spaceAt === -1 ? body : body.slice(0, spaceAt)).toLowerCase();
-    const arg = spaceAt === -1 ? "" : body.slice(spaceAt + 1).trim();
+    const parsed = parseSlashInput(text);
+    if (parsed === null) return;
+    const { name, arg } = parsed;
 
     switch (name) {
       case "help":
@@ -1259,12 +1437,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "context":
         showContext();
         break;
+      case "status":
+        renderer.notice(strip(formatIdleStatusLine(statusInfo(), terminalWidth() - 1, { plain: true })));
+        if (unknownCount > 0) runUnknownCommand(runtime, renderer);
+        break;
+      case "unknown":
+        runUnknownCommand(runtime, renderer, arg);
+        break;
       case "theme":
         runThemeCommand(arg, renderer);
         break;
+      case "notify": {
+        const home = process.env.HOME?.trim() || homedir();
+        const cfg = loadConfig(process.env, defaultConfigPath(home), workspace);
+        runNotifyCommand(arg, renderer, cfg.notify, (prefs) => persistNotifyConfig(prefs, home));
+        break;
+      }
       case "mode":
         runModeCommand(arg, runtime, renderer);
         // /mode plan flips the runtime's plan flag: keep the badge in step.
+        planState.on = readPlanMode(runtime);
+        break;
+      case "autonomy":
+        runAutonomyCommand(arg, runtime, renderer, () => readPermissionMode(runtime));
         planState.on = readPlanMode(runtime);
         break;
       case "plan":
@@ -1285,6 +1480,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         await runForkCommand(name, arg, runtime, renderer);
         break;
       }
+      case "worktree":
+        runWorktreeSlash(workspace, renderer);
+        break;
+      case "snapshot":
+        runSnapshotSlash(renderer);
+        break;
       case "think": {
         const text = renderer.lastThinking?.() ?? "";
         if (text.trim() === "") {
@@ -1294,8 +1495,45 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         for (const l of sanitizeText(text).trimEnd().split("\n")) renderer.line(dim("\u2503 " + l));
         break;
       }
+      case "palette": {
+        let custom: string[] = [];
+        try {
+          custom = loadCommands(workspace).commands.map((c) => c.name);
+        } catch {
+          /* ignore */
+        }
+        const box = formatCommandPalette(arg, { customNames: custom });
+        if (box !== "") process.stdout.write(`\n${box}\n`);
+        break;
+      }
+      case "transcript": {
+        const hist = (runtime as RuntimeWithExtras).history;
+        if (typeof hist !== "function") {
+          notSupported(renderer, "history", "transcript");
+          break;
+        }
+        const h = hist.call(runtime);
+        if (!h || h.length === 0) {
+          renderer.notice("transcript is empty");
+          break;
+        }
+        const body = formatTranscriptPlain(h);
+        const pager = process.env.PAGER?.trim() || "less";
+        if (process.stdout.isTTY) {
+          const r = spawnSync(pager, pager === "less" ? ["-R"] : [], { input: body, stdio: ["pipe", "inherit", "inherit"] });
+          if (r.error) renderer.write(body);
+        } else {
+          renderer.write(body);
+        }
+        break;
+      }
       case "rename":
       case "stats":
+      case "tokens":
+      case "learn":
+      case "trust":
+      case "settings":
+      case "graph":
       case "copy":
       case "export":
         await runConvoCommand(name, arg, runtime, renderer, workspace);
@@ -1353,7 +1591,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           await sendUserText(custom.prompt);
           break;
         }
-        if (getSkill(workspace, body.split(/\s/)[0] ?? "")) {
+        if (getSkill(workspace, name)) {
           await sendUserText(text);
           break;
         }
@@ -1368,18 +1606,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     try {
       // Every line the human typed is worth remembering, commands included.
       rememberHistory(historyFile, text);
+      clearAbortedComposerDraft(workspace, runtime.sessionId);
+      if (tryScrollbackHzReceiptUriLine(runtime, renderer, text)) {
+        showPrompt();
+        return;
+      }
       if (text.startsWith("/")) {
         await runSlash(text);
         return;
       }
-      if (busy) {
-        queued.push(text);
-        renderer.notice(`queued \u2014 it goes next (${queued.length} waiting)`);
-        // No chat bar while an answer is streaming; it returns when the turn ends.
-        return;
-      }
-      await sendTurn(text);
-      await drainQueue();
+      await sendUserText(text);
       showPrompt(true);
     } catch (err) {
       busy = false;
@@ -1453,6 +1689,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       answerWaiter = null;
       waiter("n");
     }
+    const drafting = String((rl as unknown as { line?: string }).line ?? "");
+    if (drafting.trim() !== "") saveAbortedComposerDraft(workspace, runtime.sessionId, drafting);
     if (abortRequested) return;
     abortRequested = true;
     try {
@@ -1539,6 +1777,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (resolveAction(keymap, key, busy ? "busy" : "idle")?.id === "turn.cancel" && !answerWaiter) {
         abortTurn();
       }
+    });
+  }
+
+  if (process.stdin.isTTY) {
+    process.stdin.on("keypress", (_s: unknown, key: { name?: string; ctrl?: boolean } | undefined) => {
+      if (exiting || busy || answerWaiter !== null) return;
+      if (!key?.ctrl || key.name !== "i") return;
+      const target = resolveScrollbackReceiptInspectTarget(unknownReceiptId);
+      if (!target) {
+        renderer.notice(scrollbackReceiptInspectNoticeNoTarget());
+        return;
+      }
+      printScrollbackReceiptInspect(runtime, renderer, target);
     });
   }
 

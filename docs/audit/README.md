@@ -2,6 +2,8 @@
 
 > **Document class: historical evidence** (per `_conventions.md`). These six reports are the raw, file-cited source material for `29-final-audit.md` (Parts A–C and the B.1 register append). They carry no normative force; where a report and the spec set disagree, the spec set wins and the disagreement is a defect to report.
 
+> **Live honesty pass (2026-11-12):** [`honesty-pass-2026-11-12.md`](honesty-pass-2026-11-12.md) — principal audit of stale live-doc claims vs `6f321c3` code (trust digests, `hz-sandbox-exec`, remaining EffectHost/MITM gaps). Prefer that file + `docs/28` / `docs/33` / `CURRENT_RUN` over dated pass reports for current status.
+
 ## What is here
 
 Six delta audits over all twelve reference clones in the original author's `repo-tour/` directory (pins and clone status: `../research/upstream-pins.md`), dispatched and delivered during the final audit. Each report states its own coverage stats (directories walked, files opened, explicit NOT-READ list) and every claim is tied to a file path in the clone.

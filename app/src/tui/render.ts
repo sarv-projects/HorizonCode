@@ -9,12 +9,14 @@
 
 import type { RuntimeEvent, ToolCardDetail } from "../contracts";
 import {
-  FOLD_MIN, HEADER_FIRST_TOOLS, READ_ONLY_TOOLS, foldLine, resultLine, shellFooter, shellHeader, shellOutputLines,
+  FOLD_MIN, HEADER_FIRST_TOOLS, READ_ONLY_TOOLS, foldLine, formatToolEffectLinkage, resultLine, shellFooter, shellHeader, shellOutputLines,
   subagentGroupLines, subagentLine, toolCardLines, type CardStyle, type GroupRow,
 } from "./cards";
 import { richDiff } from "./diff";
 import { createMarkdownStream, type MarkdownStream } from "./markdown";
 import { formatDuration, pulseGlyph, spinnerFrame, toolVerb, unicodeLocale } from "./live";
+import { formatUnknownEffectAnnouncement, screenReaderMode } from "./a11y";
+import { formatUnknownEffectNotice } from "./unknown-chip";
 import {
   bold, colorLevel, cyan, dim, green, red, sanitizeText, strip, terminalWidth, truncate, visibleWidth, wrapText, type ColorLevel,
 } from "./style";
@@ -38,6 +40,15 @@ export interface RenderOptions {
   level?: ColorLevel;
   unicode?: boolean;
   now?: () => number;
+  /** Unfold long diff context and lift the diff row cap (docs/13 D9). */
+  unfoldDiff?: boolean;
+  /** Unfold shell tool output panels (docs/13 D9). */
+  unfoldOutput?: boolean;
+}
+
+function envTruthy(env: Record<string, string | undefined>, key: string): boolean {
+  const v = env[key];
+  return v === "1" || v === "true";
 }
 
 export interface Renderer {
@@ -118,6 +129,9 @@ export const NESTED_LINE_CAP = 30;
 export const TURN_DIFF_LINE_CAP = 40;
 
 export function createRenderer(opts: RenderOptions = {}): Renderer {
+  const env = process.env as Record<string, string | undefined>;
+  const unfoldDiff = opts.unfoldDiff ?? envTruthy(env, "HZ_TUI_UNFOLD_DIFF");
+  const unfoldOutput = opts.unfoldOutput ?? envTruthy(env, "HZ_TUI_UNFOLD_OUTPUT");
   const out = opts.out ?? ((chunk: string) => void process.stdout.write(chunk));
   const wrap = opts.wrap ?? Boolean((process.stdout as { isTTY?: boolean } | undefined)?.isTTY);
   let atStart = true;
@@ -188,6 +202,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     width: Math.max(20, terminalWidth() - 1),
     level: opts.level ?? colorLevel(),
     unicode: opts.unicode ?? unicodeLocale(),
+    expandOutput: unfoldOutput,
   });
   interface Call { name: string; args: unknown; at: number }
   const calls = new Map<string, Call>();
@@ -263,10 +278,17 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
 
   const subLabel = (sub: Sub): string => sub.task || sub.profile || "subagent";
 
+  const cardLinkage = (ev: Extract<RuntimeEvent, { type: "tool.card" }>) => ({
+    effectId: ev.effectId,
+    receiptId: ev.receiptId,
+    receiptSeq: ev.receiptSeq,
+  });
+
   const richCard = (ev: Extract<RuntimeEvent, { type: "tool.card" }>): void => {
     const name = sanitizeText(ev.name) || "tool";
     const style = cardStyle();
     const id = String(ev.callId ?? "");
+    const linkage = cardLinkage(ev);
     if (ev.status === "running") {
       calls.set(id, { name, args: ev.args, at: now() });
       if (READ_ONLY_TOOLS.has(name) || !HEADER_FIRST_TOOLS.has(name)) return;
@@ -291,7 +313,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
         subs.push(sub);
         writeLines([subagentLine({ state: "running", task: subLabel(sub), profile: sub.profile }, style)]);
       } else {
-        writeLines(toolCardLines({ name, args: ev.args, status: "running" }, style));
+        writeLines(toolCardLines({ name, args: ev.args, status: "running", ...linkage }, style));
       }
       return;
     }
@@ -299,7 +321,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     calls.delete(id);
     const status = ev.status === "ok" ? "ok" : "error";
     const ms = ev.detail?.durationMs ?? Math.max(0, now() - call.at);
-    const input = { name, args: call.args, status, summary: ev.summary, detail: { ...ev.detail, durationMs: ms } } as const;
+    const input = { name, args: call.args, status, summary: ev.summary, detail: { ...ev.detail, durationMs: ms }, ...linkage } as const;
     if (READ_ONLY_TOOLS.has(name)) {
       const lines = toolCardLines(input, style);
       if (status === "ok") {
@@ -313,7 +335,7 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     flushFold();
     if (name === "shell" || name === "shell_session") {
       if (ev.detail?.output !== undefined) writeLines(shellOutputLines(ev.detail.output, style));
-      writeLines([shellFooter({ status, exitCode: ev.detail?.exitCode, durationMs: ms, summary: ev.summary }, style)]);
+      writeLines(shellFooter({ status, exitCode: ev.detail?.exitCode, durationMs: ms, summary: ev.summary, ...linkage }, style));
     } else if (name === "agent") {
       const sub = subs.find((x) => x.callId === id) ?? subs.find((x) => x.state === "running");
       if (sub) {
@@ -506,6 +528,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
             width: terminalWidth(),
             cap: TURN_DIFF_LINE_CAP,
             unicode: unicodeLocale(),
+            expandContext: unfoldDiff,
+            expandCap: unfoldDiff,
           });
           if (view.length > 0) {
             ensureLineStart();
@@ -550,7 +574,13 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
           if (richPreview !== "") {
             flushFold();
             ensureLineStart();
-            write(richDiff(richPreview, { width: terminalWidth(), unicode: unicodeLocale() }).join("\n") + "\n");
+            write(
+              richDiff(richPreview, {
+                width: terminalWidth(),
+                unicode: unicodeLocale(),
+                expandContext: unfoldDiff,
+              }).join("\n") + "\n",
+            );
           }
           break;
         }
@@ -561,6 +591,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
           const ok = ev.status === "ok";
           const summary = firstLine(ev.summary);
           emit("  " + dim("\u2514 ") + (ok ? green("ok") : red("error")) + (summary ? dim(": " + summary) : ""), dim);
+          const link = formatToolEffectLinkage(ev);
+          if (link !== "") emit("  " + dim(link), dim);
         }
         // The optional preview the runtime attached to this card (a staged
         // diff in plan mode): rendered under either state, absent on old cores.
@@ -573,6 +605,19 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       }
       case "notice":
         emit(dim("\u00b7 " + sanitizeText(ev.message)), dim);
+        break;
+      case "effect.unknown":
+        if (screenReaderMode()) {
+          ensureLineStart();
+          write(sanitizeText(formatUnknownEffectAnnouncement(ev)) + "\n");
+        }
+        emit(
+          dim("\u00b7 " + sanitizeText(formatUnknownEffectNotice(ev))),
+          dim,
+        );
+        break;
+      case "effect.reconciled":
+        emit(dim(`\u00b7 effect reconciled (${sanitizeText(ev.effectId).slice(0, 8)})`), dim);
         break;
       case "error":
         emit(red("\u26a0 " + sanitizeText(ev.message)), red);

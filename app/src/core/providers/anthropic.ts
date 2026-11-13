@@ -8,6 +8,9 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolCall, ToolSpec } from "../../contracts";
+import { anthropicSystemField } from "./anthropic-cache";
+import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
+import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 
@@ -111,24 +114,36 @@ function toolArguments(raw: string, declared: unknown): string {
 interface UsageShape {
   inputTokens?: number;
   outputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 async function* streamAnthropic(settings: AnthropicSettings, req: ProviderRequest): AsyncIterable<ProviderEvent> {
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : "https://api.anthropic.com").replace(/\/+$/, "");
-  const messages = toAnthropicMessages(req.messages ?? []);
+  const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
+  let messages = toAnthropicMessages(wire.messages ?? []);
   if (messages.length === 0) {
     yield { type: "error", message: "anthropic: nothing to send (no messages after system)" };
     return;
   }
 
+  const systemField =
+    typeof wire.system === "string" && wire.system !== "" ? anthropicSystemField(wire.system) : undefined;
+  const cached = applyAnthropicRequestCacheBreakpoints(
+    systemField,
+    messages as unknown as import("./anthropic-cache-wire").AnthropicWireMessage[],
+  );
+  // Cache markers are additive `cache_control` fields; block shapes stay AnthropicBlock.
+  messages = cached.messages as unknown as AnthropicMessage[];
+
   const body: Record<string, unknown> = {
-    model: req.model,
-    max_tokens: req.maxTokens && req.maxTokens > 0 ? req.maxTokens : (settings.maxTokens ?? DEFAULT_MAX_TOKENS),
+    model: wire.model,
+    max_tokens: wire.maxTokens && wire.maxTokens > 0 ? wire.maxTokens : (settings.maxTokens ?? DEFAULT_MAX_TOKENS),
     messages,
     stream: true,
   };
-  if (typeof req.system === "string" && req.system !== "") body.system = req.system;
-  if (Array.isArray(req.tools) && req.tools.length > 0) body.tools = toAnthropicTools(req.tools);
+  if (cached.system !== undefined && cached.system !== "") body.system = cached.system;
+  if (Array.isArray(wire.tools) && wire.tools.length > 0) body.tools = toAnthropicTools(wire.tools);
 
   let response: Response;
   const retries: string[] = [];
@@ -207,8 +222,14 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
 
       switch (event.type) {
         case "message_start": {
-          const input = event.message?.usage?.input_tokens;
-          if (typeof input === "number") usage.inputTokens = input;
+          const u = event.message?.usage;
+          if (u && typeof u === "object") {
+            if (typeof u.input_tokens === "number") usage.inputTokens = u.input_tokens;
+            if (typeof u.cache_creation_input_tokens === "number") {
+              usage.cacheCreationInputTokens = u.cache_creation_input_tokens;
+            }
+            if (typeof u.cache_read_input_tokens === "number") usage.cacheReadInputTokens = u.cache_read_input_tokens;
+          }
           break;
         }
         case "content_block_start": {
@@ -279,9 +300,18 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
   // A tool_use block that never received its content_block_stop.
   for (const event of flush()) yield event;
   if (emittedTool && stopReason === "end") stopReason = "tool_use";
-  const finalUsage = usage.inputTokens === undefined && usage.outputTokens === undefined
-    ? undefined
-    : { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+  const finalUsage =
+    usage.inputTokens === undefined &&
+    usage.outputTokens === undefined &&
+    usage.cacheCreationInputTokens === undefined &&
+    usage.cacheReadInputTokens === undefined
+      ? undefined
+      : {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheCreationInputTokens: usage.cacheCreationInputTokens,
+          cacheReadInputTokens: usage.cacheReadInputTokens,
+        };
   yield { type: "done", stopReason, usage: finalUsage };
 }
 

@@ -5,7 +5,8 @@
 //!
 //! Evaluation, per docs/11-authority-safety.md R1 (deny > ask > allow):
 //!   0. a structural, hard-coded rule denies any `fs.write` whose target
-//!      resolves inside the kernel state directory (`kernel-state-protected`);
+//!      resolves inside the kernel state directory, and any `shell.exec` whose
+//!      command string names that directory (`kernel-state-protected`);
 //!      it is evaluated before policy rules and leases and cannot be lifted by
 //!      policy.json (the model must never be able to rewrite its own policy);
 //!   1. any matching `deny` rule wins;
@@ -197,6 +198,10 @@ impl Guard {
         }
     }
 
+    pub fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
     /// Loaded fresh on every check so policy edits apply without a restart.
     /// A present-but-malformed policy is a typed refusal (`PolicyError`), never
     /// a silent drop of the rules the parser did not understand: a dropped
@@ -230,17 +235,29 @@ impl Guard {
 
         // Structural rule, evaluated before policy rules and leases: the kernel
         // state directory holds the policy, the event log and the receipts, so
-        // no fs.write may ever target it — a policy that says otherwise is
-        // itself part of what this rule protects. It cannot be lifted by
-        // policy.json, a caller-supplied lease, or a held lease.
-        // NOTE: keyed to `fs.write`, the only mutating kind shipped. Any future
-        // mutating kind must be added HERE as well as to KNOWN_KINDS.
+        // no fs.write may ever target it and no shell.exec may name it — a
+        // policy that says otherwise is itself part of what this rule protects.
+        // It cannot be lifted by policy.json, a caller-supplied lease, or a
+        // held lease.
+        // NOTE: keyed to `fs.write` + `shell.exec`. Any future mutating kind
+        // must be added HERE as well as to KNOWN_KINDS.
         if action.kind == "fs.write" && resolves_inside(&self.state_dir, Path::new(&action.target)) {
             return Ok(GuardDecision {
                 decision: "deny".to_string(),
                 reason: format!(
                     "kernel-state-protected: {} resolves inside the kernel state directory",
                     action.target
+                ),
+                lease_id: None,
+            });
+        }
+        if action.kind == "shell.exec" && shell_references_kernel_state(&action.target, &self.state_dir)
+        {
+            return Ok(GuardDecision {
+                decision: "deny".to_string(),
+                reason: format!(
+                    "kernel-state-protected: shell.exec command references the kernel state directory ({})",
+                    self.state_dir.display()
                 ),
                 lease_id: None,
             });
@@ -789,6 +806,39 @@ fn resolves_inside(root: &Path, target: &Path) -> bool {
     }
 }
 
+/// `true` when `target` resolves to `root` or a path under it. Unresolvable
+/// paths return `false` (sandbox reads fail closed; unlike `resolves_inside`).
+pub fn path_contained_in(root: &Path, target: &Path) -> bool {
+    match (resolve_lexical(root), resolve_lexical(target)) {
+        (Some(root), Some(target)) => target == root || target.starts_with(&root),
+        _ => false,
+    }
+}
+
+/// Lexical path resolution for sandbox reads (symlink-aware, no existence required).
+pub fn lexical_resolve(path: &Path) -> Option<PathBuf> {
+    resolve_lexical(path)
+}
+
+/// Conservative shell-command scan: absolute state-dir substrings and the
+/// canonical/legacy relative markers. Mirrors `shellCommandReferencesKernelState`
+/// in the TypeScript transport (path-token resolution lives there; Rust catches
+/// the common redirect spellings before allowlist/policy).
+fn shell_references_kernel_state(command: &str, state_dir: &Path) -> bool {
+    let cmd = command.replace('\\', "/");
+    let state_raw = state_dir.to_string_lossy().replace('\\', "/");
+    if !state_raw.is_empty() && cmd.contains(&state_raw) {
+        return true;
+    }
+    if let Some(resolved) = resolve_lexical(state_dir) {
+        let state_norm = resolved.to_string_lossy().replace('\\', "/");
+        if !state_norm.is_empty() && cmd.contains(&state_norm) {
+            return true;
+        }
+    }
+    cmd.contains(".hz/state/kernel") || cmd.contains(".hzcode/kernel")
+}
+
 /// `.hz/MEMORY.md` (or legacy `.hzcode/MEMORY.md`) beside the kernel state tree.
 fn memory_manifest_path(state_dir: &Path) -> PathBuf {
     let parent = state_dir.parent().unwrap_or(state_dir);
@@ -1010,6 +1060,42 @@ mod tests {
         assert_ne!(decision.decision, "deny", "{}", decision.reason);
         assert!(!decision.reason.contains("kernel-state-protected"));
         let _ = fs::remove_dir_all(&workspace);
+        let _ = fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn shell_exec_naming_kernel_state_is_structurally_denied() {
+        let state = scratch("state-shell");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        let guard = Guard::new(&state);
+        let action = GuardAction {
+            kind: "shell.exec".to_string(),
+            target: format!("echo x > {}/policy.json", state.display()),
+        };
+        let decision = guard
+            .check(&action, Some("workspace"), &[], None)
+            .expect("check");
+        assert_eq!(decision.decision, "deny");
+        assert!(decision.reason.contains("kernel-state-protected"));
+
+        let relative = GuardAction {
+            kind: "shell.exec".to_string(),
+            target: "rm -rf .hz/state/kernel".to_string(),
+        };
+        let decision = guard
+            .check(&relative, Some("workspace"), &[], None)
+            .expect("check");
+        assert_eq!(decision.decision, "deny");
+        assert!(decision.reason.contains("kernel-state-protected"));
+
+        let ok = GuardAction {
+            kind: "shell.exec".to_string(),
+            target: "echo hello".to_string(),
+        };
+        let decision = guard
+            .check(&ok, Some("workspace"), &[], None)
+            .expect("check");
+        assert!(!decision.reason.contains("kernel-state-protected"));
         let _ = fs::remove_dir_all(&state);
     }
 }

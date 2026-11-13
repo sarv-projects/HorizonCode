@@ -24,19 +24,17 @@
 //!       silent `enforced`, NEVER silently unconfined (docs/11 S1/S2/S4/S5).
 //!
 //! THE FAIL-CLOSED RULE (docs/11 S1/S4, dsh SANDBOX_UNAVAILABLE). `read-only`
-//! and `workspace-write` REQUIRE kernel-enforced per-path FS confinement. This
-//! kernel has NO OS confinement backend: nothing ever applies a Landlock
-//! ruleset, seccomp filter, netns or rlimit to a spawned process (docs/28
-//! ruling 44). The ladder is a REPORTING/admission seam only. A dimension is
-//! therefore `enforced` ONLY when the host OFFERS the mechanism (capability
-//! detection) AND this kernel APPLIES it (`AppliedMechanisms`: process/resources/network
-//! via `hz-sandbox-exec`; filesystem still false until Landlock rulesets ship).
-//! Detection is reported separately (`available` per dimension, additive
-//! `hostCapabilities`) and is never converted into enforcement. A Landlock-
-//! capable host is reported exactly like a host without Landlock: a mode that
-//! DEMANDS FS enforcement yields `SANDBOX_UNAVAILABLE`, whose reason says
-//! whether the capability exists but is not applied. `danger-full-access`
-//! reports NO dimension enforced (S4).
+//! and `workspace-write` REQUIRE kernel-enforced per-path FS confinement.
+//! Enforcement for owned children is applied by the companion binary
+//! `hz-sandbox-exec` (seccomp + rlimits + userns/netns + Landlock FS via
+//! `HZ_SANDBOX_FS_ROOT` / `HZ_SANDBOX_FS_MODE`) when the host canary succeeds
+//! (docs/28 rulings 140–150). This module remains the REPORTING/admission seam:
+//! a dimension is `enforced` ONLY when the host OFFERS the mechanism
+//! (capability detection) AND `kernel_applied_mechanisms()` says this tree
+//! APPLIES it. Detection alone (`available` / `hostCapabilities`) is never
+//! converted into enforcement (ruling 51). When the helper/canary cannot
+//! confine FS, FS-demanding modes yield `SANDBOX_UNAVAILABLE` with a residual
+//! that names the gap. `danger-full-access` reports NO dimension enforced (S4).
 //!
 //! LAW reuse: nothing here invents a hash. Where a digest or canonical form is
 //! needed (`EnforcementReport::to_canonical_json`) it goes through
@@ -425,12 +423,16 @@ impl EnforcementOutcome {
                 mode,
                 reason,
                 host_capabilities,
-            } => json!({
-                "status": "sandbox_unavailable",
-                "mode": mode.as_str(),
-                "reason": reason,
-                "hostCapabilities": host_capabilities.to_json(),
-            }),
+            } => {
+                let mut obj = json!({
+                    "status": "sandbox_unavailable",
+                    "mode": mode.as_str(),
+                    "reason": reason,
+                    "hostCapabilities": host_capabilities.to_json(),
+                });
+                append_platform_notes(&mut obj);
+                obj
+            }
         }
     }
 
@@ -474,6 +476,7 @@ impl EnforcementReport {
                 .unwrap()
                 .insert("unavailableReason".to_string(), json!(reason));
         }
+        append_platform_notes(&mut obj);
         obj
     }
 
@@ -484,6 +487,33 @@ impl EnforcementReport {
             .iter()
             .any(|d| d.guarantee == Guarantee::Enforced)
     }
+}
+
+/// Additive honesty: never imply Seatbelt/macOS child_net on Linux builds (ruling 246).
+fn platform_honesty_notes() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            "Linux hz-sandbox-exec confinement is unavailable in macOS-target builds; never reported as enforced.".to_string(),
+            "Seatbelt / macOS child_net backends are not implemented; never reported as enforced.".to_string(),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![
+            "macOS Seatbelt and macOS child_net confinement are unavailable on Linux builds; never reported as enforced.".to_string(),
+        ]
+    }
+}
+
+fn append_platform_notes(obj: &mut Value) {
+    let notes = platform_honesty_notes();
+    if notes.is_empty() {
+        return;
+    }
+    obj.as_object_mut()
+        .unwrap()
+        .insert("platformNotes".to_string(), json!(notes));
 }
 
 /* -------------------------- capability detection --------------------------- */
@@ -1357,6 +1387,31 @@ mod tests {
             enforce(SandboxMode::ReadOnly, &caps_none(), &all_applied(), true),
             EnforcementOutcome::Unavailable { .. }
         ));
+    }
+
+    #[test]
+    fn platform_notes_on_wire_never_claim_macos_enforced() {
+        let report = match enforce(SandboxMode::DangerFullAccess, &caps_none(), &kernel_applied_mechanisms(), true) {
+            EnforcementOutcome::Report(r) => r,
+            other => panic!("expected a report, got {:?}", other),
+        };
+        let json = EnforcementOutcome::Report(report).to_json();
+        let notes = json["platformNotes"].as_array().expect("platformNotes");
+        assert!(
+            notes.iter().any(|n| n.as_str().unwrap_or("").contains("Seatbelt")),
+            "{}",
+            json
+        );
+        let joined = notes
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            !joined.contains("is enforced"),
+            "platformNotes must not claim enforcement: {}",
+            joined
+        );
     }
 
     #[test]

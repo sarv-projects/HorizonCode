@@ -57,34 +57,86 @@ function parseBody(
   }
 }
 
+const HARMONY_CALL_CLOSE = "<|call|>";
+
+function findHarmonyOpen(tail: string): number {
+  const a = tail.indexOf("<|start|>assistant");
+  const b = tail.indexOf("<|channel|>commentary");
+  if (a < 0 && b < 0) return -1;
+  if (a < 0) return b;
+  if (b < 0) return a;
+  return Math.min(a, b);
+}
+
+function parseHarmonyBlock(
+  block: string,
+  allowed: ReadonlySet<string>,
+  errors: string[],
+  calls: ParsedHarmonyToolCall[],
+): void {
+  CALL.lastIndex = 0;
+  let m = CALL.exec(block);
+  if (m) {
+    const name = normalizeName(m[1] || m[2]);
+    parseBody(name, m[3] ?? "", allowed, errors, calls);
+    return;
+  }
+  CALL_CHANNEL_FIRST.lastIndex = 0;
+  m = CALL_CHANNEL_FIRST.exec(block);
+  if (m) {
+    const name = normalizeName(m[1]);
+    parseBody(name, m[2] ?? "", allowed, errors, calls);
+    return;
+  }
+  errors.push("harmony tool block: malformed message");
+}
+
+/**
+ * Scan `buffer` from `fromIndex` for closed Harmony messages (`<|call|>`) only.
+ * Stops at the first incomplete opener (fail-closed for partial streams).
+ */
+export function drainCompleteHarmonyToolCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedHarmonyToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedHarmonyToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const tail = buffer.slice(i);
+    const relOpen = findHarmonyOpen(tail);
+    if (relOpen < 0) break;
+    const start = i + relOpen;
+    const closeIdx = buffer.indexOf(HARMONY_CALL_CLOSE, start);
+    if (closeIdx < 0) break;
+    const end = closeIdx + HARMONY_CALL_CLOSE.length;
+    parseHarmonyBlock(buffer.slice(start, end), allowed, errors, calls);
+    i = end;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse complete Harmony tool-call messages from assistant text. */
 export function parseHarmonyToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedHarmonyToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedHarmonyToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteHarmonyToolCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
-
-  CALL.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = CALL.exec(text)) !== null) {
-    consumed.push(m[0]);
-    const name = normalizeName(m[1] || m[2]);
-    parseBody(name, m[3] ?? "", allowed, errors, calls);
+  let scan = 0;
+  while (scan < nextIndex) {
+    const tail = text.slice(scan);
+    const relOpen = findHarmonyOpen(tail);
+    if (relOpen < 0) break;
+    const start = scan + relOpen;
+    const closeIdx = text.indexOf(HARMONY_CALL_CLOSE, start);
+    if (closeIdx < 0) break;
+    const end = closeIdx + HARMONY_CALL_CLOSE.length;
+    consumed.push(text.slice(start, end));
+    scan = end;
   }
-
-  // Channel-first form only when the full start-header form did not already match.
-  if (consumed.length === 0) {
-    CALL_CHANNEL_FIRST.lastIndex = 0;
-    while ((m = CALL_CHANNEL_FIRST.exec(text)) !== null) {
-      consumed.push(m[0]);
-      const name = normalizeName(m[1]);
-      parseBody(name, m[2] ?? "", allowed, errors, calls);
-    }
-  }
-
   for (const block of consumed) rest = rest.replace(block, "");
   return { calls, rest: rest.trim(), errors };
 }

@@ -11,8 +11,9 @@
  * accident.
  *
  * Handshake: `initialize` (a request) -> `notifications/initialized` (a
- * notification) -> `tools/list` (a request). The result of `tools/list` is the
- * server's claimed tool set; the registry decides what the model may see
+ * notification) -> paginated `tools/list` (cursor passthrough until
+ * `nextCursor` is absent). The merged list is the server's claimed tool set;
+ * the registry decides what the model may see
  * (R-tools-18/R-tools-19), this module only reports `annotations.readOnlyHint`
  * verbatim.
  *
@@ -42,6 +43,7 @@
 
 import { scrubEnv } from "../../tools/helpers";
 import { spawnOwned, type OwnedProc } from "../owned-spawn";
+import { listAllMcpResources, listAllMcpTools, mcpListRequestParams } from "./list-pagination";
 
 /** The MCP protocol revision this client announces (docs/09 §4.7, v1). */
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -149,6 +151,14 @@ function safeJson(value: unknown): string {
 }
 
 /* --------------------------------- types --------------------------------- */
+
+/** A server resource as `resources/list` reported it (claims only). */
+export interface McpResourceInfo {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
 
 /** A server tool as `tools/list` reported it (claims only — see R-tools-19). */
 export interface McpToolInfo {
@@ -444,8 +454,7 @@ export class McpClient implements McpToolCaller {
       throw new McpProtocolError(this.serverId, "initialize returned no object");
     }
     this.notify("notifications/initialized");
-    const listed = await this.request("tools/list", {}, deadline - Date.now());
-    const tools = parseToolsList(listed, this.serverId);
+    const tools = await this.listToolsForDiscovery(deadline);
     this.toolsValue = tools;
     return tools;
   }
@@ -539,12 +548,37 @@ export class McpClient implements McpToolCaller {
   private async refreshTools(): Promise<void> {
     if (this.stateValue !== "connected" || this.proc === undefined) return;
     try {
-      const listed = await this.request("tools/list", {}, this.connectTimeoutMs);
-      const tools = parseToolsList(listed, this.serverId);
+      const deadline = Date.now() + this.connectTimeoutMs;
+      const tools = await this.listToolsForDiscovery(deadline);
       this.emitTools(tools);
     } catch {
       /* a failed re-list leaves the previous list; the call path reports death */
     }
+  }
+
+  /** Paginated `tools/list` until `nextCursor` is absent (shared connect + re-list path). */
+  private async listToolsForDiscovery(deadline: number): Promise<McpToolInfo[]> {
+    return listAllMcpTools(
+      (cursor) => this.request("tools/list", mcpListRequestParams(cursor), deadline - Date.now()),
+      this.serverId,
+    );
+  }
+
+  /**
+   * Paginated `resources/list` until `nextCursor` is absent (discovery consumer;
+   * ruling 264). Fails when the transport is not connected.
+   */
+  async listResources(opts?: { timeoutMs?: number }): Promise<McpResourceInfo[]> {
+    if (this.stopping) throw new McpTransportError(this.serverId, "listResources: client was stopped");
+    if (this.stateValue !== "connected" || this.proc === undefined) {
+      throw new McpTransportError(this.serverId, "listResources: not connected");
+    }
+    const budget = opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : this.connectTimeoutMs;
+    const deadline = Date.now() + budget;
+    return listAllMcpResources(
+      (cursor) => this.request("resources/list", mcpListRequestParams(cursor), deadline - Date.now()),
+      this.serverId,
+    );
   }
 
   private settlePending(pending: PendingCall, message: Record<string, unknown>): void {
@@ -757,6 +791,29 @@ export class McpClient implements McpToolCaller {
 /* -------------------------------- parsing -------------------------------- */
 
 /** Map one `tools/list` result to the reduced tool shape; junk entries are skipped. */
+export function parseResourcesList(result: unknown, serverId: string): McpResourceInfo[] {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) {
+    throw new McpProtocolError(serverId, "resources/list returned no object");
+  }
+  const list = (result as { resources?: unknown }).resources;
+  if (!Array.isArray(list)) throw new McpProtocolError(serverId, "resources/list did not return a resources array");
+  const out: McpResourceInfo[] = [];
+  for (const item of list) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+    const raw = item as Record<string, unknown>;
+    const uri = typeof raw.uri === "string" ? raw.uri.trim() : "";
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (uri === "" || name === "") continue;
+    out.push({
+      uri,
+      name,
+      description: typeof raw.description === "string" ? raw.description : undefined,
+      mimeType: typeof raw.mimeType === "string" ? raw.mimeType : undefined,
+    });
+  }
+  return out;
+}
+
 export function parseToolsList(result: unknown, serverId: string): McpToolInfo[] {
   if (result === null || typeof result !== "object" || Array.isArray(result)) {
     throw new McpProtocolError(serverId, "tools/list returned no object");

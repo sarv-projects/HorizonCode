@@ -61,16 +61,22 @@
  *     reported skipped (`created`) instead of removed.
  *   - There is no cross-process lock (the journal's concurrency note applies
  *     verbatim: whole-record appends interleave safely, nothing else is
- *     guaranteed); labels are caller-supplied with no ranking; a checkpoint
- *     whose append failed is memory-only for this process.
+ *     guaranteed); labels default to the first 60 characters of the user turn;
+ *     a failed append retries once, then stays memory-only for this process
+ *     (`onAppendFailure` notice).
  */
 
 import { randomUUID } from "node:crypto";
 import { withFileLockSync } from "./file-lock";
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { appendJsonlSync } from "./jsonl-append";
 import * as path from "node:path";
 import { reloadFromDisk, type JournalEntry, type JournalLoad } from "../tools/change-journal";
 import { realpathish, workspaceStateDir } from "./paths";
+import {
+  requestWorkspaceSnapshotCapture,
+  type WorkspaceSnapshotScope,
+} from "./workspace-snapshot";
 
 /** One checkpoint, as persisted: the file is the contract, this is its shape. */
 export interface CheckpointRecord {
@@ -288,7 +294,7 @@ function appendRecordToDisk(file: string, record: unknown): void {
   ensureStateDir(path.dirname(file));
   // Cross-process: serialized against another process's append (file-lock.ts).
   withFileLockSync(`${file}.lock`, () => {
-    appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+    appendJsonlSync(file, JSON.stringify(record) + "\n");
     setOwnerOnly(file, 0o600);
   });
 }
@@ -610,6 +616,14 @@ export function rewindPlan(workspace: string, checkpointId: string): RewindPlan 
     restores,
     skipped,
   };
+}
+
+/**
+ * Turn-boundary snapshot scope guard (S-50). Message scope is `recordCheckpoint`;
+ * workspace scope refuses `SNAPSHOT_CAPTURE_UNAVAILABLE`.
+ */
+export function assertSnapshotCaptureScope(scope: WorkspaceSnapshotScope): void {
+  requestWorkspaceSnapshotCapture({ scope });
 }
 
 /**

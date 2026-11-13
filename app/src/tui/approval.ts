@@ -11,7 +11,9 @@ import * as core from "../core";
 import { SESSION_LEASE_TTL_MS } from "../core/loop";
 import type { KernelClient } from "../core/kernel";
 import { richDiff } from "./diff";
+import { formatApprovalAskAnnouncement, screenReaderMode } from "./a11y";
 import { approvalCard, type KeyAnswer } from "./approval-card";
+import { permissionAlwaysLines, permissionPresentationForRequest } from "./permission-presentation";
 import { createRenderer, diffBlock, previewOf, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, terminalWidth, truncate, yellow } from "./style";
 
@@ -139,7 +141,15 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     gateSessionId?: string,
   ): Promise<boolean> => {
     const kind = sanitizeText(req?.kind ?? "other") || "other";
-    const title = escapeInvisible(sanitizeText(req?.title)).replace(/\s+/g, " ").trim() || "this action";
+    const workspace =
+      ui.runtime !== undefined && "workspace" in ui.runtime && typeof (ui.runtime as { workspace?: string }).workspace === "string"
+        ? (ui.runtime as { workspace: string }).workspace
+        : undefined;
+    const presentation = permissionPresentationForRequest(req, workspace);
+    const title =
+      escapeInvisible(sanitizeText(presentation.title || req?.title))
+        .replace(/\s+/g, " ")
+        .trim() || "this action";
     // Titles stay tidy (whitespace collapsed). A shell.exec detail is the command
     // itself, shown verbatim so `cat 'a   b'` reads as it runs; invisible and
     // direction-changing Unicode is made visible as <U+XXXX> in every detail.
@@ -150,12 +160,24 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     const r = ui.renderer;
 
     if (!ui.interactive) {
-      r.notice(`approval requested (${kind}): ${title} \u2014 denied, no one is attached to say yes`);
+      const headlessTitle = escapeInvisible(sanitizeText(req?.title ?? "")).replace(/\s+/g, " ").trim() || title;
+      r.notice(`approval requested (${kind}): ${headlessTitle} \u2014 denied, no one is attached to say yes`);
       return false;
     }
 
     r.ensureLineStart();
     const keyMode = typeof ui.askKey === "function";
+    const tgt = typeof action?.target === "string" ? action.target : "";
+    const canAlways = tgt !== "" && !tgt.endsWith("*") && kind !== "other";
+    if (screenReaderMode()) {
+      r.line(
+        formatApprovalAskAnnouncement({
+          title,
+          detail: kind === "shell.exec" ? detail : detail || undefined,
+          canAlways: keyMode && canAlways,
+        }),
+      );
+    }
     const guardianLine =
       typeof req?.guardian === "string" && req.guardian !== ""
         ? escapeInvisible(sanitizeText(req.guardian)).replace(/\s+/g, " ").trim()
@@ -175,15 +197,19 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     let answer = "";
     try {
       if (keyMode) {
-        const tgt = typeof action?.target === "string" ? action.target : "";
         const lines = approvalCard({
           kind,
           title,
+          icon: presentation.icon,
+          presentationLines: presentation.lines,
           detail,
           guardian: guardianLine,
+          effectId: req.effectId,
+          leaseId: req.leaseId,
+          tool: req.tool,
           width: Math.min(terminalWidth(), 100),
           unicode: ui.unicode,
-          canAlways: tgt !== "" && !tgt.endsWith("*") && kind !== "other",
+          canAlways,
         });
         r.write("\n" + lines.join("\n") + "\n");
         answer = await (ui.askKey as NonNullable<ApprovalUi["askKey"]>)(lines);
@@ -210,8 +236,9 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
             : undefined;
       const remembered = await rememberAlways(ui, grantKind, target, { kernel, sessionId }, r);
       if (remembered) {
+        const hint = permissionAlwaysLines(grantKind, target).join(" ");
         r.notice(
-          `approved, and ${grantKind} is allowed for ${sanitizeText(target) || target} in this session for ${leaseMinutes()} minutes`,
+          `approved (${hint}) Grant lasts ${leaseMinutes()} minutes for this session.`,
         );
       } else {
         r.notice("approved (this time)");

@@ -6,7 +6,13 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { EventTypes } from "../../src/contracts";
-import { RESERVED_UNEMITTED_EVENT_TYPES, SHIPPED_EVENT_CATALOGUE } from "../../src/core/event-catalogue";
+import {
+  HZ_CANONICAL_EVENTS,
+  RESERVED_UNEMITTED_EVENT_TYPES,
+  SHIPPED_EVENT_CATALOGUE,
+  SHIPPED_TO_HZ_MAP,
+  unimplementedHzEvents,
+} from "../../src/core/event-catalogue";
 import { COMPACTION_EVENT } from "../../src/core/compaction";
 import { PENDING_TODOS_EVENT, UNVERIFIED_COMPLETION_EVENT } from "../../src/core/loop";
 
@@ -40,9 +46,9 @@ function collectEmittedTypes(sources: string[]): Set<string> {
 }
 
 describe("shipped event catalogue", () => {
-  test("catalogue matches the handoff list (20 types)", () => {
-    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(20);
-    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(20);
+  test("catalogue matches the handoff list (23 types)", () => {
+    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(23);
+    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(23);
   });
 
   test("reserved message.delta is not in the shipped catalogue", () => {
@@ -63,3 +69,32 @@ describe("shipped event catalogue", () => {
     expect(missing).toEqual([]);
   });
 });
+
+describe("RC-18 shipped → hz.* mapping", () => {
+  test("canonical catalogue is exactly 44 names", () => {
+    expect(HZ_CANONICAL_EVENTS).toHaveLength(44);
+    expect(new Set(HZ_CANONICAL_EVENTS).size).toBe(44);
+  });
+
+  test("every shipped type has exactly one map row", () => {
+    expect(SHIPPED_TO_HZ_MAP.map((r) => r.shipped).sort()).toEqual([...SHIPPED_EVENT_CATALOGUE].sort());
+  });
+
+  test("every mapped hz name is in the canonical 44", () => {
+    const allowed = new Set(HZ_CANONICAL_EVENTS);
+    const bad: string[] = [];
+    for (const row of SHIPPED_TO_HZ_MAP) {
+      for (const h of row.hz) if (!allowed.has(h)) bad.push(h);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  test("unimplementedHzEvents excludes covered names", () => {
+    const unimplemented = new Set(unimplementedHzEvents());
+    for (const row of SHIPPED_TO_HZ_MAP) {
+      for (const h of row.hz) expect(unimplemented.has(h)).toBe(false);
+    }
+    expect(unimplemented.size).toBeGreaterThan(0);
+  });
+});
+

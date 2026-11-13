@@ -19,6 +19,7 @@ import { GuardGate, pathInsideWorkspace, runTurn } from "../../src/core/loop";
 import { workspaceStateDir } from "../../src/core/paths";
 import {
   isBypassName,
+  meetPermissionMode,
   modeAutoApproves,
   modeRefusal,
   parsePermissionMode,
@@ -196,6 +197,20 @@ describe("default and plan", () => {
     await run("plan", oneCall("write", { path: target, content: "x\n" }));
     expect(existsSync(target)).toBe(false);
   });
+
+  const SHELL_ALLOW: Rule[] = [{ kind: "shell.exec", scope: "*", decision: "allow" }];
+
+  test("plan mode: mutating shell refused by command-guard", async () => {
+    const { toolOutput, asked } = await run("plan", oneCall("shell", { command: "sed -i 's/a/b/' x.txt" }), SHELL_ALLOW);
+    expect(toolOutput).toContain("plan mode: shell refused");
+    expect(asked).toHaveLength(0);
+  });
+
+  test("plan mode: investigative shell is not wholesale refused", async () => {
+    const { toolOutput } = await run("plan", oneCall("shell", { command: "pwd" }), SHELL_ALLOW);
+    expect(toolOutput).not.toContain("commands are not run while planning");
+    expect(toolOutput).not.toContain("plan mode: shell refused");
+  });
 });
 
 describe("policy functions", () => {
@@ -361,5 +376,11 @@ describe("review fixes", () => {
   test("plan mode: the agent tool is refused, so no child can be looser than the plan", async () => {
     const r = await run("plan", oneCall("agent", { task: "write a file", profile: "code" }));
     expect(r.toolOutput).toContain("subagents are not spawned while planning");
+  });
+
+  test("meetPermissionMode picks the narrower posture", () => {
+    expect(meetPermissionMode("accept-edits", "read-only")).toBe("read-only");
+    expect(meetPermissionMode("default", "plan")).toBe("plan");
+    expect(meetPermissionMode(undefined, "accept-edits")).toBe("default");
   });
 });

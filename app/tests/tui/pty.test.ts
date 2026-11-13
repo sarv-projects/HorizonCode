@@ -8,6 +8,11 @@
  * Each step waits for the line it expects before typing the next one, so the
  * transcript is judged in order even though a pty interleaves the echo of what
  * was typed with what the app prints.
+ *
+ * docs/13 D12: full render-probe / VT grid harness is still deferred. Hermetic
+ * coverage here (scrollback chat) and in `fullscreen-experimental.test.ts`
+ * (alt-screen). When util-linux `script` is absent, PTY cases register as
+ * `test.skip` with an explicit reason — not failures.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -75,6 +80,7 @@ if (!SCRIPT) {
   test.skip("chat bar: /model, /files and an unknown command (needs util-linux `script`)", () => {});
   test.skip("chat bar: a human denies once and approves the next time (needs util-linux `script`)", () => {});
   test.skip("chat bar: /context reports the window and the estimated input (needs util-linux `script`)", () => {});
+  test.skip("scrollback: HZ_REDUCE_MOTION completes a mock turn (needs util-linux `script`)", () => {});
 } else {
   test(
     "prints the banner, answers a line, shows /help, then leaves on Ctrl-D with exit 0",
@@ -220,6 +226,26 @@ if (!SCRIPT) {
       // the refusal came first, the real listing only after the yes
       expect(out.indexOf("DECLINED by the user")).toBeLessThan(out.indexOf("ok: alpha.txt"));
       expect(out).toContain("\u23fa glob(");
+    },
+    PTY_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "scrollback: HZ_REDUCE_MOTION completes a mock turn",
+    async () => {
+      const ws = pool.make();
+      const proc = startChat(ws, { HZ_REDUCE_MOTION: "1" });
+
+      proc.write("hello\n");
+      expect(await waitFor(proc, MOCK_GREETING)).toBe(true);
+
+      proc.write("/exit\n");
+      const run = await proc.done;
+      const out = flatten(run.stdout);
+
+      expect(run.timedOut).toBe(false);
+      expect(run.code).toBe(0);
+      expect(out).toContain(MOCK_GREETING);
     },
     PTY_TIMEOUT_MS + 5_000,
   );

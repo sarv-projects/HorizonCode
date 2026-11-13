@@ -101,9 +101,20 @@ import {
   loadProposals,
   type StoredProposalRow,
 } from "./core/curator";
+import {
+  assertSafeMemoryBankNotePath,
+  curatorApplyEnabled,
+  ensureMemoryBankNotesDir,
+  memoryBankNoteContentDigest,
+  memoryBankNotePath,
+  mergeMemoryBankNoteAppend,
+  readMemoryBankNoteText,
+  type CuratorApplyError,
+} from "./core/curator-apply";
 import { KernelClient } from "./core/kernel";
 import { scopeFor } from "./core/loop";
 import { writeDreamPlan } from "./core/memory/dream";
+import { memoryDreamConsolidationEnabled, runDreamConsolidation } from "./core/memory/dream-consolidation";
 import { kernelStateDir, workspaceStateDir } from "./core/paths";
 import { loadPostmortems, postmortemPath, type PostmortemRecord } from "./core/postmortem";
 import { TITLE_MAX_CHARS, type ReviewProposalV1 } from "./core/review";
@@ -542,6 +553,15 @@ function growToolContext(kernel: KernelClient, workspace: string): ToolContext {
   };
 }
 
+function printCuratorApplyRefusal(io: GrowCliIo, err: unknown): void {
+  const reason = (err as CuratorApplyError | null)?.reason;
+  if (reason === "path-escape" || reason === "invalid-target") {
+    io.err(`refused: ${errorMessage(err)}`);
+    return;
+  }
+  io.err(errorMessage(err));
+}
+
 async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idArg: string, yes: boolean): Promise<number> {
   let load: ReturnType<typeof loadProposals>;
   try {
@@ -561,25 +581,66 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
   }
   const row = found.row;
   const id = row.digest;
-  const target = libraryEntryPath(stateDir, row);
-  const content = libraryEntryContent(row);
-  const rel = path.relative(workspace, target) || target;
+  const bankApply = curatorApplyEnabled() && row.kind === "memory";
+  if (curatorApplyEnabled() && row.kind !== "memory") {
+    io.err(
+      "refused: HZ_CURATOR_APPLY=1 allows memory bank note apply only; unset it to apply skill/prompt library entries via grow",
+    );
+    return 3;
+  }
+
+  let target: string;
+  let content: string;
+  let rel: string;
+  if (bankApply) {
+    try {
+      target = memoryBankNotePath(workspace, row);
+      assertSafeMemoryBankNotePath(workspace, target);
+      ensureMemoryBankNotesDir(workspace);
+      const prior = readMemoryBankNoteText(target);
+      const merged = mergeMemoryBankNoteAppend(prior, row);
+      if (merged === null) {
+        content = prior ?? "";
+      } else {
+        content = merged;
+      }
+      rel = path.relative(workspace, target) || target;
+    } catch (err) {
+      printCuratorApplyRefusal(io, err);
+      return 3;
+    }
+  } else {
+    target = libraryEntryPath(stateDir, row);
+    content = libraryEntryContent(row);
+    rel = path.relative(workspace, target) || target;
+  }
 
   if (!yes) {
     io.out(`grow --apply ${id} (dry run; pass --yes to write)`);
+    if (bankApply) io.out("mode: memory bank note append (HZ_CURATOR_APPLY=1)");
     io.out(`proposal ${id} · ${row.kind} · "${oneLine(row.title)}" · created ${row.createdAt}`);
     io.out("body:");
     for (const line of row.body.split("\n")) io.out(`  ${line}`);
     io.out(`evidence: ${row.evidence.join(", ")}`);
     io.out(`reads: ${row.reads.length > 0 ? row.reads.join(", ") : "(none)"}`);
     io.out(`intended write: ${target}`);
-    const existing = await readExistingText(target);
-    if (existing.unreadable) {
-      io.out("the target exists and its bytes are not restorable text; --yes would refuse it");
-    } else {
-      const diff = simpleUnifiedDiff(existing.text, content, rel);
-      if (diff === "") io.out("the target already holds exactly this content");
-      else io.out(diff.replace(/\n$/, ""));
+    try {
+      const existing =
+        bankApply && curatorApplyEnabled()
+          ? { text: readMemoryBankNoteText(target), unreadable: false as const }
+          : await readExistingText(target);
+      if (bankApply && existing.text !== null && mergeMemoryBankNoteAppend(existing.text, row) === null) {
+        io.out("would be a no-op: this proposal is already recorded in the bank note");
+      } else if (existing.unreadable) {
+        io.out("the target exists and its bytes are not restorable text; --yes would refuse it");
+      } else {
+        const diff = simpleUnifiedDiff(existing.text, content, rel);
+        if (diff === "") io.out("the target already holds exactly this content");
+        else io.out(diff.replace(/\n$/, ""));
+      }
+    } catch (err) {
+      printCuratorApplyRefusal(io, err);
+      return 2;
     }
     return 2;
   }
@@ -598,13 +659,32 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
     return 0;
   }
 
-  const existing = await readExistingText(target);
-  if (existing.unreadable) {
-    io.err(
-      `refused: ${target} exists and its bytes are not restorable UTF-8 text; ` +
-        `refusing to replace bytes the proposal did not produce`,
-    );
-    return 3;
+  let existingText: string | null;
+  let existingUnreadable = false;
+  if (bankApply) {
+    try {
+      existingText = readMemoryBankNoteText(target);
+    } catch (err) {
+      printCuratorApplyRefusal(io, err);
+      return 3;
+    }
+    const merged = mergeMemoryBankNoteAppend(existingText, row);
+    if (merged === null) {
+      io.out(`already recorded: proposal ${id} is present in ${rel}`);
+      return 0;
+    }
+    content = merged;
+  } else {
+    const existing = await readExistingText(target);
+    if (existing.unreadable) {
+      io.err(
+        `refused: ${target} exists and its bytes are not restorable UTF-8 text; ` +
+          `refusing to replace bytes the proposal did not produce`,
+      );
+      return 3;
+    }
+    existingText = existing.text;
+    existingUnreadable = existing.unreadable;
   }
 
   const kernel = new KernelClient({ workspace });
@@ -639,9 +719,9 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
     recordChange(ctx.sessionId, {
       path: target,
       rel,
-      before: existing.text,
-      ...(existing.unreadable ? { beforeUnreadable: true } : {}),
-      afterSha256: sha256Hex(content),
+      before: existingText,
+      ...(existingUnreadable ? { beforeUnreadable: true } : {}),
+      afterSha256: bankApply ? memoryBankNoteContentDigest(content) : sha256Hex(content),
       at: Date.now(),
       tool: "write",
     });
@@ -730,6 +810,17 @@ export async function runGrowCli(argv: readonly string[], io: GrowCliIo = DEFAUL
       `grow --dream: wrote ${result.planPath}` +
         (result.empty ? " (empty — no facts)" : ` (${result.factCount} fact(s); not applied)`),
     );
+    if (memoryDreamConsolidationEnabled()) {
+      const consolidation = runDreamConsolidation(workspace, { dryRun: false });
+      if (consolidation.noop) {
+        io.out(`grow --dream: memory/dream.md unchanged (${consolidation.skippedDuplicate} duplicate snippet(s))`);
+      } else {
+        io.out(
+          `grow --dream: appended ${consolidation.appended} snippet(s) to ${consolidation.dreamPath}` +
+            (consolidation.skippedDuplicate > 0 ? ` (${consolidation.skippedDuplicate} duplicate(s) skipped)` : ""),
+        );
+      }
+    }
     return 0;
   }
   return runApply(io, workspace, stateDir, applyId as string, argv.includes("--yes"));

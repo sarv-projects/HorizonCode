@@ -14,8 +14,11 @@ export interface ParsedKimiToolCall {
   callId?: string;
 }
 
+const KIMI_CALL_OPEN = /<\|(?:redacted_)?tool_call_begin(?:_kimi)?\|>/i;
+const KIMI_ARG_BEGIN = /<\|(?:redacted_)?tool_call_argument_begin\|>/i;
+const KIMI_CALL_CLOSE = /<\|(?:redacted_)?tool_call_end(?:_kimi)?\|>/i;
 const CALL =
-  /<\|tool_call_begin\|>\s*([^<]+?)\s*<\|tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/gi;
+  /<\|(?:redacted_)?tool_call_begin(?:_kimi)?\|>\s*([^<]+?)\s*<\|(?:redacted_)?tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|(?:redacted_)?tool_call_end(?:_kimi)?\|>/gi;
 
 function nameFromId(id: string): string {
   const trimmed = id.trim();
@@ -26,45 +29,80 @@ function nameFromId(id: string): string {
   return trimmed.split(":")[0] ?? "";
 }
 
+function parseKimiPayload(
+  callId: string,
+  rawArgs: string,
+  allowed: ReadonlySet<string>,
+): { call?: ParsedKimiToolCall; error?: string } {
+  const name = nameFromId(callId);
+  if (name === "" || !allowed.has(name)) {
+    return { error: `kimi tool block: unknown or missing tool ${JSON.stringify(name)}` };
+  }
+  const trimmed = rawArgs.trim();
+  if (trimmed === "") return { call: { name, args: {}, callId } };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { call: { name, args: parsed as Record<string, unknown>, callId } };
+    }
+    return { error: `kimi tool ${name}: arguments must be a JSON object` };
+  } catch {
+    return { error: `kimi tool ${name}: arguments are not valid JSON` };
+  }
+}
+
+/**
+ * Scan `buffer` from `fromIndex` for closed Kimi tool-call sections only.
+ * Stops at the first incomplete marker (fail-closed for partial streams).
+ */
+export function drainCompleteKimiToolCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedKimiToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedKimiToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const tail = buffer.slice(i);
+    const openMatch = KIMI_CALL_OPEN.exec(tail);
+    if (!openMatch) break;
+    const afterOpen = i + openMatch.index + openMatch[0].length;
+    const mid = buffer.slice(afterOpen);
+    const argMatch = KIMI_ARG_BEGIN.exec(mid);
+    if (!argMatch) break;
+    const callId = mid.slice(0, argMatch.index).trim();
+    const afterArg = afterOpen + argMatch.index + argMatch[0].length;
+    const closeTail = buffer.slice(afterArg);
+    const closeMatch = KIMI_CALL_CLOSE.exec(closeTail);
+    if (!closeMatch) break;
+    const rawArgs = closeTail.slice(0, closeMatch.index);
+    const closeEnd = afterArg + closeMatch.index + closeMatch[0].length;
+    const parsed = parseKimiPayload(callId, rawArgs, allowed);
+    if (parsed.error) errors.push(parsed.error);
+    else if (parsed.call) calls.push(parsed.call);
+    i = closeEnd;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse complete Kimi tool-call blocks from assistant text. */
 export function parseKimiToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedKimiToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedKimiToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteKimiToolCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
   CALL.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = CALL.exec(text)) !== null) {
+  while ((m = CALL.exec(text.slice(0, nextIndex))) !== null) {
     consumed.push(m[0]);
-    const callId = m[1].trim();
-    const name = nameFromId(callId);
-    if (name === "" || !allowed.has(name)) {
-      errors.push(`kimi tool block: unknown or missing tool ${JSON.stringify(name)}`);
-      continue;
-    }
-    const rawArgs = m[2].trim();
-    if (rawArgs === "") {
-      calls.push({ name, args: {}, callId });
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(rawArgs);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        calls.push({ name, args: parsed as Record<string, unknown>, callId });
-      } else {
-        errors.push(`kimi tool ${name}: arguments must be a JSON object`);
-      }
-    } catch {
-      errors.push(`kimi tool ${name}: arguments are not valid JSON`);
-    }
   }
   for (const block of consumed) rest = rest.replace(block, "");
   rest = rest
-    .replace(/<\|tool_calls_section_begin\|>/g, "")
-    .replace(/<\|tool_calls_section_end\|>/g, "")
+    .replace(/<\|(?:redacted_)?tool_calls_section_begin\|>/g, "")
+    .replace(/<\|(?:redacted_)?tool_calls_section_end\|>/g, "")
     .trim();
   return { calls, rest, errors };
 }

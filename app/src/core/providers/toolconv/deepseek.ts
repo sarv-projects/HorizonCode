@@ -30,39 +30,72 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function parseDeepseekCallPayload(
+  name: string,
+  rawArgs: string,
+  allowed: ReadonlySet<string>,
+): { call?: ParsedDeepseekToolCall; error?: string } {
+  if (name === "" || !allowed.has(name)) {
+    return { error: `deepseek tool block: unknown or missing tool ${JSON.stringify(name)}` };
+  }
+  const trimmed = rawArgs.trim();
+  if (trimmed === "") return { call: { name, args: {} } };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { call: { name, args: parsed as Record<string, unknown> } };
+    }
+    return { error: `deepseek tool ${name}: arguments must be a JSON object` };
+  } catch {
+    return { error: `deepseek tool ${name}: arguments are not valid JSON` };
+  }
+}
+
+/**
+ * Scan `buffer` from `fromIndex` for closed DeepSeek tool-call blocks only.
+ * Stops at the first incomplete marker sequence (fail-closed for partial streams).
+ */
+export function drainCompleteDeepseekToolCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedDeepseekToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedDeepseekToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const tail = buffer.slice(i);
+    const openRel = tail.indexOf(DS_TOOL_CALL_BEGIN);
+    if (openRel < 0) break;
+    const afterBegin = i + openRel + DS_TOOL_CALL_BEGIN.length;
+    const sepRel = buffer.indexOf(DS_TOOL_SEP, afterBegin);
+    if (sepRel < 0) break;
+    const afterSep = sepRel + DS_TOOL_SEP.length;
+    const endRel = buffer.indexOf(DS_TOOL_CALL_END, afterSep);
+    if (endRel < 0) break;
+    const closeEnd = endRel + DS_TOOL_CALL_END.length;
+    const name = buffer.slice(afterBegin, sepRel).trim();
+    const rawArgs = buffer.slice(afterSep, endRel);
+    const parsed = parseDeepseekCallPayload(name, rawArgs, allowed);
+    if (parsed.error) errors.push(parsed.error);
+    else if (parsed.call) calls.push(parsed.call);
+    i = closeEnd;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse complete DeepSeek V3.1 tool-call blocks from assistant text. */
 export function parseDeepseekToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedDeepseekToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedDeepseekToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteDeepseekToolCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
   CALL.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = CALL.exec(text)) !== null) {
+  while ((m = CALL.exec(text.slice(0, nextIndex))) !== null) {
     consumed.push(m[0]);
-    const name = m[1].trim();
-    if (name === "" || !allowed.has(name)) {
-      errors.push(`deepseek tool block: unknown or missing tool ${JSON.stringify(name)}`);
-      continue;
-    }
-    const rawArgs = m[2].trim();
-    if (rawArgs === "") {
-      calls.push({ name, args: {} });
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(rawArgs);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        calls.push({ name, args: parsed as Record<string, unknown> });
-      } else {
-        errors.push(`deepseek tool ${name}: arguments must be a JSON object`);
-      }
-    } catch {
-      errors.push(`deepseek tool ${name}: arguments are not valid JSON`);
-    }
   }
   for (const block of consumed) rest = rest.replace(block, "");
   rest = rest.replaceAll(DS_TOOL_CALLS_BEGIN, "").replaceAll(DS_TOOL_CALLS_END, "").trim();

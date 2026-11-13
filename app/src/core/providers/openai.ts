@@ -8,7 +8,10 @@
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
 import { applyQuirks } from "./quirks";
+import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { maybeDumpProviderRequest } from "./request-dump";
+import { textFromOpenAiDeltaContent } from "./openai-delta-content";
+import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 
@@ -120,27 +123,31 @@ export async function* streamOpenAiCompatible(
 ): AsyncIterable<ProviderEvent> {
   const name = settings.name;
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const messages = toOpenAiMessages(req.messages ?? []);
+  const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
+  const messages = toOpenAiMessages(wire.messages ?? []);
   if (messages.length === 0) {
-    yield { type: "error", message: `${name}: nothing to send (no messages)` };
+    yield { type: "error", message: `${name}: nothing to send (no messages)`, code: "UNKNOWN" };
     return;
   }
 
   const body: Record<string, unknown> = {
-    model: req.model,
+    model: wire.model,
     messages,
     stream: true,
     stream_options: { include_usage: true },
   };
-  if (typeof req.system === "string" && req.system !== "") {
-    body.messages = [{ role: "system", content: req.system }, ...messages];
+  if (typeof wire.system === "string" && wire.system !== "") {
+    body.messages = [{ role: "system", content: wire.system }, ...messages];
   }
-  if (Array.isArray(req.tools) && req.tools.length > 0) body.tools = toOpenAiTools(req.tools);
-  if (req.maxTokens && req.maxTokens > 0) body.max_tokens = req.maxTokens;
+  if (Array.isArray(wire.tools) && wire.tools.length > 0) body.tools = toOpenAiTools(wire.tools);
+  if (wire.maxTokens && wire.maxTokens > 0) body.max_tokens = wire.maxTokens;
   else if (settings.maxTokens && settings.maxTokens > 0) body.max_tokens = settings.maxTokens;
   else body.max_tokens = DEFAULT_MAX_TOKENS;
+  if (typeof wire.reasoningEffort === "string" && wire.reasoningEffort.trim() !== "") {
+    body.reasoning_effort = wire.reasoningEffort.trim();
+  }
 
-  const quirksApplied = applyQuirks({ provider: name, model: req.model, baseUrl }, body);
+  const quirksApplied = applyQuirks({ provider: name, model: wire.model, baseUrl }, body);
   if (quirksApplied.length > 0) yield { type: "quirks", applied: quirksApplied };
   maybeDumpProviderRequest(name, body);
 
@@ -177,7 +184,7 @@ export async function* streamOpenAiCompatible(
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `${name} request failed: ${errorText(err)}` };
+    yield { type: "error", message: `${name} request failed: ${errorText(err)}`, code: "TRANSIENT" };
     return;
   }
   for (const message of retries) yield { type: "notice", message };
@@ -200,7 +207,7 @@ export async function* streamOpenAiCompatible(
           yield { type: "done", stopReason: "abort" };
           return;
         }
-        yield { type: "error", message: `${name} request failed: ${errorText(err)}` };
+        yield { type: "error", message: `${name} request failed: ${errorText(err)}`, code: "TRANSIENT" };
         return;
       }
     }
@@ -208,17 +215,27 @@ export async function* streamOpenAiCompatible(
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    yield { type: "error", message: `${name} HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
+    const code = classifyProviderFailure(response.status, detail);
+    yield {
+      type: "error",
+      message: `${name} HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}`,
+      code,
+    };
     return;
   }
   if (!response.body) {
-    yield { type: "error", message: `${name} returned an empty response body` };
+    yield { type: "error", message: `${name} returned an empty response body`, code: "EMPTY_RESPONSE" };
     return;
   }
 
   let finish: unknown;
   let aborted = false;
-  let usage: { inputTokens?: number; outputTokens?: number } | undefined;
+  let usage: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  } | undefined;
   const partials = new Map<number, { id: string; name: string; args: string }>();
 
   try {
@@ -241,9 +258,22 @@ export async function* streamOpenAiCompatible(
         return;
       }
       if (event.usage && typeof event.usage === "object") {
+        const u = event.usage as Record<string, unknown>;
+        const details =
+          u.prompt_tokens_details && typeof u.prompt_tokens_details === "object"
+            ? (u.prompt_tokens_details as Record<string, unknown>)
+            : undefined;
         usage = {
-          inputTokens: typeof event.usage.prompt_tokens === "number" ? event.usage.prompt_tokens : undefined,
-          outputTokens: typeof event.usage.completion_tokens === "number" ? event.usage.completion_tokens : undefined,
+          inputTokens: typeof u.prompt_tokens === "number" ? u.prompt_tokens : undefined,
+          outputTokens: typeof u.completion_tokens === "number" ? u.completion_tokens : undefined,
+          cacheCreationInputTokens:
+            typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : undefined,
+          cacheReadInputTokens:
+            typeof details?.cached_tokens === "number"
+              ? details.cached_tokens
+              : typeof u.cache_read_input_tokens === "number"
+                ? u.cache_read_input_tokens
+                : undefined,
         };
       }
       const choice = Array.isArray(event.choices) ? event.choices[0] : undefined;
@@ -251,9 +281,8 @@ export async function* streamOpenAiCompatible(
       const delta = choice.delta ?? {};
       const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === "string" ? delta.reasoning : "";
       if (reasoning !== "") yield { type: "thinking", text: reasoning };
-      if (typeof delta.content === "string" && delta.content !== "") {
-        yield { type: "text", text: delta.content };
-      }
+      const text = textFromOpenAiDeltaContent(delta.content);
+      if (text !== "") yield { type: "text", text };
       const deltas: OpenAiToolCallDelta[] = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
       for (const call of deltas) {
         const index = typeof call.index === "number" ? call.index : 0;

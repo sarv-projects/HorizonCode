@@ -121,14 +121,21 @@ function levenshtein(a: string, b: string): number {
   return prev[b.length] as number;
 }
 
+/** Bun apply_patch rung (4) — mirrored on kernel path in `apply-patch-kernel-fuzz.ts`. */
+export const APPLY_PATCH_LEVENSHTEIN_THRESHOLD = 0.66;
+
 /** Similarity in [0,1]: 1 - distance / max(len). Two empty strings are identical. */
-function similarity(a: string, b: string): number {
+export function applyPatchBlockSimilarity(a: string, b: string): number {
   const max = Math.max(a.length, b.length);
   if (max === 0) return 1;
   return 1 - levenshtein(a, b) / max;
 }
 
-const SIMILARITY_THRESHOLD = 0.66;
+function similarity(a: string, b: string): number {
+  return applyPatchBlockSimilarity(a, b);
+}
+
+const SIMILARITY_THRESHOLD = APPLY_PATCH_LEVENSHTEIN_THRESHOLD;
 
 interface MatchResult {
   /** The 0-based line index where the window matched. */

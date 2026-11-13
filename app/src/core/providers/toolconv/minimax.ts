@@ -12,6 +12,8 @@ export interface ParsedMinimaxToolCall {
   args: Record<string, unknown>;
 }
 
+const INVOKE_OPEN = /<invoke\s+name="([^"]+)"\s*>/i;
+const INVOKE_CLOSE = /<\/invoke>/i;
 const INVOKE =
   /<invoke\s+name="([^"]+)"\s*>([\s\S]*?)<\/invoke>/gi;
 const PARAM =
@@ -49,25 +51,51 @@ function parseInvokeBody(inner: string): Record<string, unknown> {
   return args;
 }
 
+/**
+ * Scan `buffer` from `fromIndex` for closed `<invoke>` blocks only.
+ * Stops at the first incomplete open tag (fail-closed for partial streams).
+ */
+export function drainCompleteMinimaxInvokeCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedMinimaxToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedMinimaxToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const tail = buffer.slice(i);
+    const openMatch = INVOKE_OPEN.exec(tail);
+    if (!openMatch) break;
+    const name = openMatch[1].trim();
+    const afterOpen = i + openMatch.index + openMatch[0].length;
+    const closeTail = buffer.slice(afterOpen);
+    const closeMatch = INVOKE_CLOSE.exec(closeTail);
+    if (!closeMatch) break;
+    const inner = closeTail.slice(0, closeMatch.index);
+    const closeEnd = afterOpen + closeMatch.index + closeMatch[0].length;
+    if (name === "" || !allowed.has(name)) {
+      errors.push(`minimax tool block: unknown or missing tool ${JSON.stringify(name)}`);
+    } else {
+      calls.push({ name, args: parseInvokeBody(inner) });
+    }
+    i = closeEnd;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse MiniMax invoke blocks (with or without the namespaced envelope). */
 export function parseMinimaxToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedMinimaxToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedMinimaxToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteMinimaxInvokeCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
   INVOKE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = INVOKE.exec(text)) !== null) {
+  while ((m = INVOKE.exec(text.slice(0, nextIndex))) !== null) {
     consumed.push(m[0]);
-    const name = m[1].trim();
-    if (name === "" || !allowed.has(name)) {
-      errors.push(`minimax tool block: unknown or missing tool ${JSON.stringify(name)}`);
-      continue;
-    }
-    calls.push({ name, args: parseInvokeBody(m[2]) });
   }
   for (const block of consumed) rest = rest.replace(block, "");
   rest = rest

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { EnforcementOutcome } from "../../src/contracts";
@@ -8,7 +8,8 @@ import {
   sandboxFsModeFor,
   SANDBOX_AUTO_LABELS,
 } from "../../src/core/sandbox-spawn";
-import { kernelStateDir, readSpawnLedger, spawnOwned } from "../../src/core/owned-spawn";
+import { kernelStateDir, readSpawnLedger, sandboxHookWriteDenyRoPaths, spawnOwned } from "../../src/core/owned-spawn";
+import { workspaceHooksFile } from "../../src/core/trust";
 import type { KernelClient } from "../../src/core/kernel";
 
 const enforcedReport: EnforcementOutcome = {
@@ -76,7 +77,83 @@ describe("kernelEnforcesProcessSandbox", () => {
   });
 });
 
+describe("sandboxHookWriteDenyRoPaths", () => {
+  test("includes kernel state and workspace hooks.json when present", () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-ro-paths-"));
+    try {
+      const stateDir = kernelStateDir(workspace);
+      mkdirSync(path.dirname(workspaceHooksFile(workspace)), { recursive: true });
+      writeFileSync(workspaceHooksFile(workspace), "{}");
+      const ro = sandboxHookWriteDenyRoPaths(workspace, stateDir);
+      expect(ro).toContain(path.resolve(stateDir));
+      expect(ro).toContain(path.resolve(workspaceHooksFile(workspace)));
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("spawnOwned auto sandbox wrap", () => {
+  test("passes bridge HTTP_PROXY to wrapped children when HZ_EGRESS_NETNS_PROXY_ROUTED=1 (317)", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-sbx-routed-"));
+    const binDir = mkdtempSync(path.join(tmpdir(), "hz-sbx-exec-routed-"));
+    const bin = path.join(binDir, "hz-sandbox-exec");
+    writeFileSync(bin, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n", { mode: 0o755 });
+    const prev = { ...process.env };
+    process.env = {
+      ...prev,
+      HZ_SANDBOX_EXEC: "1",
+      HZ_SANDBOX_EXEC_BIN: bin,
+      HZ_SANDBOX_NETNS: "1",
+      HZ_EGRESS_NETNS_PROXY_ROUTED: "1",
+      HZ_EGRESS_NETNS_BRIDGE_HOST: "10.199.0.1",
+      HZ_EGRESS_PROXY: "http://127.0.0.1:4317",
+    };
+    try {
+      const stateDir = kernelStateDir(workspace);
+      const { proc } = await spawnOwned(["sh", "-c", 'echo -n "$HTTP_PROXY"'], {
+        stateDir,
+        label: "shell",
+        sandboxWrap: true,
+        stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+        longLived: false,
+      });
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      expect(out).toBe("http://10.199.0.1:4317");
+    } finally {
+      process.env = prev;
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("passes HZ_SANDBOX_CHILD_NET=off on wrapped children when parent env requests", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-sbx-net-"));
+    const binDir = mkdtempSync(path.join(tmpdir(), "hz-sbx-exec-net-"));
+    const bin = path.join(binDir, "hz-sandbox-exec");
+    writeFileSync(bin, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n", { mode: 0o755 });
+    const prev = { ...process.env };
+    process.env = { ...prev, HZ_SANDBOX_EXEC: "1", HZ_SANDBOX_EXEC_BIN: bin, HZ_SANDBOX_CHILD_NET: "off" };
+    try {
+      const stateDir = kernelStateDir(workspace);
+      const { proc } = await spawnOwned(["sh", "-c", 'echo -n "$HZ_SANDBOX_CHILD_NET"'], {
+        stateDir,
+        label: "shell",
+        sandboxWrap: true,
+        stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+        longLived: false,
+      });
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      expect(out).toBe("off");
+    } finally {
+      process.env = prev;
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   test("wraps shell argv when kernel reports process enforced", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "hz-sbx-wrap-"));
     const binDir = mkdtempSync(path.join(tmpdir(), "hz-sbx-exec-"));

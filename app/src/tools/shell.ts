@@ -2,11 +2,15 @@
 
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
-import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
+import { kernelStateDir } from "../core/owned-spawn";
+import { getExecutionCapability } from "../core/execution-capability";
 import { sha256Hex } from "../core/canon";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
+import { shellAutoBackgroundMs, shellAutoBackgroundNotice } from "../core/shell-auto-background";
+import { shellCompoundRefusal } from "../core/shell-split";
 import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
+import { formatExecOutputForModel } from "./exec-output-format";
 import { readTool } from "./read";
 
 const MAX_OUTPUT = 30_000;
@@ -569,6 +573,8 @@ export const shellTool: Tool = {
       const command = args.command;
       const invisible = invisibleUnicodeError(command, "a shell command");
       if (invisible !== undefined) return fail(invisible);
+      const splitRefusal = shellCompoundRefusal(command);
+      if (splitRefusal !== undefined) return fail(splitRefusal);
       if (ctx.signal.aborted) return fail("aborted");
 
       const dir = typeof args.cwd === "string" && args.cwd !== "" ? resolvePath(ctx.cwd, args.cwd) : ctx.cwd;
@@ -605,13 +611,14 @@ export const shellTool: Tool = {
       }
       if (ctx.signal.aborted) return fail("aborted");
 
+      const startedAt = Date.now();
       let proc: any;
       try {
         // NF-071: the single spawn path. A foreground command gets its ledger row
         // but no owner-death supervisor — its whole lifecycle (timeout kill,
         // abort, drain grace) is handled below, on this process's turn.
         proc = (
-          await spawnOwned(["bash", "-lc", command], {
+          await getExecutionCapability().spawnOwned(["bash", "-lc", command], {
             stateDir: kernelStateDir(ctx.workspace),
             label: "shell",
             cwd: dir,
@@ -630,6 +637,7 @@ export const shellTool: Tool = {
       }
 
       let out = "";
+      let captureTruncated = false;
       let timedOut = false;
       let aborted = false;
       const decoder = new TextDecoder();
@@ -670,6 +678,8 @@ export const shellTool: Tool = {
         if (typeof (graceTimer as { unref?: () => void }).unref === "function") (graceTimer as { unref: () => void }).unref();
       };
 
+      const autoBgMs = shellAutoBackgroundMs();
+      let backgrounded = false;
       const timer = setTimeout(() => {
         timedOut = true;
         kill();
@@ -680,6 +690,14 @@ export const shellTool: Tool = {
       };
       ctx.signal.addEventListener("abort", onAbort, { once: true });
 
+      const backgroundAt =
+        autoBgMs !== undefined && autoBgMs < timeoutMs
+          ? new Promise<"background">((resolve) => {
+              const bg = setTimeout(() => resolve("background"), autoBgMs);
+              if (typeof (bg as { unref?: () => void }).unref === "function") (bg as { unref: () => void }).unref();
+            })
+          : undefined;
+
       const readers: Array<{ cancel(reason?: unknown): Promise<void> }> = [];
       const pump = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
         const reader = stream.getReader();
@@ -688,7 +706,10 @@ export const shellTool: Tool = {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (out.length >= MAX_OUTPUT) continue; // keep draining, stop buffering
+            if (out.length >= MAX_OUTPUT) {
+              captureTruncated = true;
+              continue; // keep draining, stop buffering
+            }
             out += decoder.decode(value, { stream: true });
           }
         } catch {
@@ -710,7 +731,33 @@ export const shellTool: Tool = {
         }
       });
       try {
-        await Promise.race([proc.exited, abortExitCap]);
+        const racers: Array<Promise<unknown>> = [proc.exited, abortExitCap];
+        if (backgroundAt !== undefined) racers.push(backgroundAt);
+        const raced = await Promise.race(racers);
+        if (raced === "background" && !aborted) {
+          backgrounded = true;
+          clearTimeout(timer);
+          if (typeof (proc as { unref?: () => void }).unref === "function") (proc as { unref: () => void }).unref();
+          const elapsed = Date.now() - startedAt;
+          const minimised = minimiseShellOutput(out);
+          const truncatedBody = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "");
+          let body = truncatedBody + shellAutoBackgroundNotice(proc.pid, elapsed);
+          ctx.signal.removeEventListener("abort", onAbort);
+          return {
+            ok: true,
+            output: spillRawBeforeCap(
+              ctx,
+              formatExecOutputForModel({
+                exitCode: null,
+                wallMs: elapsed,
+                body,
+                outputTruncated: captureTruncated || truncatedBody.length < minimised.text.length,
+              }),
+              out,
+              minimised.changed,
+            ),
+          };
+        }
         // The pipes normally close as the child exits. A process that outlived it — a
         // background job, or a descendant that escaped the group kill — can keep them
         // open, so the drain wait is bounded and the readers are then dropped.
@@ -733,21 +780,51 @@ export const shellTool: Tool = {
       const flag = minimised.changed
         ? `\n[output minimised: ${Buffer.byteLength(out, "utf8")} \u2192 ${Buffer.byteLength(minimised.text, "utf8")} bytes]`
         : "";
-      const body = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "") + flag;
+      const truncatedBody = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "");
+      const outputTruncated = captureTruncated || truncatedBody.length < minimised.text.length;
+      let body = truncatedBody + flag;
       const modelText = (text: string): string => spillRawBeforeCap(ctx, text, out, minimised.changed);
-      if (aborted) return { ok: false, output: modelText(body), error: "aborted" };
-      if (timedOut) {
+      if (aborted) {
+        body += "\n[aborted]";
         return {
           ok: false,
-          output: modelText(`${body}\n[timed out after ${timeoutMs}ms]`),
+          output: modelText(
+            formatExecOutputForModel({
+              exitCode: proc.exitCode,
+              signalCode: proc.signalCode,
+              wallMs: Date.now() - startedAt,
+              body,
+              outputTruncated,
+            }),
+          ),
+          error: "aborted",
+        };
+      }
+      if (timedOut) {
+        body += `\n[timed out after ${timeoutMs}ms]`;
+        return {
+          ok: false,
+          output: modelText(
+            formatExecOutputForModel({
+              exitCode: proc.exitCode,
+              signalCode: proc.signalCode,
+              wallMs: Date.now() - startedAt,
+              body,
+              outputTruncated: true,
+            }),
+          ),
           error: `timed out after ${timeoutMs}ms`,
         };
       }
 
-      const code = proc.exitCode;
-      const signal = proc.signalCode;
-      const tail = `exit ${code === null ? "null" : code}${signal ? ` (signal ${signal})` : ""}`;
-      return { ok: true, output: modelText(body === "" ? tail : `${body}\n${tail}`) };
+      const formatted = formatExecOutputForModel({
+        exitCode: proc.exitCode,
+        signalCode: proc.signalCode,
+        wallMs: Date.now() - startedAt,
+        body,
+        outputTruncated,
+      });
+      return { ok: true, output: modelText(formatted) };
     } catch (e) {
       return fail(msg(e));
     }

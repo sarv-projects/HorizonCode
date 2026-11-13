@@ -111,6 +111,21 @@ export function stagedChanges(sessionId: string): readonly StagedChange[] {
  * Drop staged changes: all of them, or only the named workspace-relative path.
  * Returns how many entries were removed (0 when there was nothing to drop).
  */
+/** Replace staged `after` for one path (plan review / partial hunk apply). */
+export function replaceStagedAfter(sessionId: string, rel: string, after: string): boolean {
+  const record = PLANS.get(sessionId);
+  if (record === undefined) return false;
+  const idx = record.changes.findIndex((change) => change.rel === rel);
+  if (idx < 0) return false;
+  const prev = record.changes[idx] as StagedChange;
+  record.bytes -= contentBytes(prev);
+  const next: StagedChange = { ...prev, after: String(after) };
+  record.changes[idx] = next;
+  record.bytes += contentBytes(next);
+  PLANS.set(sessionId, record);
+  return true;
+}
+
 export function discardStaged(sessionId: string, rel?: string): number {
   const record = PLANS.get(sessionId);
   if (record === undefined) return 0;
@@ -385,4 +400,166 @@ export function unifiedDiff(before: string | null, after: string, rel: string, m
     return out.slice(0, kept).join("\n") + (kept > 0 ? "\n" : "") + `... ${dropped} more lines\n`;
   }
   return out.join("\n") + "\n";
+}
+
+/** Number of hunks in a staged change (0 when unchanged). */
+export function countChangeHunks(before: string | null, after: string, rel: string): number {
+  const diff = unifiedDiff(before, after, rel, 10_000);
+  if (diff === "") return 0;
+  return diff.split("\n").filter((line) => line.startsWith("@@")).length;
+}
+
+/** Prefix each `@@` header with `[hunk N]` (optional ` · rel`) for /changes (docs/13 D7). */
+export function labelDiffHunkHeaders(diff: string, rel?: string): string {
+  const fileBit =
+    typeof rel === "string" && rel !== "" ? ` · ${rel.replace(/[\r\n]+/g, " ").trim()}` : "";
+  let n = 0;
+  return diff
+    .split("\n")
+    .map((line) => (line.startsWith("@@") ? `[hunk ${++n}${fileBit}] ${line}` : line))
+    .join("\n");
+}
+
+export interface HunkApplyFilePick {
+  rel: string;
+  hunks: number[];
+}
+
+export interface HunkApplySelection {
+  /** `path:1,2` form — one or more staged paths. */
+  files?: HunkApplyFilePick[];
+  /** Bare `1,3` — only when exactly one file is staged. */
+  hunks?: number[];
+}
+
+function parseHunkNumbers(text: string): number[] | undefined {
+  const t = text.trim();
+  if (t === "" || !/^[\d,\s]+$/.test(t)) return undefined;
+  const nums = t
+    .split(/[,\s]+/)
+    .map((x) => Number(x))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return nums.length > 0 ? nums : undefined;
+}
+
+/** Parse `/apply` hunk arg: empty => null (apply all staged); invalid => undefined. */
+export function parseHunkApplySelection(arg: string): HunkApplySelection | null | undefined {
+  const text = arg.trim();
+  if (text === "") return null;
+  if (text.includes(":")) {
+    const files: HunkApplyFilePick[] = [];
+    for (const token of text.split(/\s+/)) {
+      if (token.trim() === "") continue;
+      const colon = token.lastIndexOf(":");
+      if (colon <= 0) return undefined;
+      const rel = token.slice(0, colon).trim();
+      const hunks = parseHunkNumbers(token.slice(colon + 1));
+      if (rel === "" || hunks === undefined) return undefined;
+      files.push({ rel, hunks });
+    }
+    return files.length > 0 ? { files } : undefined;
+  }
+  const hunks = parseHunkNumbers(text);
+  if (hunks === undefined) return undefined;
+  return { hunks };
+}
+
+/** Rewrite staged `after` for selected hunks (multi-file or single-file). */
+export function applyHunkSelections(
+  sessionId: string,
+  staged: readonly StagedChange[],
+  selection: HunkApplySelection,
+): { ok: true; updated: readonly string[] } | { ok: false; message: string } {
+  if (selection.hunks !== undefined) {
+    if (staged.length !== 1) {
+      return {
+        ok: false,
+        message:
+          "partial hunk apply with bare indices needs one staged file; use path:1,2 per file or bare /apply for every staged change",
+      };
+    }
+    const change = staged[0] as StagedChange;
+    const patched = partialAfterFromHunks(change.before, change.after, selection.hunks);
+    if (!replaceStagedAfter(sessionId, change.rel, patched)) {
+      return { ok: false, message: "could not update staged content for hunk apply" };
+    }
+    return { ok: true, updated: [change.rel] };
+  }
+  const picks = selection.files ?? [];
+  const updated: string[] = [];
+  for (const pick of picks) {
+    const change = staged.find((c) => c.rel === pick.rel);
+    if (change === undefined) {
+      return { ok: false, message: `no staged change for ${pick.rel}` };
+    }
+    const patched = partialAfterFromHunks(change.before, change.after, pick.hunks);
+    if (!replaceStagedAfter(sessionId, pick.rel, patched)) {
+      return { ok: false, message: `could not update staged content for ${pick.rel}` };
+    }
+    updated.push(pick.rel);
+  }
+  return { ok: true, updated };
+}
+
+function diffLinesForChange(before: string | null, after: string): DiffLine[] {
+  const oldLines = splitLines(before ?? "");
+  const newLines = splitLines(after);
+  if (oldLines.join("\n") === newLines.join("\n")) return [];
+  let start = 0;
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) start += 1;
+  let endOld = oldLines.length;
+  let endNew = newLines.length;
+  while (endOld > start && endNew > start && oldLines[endOld - 1] === newLines[endNew - 1]) {
+    endOld -= 1;
+    endNew -= 1;
+  }
+  const middleOld = oldLines.slice(start, endOld);
+  const middleNew = newLines.slice(start, endNew);
+  if (middleOld.length === 0 && middleNew.length === 0) return [];
+  const middle = myersOps(middleOld, middleNew) ?? coarseOps(middleOld, middleNew);
+  const ops: Op[] = [];
+  for (let i = 0; i < start; i += 1) ops.push({ kind: "keep", line: oldLines[i] as string });
+  ops.push(...middle);
+  for (let i = endOld; i < oldLines.length; i += 1) ops.push({ kind: "keep", line: oldLines[i] as string });
+  return buildLines(ops);
+}
+
+/** 1-based hunk indices; empty => unchanged `before`; all hunks => `after`. */
+export function partialAfterFromHunks(before: string | null, after: string, pick1Based: readonly number[]): string {
+  const selected = new Set(pick1Based.filter((n) => Number.isInteger(n) && n > 0));
+  if (selected.size === 0) return before ?? "";
+  const lines = diffLinesForChange(before, after);
+  if (lines.length === 0) return after;
+  const hunks = hunksOf(lines);
+  if (selected.size >= hunks.length) return after;
+  const out: string[] = [];
+  let hunkNum = 0;
+  let pos = 0;
+  for (const hunk of hunks) {
+    hunkNum += 1;
+    while (pos < hunk.start) {
+      const line = lines[pos] as DiffLine;
+      if (line.prefix === " ") out.push(line.text);
+      pos += 1;
+    }
+    const apply = selected.has(hunkNum);
+    while (pos < hunk.end) {
+      const line = lines[pos] as DiffLine;
+      if (line.prefix === " ") out.push(line.text);
+      else if (apply) {
+        if (line.prefix === "+") out.push(line.text);
+      } else if (line.prefix === "-") {
+        out.push(line.text);
+      }
+      pos += 1;
+    }
+  }
+  while (pos < lines.length) {
+    const line = lines[pos] as DiffLine;
+    if (line.prefix === " ") out.push(line.text);
+    pos += 1;
+  }
+  const body = out.join("\n");
+  if (after.endsWith("\n") && !body.endsWith("\n")) return `${body}\n`;
+  return body;
 }

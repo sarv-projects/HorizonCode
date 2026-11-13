@@ -1,5 +1,8 @@
 /**
  * sandbox-spawn.ts — route shell children through hz-sandbox-exec when enforced.
+ *
+ * Auto wrap is best-effort unless `HZ_SANDBOX_REQUIRE=1` (or `sandboxWrap: true`
+ * / `HZ_SANDBOX_EXEC=1`), which fail closed when the helper cannot confine.
  */
 
 import type { EnforcementOutcome, SandboxMode, SandboxSpawnKernel } from "../contracts";
@@ -38,3 +41,8 @@ export async function kernelEnforcesProcessSandbox(kernel: SandboxSpawnKernel): 
 }
 
 export const SANDBOX_AUTO_LABELS = new Set(["shell", "shell_session", "code_mode"]);
+
+/** True when callers asked for fail-closed confinement (`HZ_SANDBOX_REQUIRE=1`). */
+export function sandboxWrapRequired(): boolean {
+  return process.env.HZ_SANDBOX_REQUIRE === "1";
+}

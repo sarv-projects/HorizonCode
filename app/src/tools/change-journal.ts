@@ -54,8 +54,8 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { withFileLockSync } from "../core/file-lock";
+import { appendJsonlSync } from "../core/jsonl-append";
 import {
-  appendFileSync,
   chmodSync,
   mkdirSync,
   readFileSync,
@@ -294,7 +294,7 @@ function appendRecordToDisk(file: string, record: unknown): void {
   ensureStateDir(path.dirname(file));
   // Cross-process: serialized against another process's append/compaction (core/file-lock.ts).
   withFileLockSync(`${file}.lock`, () => {
-    appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+    appendJsonlSync(file, JSON.stringify(record) + "\n");
     setOwnerOnly(file, 0o600);
   });
 }

@@ -15,6 +15,10 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { blend, bold, colorEnabled, paint, colorLevel, cyan, dim, pulse, rgbFg, strip, terminalWidth, truncate, visibleWidth, wrapText, yellow, type RGB } from "./style";
 import { runStatusLineScript, type StatusLineScript, type StatusLineSpawnContext } from "./status-line";
+import { formatUnknownStatusChip } from "./unknown-chip";
+import type { EffectReconcileBlockLatchView } from "../core/effect-reconcile-block";
+import { formatReconcileBlockStatusChip } from "./reconcile-block-chip";
+import { formatBusyStatusAnnouncement, formatIdleStatusAnnouncement, reduceMotion, screenReaderMode, spinnerIntervalMs } from "./a11y";
 
 /* ------------------------------ capability ------------------------------ */
 
@@ -210,6 +214,7 @@ export interface FooterInput {
  * truncated label and clock, <24 the spinner alone. Only the label is ever cut.
  */
 export function footerLine(input: FooterInput): string {
+  if (screenReaderMode() || reduceMotion()) return formatBusyStatusAnnouncement(input);
   const unicode = input.unicode ?? true;
   const w = Math.max(1, Math.floor(input.width));
   // The ladder is in terminal columns; `width` already leaves the last one free.
@@ -266,6 +271,12 @@ export interface StatusInfo {
   /** already shortened (~) workspace path */
   path: string;
   branch?: string;
+  /** Unreconciled `hz.effect.unknown` count for the live session (docs/13 R169). */
+  unknownCount?: number;
+  /** Receipt id on the latest unknown, when count === 1. */
+  unknownReceiptId?: string;
+  /** `HZ_EFFECT_RECONCILE_BLOCK` latch for this session (ruling **304**). */
+  reconcileBlock?: EffectReconcileBlockLatchView;
 }
 
 /**
@@ -290,12 +301,50 @@ const SEP = " \u00b7 ";
  * `PLAN · model · provider · ◑ 12% · ~/proj · ⑂ main`, cut to `width`: the path
  * goes first, then the provider, then the branch; what is left is truncated.
  */
+export interface IdleStatusLineOptions {
+  /** Strip ANSI (fullscreen status row). */
+  plain?: boolean;
+  /** Append a busy segment after the bar. */
+  busy?: boolean;
+  /** Plain suffix segments (approval hint, etc.). */
+  extras?: readonly string[];
+}
+
+/**
+ * One idle status formatter for scrollback (`createLive.showIdle`) and fullscreen
+ * (`fullscreen-chat.ts`). Optional plain/busy/extras for the alt-screen row.
+ */
+export function formatIdleStatusLine(info: StatusInfo, width: number, opts: IdleStatusLineOptions = {}): string {
+  const limit = Math.max(10, Math.floor(width));
+  let line = opts.plain ? strip(composeStatusBar(info, limit)) : composeStatusBar(info, limit);
+  const tail: string[] = [];
+  if (opts.busy) tail.push("busy");
+  for (const bit of opts.extras ?? []) {
+    if (bit !== "") tail.push(bit);
+  }
+  if (tail.length > 0) {
+    const suffix = ` · ${tail.join(" · ")}`;
+    const room = limit - visibleWidth(line);
+    line += room >= visibleWidth(suffix) ? suffix : ` · ${truncate(tail.join(" · "), Math.max(4, room - 3))}`;
+  }
+  if (visibleWidth(line) > limit) line = opts.plain ? truncate(line, limit) : dim(truncate(strip(line), limit));
+  return line;
+}
+
 export function composeStatusBar(info: StatusInfo, width: number): string {
   const limit = Math.max(10, Math.floor(width));
   const mode = info.badge !== "" ? bold(yellow(info.badge)) : dim("default");
   const usageHint = formatTokenHint(info.contextUsed, info.contextWindow);
+  const unknown =
+    info.unknownCount !== undefined && info.unknownCount > 0
+      ? formatUnknownStatusChip(info.unknownCount, info.unknownReceiptId)
+      : "";
+  const reconcileBlock =
+    info.reconcileBlock !== undefined ? formatReconcileBlockStatusChip(info.reconcileBlock) : "";
   const parts: Record<string, string> = {
     mode,
+    unknown,
+    reconcileBlock,
     model: info.model,
     provider: dim(info.provider),
     ctx: info.contextPercent === undefined ? "" : dim("\u25d1 ") + `${Math.max(0, Math.min(999, Math.round(info.contextPercent)))}%`,
@@ -304,7 +353,7 @@ export function composeStatusBar(info: StatusInfo, width: number): string {
     branch: info.branch ? dim("\u2442 ") + info.branch : "",
   };
   const dropOrder = ["path", "provider", "branch", "usage", "ctx"];
-  const order = ["mode", "model", "provider", "ctx", "usage", "path", "branch"];
+  const order = ["mode", "unknown", "reconcileBlock", "model", "provider", "ctx", "usage", "path", "branch"];
   const dropped = new Set<string>();
   const build = (): string =>
     order
@@ -477,6 +526,8 @@ export function createLive(opts: LiveOptions): Live {
   const now = opts.now ?? Date.now;
   const unicode = unicodeLocale();
   const sync = opts.sync ?? syncEnabled();
+  const frameMs = reduceMotion() ? 1000 : FRAME_MS;
+  const spinMs = spinnerIntervalMs();
   let drawnLines = 0;
   let cursorHidden = false;
   let lastFrame = "";
@@ -514,8 +565,8 @@ export function createLive(opts: LiveOptions): Live {
     const w = terminalWidth() - 1;
     const verb = runningTools.size > 0 ? (runningTools.values().next().value as string) : "Thinking";
     const foot = footerLine({
-      tick: Math.floor((t - startedAt) / SPINNER_MS),
-      pulseTick: Math.floor((t - startedAt) / PULSE_MS),
+      tick: Math.floor((t - startedAt) / spinMs),
+      pulseTick: reduceMotion() ? 0 : Math.floor((t - startedAt) / PULSE_MS),
       verb,
       more: Math.max(0, runningTools.size - 1),
       phaseMs: t - phaseAt,
@@ -525,7 +576,7 @@ export function createLive(opts: LiveOptions): Live {
       unicode,
       width: w,
     });
-    const lines = [...(opts.group?.(Math.floor((t - startedAt) / SPINNER_MS), w) ?? []), foot].map((l) =>
+    const lines = [...(opts.group?.(Math.floor((t - startedAt) / spinMs), w) ?? []), foot].map((l) =>
       visibleWidth(l) > w ? truncate(strip(l), w) : l,
     );
     const frame = lines.join("\n");
@@ -588,7 +639,9 @@ export function createLive(opts: LiveOptions): Live {
     showIdle() {
       if (!opts.enabled || busy) return;
       const info = opts.status();
-      const bar = composeStatusBar(info, terminalWidth() - 1);
+      const bar = screenReaderMode()
+        ? formatIdleStatusAnnouncement(info)
+        : formatIdleStatusLine(info, terminalWidth() - 1);
       const extra = scriptLines(info)
         .map((l) => dim(truncate(l, Math.max(10, terminalWidth() - 1))))
         .join("\n");
@@ -607,7 +660,7 @@ export function createLive(opts: LiveOptions): Live {
       busy = true;
       if (!opts.enabled) return;
       if (timer === undefined) {
-        timer = setInterval(frame, FRAME_MS);
+        timer = setInterval(frame, frameMs);
         (timer as { unref?: () => void }).unref?.();
       }
       frame();

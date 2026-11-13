@@ -26,6 +26,7 @@
 
 import * as path from "node:path";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { displayBlobBodyPath, putBlobForWorkspace } from "./blobs";
 import { sha256Hex } from "./canon";
 import type { ChatMsg } from "../contracts";
 
@@ -89,6 +90,11 @@ export interface ToolOutputCapOptions {
   spillDir?: string;
   /** Path text shown in the marker (e.g. `.hz/state/spills`). Defaults to spillDir. */
   displaySpillDir?: string;
+  /**
+   * When set, over-cap output is stored in the blob CAS under this workspace
+   * (docs/12 §4.1) instead of `spills/<hash>.txt`. Shipped when `HZ_BLOB_SPILL=1`.
+   */
+  blobCasWorkspace?: string;
   /** Overridable only for tests; production uses the R-tools-42 constant. */
   maxStreamBytes?: number;
 }
@@ -158,6 +164,43 @@ export function writeSpillFile(spill: { file: string; contents: string }): void 
  * When `spillDir` is set, the offered spill is materialised too, owner-only
  * (see `writeSpillFile`).
  */
+/** Model/tool arg for lossless-resumable output continuation (docs/30 §8 #15). */
+export const TOOL_OUTPUT_OFFSET_ARG = "outputOffset";
+
+export function parseToolOutputContinuationOffset(args: Record<string, unknown>): number | undefined {
+  const v = args[TOOL_OUTPUT_OFFSET_ARG];
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return Math.floor(v);
+  return undefined;
+}
+
+/** Strip continuation args before a tool or MCP server sees the payload. */
+export function stripToolOutputContinuationArgs(args: Record<string, unknown>): Record<string, unknown> {
+  if (!(TOOL_OUTPUT_OFFSET_ARG in args)) return args;
+  const next = { ...args };
+  delete next[TOOL_OUTPUT_OFFSET_ARG];
+  return next;
+}
+
+/**
+ * Continue a truncated tool result from a prior `nextOffset` (CBM / docs/30 §8 #15 reduced).
+ */
+export function planToolOutputFromOffset(
+  output: string,
+  startOffset: number,
+  opts: ToolOutputCapOptions = {},
+): ToolOutputPlan {
+  const text = typeof output === "string" ? output : "";
+  const off = Math.max(0, Math.floor(startOffset));
+  if (off === 0) return planToolOutputCap(text, opts);
+  const slice = Buffer.from(text, "utf8").subarray(off).toString("utf8");
+  const plan = planToolOutputCap(slice, opts);
+  const base = plan.truncated;
+  if (base !== undefined) {
+    plan.truncated = { ...base, nextOffset: off + base.nextOffset };
+  }
+  return plan;
+}
+
 export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {}): ToolOutputPlan {
   const text = typeof output === "string" ? output : "";
   const maxBytes = opts.maxBytes ?? MAX_RESULT_BYTES;
@@ -198,7 +241,10 @@ export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {
 
   let spillPath: string | undefined;
   let spill: { file: string; contents: string } | undefined;
-  if (opts.spillDir !== undefined && opts.spillDir !== "") {
+  if (opts.blobCasWorkspace !== undefined && opts.blobCasWorkspace !== "") {
+    const { hash } = putBlobForWorkspace(opts.blobCasWorkspace, text);
+    spillPath = displayBlobBodyPath(opts.blobCasWorkspace, hash);
+  } else if (opts.spillDir !== undefined && opts.spillDir !== "") {
     const hash = sha256Hex(text);
     const display = opts.displaySpillDir !== undefined && opts.displaySpillDir !== "" ? opts.displaySpillDir : opts.spillDir;
     spillPath = path.join(display, `${hash}.txt`);

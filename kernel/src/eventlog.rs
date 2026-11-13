@@ -943,6 +943,8 @@ fn append_line(path: &Path, value: &Value) -> Result<(), String> {
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.flush())
         .map_err(|e| format!("cannot append to {}: {}", path.display(), e))?;
+    crate::jsonl_append::sync_jsonl_append(path, &file)
+        .map_err(|e| format!("cannot fsync {}: {}", path.display(), e))?;
     Ok(())
 }
 

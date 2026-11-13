@@ -60,7 +60,23 @@ const READ_ONLY = ["read", "grep", "glob", "repo_map", "ast_search", "lsp"] as c
 const READ_ONLY_RULES =
   "You are READ-ONLY: you have no write, edit or shell tool; do not try to change files or run commands. ";
 
+const NEVER_RULES =
+  "Never: you must not write, edit, run shell, start previews, delegate, or touch MCP. You only search and read text you can reach with grep/glob. ";
+
 export const BUILTIN_PRESETS: readonly AgentPreset[] = [
+  {
+    name: "never",
+    description: "isolated read-only search only (grep/glob); strongest Never/isolation preset",
+    tools: ["grep", "glob"],
+    maxSteps: 8,
+    source: "builtin",
+    prompt: [
+      "Profile: never.",
+      NEVER_RULES + "You are isolated in a nested session: no parent context, no agent tool, no leases.",
+      "- Search with grep/glob only; do not assume file contents without a path match.",
+      "- Return concise hits (path:line or path). State what was not found.",
+    ].join("\n"),
+  },
   {
     name: "explore",
     description: "read-only search and reading; returns concise findings with path:line",

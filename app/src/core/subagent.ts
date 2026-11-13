@@ -21,6 +21,7 @@ import type { ApprovalHandler, Lease, Provider, RuntimeEvent, ToolResult } from 
 import { loadHooks, runLifecycleHooks } from "./hooks";
 import { hooksLoadOptions } from "./trust";
 import type { KernelClient } from "./kernel";
+import type { EffectHost } from "./effect-host";
 import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
@@ -80,6 +81,9 @@ export function boundChildEvent(ev: RuntimeEvent): RuntimeEvent | null {
         args,
         status: ev.status,
         ...(ev.summary !== undefined ? { summary: clip(ev.summary) } : {}),
+        ...(ev.effectId !== undefined ? { effectId: ev.effectId } : {}),
+        ...(ev.receiptId !== undefined ? { receiptId: ev.receiptId } : {}),
+        ...(ev.receiptSeq !== undefined ? { receiptSeq: ev.receiptSeq } : {}),
       };
     }
     case "notice":
@@ -129,6 +133,8 @@ export interface NestedRunOptions {
   permissionMode?: PermissionMode;
   /** NF-073: the parent run's ledger — the child gets its own step slice but shares the ceiling. */
   ledger?: BudgetLedger;
+  /** Parent EffectHost — child tool effects share this ledger for R172 child receipts. */
+  effectHost?: EffectHost;
   trustedWorkspaceHooks?: string[];
 }
 
@@ -146,6 +152,10 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     preset = resolved.preset;
   }
   const allowed: readonly string[] = preset !== undefined ? preset.tools : BASE_TOOL_NAMES;
+  const childMode: PermissionMode | undefined =
+    preset?.name === "never"
+      ? "read-only"
+      : opts.permissionMode;
   const model = preset?.model ?? opts.model;
   // The caller's max_steps wins only downward: a preset cap bounds it.
   const requested = opts.maxSteps ?? preset?.maxSteps;
@@ -164,6 +174,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     }
   };
   const startedAt = Date.now();
+  const effectIdsBefore = new Set(opts.effectHost?.listEffectIds() ?? []);
   const deps: LoopDeps = {
     workspace: opts.workspace,
     sessionId: session.id,
@@ -202,7 +213,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // either: the child re-enters approval in both transports.
     sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
-    permissionMode: opts.permissionMode,
+    permissionMode: childMode,
     systemOverride: buildChildPrompt(opts.workspace, new Date(), { tools: allowed, kernelMode: typeof opts.kernel?.mode === "string" ? opts.kernel.mode : "untrusted" }) +
       (preset !== undefined ? `\n\n${preset.prompt}` : ""),
     // Base seven only: a subagent delegates to no one and drives no previews.
@@ -210,6 +221,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     maxProviderCalls: steps,
     // NF-073: the child's step slice sits under the parent's shared ceiling.
     ledger: opts.ledger !== undefined ? opts.ledger.child({ maxSteps: steps }) : undefined,
+    effectHost: opts.effectHost,
     trustedWorkspaceHooks: opts.trustedWorkspaceHooks,
     contextWindowTokens: catalogWindow(opts.provider.name, opts.model, loadCatalog()),
     // No `delegate`: a subagent can never spawn subagents.
@@ -232,8 +244,22 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     workspace: opts.workspace,
     detail: subagentDetail,
   });
-  emitBoundary({ type: "subagent.start", agentId: session.id, name: "agent", depth: 1, task: taskHead(task), ...profileField });
+  emitBoundary({
+    type: "subagent.start",
+    agentId: session.id,
+    name: "agent",
+    depth: 1,
+    task: taskHead(task),
+    ...profileField,
+  });
+  if (preset?.name === "never") {
+    emitBoundary({
+      type: "notice",
+      message: `subagent isolation: child session ${session.id} (grep/glob only; permission mode ${childMode ?? "read-only"}; no parent leases)`,
+    });
+  }
   const { text, aborted, exit } = await runTurn(deps, task);
+  const childEffectIds = (opts.effectHost?.listEffectIds() ?? []).filter((id) => !effectIdsBefore.has(id));
   {
     const stopped = exit.terminal === "budget_exhausted" || exit.terminal === "timeout";
     const empty = text.trim() === "";
@@ -267,6 +293,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
       ok: false,
       output: trimmed.slice(0, SUBAGENT_OUTPUT_CAP),
       error: "subagent run aborted",
+      ...(childEffectIds.length > 0 ? { childEffectIds } : {}),
     };
   }
   if (exit.terminal === "budget_exhausted" || exit.terminal === "timeout") {
@@ -274,12 +301,18 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
       ok: false,
       output: trimmed.slice(0, SUBAGENT_OUTPUT_CAP),
       error: `subagent run stopped: budget exhausted (${exit.detail ?? "unknown"})`,
+      ...(childEffectIds.length > 0 ? { childEffectIds } : {}),
     };
   }
   if (trimmed === "") {
-    return { ok: false, output: "(subagent produced no output)", error: "subagent produced no output" };
+    return {
+      ok: false,
+      output: "(subagent produced no output)",
+      error: "subagent produced no output",
+      ...(childEffectIds.length > 0 ? { childEffectIds } : {}),
+    };
   }
   const output =
     trimmed.length > SUBAGENT_OUTPUT_CAP ? trimmed.slice(0, SUBAGENT_OUTPUT_CAP) + "\n[truncated]" : trimmed;
-  return { ok: true, output };
+  return { ok: true, output, ...(childEffectIds.length > 0 ? { childEffectIds } : {}) };
 }

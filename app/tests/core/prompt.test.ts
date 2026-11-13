@@ -95,6 +95,9 @@ describe("child prompt", () => {
     const text = buildChildPrompt("/w/proj", FIXED, { ...ENV, tools: [...BASE_TOOL_NAMES] });
     expect(text).toContain("do not ask any");
     expect(text).toContain("You inherit no approvals from the parent");
+    expect(text).toContain("permission scope was fixed");
+    expect(text).toContain("Do not retry a denied operation");
+    expect(text).toContain("parent gets your final answer");
     expect(text).toContain("concise report");
     expect(text).toContain(`Tools: ${BASE_TOOL_NAMES.join(", ")}`);
     expect(SUBAGENT_SYSTEM_PROMPT).toContain("subagent");

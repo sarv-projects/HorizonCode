@@ -22,6 +22,7 @@ import type {
   Lease,
   PolicyScope,
   Provider,
+  ProviderFailureCode,
   ProviderRequest,
   ReceiptInput,
   RunBudget,
@@ -42,13 +43,71 @@ import { presetCatalog } from "./agent-profiles";
 import { dapSpawnAction } from "./dap/client";
 import { resolveAdapter, selectAdapterForProgram } from "./dap/config";
 import { attachTargetLabel } from "./dap/session";
-import { memoryDbPath } from "./memory/store";
+import { handoffDbPath } from "./memory/handoff";
+import {
+  PROJECT_BANK,
+  USER_BANK,
+  SHARED_BANK,
+  parseMemoryBankId,
+  type MemoryBankId,
+} from "./memory/banks";
+import { memoryDbPath, memorySearchReadTargets } from "./memory/store";
 import { previewQuirks } from "./providers/quirks";
+import { enrichUsageCost } from "./usage-cost";
+import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
 import { canonicalJson, sha256Hex } from "./canon";
+import {
+  computeReceiptPostimage,
+  computeReceiptPostimageFromKernel,
+  postimageObservationNotice,
+  receiptPostimageFields,
+  type KernelExecutePostimageObserve,
+} from "./receipt-postimage";
+import {
+  assessPostimageMissingAtObserve,
+  assessResultDigestEvidence,
+  postimageMissingAtObserveNotice,
+  resultDigestEvidenceNotice,
+  toolResultDigest,
+} from "./effect-evidence";
+import { effectHostKernelRequireRefusal } from "./effect-host-posture";
+import { classifyAstEditKernelProjectionMiss } from "./effect-kernel-tool-projection";
+import { EffectHost, createEffectId } from "./effect-host";
+import { mirrorEffectReconcileToKernel } from "./effect-kernel-reconcile";
+import {
+  effectReconcileBlockRefusal,
+  latchEffectReconcileBlock,
+} from "./effect-reconcile-block";
+import { frozenUnknownResourceKeys, r170ResourceGateRefusal } from "./effect-resource-gate";
+import {
+  EFFECT_HOST_KERNEL_JOURNAL_FAIL_NOTICE,
+  editArgsEligibleForKernelRoute,
+  effectHostKernelMutationEnabled,
+  effectHostKernelRequireMode,
+  shellArgsEligibleForKernelRoute,
+  tryKernelApplyPatchRoute,
+  tryKernelAstEditRoute,
+  tryKernelEditRoute,
+  tryKernelShellRoute,
+  tryKernelWriteRoute,
+  writeArgsEligibleForKernelRoute,
+} from "./effect-kernel-mutation-route";
+import {
+  applyPatchArgsEligibleForKernelRoute,
+  astEditArgsEligibleForKernelRoute,
+} from "./effect-kernel-tool-projection";
 // The window's compaction: one replacement for the silent slice, imported here
 // and nowhere else (compaction.ts holds the pinning, the summary and the
 // report; the loop only chooses the window size).
-import { COMPACTION_EVENT, compactHistory } from "./compaction";
+import { COMPACTION_EVENT, compactHistory, elidedPrefixForCompaction, tokensIn } from "./compaction";
+import { CompactionHoldBuffer, compactionHoldEnabled } from "./compaction-hold";
+import {
+  CONTEXT_WINDOW_COMPACTION_NOTICE,
+  emergencyHistoryLimit,
+  isContextWindowExceededCode,
+} from "./compaction-context-window";
+import { appendCompactionRecord, type CompactionTrigger } from "./compaction-journal";
+import { sessionKernelReconcileNotice } from "./session-kernel-reconcile";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
 import { buildSystemPrompt, type PromptEnvironmentOverrides } from "./prompt";
@@ -91,13 +150,17 @@ import {
 } from "./hooks";
 import { hooksLoadOptions } from "./trust";
 import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
+import { buildRunCompletePayload, RUN_COMPLETE_EVENT } from "./receipt-run-terminal";
 // SAFETY-RAILS (FEAT-002): three self-contained loop-level guards, wired here
 // minimally — loop-detection before dispatch, repeat-tool after execute, and
 // the mistake tracker on error. The modules are pure; the loop imports them,
 // never the reverse.
+import { consecutiveMistakesInterruptNudge, loopDetectionInterruptNudge } from "./guards/guard-prompt";
 import { LoopDetectionTracker } from "./guards/loop-detection";
 import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
+import { truncatedToolCallMessage } from "./guards/truncated-tool-batch";
+import { runClassedToolBatchFifo } from "./tool-batch-fifo";
 // Tier-3 speculative execution (docs/28 ruling 47): an OFF-BY-DEFAULT coordinator
 // that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
 // Its host `run` callback goes through the SAME guarded executeTool path, so a
@@ -117,17 +180,24 @@ import {
   estimateTokens,
   fitMaxOutputTokens,
   FRAMING_CHARGE_TOKENS,
+  parseToolOutputContinuationOffset,
   planToolOutputCap,
+  planToolOutputFromOffset,
+  stripToolOutputContinuationArgs,
   windowForModel,
 } from "./output-budget";
 import type { KernelClient } from "./kernel";
 import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import type { PermissionMode } from "./permission-mode";
 import { modeAutoApproves, modeRefusal } from "./permission-mode";
+import { planModeShellRefusal } from "./command-guard";
+import { shellCompoundRefusal } from "./shell-split";
 import { invisibleUnicodeError } from "../tools/helpers";
 import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
+import { blobSpillEnabled } from "./blobs";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
+import { drainFormatted, type InterjectionBuffer } from "./interjection";
 
 // The symlink-aware resolution moved to paths.ts (the single state-path
 // resolver); re-exported so every existing `from "./loop"` import keeps working.
@@ -397,7 +467,30 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       return file ? { kind: "fs.read", target: resolved(file) } : undefined;
     }
     case "memory_search": {
-      return { kind: "fs.read", target: memoryDbPath(workspace) };
+      const scope = typeof args.scope === "string" ? args.scope.trim().toLowerCase() : "";
+      let banks: MemoryBankId[] = [PROJECT_BANK];
+      if (scope === "shared_recall" || scope === "all") {
+        banks = [PROJECT_BANK, USER_BANK, SHARED_BANK];
+      } else if (scope === "user" || scope === "shared") {
+        const b = parseMemoryBankId(scope);
+        if (b !== undefined) banks = [b];
+      }
+      if (Array.isArray(args.banks)) {
+        const parsed = args.banks
+          .filter((x): x is string => typeof x === "string")
+          .map((x) => parseMemoryBankId(x))
+          .filter((x): x is MemoryBankId => x !== undefined);
+        if (parsed.length > 0) banks = parsed;
+      }
+      const targets = memorySearchReadTargets(workspace, banks);
+      return { kind: "fs.read", target: targets[0] ?? memoryDbPath(workspace) };
+    }
+    case "handoff_create": {
+      return { kind: "fs.write", target: handoffDbPath(workspace) };
+    }
+    case "handoff_resume":
+    case "handoff_search": {
+      return { kind: "fs.read", target: handoffDbPath(workspace) };
     }
     case "debug": {
       const op = argString(args, "op");
@@ -535,32 +628,6 @@ function withCallIntent(action: GuardAction, args: Record<string, unknown>, work
   };
 }
 
-/**
- * NF-072 batch scheduling. Every tool carries a concurrency class: `shared`
- * calls in one batch run concurrently; an `exclusive` call is its own barrier
- * (`docs/24` NF-072). Unknown tools are pure error paths and share.
- */
-export function concurrencyClassOf(name: string): "shared" | "exclusive" {
-  return getTool(name)?.concurrencyClass === "exclusive" ? "exclusive" : "shared";
-}
-
-/** Split a batch into execution segments: a shared run, then an exclusive barrier, then the next run. */
-export function batchSegments(calls: ToolCall[]): ToolCall[][] {
-  const segments: ToolCall[][] = [];
-  let shared: ToolCall[] = [];
-  for (const call of calls) {
-    if (concurrencyClassOf(call.name) === "exclusive") {
-      if (shared.length > 0) segments.push(shared);
-      shared = [];
-      segments.push([call]);
-    } else {
-      shared.push(call);
-    }
-  }
-  if (shared.length > 0) segments.push(shared);
-  return segments;
-}
-
 /** Keep the newest messages, starting at a user turn so the replay stays valid. */
 export function trimHistory(messages: ChatMsg[], limit = HISTORY_LIMIT): ChatMsg[] {
   const list = Array.isArray(messages) ? messages : [];
@@ -645,6 +712,44 @@ function toolMessageContent(result: ToolResult, text: string): string {
   if (result.ok) return text === "" ? "(no output)" : text;
   const reason = typeof result.error === "string" && result.error !== "" ? result.error : text;
   return reason === "" ? "tool failed" : reason;
+}
+
+/**
+ * Pi pattern: an output-length stop with pending tool calls — fail every call in
+ * the turn (truncated args are unsafe) and append synthetic tool results so the
+ * model can re-issue them on the next step.
+ */
+async function failTruncatedToolBatch(
+  deps: LoopDeps,
+  faults: RunFaults,
+  calls: ToolCall[],
+): Promise<void> {
+  for (const call of calls) {
+    const message = truncatedToolCallMessage(call.name);
+    const result: ToolResult = { ok: false, output: message, error: message };
+    emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: {}, status: "error" });
+    await logEvent(
+      deps,
+      faults,
+      EventTypes.toolResult,
+      { callId: call.id, name: call.name, ok: false, output: message, error: message, truncatedOutput: true },
+      { kind: "tool", id: call.name },
+    );
+    try {
+      deps.store.appendMessage(deps.sessionId, {
+        role: "tool",
+        content: toolMessageContent(result, message),
+        toolCallId: call.id,
+        toolName: call.name,
+      });
+    } catch (err) {
+      faults.noteTranscript(call.name, err);
+      emit(deps.callbacks, {
+        type: "notice",
+        message: `tool ${call.name}: could not record truncated-fail result (${errorMessage(err)})`,
+      });
+    }
+  }
 }
 
 export function streamFor(sessionId: string): string {
@@ -1135,6 +1240,8 @@ export interface LoopDeps {
   trustedWorkspaceHooks?: string[];
   /** NF-074: catalog-resolved context window; falls back to `windowForModel`. */
   contextWindowTokens?: number;
+  /** C-11 reduced: explicit thinking effort for this turn (no auto classifier). */
+  thinkingEffort?: ThinkingRung;
   /**
    * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
    * YET READ by the turn path. The field and the `buildSpeculationHost` /
@@ -1143,6 +1250,42 @@ export interface LoopDeps {
    * The ordinary NF-072 batch is unchanged.
    */
   speculativeExecution?: boolean;
+  /**
+   * Mid-turn steering buffer (docs/30 §8 #8): drained at step boundaries into
+   * synthetic user messages. Absent = no interjection path (subagents, tests).
+   */
+  interjection?: InterjectionBuffer;
+  /** EffectHost precursor ledger for this run (allow → execute → observe). */
+  effectHost?: EffectHost;
+}
+
+/** Drain pending interjections into the transcript at a safe step boundary. */
+export function drainInterjectionsAtSafePoint(deps: LoopDeps, faults: RunFaults): boolean {
+  const buffer = deps.interjection;
+  if (buffer === undefined || buffer.isEmpty()) return false;
+  const drained = drainFormatted(buffer);
+  if (drained.length === 0) return false;
+  let delivered = false;
+  for (const row of drained) {
+    try {
+      deps.store.appendMessage(deps.sessionId, { role: "user", content: row.modelText });
+      delivered = true;
+      emit(deps.callbacks, { type: "interjection.admitted", text: row.displayText });
+    } catch (err) {
+      faults.noteTranscript("interjection", err);
+      buffer.restoreFront([{ text: row.displayText }]);
+    }
+  }
+  if (delivered) {
+    emit(deps.callbacks, {
+      type: "notice",
+      message:
+        drained.length === 1
+          ? "mid-turn steer: delivered your message at a step boundary"
+          : `mid-turn steer: delivered ${drained.length} messages at a step boundary`,
+    });
+  }
+  return delivered;
 }
 
 /**
@@ -1175,7 +1318,9 @@ export function buildSpeculationHost(
       const parsed = parseCall(call);
       // Route through executeTool so admissionFor -> gate.check -> tool.execute
       // happens exactly as it would for a non-speculative call.
-      const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks);
+      const specEffectId = createEffectId();
+      deps.effectHost?.begin(specEffectId, call.name, call.id);
+      const executed = await executeTool(deps, speculativeGate, call, parsed, faults, hooks, specEffectId);
       return { ok: executed.result.ok, output: executed.result.output, error: executed.result.error };
     },
   };
@@ -1208,6 +1353,7 @@ interface AssistantTurn {
   stopReason: "end" | "tool_use" | "max_tokens" | "abort";
   usage?: Usage;
   error?: string;
+  failureCode?: ProviderFailureCode;
   quirks?: string[];
 }
 
@@ -1311,6 +1457,7 @@ export function pendingTodosReminder(sessionId: string, sinceVersion?: number): 
 
 /** Audit-trail event: a run changed files and ran nothing that verifies them. */
 export const UNVERIFIED_COMPLETION_EVENT = "run.unverified_completion";
+export { RUN_COMPLETE_EVENT };
 
 /** What one run changed, whether anything checked it, and what it claimed done. */
 class RunEvidence {
@@ -1514,6 +1661,9 @@ async function collectAssistant(
     messages: history,
     tools: specs,
     signal: deps.signal,
+    ...(deps.thinkingEffort !== undefined
+      ? { reasoningEffort: toProviderReasoningEffort(deps.thinkingEffort) }
+      : {}),
   };
   try {
     for await (const event of deps.provider.stream(request)) {
@@ -1542,6 +1692,7 @@ async function collectAssistant(
         break;
       } else if (event.type === "error") {
         turn.error = event.message;
+        if (event.code !== undefined) turn.failureCode = event.code;
         break;
       }
       if (deps.signal.aborted) {
@@ -1568,7 +1719,6 @@ const PLAN_MODE_REFUSED: Record<string, string> = {
   apply_patch: "plan mode: apply_patch is not staged (multi-file); use write or edit to stage a change, or exit plan mode",
   ast_edit: "plan mode: ast_edit rewrites files and is not staged; use write or edit to stage a change, or exit plan mode",
   shell_session: "plan mode: interactive sessions are not started while planning; exit plan mode to run one",
-  shell: "plan mode: commands are not run while planning; the user applies the plan (or exits plan mode) to execute",
   undo: "plan mode: undo restores files and is not staged; exit plan mode to undo",
   preview: "plan mode: dev servers are not started; exit plan mode to run one",
   agent: "plan mode: subagents are not spawned while planning; exit plan mode to delegate",
@@ -1657,7 +1807,16 @@ async function executeTool(
   parsed: { args: Record<string, unknown>; error?: string },
   faults: RunFaults,
   hooks: HooksConfig,
-): Promise<{ result: ToolResult; leaseId?: string; staged?: boolean; preview?: string; expected?: boolean }> {
+  effectId: string,
+): Promise<{
+  result: ToolResult;
+  leaseId?: string;
+  staged?: boolean;
+  preview?: string;
+  expected?: boolean;
+  kernelRouteObserve?: KernelExecutePostimageObserve;
+  childEffectIds?: string[];
+}> {
   if (parsed.error) {
     return {
       result: { ok: false, output: `Invalid arguments for ${call.name}: ${parsed.error}`, error: `invalid arguments: ${parsed.error}` },
@@ -1694,7 +1853,51 @@ async function executeTool(
     if (invisible !== undefined) return { result: { ok: false, output: invisible, error: invisible }, expected: true };
   }
 
+  if (deps.planMode === true && call.name === "shell" && typeof parsed.args.command === "string") {
+    const planShell = planModeShellRefusal(parsed.args.command);
+    if (planShell !== undefined) {
+      return { result: { ok: false, output: planShell, error: planShell }, expected: true };
+    }
+  }
+
+  if (call.name === "shell" && typeof parsed.args.command === "string") {
+    const splitRefusal = shellCompoundRefusal(parsed.args.command);
+    if (splitRefusal !== undefined) return { result: { ok: false, output: splitRefusal, error: splitRefusal }, expected: true };
+  }
+
+  const reconcileBlockRefusal = effectReconcileBlockRefusal(
+    deps.workspace,
+    deps.sessionId,
+    call.name,
+    parsed.args,
+  );
+  if (reconcileBlockRefusal !== undefined) {
+    return {
+      result: { ok: false, output: reconcileBlockRefusal, error: reconcileBlockRefusal },
+      expected: true,
+    };
+  }
+
+  const unknownResourceRefusal = r170ResourceGateRefusal(
+    call.name,
+    parsed.args,
+    deps.workspace,
+    frozenUnknownResourceKeys(deps.effectHost),
+    deps.effectHost,
+  );
+  if (unknownResourceRefusal !== undefined) {
+    return {
+      result: { ok: false, output: unknownResourceRefusal, error: unknownResourceRefusal },
+      expected: true,
+    };
+  }
+
   const admission = admissionFor(call.name, parsed.args, deps.workspace);
+  if (admission !== undefined && admission.kind === "guard" && admission.action.kind === "shell.exec") {
+    const splitRefusal = shellCompoundRefusal(admission.action.target);
+    if (splitRefusal !== undefined) return { result: { ok: false, output: splitRefusal, error: splitRefusal }, expected: true };
+  }
+
   if (admission === undefined) {
     // Fail closed: a tool without an admission never runs. Unmapped is a bug,
     // not a permission.
@@ -1725,8 +1928,14 @@ async function executeTool(
           const projected = projectChange(call.name, parsed.args, deps.workspace);
           if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
         }
-        const asked: ApprovalRequest & { preview?: string } =
-          approvalPreview !== undefined ? { ...request, preview: approvalPreview } : request;
+        const linkLease = decision.leaseId ?? gate.leaseFor(action) ?? leaseId;
+        const asked: ApprovalRequest & { preview?: string } = {
+          ...request,
+          effectId,
+          tool: call.name,
+          ...(linkLease !== undefined ? { leaseId: linkLease } : {}),
+          ...(approvalPreview !== undefined ? { preview: approvalPreview } : {}),
+        };
         await logEvent(
           deps,
           faults,
@@ -1767,6 +1976,60 @@ async function executeTool(
     return { result: { ok: false, output: denied, error: denied }, expected: true };
   }
 
+  deps.effectHost?.recordAllow(effectId, { leaseId });
+
+  let kernelRouted = false;
+  if (effectHostKernelMutationEnabled()) {
+    let routed:
+      | Awaited<ReturnType<typeof tryKernelWriteRoute>>
+      | undefined;
+    if (call.name === "write" && writeArgsEligibleForKernelRoute(parsed.args)) {
+      routed = await tryKernelWriteRoute(deps.kernel, deps.workspace, deps.sessionId, effectId, parsed.args);
+    } else if (call.name === "edit" && editArgsEligibleForKernelRoute(parsed.args)) {
+      routed = await tryKernelEditRoute(deps.kernel, deps.workspace, deps.sessionId, effectId, parsed.args);
+    } else if (call.name === "shell" && shellArgsEligibleForKernelRoute(parsed.args)) {
+      routed = await tryKernelShellRoute(deps.kernel, deps.workspace, effectId, parsed.args);
+    } else if (call.name === "apply_patch" && applyPatchArgsEligibleForKernelRoute(parsed.args)) {
+      routed = await tryKernelApplyPatchRoute(
+        deps.kernel,
+        deps.workspace,
+        deps.sessionId,
+        effectId,
+        parsed.args,
+      );
+    } else if (call.name === "ast_edit" && astEditArgsEligibleForKernelRoute(parsed.args)) {
+      routed = await tryKernelAstEditRoute(
+        deps.kernel,
+        deps.workspace,
+        deps.sessionId,
+        effectId,
+        parsed.args,
+      );
+    }
+    if (routed !== undefined) {
+      kernelRouted = true;
+      if (routed.journalRecordFailed) {
+        emit(deps.callbacks, { type: "notice", message: EFFECT_HOST_KERNEL_JOURNAL_FAIL_NOTICE });
+      }
+      deps.effectHost?.recordExecute(effectId, { ok: routed.result.ok });
+      return { result: routed.result, leaseId, kernelRouteObserve: routed.kernelObserve };
+    }
+  }
+
+  if (effectHostKernelRequireMode()) {
+    const astEditProjectionMiss =
+      call.name === "ast_edit" && !kernelRouted && astEditArgsEligibleForKernelRoute(parsed.args)
+        ? await classifyAstEditKernelProjectionMiss(deps.workspace, parsed.args)
+        : undefined;
+    const requireRefusal = effectHostKernelRequireRefusal(call.name, parsed.args, kernelRouted, {
+      ...(astEditProjectionMiss ? { astEditProjectionMiss } : {}),
+    });
+    if (requireRefusal) {
+      deps.effectHost?.recordExecute(effectId, { ok: false });
+      return { result: { ok: false, output: requireRefusal, error: requireRefusal }, expected: true, leaseId };
+    }
+  }
+
   const context: ToolContext = {
     cwd: deps.workspace,
     workspace: deps.workspace,
@@ -1783,9 +2046,16 @@ async function executeTool(
   };
 
   try {
-    return { result: normalizeToolResult(await tool.execute(parsed.args, context)), leaseId };
+    const result = normalizeToolResult(await tool.execute(stripToolOutputContinuationArgs(parsed.args), context));
+    const childEffectIds = result.childEffectIds?.length ? [...result.childEffectIds] : undefined;
+    deps.effectHost?.recordExecute(effectId, {
+      ok: result.ok,
+      ...(childEffectIds?.length ? { childEffectIds } : {}),
+    });
+    return { result, leaseId, ...(childEffectIds?.length ? { childEffectIds } : {}) };
   } catch (err) {
     const message = errorMessage(err);
+    deps.effectHost?.recordExecute(effectId, { ok: false });
     return { result: { ok: false, output: `Tool ${call.name} failed: ${message}`, error: message }, leaseId };
   }
 }
@@ -1802,27 +2072,139 @@ async function issueToolReceipt(
   parsed: { args: Record<string, unknown> },
   result: ToolResult,
   leaseId: string | undefined,
-): Promise<boolean> {
+  effectId: string,
+  kernelRouteObserve?: KernelExecutePostimageObserve,
+  childEffectIds?: readonly string[],
+): Promise<{ receiptId: string; receiptSeq: number } | undefined> {
   try {
+    const postimageMissing = assessPostimageMissingAtObserve(call.name, parsed.args, deps.workspace, result.ok);
+    if (postimageMissing.missing && postimageMissing.path) {
+      emit(deps.callbacks, {
+        type: "notice",
+        message: postimageMissingAtObserveNotice(call.name, postimageMissing.path),
+      });
+    }
+    const postimage =
+      postimageMissing.missing
+        ? undefined
+        : kernelRouteObserve !== undefined &&
+            (call.name === "write" ||
+              call.name === "edit" ||
+              call.name === "apply_patch" ||
+              call.name === "ast_edit")
+          ? computeReceiptPostimageFromKernel(
+              call.name,
+              parsed.args,
+              deps.workspace,
+              result.ok,
+              kernelRouteObserve,
+            )
+          : computeReceiptPostimage(call.name, parsed.args, deps.workspace, result.ok);
+    const postimageFields = receiptPostimageFields(postimage);
+    if (postimage !== undefined && !postimage.observationStable) {
+      emit(deps.callbacks, { type: "notice", message: postimageObservationNotice(postimage) });
+    }
+    const observedResultDigest = toolResultDigest(result);
     const receipt = await deps.kernel.issueReceipt({
       action: "tool.execute",
       tool: call.name,
       argsDigest: sha256Hex(canonicalJson(parsed.args)),
-      resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+      resultDigest: observedResultDigest,
       leaseId,
+      effectId,
+      ...(postimageFields ?? {}),
+      ...(childEffectIds?.length ? { childEffectIds: [...childEffectIds] } : {}),
+    });
+    const digestEvidence = assessResultDigestEvidence(receipt.resultDigest, result);
+    const kernelShellDigestStable =
+      call.name === "shell" &&
+      kernelRouteObserve !== undefined &&
+      kernelRouteObserve.resultDigestStable === false
+        ? false
+        : undefined;
+    const resultDigestEvidenceStable =
+      kernelShellDigestStable === false ? false : digestEvidence.stable;
+    if (!digestEvidence.stable) {
+      emit(deps.callbacks, {
+        type: "notice",
+        message: resultDigestEvidenceNotice(call.name, receipt.resultDigest, digestEvidence.observedDigest),
+      });
+    } else if (kernelShellDigestStable === false) {
+      emit(deps.callbacks, {
+        type: "notice",
+        message: `kernel shell.exec stream digest observe unstable for ${call.name}; effect marked unknown`,
+      });
+    }
+    deps.effectHost?.recordObserve(effectId, {
+      receiptId: receipt.id,
+      receiptSeq: receipt.seq,
+      postimageDigest: postimageFields?.postimageDigest,
+      postimageObservationStable: postimage?.observationStable,
+      resultDigestEvidenceStable,
+      postimageMissingAtObserve: postimageMissing.missing,
+      resourceKey: postimage?.path ?? postimageMissing.path,
     });
     await logEvent(
       deps,
       faults,
       EventTypes.receiptIssued,
-      { receiptId: receipt.id, seq: receipt.seq, tool: call.name, callId: call.id },
+      {
+        receiptId: receipt.id,
+        seq: receipt.seq,
+        tool: call.name,
+        callId: call.id,
+        effectId,
+        ...(postimageFields ?? {}),
+        ...(postimage !== undefined && !postimage.observationStable
+          ? { postimageObservationUnstable: true, postimagePath: postimage.path }
+          : {}),
+        ...(postimageMissing.missing && postimageMissing.path
+          ? { postimageMissingAtObserve: true, postimagePath: postimageMissing.path }
+          : {}),
+        ...(!resultDigestEvidenceStable ? { resultDigestEvidenceUnstable: true } : {}),
+      },
       { kind: "system", id: "hz-kernel" },
     );
-    return true;
+    const verdict = deps.effectHost?.reconcileEffect(effectId) ?? "unknown";
+    await mirrorEffectReconcileToKernel(deps.kernel, deps.effectHost?.getRecord(effectId));
+    const settlePayload = {
+      effectId,
+      tool: call.name,
+      callId: call.id,
+      receiptId: receipt.id,
+      receiptSeq: receipt.seq,
+      verdict,
+      ...(postimageFields ? { postimageDigest: postimageFields.postimageDigest } : {}),
+      ...(postimage !== undefined && !postimage.observationStable
+        ? { postimageObservationUnstable: true }
+        : {}),
+      ...(postimageMissing.missing ? { postimageMissingAtObserve: true } : {}),
+      ...(!resultDigestEvidenceStable ? { resultDigestEvidenceUnstable: true } : {}),
+    };
+    if (verdict === "settled") {
+      await logEvent(deps, faults, EventTypes.effectSettled, settlePayload, {
+        kind: "system",
+        id: "hz-effect",
+      });
+    } else {
+      await logEvent(deps, faults, EventTypes.effectUnknown, settlePayload, {
+        kind: "system",
+        id: "hz-effect",
+      });
+      emit(deps.callbacks, {
+        type: "effect.unknown",
+        effectId,
+        tool: call.name,
+        receiptId: receipt.id,
+        callId: call.id,
+      });
+    }
+    deps.effectHost?.persistRecord(effectId, verdict);
+    return { receiptId: receipt.id, receiptSeq: receipt.seq };
   } catch (err) {
     faults.noteReceipt(err);
     emit(deps.callbacks, { type: "notice", message: `could not issue a receipt: ${errorMessage(err)}` });
-    return false;
+    return undefined;
   }
 }
 
@@ -1869,20 +2251,36 @@ async function runToolCall(
   attemptsAfterFailure?: (formatError: boolean) => number,
 ): Promise<ToolCallOutcome> {
   const parsed = parseCall(call);
+  const effectId = createEffectId();
+  deps.effectHost?.begin(effectId, call.name, call.id);
   const started = Date.now();
   // NF-069: when the admitted args are a repaired form of the model's bytes the
   // event and both cards say so; the receipt below hashes these same args.
   const repairedMark = parsed.repaired === true ? { repaired: true as const } : {};
-  emit(deps.callbacks, { type: "tool.card", callId: call.id, name: call.name, args: parsed.args, status: "running", ...repairedMark });
+  emit(deps.callbacks, {
+    type: "tool.card",
+    callId: call.id,
+    name: call.name,
+    args: parsed.args,
+    status: "running",
+    effectId,
+    ...repairedMark,
+  });
   await logEvent(
     deps,
     faults,
     EventTypes.toolCall,
-    { callId: call.id, name: call.name, args: parsed.args, ...(parsed.repaired === true ? { repaired: true, repairs: parsed.repairs } : {}) },
+    {
+      callId: call.id,
+      name: call.name,
+      args: parsed.args,
+      effectId,
+      ...(parsed.repaired === true ? { repaired: true, repairs: parsed.repairs } : {}),
+    },
     { kind: "tool", id: call.name },
   );
 
-  const executed = await executeTool(deps, gate, call, parsed, faults, hooks);
+  const executed = await executeTool(deps, gate, call, parsed, faults, hooks, effectId);
   const result = executed.result;
   // Completion evidence: what this run changed, and whether anything checked it.
   // A staged (plan-mode) write changed nothing on disk, so it is not evidence.
@@ -1894,10 +2292,18 @@ async function runToolCall(
   // NF-074(b): cap the model-facing result and spill the full text. The
   // receipt digest below stays the digest of the FULL output — the cap is a
   // context budget, never an evidence change.
-  const plan = planToolOutputCap(typeof result.output === "string" ? result.output : "", {
-    spillDir: workspaceSpillDir(deps.workspace),
-    displaySpillDir: displaySpillPath(deps.workspace),
-  });
+  const fullOutput = typeof result.output === "string" ? result.output : "";
+  const outputOffset = parseToolOutputContinuationOffset(parsed.args);
+  const capOpts = blobSpillEnabled()
+    ? { blobCasWorkspace: deps.workspace }
+    : {
+        spillDir: workspaceSpillDir(deps.workspace),
+        displaySpillDir: displaySpillPath(deps.workspace),
+      };
+  const plan =
+    outputOffset !== undefined && outputOffset > 0
+      ? planToolOutputFromOffset(fullOutput, outputOffset, capOpts)
+      : planToolOutputCap(fullOutput, capOpts);
   if (plan.spill) {
     const refusal = writeSpillSafely(plan.spill.file, plan.spill.contents);
     if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
@@ -1972,11 +2378,22 @@ async function runToolCall(
         error: result.error,
         ms: Date.now() - started,
         leaseId: executed.leaseId,
+        effectId,
         transcriptWriteFailed: true,
       },
       { kind: "tool", id: call.name },
     );
-    await issueToolReceipt(deps, faults, call, parsed, result, executed.leaseId);
+    const receipt = await issueToolReceipt(
+      deps,
+      faults,
+      call,
+      parsed,
+      result,
+      executed.leaseId,
+      effectId,
+      executed.kernelRouteObserve,
+      executed.childEffectIds,
+    );
     emit(deps.callbacks, {
       type: "tool.card",
       callId: call.id,
@@ -1984,6 +2401,8 @@ async function runToolCall(
       args: parsed.args,
       status: "error",
       summary: firstLine(message),
+      effectId,
+      ...(receipt ?? {}),
     });
     throw new TranscriptAppendError(message);
   }
@@ -2000,12 +2419,23 @@ async function runToolCall(
       error: result.error,
       ms: Date.now() - started,
       leaseId: executed.leaseId,
+      effectId,
     },
     { kind: "tool", id: call.name },
   );
 
   // The receipt is the durable proof of what ran, with what arguments, to what result.
-  await issueToolReceipt(deps, faults, call, parsed, result, executed.leaseId);
+  const receipt = await issueToolReceipt(
+    deps,
+    faults,
+    call,
+    parsed,
+    result,
+    executed.leaseId,
+    effectId,
+    executed.kernelRouteObserve,
+    executed.childEffectIds,
+  );
 
   emit(deps.callbacks, {
     type: "tool.card",
@@ -2017,6 +2447,8 @@ async function runToolCall(
     summary: result.ok ? firstLine(content) : firstLine(result.error && result.error !== "" ? result.error : content),
     ...(executed.preview !== undefined ? { preview: executed.preview } : {}),
     detail: cardDetail(call.name, result, Date.now() - started),
+    effectId,
+    ...(receipt ?? {}),
   });
   // The locally counted context cost of this message (NF-074(a) tail), plus
   // the outcome the mistake-tracker rail needs: a tool that returned ok:false
@@ -2118,7 +2550,11 @@ export async function runTurn(
     // subagent with a fixed systemOverride still routes — the editing dialect
     // follows the model, not the prompt.
     const routing = resolveToolRoutingConfig({ model: deps.model, provider: deps.provider.name });
-    deps = { ...deps, toolFilter: routing.toToolFilter(deps.toolFilter) };
+    deps = {
+      ...deps,
+      toolFilter: routing.toToolFilter(deps.toolFilter),
+      effectHost: deps.effectHost ?? new EffectHost(),
+    };
     await beginUserTurn(deps, faults, prompt);
     // Read once per run, from the store: the task statement survives a trim and
     // a resume alike, and it is the FIRST user turn that is the task — not the
@@ -2161,7 +2597,7 @@ export async function runTurn(
           if (!message.startsWith("no per-model instruction template")) emit(deps.callbacks, { type: "notice", message });
         },
       });
-      const mem = memoryPromptSection(deps.workspace);
+      const mem = memoryPromptSection(deps.workspace, prompt);
       const base = perModel === "" ? projectBlocks : `${projectBlocks}\n\n${perModel}\n`;
       if (mem === undefined) return base;
       return `${base}\n\n${mem}\n`;
@@ -2235,6 +2671,10 @@ export async function runTurn(
     // One report per run, not one per dispatch: the compaction numbers describe
     // the view the run works from, and a notice per step would be a notice storm.
     let compactionAnnounced = false;
+    let historyLimit = HISTORY_LIMIT;
+    let contextWindowRecoveryUsed = false;
+    let pendingCompactionTrigger: CompactionTrigger | undefined;
+    const compactionHold = compactionHoldEnabled() ? new CompactionHoldBuffer() : undefined;
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
@@ -2268,6 +2708,8 @@ export async function runTurn(
       // Charged before the call: a billed-but-failed turn still spends its step.
       await ledger.chargeStep();
 
+      if (drainInterjectionsAtSafePoint(deps, faults)) continue;
+
       // The window is compacted, not sliced: the turn that stated the task, the
       // constraints later turns stated and a labelled summary of what left the
       // window ride with it (compaction.ts). The store is never rewritten — this
@@ -2278,7 +2720,8 @@ export async function runTurn(
       // object, so `limit` fell back to 1 in compaction.ts and every dispatch
       // elided the whole transcript down to one message. No typecheck existed
       // to catch the missing argument; the pipeline now has one.)
-      const view = compactHistory(deps.store.history(deps.sessionId), { limit: HISTORY_LIMIT });
+      const rawHistory = deps.store.history(deps.sessionId);
+      const view = compactHistory(rawHistory, { limit: historyLimit, holdBuffer: compactionHold });
       const history = view.history;
       if (view.compacted && !compactionAnnounced) {
         // The elision is reported, never silent: a notice for the human of this
@@ -2289,14 +2732,14 @@ export async function runTurn(
         // compaction actually happened, never a per-dispatch storm.
         // Observation-only (H4). compactHistory is synchronous, so the window
         // is already computed; pre carries the pending counts, post the result.
-        await emitLifecycle("compactPre", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
+        await emitLifecycle("compactPre", { window: historyLimit, dropped: view.dropped, kept: view.kept });
         emit(deps.callbacks, { type: "notice", message: view.notice });
         await logEvent(
           deps,
           faults,
           COMPACTION_EVENT,
           {
-            window: HISTORY_LIMIT,
+            window: historyLimit,
             dropped: view.dropped,
             kept: view.kept,
             elidedTokens: view.elidedTokens,
@@ -2310,7 +2753,20 @@ export async function runTurn(
         );
         // H1 compact.post: the compaction settled; fire the post half of the
         // pair (observation-only, H4).
-        await emitLifecycle("compactPost", { window: HISTORY_LIMIT, dropped: view.dropped, kept: view.kept });
+        await emitLifecycle("compactPost", { window: historyLimit, dropped: view.dropped, kept: view.kept });
+        const trigger: CompactionTrigger =
+          pendingCompactionTrigger ?? (view.holdSwap ? "hold-swap" : "history-window");
+        pendingCompactionTrigger = undefined;
+        appendCompactionRecord(deps.workspace, {
+          sessionId: deps.sessionId,
+          trigger,
+          tokensBefore: view.elidedTokens + tokensIn(view.history),
+          tokensAfter: tokensIn(view.history),
+          dropped: view.dropped,
+          kept: view.kept,
+          window: historyLimit,
+          summaryDigest: sha256Hex(view.summary),
+        });
       }
       const quirksPreview =
         deps.providerBaseUrl !== undefined
@@ -2348,6 +2804,16 @@ export async function runTurn(
           appendedTokens = FRAMING_CHARGE_TOKENS + estimateTokens(turn.text);
           for (const call of turn.toolCalls) appendedTokens += estimateTokens(call.arguments);
         }
+        if ((turn.usage.cacheReadInputTokens ?? 0) > 0 || (turn.usage.cacheCreationInputTokens ?? 0) > 0) {
+          const enriched = enrichUsageCost(turn.usage, deps.provider.name, deps.model);
+          const total = enriched.cost?.totalUsd;
+          if (total !== undefined) {
+            emit(deps.callbacks, {
+              type: "notice",
+              message: `provider usage: cache read ${turn.usage.cacheReadInputTokens ?? 0}, cache write ${turn.usage.cacheCreationInputTokens ?? 0}, ~$${total.toFixed(4)} (harness estimate)`,
+            });
+          }
+        }
       }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;
@@ -2369,8 +2835,34 @@ export async function runTurn(
       emit(deps.callbacks, { type: "assistant.done", text: turn.text });
 
       if (turn.error) {
+        if (
+          isContextWindowExceededCode(turn.failureCode) &&
+          !contextWindowRecoveryUsed
+        ) {
+          const rawCount = deps.store.history(deps.sessionId).length;
+          const nextLimit = emergencyHistoryLimit(historyLimit, rawCount);
+          if (nextLimit !== null) {
+            const limitBefore = historyLimit;
+            contextWindowRecoveryUsed = true;
+            historyLimit = nextLimit;
+            compactionAnnounced = false;
+            pendingCompactionTrigger = "emergency-context-window";
+            emit(deps.callbacks, { type: "notice", message: CONTEXT_WINDOW_COMPACTION_NOTICE });
+            await logEvent(deps, faults, EventTypes.error, {
+              message: turn.error,
+              code: turn.failureCode,
+              compactionPending: true,
+              historyLimitBefore: limitBefore,
+              historyLimitAfter: nextLimit,
+            });
+            continue;
+          }
+        }
         emit(deps.callbacks, { type: "error", message: turn.error });
-        await logEvent(deps, faults, EventTypes.error, { message: turn.error });
+        await logEvent(deps, faults, EventTypes.error, {
+          message: turn.error,
+          ...(turn.failureCode !== undefined ? { code: turn.failureCode } : {}),
+        });
         // SAFETY-RAILS: a provider error is an `api_error` mistake. The run
         // always ends here on the FIRST provider error with the existing
         // `provider_error` detail; the tracker only changes the detail once the
@@ -2393,8 +2885,13 @@ export async function runTurn(
       }
       if (turn.stopReason === "max_tokens") {
         emit(deps.callbacks, { type: "notice", message: "the model hit its output limit for this turn" });
+        if (turn.toolCalls.length > 0) {
+          await failTruncatedToolBatch(deps, faults, turn.toolCalls);
+          continue;
+        }
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
+        if (drainInterjectionsAtSafePoint(deps, faults)) continue;
         // T-3: the model is ending its turn. If the session todo list still has
         // open items, give it ONE more step with a bounded reminder before the
         // run settles (the exit-status gate below keeps `unknown` as the
@@ -2414,35 +2911,24 @@ export async function runTurn(
         continue;
       }
 
-      // SAFETY-RAILS (rail 1): identical-tool-call loop detection, BEFORE the
-      // batch is dispatched. A soft verdict (the 3rd identical call) adds a
-      // nudge to the corrective that rides the next step's system rail, exactly
-      // like the format-error corrective; a hard verdict (the 5th) stops the
-      // run with `tool_loop` before anything is executed.
-      let loopHardStop = false;
-      // A fresh batch re-derives the nudge: it is cleared here and re-set only
-      // if a soft verdict fires for a call in THIS batch, so a non-repeated call
-      // (which the tracker's own state resets) does not leave a stale nudge.
+      // SAFETY-RAILS (rail 1): Grok-style tiered identical-step detection, BEFORE
+      // the batch is dispatched. One provider turn (parallel calls included) is
+      // one step; tight tiers apply when every call is read/plan-style.
       loopNudge = undefined;
-      for (const call of turn.toolCalls) {
-        const verdict = loopDetection.inspect({ name: call.name, input: parseCall(call).args });
-        if (verdict.kind === "hard") {
-          emit(deps.callbacks, { type: "error", message: verdict.message ?? "tool-call loop detected" });
-          await logEvent(deps, faults, EventTypes.error, { message: verdict.message, detail: "tool_loop" });
-          exit = { terminal: "failed", detail: "tool_loop" };
-          loopHardStop = true;
-          break;
-        }
-        if (verdict.kind === "soft" && verdict.message !== undefined) {
-          // The soft nudge rides the next step's system rail like the format
-          // corrective, but on its OWN channel so the format-error reset below
-          // (which clears `corrective` on a clean batch) cannot wipe it: a
-          // repeated CLEAN call is exactly when the nudge must survive.
-          loopNudge = verdict.message;
-          emit(deps.callbacks, { type: "notice", message: verdict.message });
-        }
+      const loopCalls = turn.toolCalls.map((call) => ({ name: call.name, input: parseCall(call).args }));
+      const loopVerdict = loopDetection.inspectStep(loopCalls);
+      if (loopVerdict.kind === "hard") {
+        emit(deps.callbacks, { type: "error", message: loopVerdict.message ?? "tool-call loop detected" });
+        await logEvent(deps, faults, EventTypes.error, { message: loopVerdict.message, detail: "tool_loop" });
+        exit = { terminal: "failed", detail: "tool_loop" };
+        break;
       }
-      if (loopHardStop) break;
+      if (loopVerdict.kind === "soft" && loopVerdict.message !== undefined) {
+        const label = loopVerdict.toolLabel ?? "tool";
+        const count = loopVerdict.consecutiveCount ?? 0;
+        loopNudge = loopDetectionInterruptNudge(label, count);
+        emit(deps.callbacks, { type: "notice", message: loopVerdict.message });
+      }
       // FEAT-003: capture the journal boundary just before the turn's tool
       // batch runs. The entries this session can see now are the "before" set;
       // anything appended while the batch runs is a change THIS turn made. Plan
@@ -2457,44 +2943,39 @@ export async function runTurn(
       // run AFTER the batch settles, iterating turn.toolCalls in order, so the
       // chain and the tracker stay deterministic regardless of concurrency.
       const toolOk = new Map<string, boolean>();
-      for (const segment of batchSegments(turn.toolCalls)) {
-        if (deps.signal.aborted) {
-          aborted = true;
-          break;
-        }
-        await Promise.all(
-          segment.map((call) =>
-            runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy, (formatError) => {
-              const mistakeLeft = mistakes.remaining - 1;
-              return formatError ? Math.min(mistakeLeft, MAX_CONSECUTIVE_FORMAT_ERRORS - consecutiveFormatErrors - 1) : mistakeLeft;
-            })
-              .then((outcome) => {
-                appendedTokens += outcome.tokens;
-                // A plan-mode staged call changed nothing: not a failure. A
-                // call whose arguments did not parse is a FORMAT error, counted
-                // by the format cap / `invalid_tool_call` axis below — not a
-                // `tool_execution_failed` mistake, so it is excluded here to
-                // avoid double-counting the same batch on both axes.
-                if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseCall(call).error === undefined) {
-                  toolOk.set(call.id, outcome.ok);
-                }
-              })
-              .catch((err) => {
-                if (err instanceof TranscriptAppendError) {
-                  // The tool's effect already happened while its result is not
-                  // in the transcript: stop at this boundary instead of
-                  // replaying a history that no longer matches what ran. The
-                  // fault (named for the run by faults.failureMessage at the
-                  // end) is already recorded and noticed in runToolCall.
-                  fatal = true;
-                  return;
-                }
-                emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
-              }),
-          ),
-        );
-        if (fatal) break;
-      }
+      const batchFifo = await runClassedToolBatchFifo(turn.toolCalls, {
+        signal: deps.signal,
+        runCall: async (call) => {
+          const outcome = await runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy, (formatError) => {
+            const mistakeLeft = mistakes.remaining - 1;
+            return formatError ? Math.min(mistakeLeft, MAX_CONSECUTIVE_FORMAT_ERRORS - consecutiveFormatErrors - 1) : mistakeLeft;
+          });
+          appendedTokens += outcome.tokens;
+          // A plan-mode staged call changed nothing: not a failure. A
+          // call whose arguments did not parse is a FORMAT error, counted
+          // by the format cap / `invalid_tool_call` axis below — not a
+          // `tool_execution_failed` mistake, so it is excluded here to
+          // avoid double-counting the same batch on both axes.
+          if (!outcome.staged && !(outcome.expected && !outcome.ok) && parseCall(call).error === undefined) {
+            toolOk.set(call.id, outcome.ok);
+          }
+        },
+        onCallError: (call, err) => {
+          if (err instanceof TranscriptAppendError) {
+            // The tool's effect already happened while its result is not
+            // in the transcript: stop at this boundary instead of
+            // replaying a history that no longer matches what ran. The
+            // fault (named for the run by faults.failureMessage at the
+            // end) is already recorded and noticed in runToolCall.
+            return "fatal";
+          }
+          emit(deps.callbacks, { type: "notice", message: `tool ${call.name} failed unexpectedly: ${errorMessage(err)}` });
+          return undefined;
+        },
+      });
+      if (batchFifo.aborted) aborted = true;
+      if (batchFifo.fatal) fatal = true;
+      maybeEmitSessionKernelReconcile(deps);
       // FEAT-003: the entries recorded during THIS turn are those appended
       // since the boundary above. Aggregate them into one net diff per file and
       // emit a single turn.diff event, independent of per-tool output. Only
@@ -2519,6 +3000,14 @@ export async function runTurn(
         break;
       }
       if (aborted) break;
+
+      if (compactionHold) {
+        const elided = elidedPrefixForCompaction(deps.store.history(deps.sessionId), historyLimit);
+        if (elided !== null) {
+          const total = deps.store.history(deps.sessionId).length;
+          compactionHold.prepareHold(elided, total, historyLimit);
+        }
+      }
 
       // SAFETY-RAILS (rail 3): the repeat-tool reminder, POST-execute and in
       // deterministic order, so a denied or failed call still advances the
@@ -2555,6 +3044,9 @@ export async function runTurn(
           emit(deps.callbacks, { type: "error", message: outcome.message });
           await logEvent(deps, faults, EventTypes.error, { message: outcome.message });
           break;
+        }
+        if (mistakes.remaining === 1) {
+          corrective = consecutiveMistakesInterruptNudge(mistakes.value, mistakes.value + 1);
         }
       } else if (batchHadToolSuccess) {
         mistakes.reset();
@@ -2604,6 +3096,8 @@ export async function runTurn(
         consecutiveFormatErrors = 0;
         corrective = undefined;
       }
+
+      if (drainInterjectionsAtSafePoint(deps, faults)) continue;
     }
     // H1 step.end (turn.end): the dispatch loop has left by its single exit
     // path; fire once, before the turn.done emission below. Observation-only
@@ -2700,6 +3194,22 @@ export async function runTurn(
       emit(deps.callbacks, { type: "notice", message: `could not record a post-mortem: ${errorMessage(err)}` });
     }
   }
+  maybeEmitSessionKernelReconcile(deps);
+  try {
+    await logEvent(deps, faults, RUN_COMPLETE_EVENT, buildRunCompletePayload(exit));
+  } catch {
+    /* logEvent already accounts for faults */
+  }
   emit(deps.callbacks, { type: "turn.done" });
   return { text, aborted: aborted || deps.signal.aborted, exit };
 }
+
+/** Session↔kernel pairing check at batch/turn boundaries; never fails the run. */
+function maybeEmitSessionKernelReconcile(deps: LoopDeps): void {
+  const msg = sessionKernelReconcileNotice(deps.workspace, deps.sessionId);
+  if (msg !== undefined) emit(deps.callbacks, { type: "notice", message: msg });
+  const block = latchEffectReconcileBlock(deps.workspace, deps.sessionId, deps.effectHost);
+  if (block !== undefined) emit(deps.callbacks, { type: "notice", message: block });
+}
+
+export { batchSegments, concurrencyClassOf } from "./tool-batch-fifo";

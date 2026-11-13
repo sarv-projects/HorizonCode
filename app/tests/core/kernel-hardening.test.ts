@@ -192,6 +192,18 @@ describe("lexical symlink-chain resolution (finding 2)", () => {
     ).toBeUndefined();
   });
 
+  test("protectedPathRefusal refuses shell.exec that names the kernel state dir", () => {
+    const fx = fixture("hz-shell-state-");
+    const { workspace, stateDir } = fx;
+    const deny = (cmd: string) =>
+      protectedPathRefusal({ kind: "shell.exec", target: cmd }, stateDir);
+    expect(deny(`echo x > ${path.join(stateDir, "policy.json")}`)).toBeDefined();
+    expect(deny("rm -rf .hz/state/kernel")).toBeDefined();
+    expect(deny(`cat ${path.join(workspace, ".hz/state/kernel/events.jsonl")}`)).toBeDefined();
+    expect(deny("echo hello")).toBeUndefined();
+    expect(deny("ls src")).toBeUndefined();
+  });
+
   test("the walk drives scope classification, including for links that leave the workspace", () => {
     const fx = fixture("hz-sym-scope-");
     const { workspace, stateDir } = fx;

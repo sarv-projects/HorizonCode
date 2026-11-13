@@ -40,30 +40,91 @@
  * directory stays read-only instead of being silently made writable.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
-import { appendFile, chmod, mkdir, readFile, rename, stat } from "node:fs/promises";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { chmod, mkdir, readFile, rename, stat } from "node:fs/promises";
+import { appendJsonl } from "./jsonl-append";
 import * as path from "node:path";
-import { kernelStateDir as resolveKernelStateDir } from "./paths";
+import { kernelStateDir as resolveKernelStateDir, userConfigDir } from "./paths";
+import { workspaceHooksFile } from "./trust";
 import { birthIdentityOf, readProcessFacts, type ProcessIdentity } from "./worker-identity";
 import { startOwnerDeathSupervisor } from "./supervisor";
 import type { SandboxSpawnKernel } from "../contracts";
 import { resolveSandboxExecBinary } from "./kernel";
 import { kernelEnforcesProcessSandbox, SANDBOX_AUTO_LABELS } from "./sandbox-spawn";
+import { mergeEgressProxyEnv } from "./egress-env";
+import { mergeNetnsEgressProxySpawnEnv } from "./sandbox-netns-proxy";
+import { mergeSandboxChildNetSpawnEnv } from "./sandbox-child-net";
+import { mergeSandboxNetnsHonestySpawnEnv } from "./sandbox-netns-route";
 
-function wrapArgvForSandbox(argv: string[]): string[] {
+function sandboxRequireClosed(): boolean {
+  return process.env.HZ_SANDBOX_REQUIRE === "1";
+}
+
+/** Paths that must stay read-only under workspace-write (Grok hook write-deny adapt). */
+export function sandboxHookWriteDenyRoPaths(workspace: string, stateDir: string, home?: string): string[] {
+  const ro = new Set<string>();
+  ro.add(path.resolve(stateDir));
+  const wsHooks = workspaceHooksFile(workspace);
+  if (existsSync(wsHooks)) ro.add(path.resolve(wsHooks));
+  const resolvedHome = home ?? homedir();
+  if (resolvedHome !== "") {
+    const userHooks = path.join(userConfigDir(resolvedHome), "hooks.json");
+    if (existsSync(userHooks)) ro.add(path.resolve(userHooks));
+  }
+  return [...ro];
+}
+
+function mergeRoPaths(existing: string | undefined, extra: string[]): string {
+  const set = new Set<string>();
+  if (typeof existing === "string" && existing.trim() !== "") {
+    for (const part of existing.split(":")) {
+      if (part.trim() !== "") set.add(part);
+    }
+  }
+  for (const p of extra) set.add(p);
+  return [...set].join(":");
+}
+
+function wrapArgvForSandbox(argv: string[], required: boolean): string[] {
   const bin = resolveSandboxExecBinary();
-  if (!bin) return argv;
+  if (!bin) {
+    if (required) {
+      throw new Error(
+        "spawnOwned: sandbox wrap required but hz-sandbox-exec was not found (set HZ_SANDBOX_EXEC_BIN or unset HZ_SANDBOX_REQUIRE)",
+      );
+    }
+    return argv;
+  }
   return [bin, "--", ...argv];
 }
 
 async function resolveSpawnArgv(cmd: string[], opts: SpawnOwnedOptions): Promise<string[]> {
-  if (process.env.HZ_SANDBOX_EXEC === "0" || opts.sandboxWrap === false) return cmd;
-  if (process.env.HZ_SANDBOX_EXEC === "1" || opts.sandboxWrap === true) return wrapArgvForSandbox(cmd);
   const auto =
     opts.sandboxWrap === "auto" ||
     (opts.sandboxWrap === undefined && SANDBOX_AUTO_LABELS.has(opts.label) && opts.kernel !== undefined);
+  const required =
+    opts.sandboxWrap === true || (auto && sandboxRequireClosed()) || process.env.HZ_SANDBOX_EXEC === "1";
+
+  if (opts.sandboxWrap === false) return cmd;
+  if (process.env.HZ_SANDBOX_EXEC === "0") {
+    if (required) {
+      throw new Error(
+        "spawnOwned: sandbox wrap required but HZ_SANDBOX_EXEC=0 disables confinement",
+      );
+    }
+    return cmd;
+  }
+  if (process.env.HZ_SANDBOX_EXEC === "1" || opts.sandboxWrap === true) {
+    return wrapArgvForSandbox(cmd, true);
+  }
   if (auto && opts.kernel !== undefined && (await kernelEnforcesProcessSandbox(opts.kernel))) {
-    return wrapArgvForSandbox(cmd);
+    return wrapArgvForSandbox(cmd, required);
+  }
+  if (auto && sandboxRequireClosed()) {
+    throw new Error(
+      "spawnOwned: sandbox wrap required (HZ_SANDBOX_REQUIRE=1) but the kernel reports no enforceable process sandbox",
+    );
   }
   return cmd;
 }
@@ -221,7 +282,8 @@ async function appendLedgerRow(stateDir: string, entry: SpawnLedgerEntry): Promi
   }
   // One append of one line: whole lines only, so a crash cannot interleave the
   // rows of two concurrent spawns beyond what O_APPEND already prevents.
-  await appendFile(file, JSON.stringify(entry) + "\n", "utf8");
+  // fsync by default (docs/33 §6.5); HZ_JSONL_FSYNC=0 disables.
+  await appendJsonl(file, JSON.stringify(entry) + "\n");
   // Applied after the append, so an existing loose-mode ledger is tightened too.
   await setOwnerOnly(file, 0o600);
 }
@@ -416,7 +478,13 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
 
   const argv = await resolveSpawnArgv(cmd, opts);
   const wrapped = argv[0] !== undefined && argv[0] !== cmd[0];
-  let spawnEnv = opts.env;
+  let spawnEnv = mergeSandboxChildNetSpawnEnv(
+    mergeSandboxNetnsHonestySpawnEnv(
+      mergeEgressProxyEnv(
+        mergeNetnsEgressProxySpawnEnv({ ...(opts.env ?? process.env) }, { sandboxWrapped: wrapped }),
+      ),
+    ),
+  );
   if (wrapped) {
     const root = opts.cwd ?? process.cwd();
     const fromMode =
@@ -426,10 +494,19 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
           ? "workspace-write"
           : undefined;
     const fsMode = opts.sandboxFsMode ?? fromMode ?? "workspace-write";
+    // Keep the kernel state directory read-only inside the workspace fence so
+    // a wrapped shell cannot rewrite policy/events/receipts via redirects.
+    const existingRo = spawnEnv.HZ_SANDBOX_FS_RO_PATHS;
+    const workspaceRoot = opts.cwd ?? process.cwd();
+    const roPaths = mergeRoPaths(
+      typeof existingRo === "string" ? existingRo : undefined,
+      sandboxHookWriteDenyRoPaths(workspaceRoot, opts.stateDir),
+    );
     spawnEnv = {
-      ...(opts.env ?? process.env),
+      ...spawnEnv,
       HZ_SANDBOX_FS_ROOT: root,
       HZ_SANDBOX_FS_MODE: fsMode,
+      HZ_SANDBOX_FS_RO_PATHS: roPaths,
     };
   }
   const proc = Bun.spawn({

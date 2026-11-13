@@ -64,10 +64,11 @@ describe("/mode and the badge", () => {
     return { renderer, runtime, text: () => strip(chunks.join("")), mode: () => mode };
   }
 
-  test("bare /mode shows the current mode", () => {
+  test("bare /mode prints the autonomy ladder", () => {
     const h = setup("read-only");
     runModeCommand("", h.runtime, h.renderer);
     expect(h.text()).toContain("read-only");
+    expect(h.text()).toContain("autonomy ladder");
   });
 
   test("/mode accept-edits sets it", () => {

@@ -4,6 +4,7 @@
 
 import { homedir } from "node:os";
 import type { ProviderOAuthEndpoints, ProviderRegistryEntry } from "../config";
+import { appendOAuthClientAuth } from "./oauth-params";
 import { writeOAuthToken, type StoredOAuthToken } from "./store";
 
 export type DeviceOAuthEndpoints = ProviderOAuthEndpoints & { deviceAuthorizationUrl: string };
@@ -49,6 +50,7 @@ export async function runDeviceCodeLogin(
   const started = Date.now();
 
   const body = new URLSearchParams({ client_id: entry.oauth.clientId });
+  appendOAuthClientAuth(body, entry.oauth);
   if (entry.oauth.scopes?.length) body.set("scope", entry.oauth.scopes.join(" "));
 
   const devRes = await fetcher(entry.oauth.deviceAuthorizationUrl, {
@@ -87,6 +89,7 @@ export async function runDeviceCodeLogin(
       device_code: dev.device_code,
       client_id: entry.oauth.clientId,
     });
+    appendOAuthClientAuth(poll, entry.oauth);
     const tokRes = await fetcher(entry.oauth.tokenUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },

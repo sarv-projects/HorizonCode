@@ -9,6 +9,7 @@
  * keeps static -> environment -> memory; its environment is fixed for its life.
  */
 import os from "node:os";
+import { harnessAutomationSection } from "../pre-commit-hooks";
 import { BASE_PROMPT_SECTIONS, CHILD_PROMPT_SECTIONS, type PromptSection } from "./sections";
 import { detectShell, insideGitRepo, renderEnvironment, type EnvironmentInfo } from "./environment";
 
@@ -45,7 +46,9 @@ export function buildSystemPrompt(
   over?: PromptEnvironmentOverrides,
   memory = "",
 ): string {
-  return `${staticPrompt()}${memory}\n\n${renderEnvironment(environmentFor(workspace, today, over))}`;
+  const harness = harnessAutomationSection(workspace);
+  const harnessBlock = harness !== "" ? `\n\n${harness}` : "";
+  return `${staticPrompt()}${memory}${harnessBlock}\n\n${renderEnvironment(environmentFor(workspace, today, over))}`;
 }
 
 /** The subagent body without the environment (kept as the exported constant). */

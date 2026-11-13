@@ -6,7 +6,14 @@
  */
 
 import type { ToolSpec } from "../../../contracts";
-import { parseMinimaxToolCalls, type ParsedMinimaxToolCall } from "./minimax";
+import {
+  drainCompleteMinimaxInvokeCalls,
+  parseMinimaxToolCalls,
+  type ParsedMinimaxToolCall,
+} from "./minimax";
+
+/** Anthropic invoke blocks share MiniMax's `<invoke>` close semantics. */
+export const drainCompleteAnthropicInvokeCalls = drainCompleteMinimaxInvokeCalls;
 
 export type ParsedAnthropicToolCall = ParsedMinimaxToolCall;
 

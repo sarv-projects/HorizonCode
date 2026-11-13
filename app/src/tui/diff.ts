@@ -25,6 +25,10 @@ export interface RichDiffOptions {
   cap?: number;
   level?: ColorLevel;
   unicode?: boolean;
+  /** When true, long unchanged context runs are not collapsed (docs/13 D9). */
+  expandContext?: boolean;
+  /** When true, skip the `N more lines` cap footer (still honours row paint cap if set). */
+  expandCap?: boolean;
 }
 
 interface Row {
@@ -70,7 +74,10 @@ function parse(diff: string): Row[] {
       newNo++;
     } else rows.push({ kind: "ctx", text: line });
   }
-  // Fold long unchanged runs.
+  return rows;
+}
+
+function foldContextRows(rows: Row[]): Row[] {
   const out: Row[] = [];
   for (let i = 0; i < rows.length; ) {
     if (rows[i]!.kind !== "ctx") {
@@ -88,13 +95,17 @@ function parse(diff: string): Row[] {
   return out;
 }
 
+function applyContextFold(rows: Row[], expand: boolean): Row[] {
+  return expand ? rows : foldContextRows(rows);
+}
+
 /** Rendered rows (without the cap footer) for tests and callers that page themselves. */
 export function richDiffLines(diff: string, opts: RichDiffOptions = {}): string[] {
   if (typeof diff !== "string" || diff.trim() === "") return [];
   const level = opts.level ?? colorLevel();
   const width = Math.max(24, Math.floor(opts.width ?? 80));
   const u = opts.unicode !== false;
-  const rows = parse(diff);
+  const rows = applyContextFold(parse(diff), opts.expandContext === true);
   const maxNo = rows.reduce((m, r) => Math.max(m, r.num ?? 0), 0);
   const numW = Math.max(3, String(maxNo).length);
   const bar = u ? "\u2502" : "|";
@@ -134,6 +145,7 @@ export function richDiffLines(diff: string, opts: RichDiffOptions = {}): string[
 /** The capped view: at most `cap` rows then a dim `… N more lines` footer. */
 export function richDiff(diff: string, opts: RichDiffOptions = {}): string[] {
   const all = richDiffLines(diff, opts);
+  if (opts.expandCap === true) return all;
   const cap = opts.cap ?? RICH_DIFF_LINE_CAP;
   if (all.length <= cap) return all;
   const u = opts.unicode !== false;

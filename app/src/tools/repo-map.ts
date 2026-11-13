@@ -36,9 +36,10 @@ import {
   type RepoMapFileEntry,
   type RepoMapIndexLoad,
 } from "./repo-map-cache";
+import { buildRepoMapWithLadder, effectiveRepoMapBudget } from "./repo-map-ladder";
 
-const DEFAULT_MAX_TOKENS = 4_000;
-const HARD_MAX_TOKENS = 16_000;
+export const DEFAULT_MAX_TOKENS = 4_000;
+export const HARD_MAX_TOKENS = 16_000;
 const MAX_FILES = 3_000;
 const MAX_FILE_BYTES = 1024 * 1024;
 /** Per-file scan facts kept in the process-wide memo; a little above MAX_FILES
@@ -389,6 +390,53 @@ export function renderMap(ranked: RankedFile[], count: number): string {
   return lines.join("\n");
 }
 
+export interface FlatSymbol {
+  rel: string;
+  def: string;
+}
+
+/** Flatten ranked files into definition rows (rank order, all defs per file). */
+export function flattenRepoMapSymbols(ranked: RankedFile[]): FlatSymbol[] {
+  const out: FlatSymbol[] = [];
+  for (const file of ranked) for (const def of file.defs) out.push({ rel: file.rel, def });
+  return out;
+}
+
+/** Render a symbol slice (regroups by file path). */
+export function renderSymbols(symbols: FlatSymbol[]): string {
+  const lines: string[] = [];
+  let cur = "";
+  for (const s of symbols) {
+    if (s.rel !== cur) {
+      lines.push(`${s.rel}:`);
+      cur = s.rel;
+    }
+    lines.push(`  \u22ee ${s.def}`);
+  }
+  return lines.join("\n");
+}
+
+/** Binary search how many symbols fit the token budget. */
+export function pickSymbolsByBudget(symbols: FlatSymbol[], budgetTokens: number): { count: number; tokens: number } {
+  let lo = 0;
+  let hi = symbols.length;
+  let best = 0;
+  let bestTokens = 0;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const text = renderSymbols(symbols.slice(0, mid));
+    const tokens = estimateTokens(text);
+    if (tokens <= budgetTokens || mid === 0) {
+      best = mid;
+      bestTokens = tokens;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return { count: best, tokens: bestTokens };
+}
+
 /** Binary search the largest prefix of `ranked` whose render fits `budget`. */
 export function pickByBudget(ranked: RankedFile[], budgetTokens: number): { count: number; tokens: number } {
   let lo = 0;
@@ -410,12 +458,16 @@ export function pickByBudget(ranked: RankedFile[], budgetTokens: number): { coun
   return { count: best, tokens: bestTokens };
 }
 
-interface RepoMapOptions {
+export interface RepoMapOptions {
   root: string;
   cwd: string;
   focus?: string[];
   includeTests?: boolean;
   maxTokens?: number;
+  /** Ranked-file offset for paging (docs/30 §8 #13 reduced). */
+  fileCursor?: number;
+  /** Definition-row offset after `fileCursor` slice (CBM symbol paging reduced). */
+  symbolCursor?: number;
   /**
    * Persistent per-file index file (./repo-map-cache.ts, at
    * `<state root>/repo-map/index.json`); absent = the in-process memo only.
@@ -429,6 +481,10 @@ export interface RepoMapResult {
   filesIncluded: number;
   filesOmitted: number;
   truncated: boolean;
+  /** Pass as `fileCursor` on the next call when present (ranked renderable list). */
+  nextFileCursor?: number;
+  /** Pass as `symbolCursor` when symbol-level paging truncated the map. */
+  nextSymbolCursor?: number;
   /** Files this call served from the memo or the persistent index. */
   cacheReused: number;
   /** Files this call re-extracted from source text. */
@@ -573,19 +629,56 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
 
   // Files with nothing to render (no defs) never make the map body.
   const renderable = ranked.filter((f) => f.defs.length > 0);
-  const { count, tokens } = pickByBudget(renderable, maxTokens);
-  const body = renderMap(renderable, count);
-  const omitted = renderable.length - count;
+  const fileCursor = Math.max(0, Math.floor(opts.fileCursor ?? 0));
+  const paged = renderable.slice(fileCursor);
+  const useSymbolPaging = opts.symbolCursor !== undefined;
+  const symbolCursor = Math.max(0, Math.floor(opts.symbolCursor ?? 0));
 
-  const stats = `[repo_map: ${count} file${count === 1 ? "" : "s"}, ~${tokens} tokens${omitted > 0 ? `, ${omitted} omitted` : ""}, cache: ${reused} reused, ${parsed} parsed]`;
-  const marker = omitted > 0 ? `\n[truncated: showing ${count} of ${renderable.length} files within ${maxTokens} tokens; raise maxTokens (hard ${HARD_MAX_TOKENS}) or pass focus]` : "";
+  let body: string;
+  let tokens: number;
+  let count: number;
+  let budgetOmitted: number;
+  let tailOmitted: number;
+  let nextFileCursor: number | undefined;
+  let nextSymbolCursor: number | undefined;
+
+  if (useSymbolPaging) {
+    const symbols = flattenRepoMapSymbols(paged).slice(symbolCursor);
+    const picked = pickSymbolsByBudget(symbols, maxTokens);
+    count = picked.count;
+    tokens = picked.tokens;
+    body = renderSymbols(symbols.slice(0, count));
+    budgetOmitted = symbols.length - count;
+    tailOmitted = 0;
+    const tailSym = symbols.length - count;
+    nextSymbolCursor = tailSym > 0 ? symbolCursor + count : undefined;
+    if (nextSymbolCursor === undefined && fileCursor + paged.length < renderable.length) {
+      nextFileCursor = fileCursor + paged.length;
+    }
+  } else {
+    const picked = pickByBudget(paged, maxTokens);
+    count = picked.count;
+    tokens = picked.tokens;
+    body = renderMap(paged, count);
+    budgetOmitted = paged.length - count;
+    tailOmitted = renderable.length - fileCursor - count;
+    nextFileCursor = tailOmitted > 0 ? fileCursor + count : undefined;
+  }
+
+  const stats = `[repo_map: ${count} ${useSymbolPaging ? `symbol${count === 1 ? "" : "s"}` : `file${count === 1 ? "" : "s"}`}, ~${tokens} tokens${budgetOmitted > 0 ? `, ${budgetOmitted} omitted by budget` : ""}${fileCursor > 0 ? `, fileCursor ${fileCursor}` : ""}${symbolCursor > 0 ? `, symbolCursor ${symbolCursor}` : ""}${nextFileCursor !== undefined ? `, nextFileCursor ${nextFileCursor}` : ""}${nextSymbolCursor !== undefined ? `, nextSymbolCursor ${nextSymbolCursor}` : ""}, cache: ${reused} reused, ${parsed} parsed]`;
+  const marker =
+    budgetOmitted > 0 || nextFileCursor !== undefined || nextSymbolCursor !== undefined
+      ? `\n[truncated: pass maxTokens (hard ${HARD_MAX_TOKENS}), focus, fileCursor${nextFileCursor !== undefined ? `=${nextFileCursor}` : ""}, or symbolCursor${nextSymbolCursor !== undefined ? `=${nextSymbolCursor}` : ""} for the next slice]`
+      : "";
 
   return {
     map: `${body}\n${stats}${marker}`,
     tokens,
     filesIncluded: count,
-    filesOmitted: omitted,
-    truncated: omitted > 0,
+    filesOmitted: budgetOmitted + Math.max(0, tailOmitted),
+    truncated: budgetOmitted > 0 || nextFileCursor !== undefined || nextSymbolCursor !== undefined,
+    nextFileCursor,
+    nextSymbolCursor,
     cacheReused: reused,
     cacheParsed: parsed,
   };
@@ -606,6 +699,19 @@ export const repoMapTool: Tool = {
         description: "Files to personalise the ranking toward, e.g. the files under discussion.",
       },
       includeTests: { type: "boolean", description: "Include test-looking paths (default false)." },
+      fileCursor: {
+        type: "number",
+        description: "Ranked-file offset for paging; use nextFileCursor from a prior truncated map.",
+      },
+      symbolCursor: {
+        type: "number",
+        description:
+          "Definition-row offset (after fileCursor slice) for symbol-level paging; use nextSymbolCursor from a prior truncated map.",
+      },
+      fallbackLadder: {
+        type: "boolean",
+        description: "When true (default), climb focus → repo → plain max-budget ladder if the map would be empty.",
+      },
     },
   },
 
@@ -626,8 +732,33 @@ export const repoMapTool: Tool = {
       const focus = Array.isArray(args.focus) ? args.focus.filter((f): f is string => typeof f === "string") : undefined;
       const includeTests = args.includeTests === true;
       const maxTokens = typeof args.maxTokens === "number" && args.maxTokens > 0 ? args.maxTokens : undefined;
+      const fileCursor = typeof args.fileCursor === "number" && args.fileCursor >= 0 ? Math.floor(args.fileCursor) : undefined;
+      const symbolCursor =
+        typeof args.symbolCursor === "number" && args.symbolCursor >= 0 ? Math.floor(args.symbolCursor) : undefined;
+      const useLadder = args.fallbackLadder !== false;
+      const budget = effectiveRepoMapBudget(focus, maxTokens);
 
-      const result = buildRepoMap({ root, cwd: ctx.cwd, focus, includeTests, maxTokens, indexFile: repoMapCachePath(ctx.workspace) });
+      const result = useLadder
+        ? buildRepoMapWithLadder({
+            root,
+            cwd: ctx.cwd,
+            focus,
+            includeTests,
+            maxTokens: budget,
+            fileCursor,
+            symbolCursor,
+            indexFile: repoMapCachePath(ctx.workspace),
+          })
+        : buildRepoMap({
+            root,
+            cwd: ctx.cwd,
+            focus,
+            includeTests,
+            maxTokens: budget,
+            fileCursor,
+            symbolCursor,
+            indexFile: repoMapCachePath(ctx.workspace),
+          });
       if ("empty" in result) return fail("empty workspace");
       return { ok: true, output: result.map };
     } catch (e) {

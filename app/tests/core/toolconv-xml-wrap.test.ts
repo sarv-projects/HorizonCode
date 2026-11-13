@@ -30,10 +30,19 @@ async function collectEvents(provider: Provider): Promise<ProviderEvent[]> {
 }
 
 describe("xml toolconv wrapper", () => {
-  test("emits tool_call only after stream completes", async () => {
+  test("emits tool_call when block closes mid-stream", async () => {
     const block =
       `<forge_tool_call><tool_name>read</tool_name><arguments>{"path":"a.txt"}</arguments></forge_tool_call>`;
-    const wrapped = wrapXmlToolProvider(textProvider(`ok ${block}`));
+    const inner: Provider = {
+      name: "chunked",
+      async *stream() {
+        yield { type: "text", text: "ok " };
+        yield { type: "text", text: block };
+        yield { type: "text", text: " tail" };
+        yield { type: "done", stopReason: "end" };
+      },
+    };
+    const wrapped = wrapXmlToolProvider(inner);
     const events = await collectEvents(wrapped);
     const tools = events.filter((e) => e.type === "tool_call");
     const done = events.filter((e) => e.type === "done");
@@ -41,8 +50,9 @@ describe("xml toolconv wrapper", () => {
     expect(tools[0]).toMatchObject({ name: "read", arguments: '{"path":"a.txt"}' });
     expect(done[done.length - 1]).toMatchObject({ stopReason: "tool_use" });
     const toolIdx = events.findIndex((e) => e.type === "tool_call");
-    const textIdx = events.findIndex((e) => e.type === "text");
-    expect(textIdx).toBeLessThan(toolIdx);
+    const doneIdx = events.findIndex((e) => e.type === "done");
+    expect(toolIdx).toBeGreaterThan(0);
+    expect(doneIdx).toBeGreaterThan(toolIdx);
   });
 
   test("partial block at end yields no tool_call", async () => {

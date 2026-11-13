@@ -30,6 +30,15 @@ describe("read tool", () => {
     expect(r.output).toBe("(empty file) empty.txt");
   });
 
+  test("negative offset reads from the end of the file", async () => {
+    const ws = makeWorkspace({ "ten.txt": numberedLines(10) });
+    const r = await readTool.execute({ path: "ten.txt", offset: -3 }, mockToolContext({ cwd: ws }));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("     8| line 8");
+    expect(r.output).toContain("    10| line 10");
+    expect(r.output).not.toContain("     7|");
+  });
+
   test("honours offset and limit", async () => {
     const ws = makeWorkspace({ "ten.txt": numberedLines(10) });
     const r = await readTool.execute({ path: "ten.txt", offset: 3, limit: 2 }, mockToolContext({ cwd: ws }));
@@ -100,7 +109,7 @@ describe("read tool", () => {
   test("requires a path", async () => {
     const r = await readTool.execute({}, mockToolContext());
     expect(r.ok).toBe(false);
-    expect(r.error).toBe("path is required");
+    expect(r.error).toBe("path or paths is required");
   });
 
   test("guards with fs.read and denies before touching the disk", async () => {
@@ -133,5 +142,24 @@ describe("read tool", () => {
     const r = await readTool.execute({ path: outside }, ctx);
     expect(r.ok).toBe(true);
     expect(r.output).toBe("     1| approved");
+  });
+
+  test("paths batch returns per-item ok/error without failing the call", async () => {
+    const ws = makeWorkspace({ "a.txt": "alpha\n", "b.txt": "beta\n" });
+    const r = await readTool.execute({ paths: ["a.txt", "missing.txt", "b.txt"] }, mockToolContext({ cwd: ws }));
+    expect(r.ok).toBe(true);
+    const items = JSON.parse(r.output) as Array<{ path: string; ok: boolean; error?: string }>;
+    expect(items).toHaveLength(3);
+    expect(items[0]?.ok).toBe(true);
+    expect(items[1]?.ok).toBe(false);
+    expect(items[1]?.error).toContain("not found");
+    expect(items[2]?.ok).toBe(true);
+  });
+
+  test("refuses path and paths together", async () => {
+    const ws = makeWorkspace({ "a.txt": "x\n" });
+    const r = await readTool.execute({ path: "a.txt", paths: ["a.txt"] }, mockToolContext({ cwd: ws }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("either path or paths");
   });
 });

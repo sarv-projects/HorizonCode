@@ -3,7 +3,12 @@ HorizonCode — third-party notice (2026-11-10)
 No project LICENSE is chosen yet (see README.md). This file records known
 adapted or verbatim material that may require attribution when a license ships.
 
-Upstream licenses (per docs Provenance tables; verify before release):
+Provenance tables (upstream license rows — see docs/LICENSE-STATUS.md):
+  docs/08-runtime.md (Provenance) · docs/09-tools.md (Provenance) ·
+  docs/16-operations.md (Provenance) · docs/24-feature-catalog.md §A ·
+  docs/30-steal-list.md · docs/33-handoff.md §6
+
+Upstream licenses (summary only; verify each row at release):
 - OpenAI Codex — Apache-2.0 (sandbox patterns, provider shapes)
 - oh-my-pi — MIT (toolconv specs, fuzzy constants, OAuth patterns)
 - opencode / Cline — MIT (hooks, apply_patch grammar)

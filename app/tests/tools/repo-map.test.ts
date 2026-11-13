@@ -167,8 +167,8 @@ describe("buildRepoMap", () => {
     if ("empty" in tiny) throw new Error("unexpected empty");
     expect(tiny.truncated).toBe(true);
     expect(tiny.filesIncluded).toBeLessThan(30);
-    expect(tiny.map).toContain("[truncated: showing");
-    expect(tiny.map).toContain("omitted");
+    expect(tiny.map).toContain("[truncated:");
+    expect(tiny.map).toContain("omitted by budget");
 
     const full = buildRepoMap({ root: ws, cwd: ws, maxTokens: 16_000 });
     if ("empty" in full) throw new Error("unexpected empty");
@@ -227,6 +227,30 @@ describe("the tool", () => {
     const r = await repoMapTool.execute({}, mockToolContext({ cwd: ws }));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("empty workspace");
+  });
+
+  test("symbolCursor pages definition rows and emits nextSymbolCursor", () => {
+    const ws = makeWorkspace(manyFiles(12));
+    const first = buildRepoMap({ root: ws, cwd: ws, maxTokens: 40, symbolCursor: 0 });
+    if ("empty" in first) throw new Error("unexpected empty");
+    expect(first.nextSymbolCursor).toBeDefined();
+    expect(first.map).toContain("nextSymbolCursor");
+    const cursor = first.nextSymbolCursor as number;
+    const second = buildRepoMap({ root: ws, cwd: ws, maxTokens: 40, symbolCursor: cursor });
+    if ("empty" in second) throw new Error("unexpected empty");
+    expect(bodyOf(second.map)).not.toBe(bodyOf(first.map));
+  });
+
+  test("fileCursor pages the ranked list and emits nextFileCursor", () => {
+    const ws = makeWorkspace(manyFiles(20));
+    const first = buildRepoMap({ root: ws, cwd: ws, maxTokens: 80 });
+    if ("empty" in first) throw new Error("unexpected empty");
+    expect(first.nextFileCursor).toBeDefined();
+    expect(first.map).toContain("nextFileCursor");
+    const cursor = first.nextFileCursor as number;
+    const second = buildRepoMap({ root: ws, cwd: ws, maxTokens: 80, fileCursor: cursor });
+    if ("empty" in second) throw new Error("unexpected empty");
+    expect(bodyOf(second.map)).not.toBe(bodyOf(first.map));
   });
 
   test("execute honours a subdirectory path", async () => {

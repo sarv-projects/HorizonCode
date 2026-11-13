@@ -85,10 +85,9 @@ function depsFor(
 }
 
 describe("loop-detection hard stop (rail 1)", () => {
-  test("five identical successful tool calls exit with detail 'tool_loop'", async () => {
-    // A real, readable file so the repeated read SUCCEEDS: a success keeps the
-    // mistake tracker at zero, so loop-detection (hard at 5) is the rail that
-    // fires, not the mistake tracker.
+  test("eight identical read steps exit with detail 'tool_loop'", async () => {
+    // Repeated successful reads keep the mistake tracker at zero, so tiered
+    // loop-detection (hard at 8 for read) fires, not the mistake tracker.
     writeFileSync(path.join(workspace, "a.txt"), "hello");
     const events: Array<{ type: string; message?: string }> = [];
     const { provider, calls } = repeatingProvider([
@@ -101,15 +100,38 @@ describe("loop-detection hard stop (rail 1)", () => {
       expect(result.exit.terminal).toBe("failed");
       expect(result.exit.detail).toBe("tool_loop");
       expect(exitCodeFor(result.exit)).toBe(1);
-      // The hard stop happens on the 5th dispatch, before that batch runs.
-      expect(calls()).toBe(5);
+      expect(calls()).toBe(8);
       expect(
         events.some((e) => e.type === "error" && (e.message ?? "").includes("stopping to avoid a loop")),
       ).toBe(true);
-      // The soft nudge fired earlier (the 3rd identical call).
       expect(
         events.some((e) => e.type === "notice" && (e.message ?? "").includes("consider trying a different approach")),
       ).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+});
+
+describe("max_tokens fail-all-tools (Pi pattern)", () => {
+  test("truncated turn fails every tool call without executing", async () => {
+    writeFileSync(path.join(workspace, "a.txt"), "hello");
+    const events: Array<{ type: string; message?: string }> = [];
+    const { provider, calls } = scriptedProvider([
+      [toolCall("read", { path: "a.txt" }, "c1"), { type: "done", stopReason: "max_tokens" }],
+      DONE,
+    ]);
+    const { deps, kernel, store } = depsFor(provider, events);
+    try {
+      const result = await runTurn(deps, "read with truncated output");
+      expect(result.exit.terminal).toBe("succeeded");
+      expect(calls()).toBe(2);
+      const toolMessages = store.history(deps.sessionId).filter((m) => m.role === "tool");
+      expect(toolMessages).toHaveLength(1);
+      expect(toolMessages[0]?.content).toContain("output token limit");
+      expect(toolMessages[0]?.content).toContain("not executed");
+      expect(events.some((e) => e.type === "notice" && (e.message ?? "").includes("output limit"))).toBe(true);
     } finally {
       await kernel.close();
       store.close();

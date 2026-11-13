@@ -1,0 +1,1 @@
+The run has recorded {count} consecutive mistake(s) (limit {max}). The next failure will stop the run with state preserved. Change approach: fix the underlying error, use a different tool, or ask for clarification — do not repeat the same failing call.

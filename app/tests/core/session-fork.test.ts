@@ -64,6 +64,16 @@ describe("SessionStore.forkSession", () => {
     store.close();
   });
 
+  test("fork meet stores the narrower permission mode", () => {
+    const ws = tempDir("hz-fork-mode-");
+    const store = new SessionStore(ws);
+    const parent = store.createSession("p", { permissionMode: "accept-edits" });
+    seed(store, parent.id);
+    const child = store.forkSession(parent.id, { permissionMode: "read-only" });
+    expect(store.getSession(child.id)?.permissionMode).toBe("read-only");
+    store.close();
+  });
+
   test("lineage survives reopening the database (resume works on forks)", () => {
     const ws = tempDir("hz-fork-reopen-");
     const a = new SessionStore(ws);

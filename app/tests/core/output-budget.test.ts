@@ -23,6 +23,7 @@ import {
   FRAMING_CHARGE_TOKENS,
   MIN_OUTPUT_TOKENS,
   planToolOutputCap,
+  planToolOutputFromOffset,
   windowForModel,
 } from "../../src/core/output-budget";
 import type { Provider, ProviderEvent } from "../../src/contracts";
@@ -122,6 +123,16 @@ describe("planToolOutputCap: over the cap truncates, losslessly-resumable", () =
     expect(plan.truncated?.spillPath?.endsWith(`${sha256Hex(full)}.txt`)).toBe(true);
   });
 
+  test("planToolOutputFromOffset advances nextOffset through the full string", () => {
+    const full = "a".repeat(500) + "tail-marker";
+    const first = planToolOutputCap(full, { maxBytes: 120, maxTokens: 10_000 });
+    expect(first.truncated?.nextOffset).toBeGreaterThan(0);
+    const off = first.truncated?.nextOffset ?? 0;
+    const second = planToolOutputFromOffset(full, off, { maxBytes: 10_000, maxTokens: 10_000 });
+    expect(second.text).toContain("tail-marker");
+    expect(second.truncated).toBeUndefined();
+  });
+
   test("over the 64 MiB stream cap the call refuses to spill", () => {
     const plan = planToolOutputCap("x".repeat(100), { maxStreamBytes: 50, spillDir: path.join(workspace, "spills") });
     expect(plan.text).toContain("output too large");
@@ -210,6 +221,48 @@ describe("the loop caps tool output and shores up the spill", () => {
       store.close();
     }
   }, 20000);
+
+  test("outputOffset continues a prior truncated shell result", async () => {
+    const captured: Array<{ maxTokens?: number }> = [];
+    const big = `${Array.from({ length: 8_000 }, (_, i) => String(i + 1)).join("\n")}\n`;
+    const firstPlan = planToolOutputCap(big);
+    const off = firstPlan.truncated?.nextOffset ?? 0;
+    expect(off).toBeGreaterThan(0);
+
+    const provider = scriptedProvider(
+      [
+        [
+          {
+            type: "tool_call",
+            id: "call_1",
+            name: "shell",
+            arguments: JSON.stringify({
+              command: "seq 1 8000",
+              outputOffset: off,
+            }),
+          },
+          { type: "done", stopReason: "tool_use" },
+        ],
+        [{ type: "done", stopReason: "end" }],
+      ],
+      captured,
+    );
+    const { deps, kernel, store } = depsFor(provider, { maxSteps: 5 });
+    try {
+      await runTurn(deps, "continue output");
+      const content = store
+        .history(deps.sessionId)
+        .filter((m) => m.role === "tool" && m.toolName === "shell")
+        .map((m) => m.content)
+        .join("");
+      expect(content).toMatch(/\b3[4-9]\d{2}\b/);
+      expect(content).not.toMatch(/^1\n/);
+      expect(content.length).toBeGreaterThan(1_000);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  }, 30_000);
 
   test("the output cap follows the usage anchor on the next request", async () => {
     const captured: Array<{ maxTokens?: number }> = [];

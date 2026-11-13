@@ -40,6 +40,24 @@ export type PermissionMode = "default" | "plan" | "accept-edits" | "read-only";
 
 export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "plan", "accept-edits", "read-only"];
 
+/** Narrower posture wins (docs/12 S-46 fork meet); lower = less write capability. */
+const PERMISSION_MODE_NARROWNESS: Record<PermissionMode, number> = {
+  "read-only": 0,
+  plan: 1,
+  default: 2,
+  "accept-edits": 3,
+};
+
+/** Lattice meet for fork: child posture is never wider than parent or the active mode. */
+export function meetPermissionMode(
+  parent: PermissionMode | undefined,
+  current: PermissionMode | undefined,
+): PermissionMode {
+  const a = parent ?? "default";
+  const b = current ?? "default";
+  return PERMISSION_MODE_NARROWNESS[a] <= PERMISSION_MODE_NARROWNESS[b] ? a : b;
+}
+
 /** Names that mean "skip the approvals"; refused on purpose (see the header). */
 const BYPASS_NAMES: readonly string[] = ["yolo", "bypass", "bypasspermissions", "bypass-permissions", "dangerously-skip-permissions"];
 
@@ -154,7 +172,7 @@ export function modeBadge(mode: PermissionMode): string {
 export function describeMode(mode: PermissionMode): string {
   switch (mode) {
     case "plan":
-      return "plan: writes and edits are staged for review (/changes, /apply, /discard)";
+      return "plan: writes and edits are staged for review (/changes, /apply, /discard); shell allows read-only commands (command-guard blocks mutating patterns)";
     case "accept-edits":
       return "accept-edits: in-workspace write/edit asks are answered yes (not CI/hook/manifest/shell-rc files); shell and everything else ask as usual";
     case "read-only":

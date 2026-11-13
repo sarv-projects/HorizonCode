@@ -13,7 +13,7 @@ describe("oauth store", () => {
   test("round-trip at mode 0600", () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-"));
     writeOAuthToken({ provider: "anthropic", accessToken: "tok", obtainedAt: new Date().toISOString() }, home);
-    const file = path.join(home, ".config", "horizon", "oauth", "anthropic.json");
+    const file = path.join(home, ".config", "horizon", "credentials.db");
     expect((statSync(file).mode & 0o777) === 0o600).toBe(true);
     const cred = credentialFromStore("anthropic", home);
     expect(cred?.kind).toBe("oauth");

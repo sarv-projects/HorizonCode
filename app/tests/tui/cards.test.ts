@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  cardDuration, describeTool, lineDelta, foldLabel, foldLine, patchStats, resultLine, shellFooter, shellHeader, shellOutputLines,
-  shortPath, subagentGroupLines, subagentLine, toolCardLines, type CardStyle,
+  cardDuration, describeTool, foldLabel, foldLine, formatToolEffectLinkage, lineDelta, patchStats, resultLine, shellFooter, shellHeader,
+  shellOutputLines, shortPath, subagentGroupLines, subagentLine, toolCardLines, type CardStyle,
 } from "../../src/tui/cards";
 import { createRenderer } from "../../src/tui/render";
 import { setColorEnabled, strip, visibleWidth, type ColorLevel } from "../../src/tui/style";
@@ -104,6 +104,14 @@ describe("shell card", () => {
     const rows = shellOutputLines(out, st(80)).map(strip);
     expect(rows).toEqual(["  \u258e line 1", "  \u258e line 2", "  \u258e \u2026 +185 lines", "  \u258e line 188", "  \u258e line 189", "  \u258e line 190"]);
   });
+  test("expandOutput shows every line", () => {
+    const out = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+    const folded = shellOutputLines(out, st(80)).map(strip);
+    const expanded = shellOutputLines(out, { ...st(80), expandOutput: true }).map(strip);
+    expect(folded.some((l) => l.includes("+"))).toBe(true);
+    expect(expanded.some((l) => l.includes("+"))).toBe(false);
+    expect(expanded.length).toBe(12);
+  });
   test("short output shows everything; control codes are stripped; rows clipped", () => {
     expect(shellOutputLines("a\n\u001b[31mred\u001b[0m\nb", st(80)).map(strip)).toEqual(["  \u258e a", "  \u258e red", "  \u258e b"]);
     for (const w of WIDTHS) for (const r of shellOutputLines("x".repeat(500) + "\n".repeat(1) + "y", st(w, 3))) expect(visibleWidth(r)).toBeLessThanOrEqual(w);
@@ -114,9 +122,19 @@ describe("shell card", () => {
     expect(visibleWidth(shellOutputLines("a", st(40, 3))[0] ?? "")).toBe(40);
   });
   test("footer", () => {
-    expect(shellFooter({ status: "ok", exitCode: 0, durationMs: 4200 }, st(80))).toBe("  \u2514 4.2s");
-    expect(shellFooter({ status: "ok", exitCode: 1, durationMs: 4200 }, st(80))).toBe("  \u2514 exit 1 \u00b7 4.2s");
-    expect(shellFooter({ status: "ok", exitCode: 1, durationMs: 4200 }, st(80, 1))).toContain("\u001b[31m");
+    expect(shellFooter({ status: "ok", exitCode: 0, durationMs: 4200 }, st(80))).toEqual(["  \u2514 4.2s"]);
+    expect(shellFooter({ status: "ok", exitCode: 1, durationMs: 4200 }, st(80))).toEqual(["  \u2514 exit 1 \u00b7 4.2s"]);
+    expect(shellFooter({ status: "ok", exitCode: 1, durationMs: 4200 }, st(80, 1))[0]).toContain("\u001b[31m");
+  });
+  test("effect linkage formatter and card lines", () => {
+    expect(formatToolEffectLinkage({ effectId: "eff-abcdef01" })).toBe("effect eff-abcd");
+    expect(formatToolEffectLinkage({ effectId: "eff-1", receiptSeq: 42 })).toBe("effect eff-1 \u00b7 r#42");
+    expect(formatToolEffectLinkage({ receiptId: "rcpt-deadbeef" })).toBe("receipt rcpt-dea");
+    const lines = toolCardLines(
+      { name: "write", args: { path: "a.ts", content: "x" }, status: "ok", effectId: "eff-zzzz", receiptSeq: 7, detail: { durationMs: 100 } },
+      st(80),
+    );
+    expect(lines.some((l) => strip(l).includes("effect eff-zzzz") && strip(l).includes("r#7"))).toBe(true);
   });
 });
 
@@ -263,6 +281,22 @@ describe("renderer", () => {
     expect(b.text()).toBe("slow streaming words ");
     b.r.handle({ type: "assistant.done", text: "" });
     expect(b.text()).toBe("slow streaming words here\n");
+  });
+
+  test("rich tool cards show effect linkage when the event carries it", () => {
+    const a = rich(() => 0);
+    a.r.handle({
+      type: "tool.card",
+      callId: "w1",
+      name: "write",
+      args: { path: "x.ts", content: "a" },
+      status: "ok",
+      effectId: "eff-link-test",
+      receiptSeq: 3,
+      detail: { durationMs: 50 },
+    });
+    expect(a.text()).toContain("effect eff-link");
+    expect(a.text()).toContain("r#3");
   });
 
   test("the rich renderer exposes liveLines only when rich", () => {

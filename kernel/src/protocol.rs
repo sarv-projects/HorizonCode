@@ -6,10 +6,13 @@
 //! Malformed lines answer with `"id": null` and the kernel never exits on bad input.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
 use crate::canon::error_response;
+use crate::effect_host;
+use crate::egress_connect;
 use crate::eventlog::{AnchorConfig, EventLog};
 use crate::guard::{self, Guard, GuardAction, Lease};
 use crate::receipts::Receipts;
@@ -21,6 +24,8 @@ pub struct Kernel {
     events: EventLog,
     receipts: Receipts,
     guard: Guard,
+    egress_connect: Mutex<egress_connect::ListenerSlot>,
+    effect_hermetic: effect_host::SharedHermeticLedger,
 }
 
 impl Kernel {
@@ -29,6 +34,8 @@ impl Kernel {
             events: EventLog::new_with_anchor(state_dir, anchor.clone()),
             receipts: Receipts::new_with_anchor(state_dir, anchor),
             guard: Guard::new(state_dir),
+            egress_connect: Mutex::new(egress_connect::ListenerSlot::new()),
+            effect_hermetic: Mutex::new(effect_host::HermeticEffectLedger::default()),
         }
     }
 
@@ -263,6 +270,44 @@ impl Kernel {
                 let outcome =
                     sandbox::enforce(mode, caps, &sandbox::kernel_applied_mechanisms(), demand_full);
                 Ok(outcome.to_json())
+            }
+
+            // EffectHost settle mirror (docs/28): Bun emits hz.effect.*; kernel
+            // agrees on settled|unknown from the same phase/receipt facts.
+            "effect.reconcile" => effect_host::reconcile_params(params),
+
+            // Ruling 243: fail-closed execute stub; hermetic pure/echo only.
+            "effect.execute" => {
+                let mut ledger = self
+                    .effect_hermetic
+                    .lock()
+                    .map_err(|_| "effect.execute: hermetic ledger lock poisoned".to_string())?;
+                effect_host::execute_params(params, &mut ledger)
+            }
+
+            // §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced).
+            "egress.connect.listen" => {
+                let action = params
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("start");
+                let mut slot = self
+                    .egress_connect
+                    .lock()
+                    .map_err(|_| "egress.connect.listen: listener lock poisoned".to_string())?;
+                match action {
+                    "start" => {
+                        let port = number_param(params, "port").unwrap_or(0) as u16;
+                        let forward = params.get("forward").and_then(|v| v.as_bool());
+                        let tls_peek = params.get("tlsPeek").and_then(|v| v.as_bool());
+                        slot.start(self.guard.state_dir(), port, forward, tls_peek)
+                    }
+                    "stop" => slot.stop(),
+                    other => Err(format!(
+                        "egress.connect.listen.action {:?} is unknown; expected \"start\" or \"stop\"",
+                        other
+                    )),
+                }
             }
 
             other => Err(format!("unknown method: {}", other)),

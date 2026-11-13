@@ -10,6 +10,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, wri
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+  checkRepoLicense,
+  doctorFixSuggestion,
   doctorExitCode,
   runDoctor,
   renderDoctor,
@@ -18,6 +20,7 @@ import {
   type DoctorEnv,
   type SpawnResult,
 } from "../../src/core/doctor";
+import { repoRoot } from "./helpers";
 import { COMMITTED_CATALOG_SNAPSHOT } from "../../src/core/catalog/catalog";
 import { kernelStateDir } from "../../src/core/paths";
 import { writeOAuthToken } from "../../src/core/auth/store";
@@ -31,6 +34,62 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(workspace, { recursive: true, force: true });
+});
+
+test("repo.license is honest when root LICENSE is absent", () => {
+  const line = checkRepoLicense(repoRoot);
+  expect(line.id).toBe("repo.license");
+  expect(line.status).toBe("warn");
+  expect(line.detail).toContain("no LICENSE");
+  expect(line.detail).not.toMatch(/\bApache-2\.0\b/);
+  expect(line.hint).toContain("LICENSE-STATUS");
+  const checks = runDoctor(fakeEnv());
+  expect(byId(checks, "repo.license").status).toBe("warn");
+});
+
+test("worktree.pool and workspace.mount doctor lines", () => {
+  const checks = runDoctor(
+    fakeEnv({
+      run: (cmd, args) => {
+        if (cmd === "findmnt") return { ok: true, status: 0, stdout: "ext4\n", stderr: "" };
+        if (cmd === "git" && args[0] === "worktree") {
+          return {
+            ok: true,
+            status: 0,
+            stdout: `worktree ${workspace}\nHEAD abcdefabcdefabcdefabcdefabcdefabcdefab\nbranch refs/heads/main\n`,
+            stderr: "",
+          };
+        }
+        return OKRUN(cmd);
+      },
+    }),
+  );
+  expect(byId(checks, "worktree.pool").detail).toContain("hz worktree pool");
+  expect(byId(checks, "workspace.mount").status).toBe("ok");
+});
+
+test("workspace.mount warns on nfs", () => {
+  const checks = runDoctor(
+    fakeEnv({
+      run: (cmd, args) => {
+        if (cmd === "findmnt") return { ok: true, status: 0, stdout: "nfs4\n", stderr: "" };
+        if (cmd === "git" && args[0] === "worktree") {
+          return { ok: false, status: 128, stdout: "", stderr: "not a git repo" };
+        }
+        return OKRUN(cmd);
+      },
+    }),
+  );
+  expect(byId(checks, "workspace.mount").status).toBe("warn");
+  expect(byId(checks, "workspace.mount").detail).toContain("nfs4");
+});
+
+test("state.durability documents JSONL fsync; HZ_JSONL_FSYNC=0 warns", () => {
+  const checks = runDoctor(fakeEnv());
+  expect(byId(checks, "state.durability").status).toBe("ok");
+  expect(byId(checks, "state.durability").detail).toContain("fsync");
+  const off = runDoctor(fakeEnv({ env: { HZ_JSONL_FSYNC: "0", HZ_PROVIDER: "mock" } }));
+  expect(byId(off, "state.durability").status).toBe("warn");
 });
 
 test("oauth token line when stored", () => {
@@ -63,12 +122,28 @@ test("landlock doctor line is honest (no FS enforcement claimed)", () => {
   expect(line.detail.toLowerCase()).not.toContain("enforced");
 });
 
-test("tui.screen warns when fullscreen is requested", () => {
+test("sandbox.platform warns macOS Seatbelt unavailable on Linux builds", () => {
+  const line = byId(runDoctor(fakeEnv()), "sandbox.platform");
+  expect(line.status).toBe("warn");
+  expect(line.detail.toLowerCase()).toContain("seatbelt");
+  expect(line.detail.toLowerCase()).not.toMatch(/\b(is|are) enforced\b/);
+});
+
+test("tui.screen reports reduced fullscreen chat", () => {
   const scroll = byId(runDoctor(fakeEnv()), "tui.screen");
   expect(scroll.status).toBe("ok");
   expect(scroll.detail).toContain("scrollback");
+  expect(scroll.detail).toContain("cellbuffer+escape-writer CODE_PRESENT");
   const full = byId(runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_TUI_MODE: "fullscreen" } })), "tui.screen");
-  expect(full.status).toBe("warn");
+  expect(full.status).toBe("ok");
+  expect(full.detail).toContain("fullscreen");
+  expect(full.detail).toContain("cellbuffer+escape-writer CODE_PRESENT");
+  const exp = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_TUI_MODE: "fullscreen-experimental" } })),
+    "tui.screen",
+  );
+  expect(exp.status).toBe("ok");
+  expect(exp.detail).toContain("fullscreen-experimental");
 });
 
 test("outer egress firewall marker", () => {
@@ -76,6 +151,150 @@ test("outer egress firewall marker", () => {
   expect(off.some((c) => c.id === "egress.outer" && c.status === "warn")).toBe(true);
   const on = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_OUTER_EGRESS_FIREWALL: "1" } }));
   expect(on.some((c) => c.id === "egress.outer" && c.status === "ok")).toBe(true);
+});
+
+test("shell egress honesty never claims enforced", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "egress.shell");
+  expect(line.status).toBe("warn");
+  expect(line.detail.toLowerCase()).not.toContain("enforced");
+});
+
+test("egress.netns reports partial denial honesty", () => {
+  const line = byId(runDoctor(fakeEnv()), "egress.netns");
+  expect(line.status).toBe("warn");
+  expect(line.detail.toLowerCase()).toContain("partial");
+  expect(line.detail.toLowerCase()).toContain("never claim shell-net enforced");
+});
+
+test("egress.netns.route distinguishes proxy-routed partial", () => {
+  const line = byId(
+    runDoctor(
+      fakeEnv({
+        env: { ...fakeEnv().env, HZ_SANDBOX_NETNS: "1", HZ_EGRESS_PROXY: "http://127.0.0.1:9" },
+      }),
+    ),
+    "egress.netns.route",
+  );
+  expect(line.status).toBe("warn");
+  expect(line.detail.toLowerCase()).toContain("proxy-routed");
+  expect(line.detail.toLowerCase()).toContain("never claim shell-net enforced");
+});
+
+test("egress.netns.proxy reports parent-loopback reach honesty", () => {
+  const line = byId(
+    runDoctor(
+      fakeEnv({
+        env: {
+          ...fakeEnv().env,
+          HZ_SANDBOX_NETNS: "1",
+          HZ_EGRESS_PROXY: "http://127.0.0.1:9",
+        },
+      }),
+    ),
+    "egress.netns.proxy",
+  );
+  expect(line.status).toBe("warn");
+  expect(line.detail.toLowerCase()).toMatch(/parent-loopback|not applicable|proxy reach/);
+});
+
+test("HZ_EGRESS_PROXY doctor line", () => {
+  const unset = byId(runDoctor(fakeEnv()), "egress.proxy");
+  expect(unset.status).toBe("ok");
+  const set = byId(runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EGRESS_PROXY: "127.0.0.1:8888" } })), "egress.proxy");
+  expect(set.detail).toContain("advisory routing only");
+  expect(set.detail).not.toContain("enforced");
+});
+
+test("effect.reconcile probe doctor line is read-only", () => {
+  const line = byId(runDoctor(fakeEnv()), "effect.reconcile");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toContain("probe");
+});
+
+test("terminal.run capability doctor line (ruling 298)", () => {
+  const line = byId(runDoctor(fakeEnv()), "terminal.run");
+  expect(line.detail).toContain("terminal.run capability snapshot");
+  expect(line.detail).not.toContain("enforced");
+});
+
+test("terminal.state probe uses allow-list (ruling 292)", () => {
+  const line = byId(
+    runDoctor(
+      fakeEnv({
+        run: (cmd, args) => {
+          if (cmd === "true" || cmd === "pwd") return OKRUN(cmd);
+          if (cmd === "git" && args[0] === "rev-parse") {
+            return { ok: true, status: 0, stdout: "true\n", stderr: "" };
+          }
+          return OKRUN(cmd);
+        },
+      }),
+    ),
+    "terminal.state",
+  );
+  expect(line.detail).toContain("allow-list");
+  expect(line.detail).not.toContain("enforced");
+});
+
+test("effect.postimage.replay doctor line (ruling 301)", () => {
+  const off = byId(runDoctor(fakeEnv()), "effect.postimage.replay");
+  expect(off.status).toBe("warn");
+  expect(off.detail.toLowerCase()).toContain("off by default");
+  expect(off.hint).toContain("HZ_VERIFY_POSTIMAGE_REPLAY=1");
+  expect(off.hint).toContain("doctor --fix effect.postimage.replay");
+  const req = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EFFECT_HOST_KERNEL: "require" } })),
+    "effect.postimage.replay",
+  );
+  expect(req.detail.toLowerCase()).toContain("auto-on");
+  const fix = doctorFixSuggestion("effect.postimage.replay", {});
+  expect(fix?.some((l) => l.includes("HZ_VERIFY_POSTIMAGE_REPLAY=1"))).toBe(true);
+});
+
+test("effect.host doctor line documents kernel route coverage", () => {
+  const off = byId(runDoctor(fakeEnv()), "effect.host");
+  expect(off.status).toBe("warn");
+  expect(off.detail.toLowerCase()).toContain("unset");
+  expect(off.hint).toContain("HZ_EFFECT_HOST_KERNEL=default");
+  const req = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EFFECT_HOST_KERNEL: "require" } })),
+    "effect.host",
+  );
+  expect(req.status).toBe("warn");
+  expect(req.detail.toLowerCase()).toContain("fail-closed");
+  expect(req.hint).toContain("apply_patch");
+  const def = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EFFECT_HOST_KERNEL: "default" } })),
+    "effect.host",
+  );
+  expect(def.detail.toLowerCase()).toContain("ambient bun");
+  expect(def.detail.toLowerCase()).toContain("compound");
+  expect(def.hint.toLowerCase()).toContain("prototype trust spine");
+  expect(def.hint).toContain("HZ_EFFECT_HOST_KERNEL=require");
+  const defFix = doctorFixSuggestion("effect.host", { HZ_EFFECT_HOST_KERNEL: "default" });
+  expect(defFix?.some((l) => l.includes("HZ_EFFECT_HOST_KERNEL=require"))).toBe(true);
+  expect(req.hint.toLowerCase()).toContain("variadic");
+});
+
+test("effect.postimage.replay doctor names ast_edit kernel route (ruling 320)", () => {
+  const line = byId(runDoctor(fakeEnv()), "effect.postimage.replay");
+  expect(line.detail.toLowerCase()).toContain("ast_edit");
+});
+
+test("egress.tls never claims enforced", () => {
+  const line = byId(runDoctor(fakeEnv()), "egress.tls");
+  expect(line.status).toBe("warn");
+  expect(line.detail.toLowerCase()).toContain("never claim shell tls mitm enforced");
+  const fwd = byId(runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EGRESS_FORWARD: "1" } })), "egress.tls");
+  expect(fwd.detail.toLowerCase()).toContain("not terminated");
+  const peek = byId(
+    runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_EGRESS_FORWARD: "1", HZ_EGRESS_TLS_PEEK: "1" } })),
+    "egress.tls",
+  );
+  expect(peek.detail.toLowerCase()).toContain("peek");
+  expect(peek.hint?.toLowerCase()).toContain("not decryption");
+  expect(peek.detail).not.toContain("enforced");
 });
 
 const OKRUN = (cmd: string): SpawnResult =>
@@ -234,6 +453,16 @@ describe("provider, key and model", () => {
     const line = byId(runDoctor(fakeEnv({ env, home })), "catalog.source");
     expect(line.status).toBe("ok");
     expect(line.detail).toContain("models-dev.snapshot");
+  });
+
+  test("catalog.poll and backlog.skip honesty lines", () => {
+    const checks = runDoctor(fakeEnv({ env: { LANG: "C.UTF-8" } }));
+    const poll = byId(checks, "catalog.poll");
+    expect(poll.status).toBe("ok");
+    expect(poll.detail).toContain("off by default");
+    const skip = byId(checks, "backlog.skip");
+    expect(skip.status).toBe("ok");
+    expect(skip.detail).toMatch(/11 explicit SKIP/);
   });
 
   test("a known model resolves in the catalog; an unknown one is a WARN", () => {

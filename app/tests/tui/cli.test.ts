@@ -39,6 +39,9 @@ describe("command line", () => {
     expect(run.stdout).toContain("hzcode [message]");
     expect(run.stdout).toContain("--workspace <path>");
     expect(run.stdout).toContain("--model <name>");
+    expect(run.stdout).toContain("--list-models");
+    expect(run.stdout).toContain("--show-prompts");
+    expect(run.stdout).toContain("--show-repo-map");
     expect(run.stdout).toContain("--mock");
     expect(run.stdout).toContain("--version");
     expect(run.stdout).toContain("hzcode keybind check");
@@ -98,5 +101,37 @@ describe("command line", () => {
 
     expect(run.code).toBe(2);
     expect(run.stderr).toContain("unknown option --nope");
+  });
+
+  test("--show-prompts prints JSON and exits 0 without a turn", async () => {
+    const ws = makeWorkspace();
+    const run = await runApp(appSpec(["--workspace", ws, "--mock", "--show-prompts"]), "");
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain('"Hello!"');
+    expect(run.stdout).toContain('"system"');
+    expect(run.stderr).toBe("");
+  });
+
+  test("--show-repo-map prints map and exits 0 without a turn", async () => {
+    const ws = makeWorkspace({ "src/index.ts": "export function app() { return 1; }\n" });
+    const run = await runApp(appSpec(["--workspace", ws, "--mock", "--show-repo-map"]), "");
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("[repo_map:");
+    expect(run.stderr).toBe("");
+  });
+
+  test("--list-models filters by substring", async () => {
+    const ws = makeWorkspace();
+    const run = await runApp(appSpec(["--workspace", ws, "--mock", "--list-models", "mock"]), "");
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("mock-1");
+  });
+
+  test("--model typo exits 2 with did-you-mean", async () => {
+    const ws = makeWorkspace();
+    const run = await runApp(appSpec(["--workspace", ws, "--mock", "--model", "mock-2"]), "");
+    expect(run.code).toBe(2);
+    expect(run.stderr).toContain("Did you mean");
+    expect(run.stderr).toContain("mock-1");
   });
 });
