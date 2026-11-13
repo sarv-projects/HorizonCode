@@ -380,6 +380,104 @@ export function astEditProjectionMissRequireDetail(reason: AstEditProjectionMiss
   }
 }
 
+/** Fail-closed reason when kernel apply_patch projection cannot run (ruling **323** require honesty). */
+export type ApplyPatchProjectionMissReason =
+  | "parse_fail"
+  | "empty_ops"
+  | "shape_ineligible"
+  | "path_escape"
+  | "read_fail"
+  | "bun_fuzz_only"
+  | "fuzz_unresolved"
+  | "resolve_mismatch";
+
+/**
+ * Classify why `resolveApplyPatchKernelProjections` would fail when structural
+ * eligibility may still look true — used by `HZ_EFFECT_HOST_KERNEL=require`.
+ */
+export async function classifyApplyPatchKernelProjectionMiss(
+  workspace: string,
+  args: Record<string, unknown>,
+  env: Record<string, string | undefined> = process.env,
+): Promise<ApplyPatchProjectionMissReason | undefined> {
+  const input = patchInputString(args);
+  if (!input) return "parse_fail";
+  const parsed = parse(input);
+  if (!parsed.ok) return "parse_fail";
+  const { ops } = parsed.patch;
+  if (ops.length === 0) return "empty_ops";
+  if (!applyPatchKernelProjections(args)) return "shape_ineligible";
+
+  const { readFile } = await import("node:fs/promises");
+  const fileCache = new Map<string, string>();
+  let resolvedCount = 0;
+  let structuralCount = 0;
+
+  for (const op of ops) {
+    const projs = fileOpKernelProjections(op);
+    if (!projs) return "shape_ineligible";
+    structuralCount += projs.length;
+    const editableChunks =
+      op.kind === "update"
+        ? op.chunks.filter((c) => {
+            const bytes = chunkExactBytes(c);
+            return bytes && bytes.old !== bytes.new;
+          })
+        : [];
+    let editChunkCursor = 0;
+    for (const proj of projs) {
+      if (proj.kind !== "edit") {
+        resolvedCount += 1;
+        continue;
+      }
+      if (op.kind !== "update") return "shape_ineligible";
+      const chunk = editableChunks[editChunkCursor];
+      editChunkCursor += 1;
+      if (!chunk) return "resolve_mismatch";
+
+      const abs = resolvePathInWorkspace(workspace, proj.path);
+      if (!abs) return "path_escape";
+      let before = fileCache.get(abs);
+      if (before === undefined) {
+        try {
+          before = (await readFile(abs)).toString("utf8");
+          fileCache.set(abs, before);
+        } catch {
+          return "read_fail";
+        }
+      }
+
+      if (classifyApplyPatchChunkKernelFuzz(before, chunk) === "bun_fuzz_only") return "bun_fuzz_only";
+      const resolvedEdit = resolveKernelApplyPatchChunkEdit(before, chunk, env);
+      if (!resolvedEdit) return "fuzz_unresolved";
+      resolvedCount += 1;
+    }
+  }
+  if (resolvedCount !== structuralCount || resolvedCount === 0) return "resolve_mismatch";
+  return undefined;
+}
+
+export function applyPatchProjectionMissRequireDetail(reason: ApplyPatchProjectionMissReason): string {
+  switch (reason) {
+    case "parse_fail":
+      return "apply_patch input failed to parse";
+    case "empty_ops":
+      return "apply_patch has no file ops";
+    case "shape_ineligible":
+      return "apply_patch not sequential Add/exact-Update/Delete/Move kernel-eligible";
+    case "path_escape":
+      return "apply_patch path outside workspace";
+    case "read_fail":
+      return "apply_patch target file unreadable";
+    case "bun_fuzz_only":
+      return "apply_patch chunk needs Bun-only fuzz (first-hit / below-threshold) — refused under require";
+    case "fuzz_unresolved":
+      return "apply_patch fuzzy chunk ambiguous or unresolved under HZ_EFFECT_HOST_EDIT_REPAIR";
+    case "resolve_mismatch":
+      return "apply_patch kernel projection resolve mismatch";
+  }
+}
+
 export function applyPatchKernelPath(args: Record<string, unknown>, workspace: string): string | undefined {
   const projections = applyPatchKernelProjections(args);
   const proj = projections?.[projections.length - 1];

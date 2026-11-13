@@ -41,6 +41,11 @@ import { acceptInterjection, InterjectionBuffer } from "./interjection";
 import { resolveThinkingEffort } from "./thinking-effort";
 import { augmentConfigWithTrustedWorkspace, defaultConfigPath, loadConfig, readConfigFile, type HzConfig, type McpConfig } from "./config";
 import { applySandboxChildNetFromConfig } from "./sandbox-child-net";
+import {
+  applyEffectHostKernelFromUserConfig,
+  applyEffectHostKernelSandboxDefault,
+} from "./effect-host-runtime";
+import { kernelEnforcesProcessSandbox } from "./sandbox-spawn";
 import { catalogWindow, loadCatalog } from "./catalog/catalog";
 import { startModelsCatalogPoll, type ModelsPollStop } from "./catalog/catalog-poll";
 import {
@@ -1277,7 +1282,10 @@ class HzRuntimeImpl implements HzRuntime {
 export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
   const startupNotices: string[] = [];
-  applySandboxChildNetFromConfig(readConfigFile(defaultConfigPath(homedir())), process.env);
+  const userConfigFile = readConfigFile(defaultConfigPath(homedir()));
+  applySandboxChildNetFromConfig(userConfigFile, process.env);
+  const effectHostFromConfig = applyEffectHostKernelFromUserConfig(userConfigFile, process.env);
+  if (effectHostFromConfig.notice) startupNotices.push(effectHostFromConfig.notice);
   const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, undefined, workspace), workspace, process.env, homedir(), (message) =>
     startupNotices.push(message),
   );
@@ -1334,6 +1342,12 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     onModeChange: (_mode, reason) => impl?.note(`kernel: ${reason}`),
   });
   await kernel.start();
+
+  const effectHostSandboxDefault = applyEffectHostKernelSandboxDefault(
+    process.env,
+    await kernelEnforcesProcessSandbox(kernel),
+  );
+  if (effectHostSandboxDefault.notice) startupNotices.push(effectHostSandboxDefault.notice);
 
   const effectLedger = new WorkspaceEffectLedger(workspace);
   const effectHost = new EffectHost(effectLedger);

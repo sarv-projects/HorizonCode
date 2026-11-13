@@ -332,6 +332,9 @@ fn execute_fs_edit(
         ledger,
         effect_id,
         "editPath",
+        &raw_path,
+        Some(crate::effect_evidence::FsMutationResultKind::Edit),
+        None,
         &resolved,
     )
 }
@@ -504,11 +507,22 @@ fn execute_fs_delete(
     let confirm_missing = file_missing_stable(&resolved);
     let observation_stable = primary_missing && confirm_missing;
     let phases = ledger.record_hermetic(effect_id);
+    let content_digest = if observation_stable {
+        Some(EMPTY_SHA256_HEX)
+    } else {
+        None
+    };
+    let result_obs = crate::effect_evidence::observe_kernel_fs_mutation_result_digest(
+        crate::effect_evidence::FsMutationResultKind::Delete,
+        &raw_path,
+        content_digest,
+        None,
+    );
     let verdict = reconcile(
         &phases,
         Some(HERMETIC_OBSERVE_RECEIPT_ID),
         Some(HERMETIC_OBSERVE_RECEIPT_SEQ),
-        None,
+        Some(result_obs.observation_stable),
         None,
         Some(observation_stable),
     );
@@ -517,10 +531,14 @@ fn execute_fs_delete(
         "effectId": effect_id,
         "phases": ["allow", "execute", "observe"],
         "postimageObservationStable": observation_stable,
+        "resultDigestStable": result_obs.observation_stable,
         "deletePath": resolved.to_string_lossy(),
     });
     if observation_stable {
         out["contentDigest"] = json!(EMPTY_SHA256_HEX);
+    }
+    if let Some(d) = result_obs.digest {
+        out["resultDigest"] = json!(d);
     }
     Ok(out)
 }
@@ -554,7 +572,15 @@ fn execute_fs_rename(
         "HZ_PRECONDITION_FAILED: effect.execute fs.rename destination could not be resolved".to_string()
     })?;
     crate::sandbox_atomic_write::rename_file_in_sandbox(root, &from_resolved, &to_resolved)?;
-    finish_fs_postimage_mutation_json(ledger, effect_id, "renameToPath", &to_resolved)
+    finish_fs_postimage_mutation_json(
+        ledger,
+        effect_id,
+        "renameToPath",
+        &raw_to,
+        Some(crate::effect_evidence::FsMutationResultKind::Rename),
+        Some(&raw_from),
+        &to_resolved,
+    )
 }
 
 fn execute_fs_write(
@@ -581,6 +607,9 @@ fn execute_fs_write(
         ledger,
         effect_id,
         "writePath",
+        &raw_path,
+        Some(crate::effect_evidence::FsMutationResultKind::Write),
+        None,
         &resolved,
     )
 }
@@ -589,15 +618,38 @@ fn finish_fs_postimage_mutation_json(
     ledger: &mut HermeticEffectLedger,
     effect_id: &str,
     path_field: &str,
+    rel_path: &str,
+    mutation: Option<crate::effect_evidence::FsMutationResultKind>,
+    rel_from: Option<&str>,
     resolved: &Path,
 ) -> Result<Value, String> {
     let phases = ledger.record_hermetic(effect_id);
     let obs = crate::receipt_postimage::observe_file_postimage(resolved);
+    let digest_for_output = if obs.observation_stable {
+        obs.digest.as_deref()
+    } else {
+        None
+    };
+    let (result_digest_stable, result_digest) = match mutation {
+        Some(kind) => {
+            let result_obs = crate::effect_evidence::observe_kernel_fs_mutation_result_digest(
+                kind,
+                rel_path,
+                digest_for_output,
+                rel_from,
+            );
+            (
+                Some(result_obs.observation_stable),
+                result_obs.digest,
+            )
+        }
+        None => (None, None),
+    };
     let verdict = reconcile(
         &phases,
         Some(HERMETIC_OBSERVE_RECEIPT_ID),
         Some(HERMETIC_OBSERVE_RECEIPT_SEQ),
-        None,
+        result_digest_stable,
         None,
         Some(obs.observation_stable),
     );
@@ -608,12 +660,18 @@ fn finish_fs_postimage_mutation_json(
         "postimageObservationStable": obs.observation_stable,
         path_field: resolved.to_string_lossy(),
     });
+    if let Some(stable) = result_digest_stable {
+        out["resultDigestStable"] = json!(stable);
+    }
     if obs.observation_stable {
         if let Some(d) = obs.digest {
             out["contentDigest"] = json!(d);
         }
     } else if let Some(c) = obs.confirm_digest {
         out["postimageConfirmDigest"] = json!(c);
+    }
+    if let Some(d) = result_digest {
+        out["resultDigest"] = json!(d);
     }
     Ok(out)
 }
@@ -993,6 +1051,8 @@ mod tests {
         assert_eq!(out["verdict"], "settled");
         assert_eq!(out["contentDigest"], expected);
         assert_eq!(out["postimageObservationStable"], true);
+        assert_eq!(out["resultDigestStable"], true);
+        assert!(out.get("resultDigest").and_then(|v| v.as_str()).is_some());
         let on_disk = std::fs::read(sandbox.join("out.bin")).unwrap();
         assert_eq!(on_disk, b"hz-write");
         let _ = std::fs::remove_dir_all(&sandbox);

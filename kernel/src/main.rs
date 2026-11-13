@@ -10,6 +10,7 @@
 mod canon;
 mod effect_evidence;
 mod effect_host;
+mod edit_unicode_fold;
 mod effect_host_edit_repair;
 mod egress;
 mod egress_connect;

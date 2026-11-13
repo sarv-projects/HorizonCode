@@ -10,6 +10,7 @@ import { EventTypes, newId, nowIso } from "../../src/contracts";
 import {
   __resetEffectReconcileBlockForTests,
   assessEffectReconcileBlock,
+  effectReconcileBlockObservePendingRefusal,
   effectReconcileBlockRefusal,
   effectReconcileBlockEnabled,
   effectReconcileBlockMode,
@@ -17,6 +18,8 @@ import {
   formatEffectReconcileBlockStatusLines,
   formatReconcileBlockListLines,
   formatReconcileBlockResourceDependencyLines,
+  formatObservePendingDependencyLines,
+  reconcileBlockObservePendingDependencies,
   reconcileBlockResourceDependencies,
   effectReconcileBlockLatchBlockedPaths,
   isEffectReconcileBlockLatched,
@@ -25,6 +28,7 @@ import {
   tryReleaseEffectReconcileBlock,
 } from "../../src/core/effect-reconcile-block";
 import { writeFileSync } from "node:fs";
+import { EffectHost, createEffectId } from "../../src/core/effect-host";
 import { KernelClient } from "../../src/core/kernel";
 import { kernelStateDir } from "../../src/core/paths";
 import { restoreEnv, setEnv, snapshotEnv, type EnvSnapshot } from "./helpers";
@@ -53,6 +57,123 @@ describe("effectReconcileBlockEnabled", () => {
     expect(effectReconcileBlockMode()).toBe("session");
     setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
     expect(effectReconcileBlockMode()).toBe("resource");
+  });
+});
+
+describe("observe-pending gate (rulings 333, 334)", () => {
+  test("refuses ast_edit on path while prior effect execute has not observed", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "pending.ts");
+    host.begin(effectId, "apply_patch", "call-inflight");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      "ast_edit",
+      { path: "pending.ts", pat: "x", out: "y" },
+      host,
+    );
+    expect(refusal).toContain("observe not settled");
+    expect(refusal).toContain(effectId.slice(0, 13));
+    const writeRefusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      "write",
+      { path: "pending.ts", content: "z" },
+      host,
+    );
+    expect(writeRefusal).toContain("observe not settled");
+    expect(writeRefusal).toContain("refusing write");
+    host.recordObserve(effectId, { receiptId: "r1", receiptSeq: 1, resourceKey: target });
+    expect(
+      effectReconcileBlockObservePendingRefusal(
+        workspace,
+        "ast_edit",
+        { path: "pending.ts", pat: "x", out: "y" },
+        host,
+      ),
+    ).toBeUndefined();
+  });
+
+  test("refuses edit on overlapping path (ruling 334)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "sub", "lane.ts");
+    host.begin(effectId, "write", "w1");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      "edit",
+      { path: "sub/lane.ts", old: "a", new: "b" },
+      host,
+    );
+    expect(refusal).toContain("observe not settled");
+    expect(refusal).toContain("refusing edit");
+    expect(
+      effectReconcileBlockObservePendingRefusal(workspace, "edit", { path: "other.ts", old: "a", new: "b" }, host),
+    ).toBeUndefined();
+  });
+
+  test("shell skipped when no postimage path (ruling 334)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "sh.ts");
+    host.begin(effectId, "write", "w-sh");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    expect(
+      effectReconcileBlockObservePendingRefusal(workspace, "shell", { command: "echo hi" }, host),
+    ).toBeUndefined();
+  });
+
+  test("shell refused when explicit cwd overlaps observe-pending path (ruling 336)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "sub", "lane.ts");
+    host.begin(effectId, "write", "w336");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      "shell",
+      { command: "npm test", cwd: "sub" },
+      host,
+    );
+    expect(refusal).toContain("observe not settled");
+    expect(refusal).toContain("refusing shell");
+    expect(
+      effectReconcileBlockObservePendingRefusal(workspace, "shell", { command: "npm test", cwd: "other" }, host),
+    ).toBeUndefined();
+  });
+
+  test("shell refused when explicit path overlaps (ruling 336)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "explicit.ts");
+    host.begin(effectId, "edit", "e336");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      "shell",
+      { command: "cat explicit.ts", path: "explicit.ts" },
+      host,
+    );
+    expect(refusal).toContain("refusing shell");
+  });
+
+  test("off when HZ_EFFECT_RECONCILE_BLOCK unset", () => {
+    setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "" });
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "off.ts");
+    host.begin(effectId, "write", "c1");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    expect(
+      effectReconcileBlockObservePendingRefusal(workspace, "apply_patch", { patch: "*** off.ts\n+x" }, host),
+    ).toBeUndefined();
   });
 });
 
@@ -148,6 +269,27 @@ describe("latch view for TUI (ruling 304, 307)", () => {
     });
     expect(status.some((l) => l.includes("per-resource block drivers"))).toBe(true);
     expect(reconcileBlockResourceDependencies(workspace, sid).length).toBe(0);
+  });
+
+  test("latch view surfaces observe-pending drivers (ruling 342)", () => {
+    setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "1" });
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "observe-pane.ts");
+    host.begin(effectId, "write", "w-342");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const view = effectReconcileBlockLatchView(workspace, "sess-342", host);
+    expect(view.latched).toBe(false);
+    expect(view.observePendingActive).toBe(true);
+    expect(reconcileBlockObservePendingDependencies(host).map((d) => d.resourcePath)).toEqual([target]);
+    const lines = formatObservePendingDependencyLines(view.observePendingDependencies ?? []);
+    expect(lines.some((l) => l.includes("observe-pane.ts"))).toBe(true);
+    const status = formatEffectReconcileBlockStatusLines(view);
+    expect(status.some((l) => l.includes("observe-pending"))).toBe(true);
+    host.recordObserve(effectId, { receiptId: "r342", receiptSeq: 1, resourceKey: target });
+    const cleared = effectReconcileBlockLatchView(workspace, "sess-342", host);
+    expect(cleared.observePendingActive).toBeUndefined();
   });
 
   test("effectReconcileBlockLatchView reflects test latch", () => {

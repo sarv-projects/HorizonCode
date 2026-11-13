@@ -5,6 +5,7 @@
 import type { EffectReconcileBlockLatchView } from "../core/effect-reconcile-block";
 import {
   formatEffectReconcileBlockStatusLines,
+  formatObservePendingInspectorLines,
   formatReconcileBlockListLines,
 } from "../core/effect-reconcile-block";
 import type { UnknownEffectRow } from "../core/effect-unknown-list";
@@ -33,6 +34,16 @@ export function buildInsetReconcileBlockLogicalLines(
   ];
 }
 
+/** Inset scrollback when observe-pending overlap gate is active without reconcile latch (**342**). */
+export function buildInsetObservePendingLogicalLines(
+  view: EffectReconcileBlockLatchView | undefined,
+): string[] {
+  if (!view?.observePendingActive || view.mode === "off" || view.latched) return [];
+  const banner = fullscreenReconcileBlockExtra(view);
+  if (!banner) return [];
+  return [`— inset ${banner} —`, ...formatObservePendingInspectorLines(view)];
+}
+
 /**
  * Full logical inset scrollback (viewport applied at paint via `insetScrollBack`).
  * Reconcile-block banner when latched; else UNKNOWN summary; else buried transcript.
@@ -46,6 +57,8 @@ export function buildFullscreenInsetLogicalLines(opts: {
   const { transcript, mainScrollUp, unknownRows, reconcileBlock } = opts;
   const blockLines = buildInsetReconcileBlockLogicalLines(reconcileBlock);
   if (blockLines.length > 0) return blockLines;
+  const observeLines = buildInsetObservePendingLogicalLines(reconcileBlock);
+  if (observeLines.length > 0) return observeLines;
   if (unknownRows.length > 0) {
     return formatUnknownInspectorLines(unknownRows);
   }

@@ -11,7 +11,13 @@ import { runDoctor, type DoctorEnv } from "../../src/core/doctor";
 import { resolveSandboxExecBinary } from "../../src/core/kernel";
 import { kernelStateDir, spawnOwned } from "../../src/core/owned-spawn";
 import type { DoctorRunFn } from "../../src/core/sandbox-netns-veth";
-import { VETH_HERMETIC_BRIDGE_HOST, probeCapNetAdminForVeth } from "../../src/core/sandbox-netns-veth";
+import {
+  VETH_HERMETIC_BRIDGE_HOST,
+  VETH_HERMETIC_NS,
+  probeCapNetAdminForVeth,
+  setupVethHermeticPlumbing,
+  teardownVethHermeticPlumbing,
+} from "../../src/core/sandbox-netns-veth";
 import {
   assessNetnsSpawnWrappedConnectPosture,
   attemptNetnsSpawnWrappedProductConnectEgress,
@@ -121,17 +127,77 @@ describe("spawnOwned wrapped CONNECT (ruling 321)", () => {
         { sandboxExecBin: bin },
       );
       if (result.ok) {
-        expect(result.wrappedConnectHermeticOk).toBe(true);
-        expect(result.wrappedConnectProductionBlocked).toBe(true);
+        expect(result.wrappedConnectProductionJoinOk).toBe(true);
+        expect(result.wrappedConnectProductionWithoutJoinBlocked).toBe(true);
         expect(result.plumbingVethConnectOk).toBe(true);
         const posture = postureFromHermeticSpawnWrappedConnect(spawnStackBase(), realRun, result);
-        expect(posture.kind).toBe("hermetic-wrapped-ok");
+        expect(posture.kind).toBe("hermetic-production-join-ok");
+        expect(posture.hermeticProductionJoinConnectOk).toBe(true);
         expect(posture.detail.toLowerCase()).not.toContain("enforced");
       } else if (!result.skipped) {
         expect(result.reason.length).toBeGreaterThan(0);
       }
     } finally {
       echo.close();
+    }
+  });
+
+  test("spawnOwned production child_net=off CONNECT via bridge after veth join (ruling 326)", async () => {
+    if (!probeCapNetAdminForVeth(realRun)) return;
+    const bin = resolveSandboxExecBinary(process.env);
+    if (bin === undefined || !existsSync(bin)) return;
+    const plumbing = setupVethHermeticPlumbing(realRun, VETH_HERMETIC_NS);
+    if (plumbing.ok === false) return;
+    const echo = createServer((s) => {
+      s.on("data", (d) => s.write(d));
+    });
+    await new Promise<void>((resolve, reject) => {
+      echo.listen(0, "127.0.0.1", () => resolve());
+      echo.on("error", reject);
+    });
+    const echoPort = (echo.address() as { port: number }).port;
+    const authority = `127.0.0.1:${echoPort}`;
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-wrap-326-"));
+    const prev = { ...process.env };
+    try {
+      const proxy = await startEgressConnectProxy({
+        listenHost: VETH_HERMETIC_BRIDGE_HOST,
+        forward: true,
+        policy: [{ host: "127.0.0.1", decision: "allow" }],
+      });
+      const connectPy = buildConnectViaProxyProbePython(
+        `http://${VETH_HERMETIC_BRIDGE_HOST}:${proxy.port}`,
+        authority,
+      );
+      process.env = {
+        ...prev,
+        ...spawnStackBase(),
+        HZ_SANDBOX_EXEC_BIN: bin,
+        HZ_EGRESS_PROXY: `http://127.0.0.1:${proxy.port}`,
+        HZ_SANDBOX_CHILD_NET: "off",
+        HZ_SANDBOX_VETH_JOIN: "1",
+        HZ_SANDBOX_VETH_NETNS: VETH_HERMETIC_NS,
+      };
+      const { proc } = await spawnOwned(["python3", "-c", connectPy], {
+        stateDir: kernelStateDir(workspace),
+        label: "shell",
+        sandboxWrap: true,
+        kernel: { mode: "trusted", sandboxReport: async () => enforcedReport } as never,
+        stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+        longLived: false,
+      });
+      const out = await new Response(proc.stdout).text();
+      const err = await new Response(proc.stderr).text();
+      await proc.exited;
+      const merged = `${out}\n${err}`;
+      expect(merged).toContain("CONNECT_VIA_SPAWN_PROXY_OK");
+      expect(merged).not.toContain("enforced");
+      proxy.stop();
+    } finally {
+      echo.close();
+      process.env = prev;
+      rmSync(workspace, { recursive: true, force: true });
+      teardownVethHermeticPlumbing(realRun, VETH_HERMETIC_NS);
     }
   });
 

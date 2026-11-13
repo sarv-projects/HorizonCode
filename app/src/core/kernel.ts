@@ -26,7 +26,11 @@ import { deleteFileInSandbox } from "./effect-host-atomic-delete";
 import { renameFileInSandbox } from "./effect-host-atomic-rename";
 import { writeBytesAtomicInSandbox } from "./effect-host-atomic-write";
 import { resolveKernelFsEditOldString } from "./effect-host-edit-repair";
-import { observeCapturedShellStreamDigest, shellExecResultDigestStable } from "./effect-evidence";
+import {
+  observeCapturedShellStreamDigest,
+  observeKernelFsMutationResultDigest,
+  shellExecResultDigestStable,
+} from "./effect-evidence";
 import { assessPostimageObservation, observePostimageDigest } from "./receipt-postimage";
 import * as path from "node:path";
 import type {
@@ -1607,15 +1611,25 @@ export class KernelClient {
               const confirm = observePostimageDigest(candidate);
               const stability = assessPostimageObservation(primary, confirm);
               const observationStable = stability.observationStable;
+              const resultObs = observeKernelFsMutationResultDigest(
+                "write",
+                rawPath,
+                observationStable ? primary : undefined,
+                undefined,
+              );
+              const verdict =
+                observationStable && resultObs.resultDigestStable ? "settled" : "unknown";
               const result: KernelRequestMap["effect.execute"]["result"] = {
-                verdict: observationStable ? "settled" : "unknown",
+                verdict,
                 effectId,
                 phases: ["allow", "execute", "observe"],
                 postimageObservationStable: observationStable,
+                resultDigestStable: resultObs.resultDigestStable,
                 ...(observationStable && primary !== undefined ? { contentDigest: primary } : {}),
                 ...(stability.confirmDigest !== undefined
                   ? { postimageConfirmDigest: stability.confirmDigest }
                   : {}),
+                ...(resultObs.resultDigest ? { resultDigest: resultObs.resultDigest } : {}),
                 writePath: candidate,
               };
               return result as unknown as KernelRequestMap[M]["result"];
@@ -1684,15 +1698,25 @@ export class KernelClient {
               const confirm = observePostimageDigest(candidate);
               const stability = assessPostimageObservation(primary, confirm);
               const observationStable = stability.observationStable;
+              const resultObs = observeKernelFsMutationResultDigest(
+                "edit",
+                rawPath,
+                observationStable ? primary : undefined,
+                undefined,
+              );
+              const verdict =
+                observationStable && resultObs.resultDigestStable ? "settled" : "unknown";
               const result: KernelRequestMap["effect.execute"]["result"] = {
-                verdict: observationStable ? "settled" : "unknown",
+                verdict,
                 effectId,
                 phases: ["allow", "execute", "observe"],
                 postimageObservationStable: observationStable,
+                resultDigestStable: resultObs.resultDigestStable,
                 ...(observationStable && primary !== undefined ? { contentDigest: primary } : {}),
                 ...(stability.confirmDigest !== undefined
                   ? { postimageConfirmDigest: stability.confirmDigest }
                   : {}),
+                ...(resultObs.resultDigest ? { resultDigest: resultObs.resultDigest } : {}),
                 editPath: candidate,
               };
               return result as unknown as KernelRequestMap[M]["result"];
@@ -1726,12 +1750,21 @@ export class KernelClient {
             .then(() => {
               const observationStable = missing() && missing();
               const emptyDigest = sha256Hex("");
+              const resultObs = observeKernelFsMutationResultDigest(
+                "delete",
+                rawPath,
+                observationStable ? emptyDigest : undefined,
+              );
+              const verdict =
+                observationStable && resultObs.resultDigestStable ? "settled" : "unknown";
               const result: KernelRequestMap["effect.execute"]["result"] = {
-                verdict: observationStable ? "settled" : "unknown",
+                verdict,
                 effectId,
                 phases: ["allow", "execute", "observe"],
                 postimageObservationStable: observationStable,
+                resultDigestStable: resultObs.resultDigestStable,
                 ...(observationStable ? { contentDigest: emptyDigest } : {}),
+                ...(resultObs.resultDigest ? { resultDigest: resultObs.resultDigest } : {}),
                 deletePath: candidate,
               };
               return result as unknown as KernelRequestMap[M]["result"];
@@ -1768,15 +1801,25 @@ export class KernelClient {
               const confirm = observePostimageDigest(toCandidate);
               const stability = assessPostimageObservation(primary, confirm);
               const observationStable = stability.observationStable;
+              const resultObs = observeKernelFsMutationResultDigest(
+                "rename",
+                rawTo,
+                observationStable ? primary : undefined,
+                rawFrom,
+              );
+              const verdict =
+                observationStable && resultObs.resultDigestStable ? "settled" : "unknown";
               const result: KernelRequestMap["effect.execute"]["result"] = {
-                verdict: observationStable ? "settled" : "unknown",
+                verdict,
                 effectId,
                 phases: ["allow", "execute", "observe"],
                 postimageObservationStable: observationStable,
+                resultDigestStable: resultObs.resultDigestStable,
                 ...(observationStable && primary !== undefined ? { contentDigest: primary } : {}),
                 ...(stability.confirmDigest !== undefined
                   ? { postimageConfirmDigest: stability.confirmDigest }
                   : {}),
+                ...(resultObs.resultDigest ? { resultDigest: resultObs.resultDigest } : {}),
                 renameToPath: toCandidate,
               };
               return result as unknown as KernelRequestMap[M]["result"];

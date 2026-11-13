@@ -30,6 +30,51 @@ describe("resolveKernelFsEditOldString", () => {
     }
   });
 
+  test("per-line trim window repair (ruling 337)", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+      const content = "  alpha  \n  beta  \n";
+      const miss = resolveKernelFsEditOldString(content, "alpha\nbeta", {});
+      expect(miss.ok).toBe(false);
+      const hit = resolveKernelFsEditOldString(content, "alpha\nbeta", process.env);
+      expect(hit.ok).toBe(true);
+      if (hit.ok) expect(hit.oldString).toBe("  alpha  \n  beta  ");
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+
+  test("per-line trimEnd window repair (ruling 335)", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+      const content = "alpha  \nbeta  \ngamma\n";
+      const miss = resolveKernelFsEditOldString(content, "alpha\nbeta", {});
+      expect(miss.ok).toBe(false);
+      const hit = resolveKernelFsEditOldString(content, "alpha\nbeta", process.env);
+      expect(hit.ok).toBe(true);
+      if (hit.ok) expect(hit.oldString).toBe("alpha  \nbeta  ");
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+
+  test("per-line unicode-fold window repair (ruling 339)", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+      const content = "say \u2018hi\u2019\nnext\n";
+      const miss = resolveKernelFsEditOldString(content, "say 'hi'\nnext", {});
+      expect(miss.ok).toBe(false);
+      const hit = resolveKernelFsEditOldString(content, "say 'hi'\nnext", process.env);
+      expect(hit.ok).toBe(true);
+      if (hit.ok) expect(hit.oldString).toBe("say \u2018hi\u2019\nnext");
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+
   test("newline normalisation repair", () => {
     const snap = snapshotEnv();
     try {

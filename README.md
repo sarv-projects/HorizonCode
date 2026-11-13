@@ -333,10 +333,13 @@ The authoritative status table is `CURRENT_RUN.md` §5.0, and the implemented-ve
 
 ## Documentation
 
-Start at [`docs/00-index.md`](./docs/00-index.md).
+**Coding agents:** [`AGENTS.md`](./AGENTS.md) first (onboarding + docs≠complete-tree rule). Then [`docs/FULL-BACKLOG-2026-11-13.md`](./docs/FULL-BACKLOG-2026-11-13.md) and [`docs/33-handoff.md`](./docs/33-handoff.md). Spec index: [`docs/00-index.md`](./docs/00-index.md).
 
 | Read | For |
 |---|---|
+| [`docs/FULL-BACKLOG-2026-11-13.md`](./docs/FULL-BACKLOG-2026-11-13.md) | **The backlog** (queue + §Z what to do first + P0 bars) |
+| [`docs/AGENT-DOC-NAVIGATION.md`](./docs/AGENT-DOC-NAVIGATION.md) | `repo_take/` + code paths (optional detail) |
+| [`docs/GOAL-PROGRESS.md`](./docs/GOAL-PROGRESS.md) | honest goal status (NOT COMPLETE) and wave residuals |
 | [`docs/28-implementation-status.md`](./docs/28-implementation-status.md) | what is implemented, with evidence commands |
 | [`CURRENT_RUN.md`](./CURRENT_RUN.md) | current state, open work and exact continuation steps |
 | [`docs/research/README.md`](./docs/research/README.md) | the upstream research notes and the pinned upstream commits ([`upstream-pins.md`](./docs/research/upstream-pins.md)) behind the steal list |

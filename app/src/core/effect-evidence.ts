@@ -61,6 +61,64 @@ export function shellExecResultDigestStable(
   return stdout.observationStable && stderr.observationStable;
 }
 
+/** Success output for kernel-routed fs mutations (must match `effect-kernel-mutation-route.ts`). */
+export function kernelFsMutationSuccessOutput(
+  kind: "write" | "edit" | "delete" | "rename",
+  rel: string,
+  contentDigest?: string,
+  relFrom?: string,
+): string {
+  const digest = contentDigest ?? "?";
+  switch (kind) {
+    case "write":
+      return `[effect-host-kernel] wrote ${rel} (kernel fs.write; postimage digest ${digest})`;
+    case "edit":
+      return `[effect-host-kernel] edited ${rel} (kernel fs.edit; postimage digest ${digest})`;
+    case "delete":
+      return `[effect-host-kernel] deleted ${rel} (kernel fs.delete; postimage digest ${digest})`;
+    case "rename":
+      return `[effect-host-kernel] renamed ${relFrom ?? "?"} → ${rel} (kernel fs.rename; postimage digest ${digest})`;
+  }
+}
+
+/** Multi-op kernel-routed `apply_patch` aggregated success output (docs/28 **328**). */
+export function kernelApplyPatchMultiOpSuccessOutput(
+  opCount: number,
+  paths: string,
+  contentDigest?: string,
+): string {
+  const digest = contentDigest ?? "?";
+  return `[effect-host-kernel] apply_patch ${opCount} op(s) via kernel (${paths}; postimage digest ${digest})`;
+}
+
+/** Independent double-hash on canonical kernel mutation tool output (docs/28 **327**, **328**). */
+export function observeKernelFsMutationResultDigest(
+  kind: "write" | "edit" | "delete" | "rename",
+  rel: string,
+  contentDigest?: string,
+  relFrom?: string,
+): { resultDigest?: string; resultDigestStable: boolean } {
+  const output = kernelFsMutationSuccessOutput(kind, rel, contentDigest, relFrom);
+  const obs = observeCapturedShellStreamDigest(Buffer.from(output, "utf8"));
+  return {
+    resultDigestStable: obs.observationStable,
+    ...(obs.digest ? { resultDigest: obs.digest } : {}),
+  };
+}
+
+export function observeKernelApplyPatchMultiOpResultDigest(
+  opCount: number,
+  paths: string,
+  contentDigest?: string,
+): { resultDigest?: string; resultDigestStable: boolean } {
+  const output = kernelApplyPatchMultiOpSuccessOutput(opCount, paths, contentDigest);
+  const obs = observeCapturedShellStreamDigest(Buffer.from(output, "utf8"));
+  return {
+    resultDigestStable: obs.observationStable,
+    ...(obs.digest ? { resultDigest: obs.digest } : {}),
+  };
+}
+
 export function assessPostimageMissingAtObserve(
   tool: string,
   args: Record<string, unknown>,

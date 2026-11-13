@@ -1091,7 +1091,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const key = reconcileBlockScrollbackNoticeKey(view);
     if (key === reconcileBlockNoticeKeySeen) return;
     reconcileBlockNoticeKeySeen = key;
-    if (view.latched && view.mode !== "off") {
+    if ((view.latched || view.observePendingActive) && view.mode !== "off") {
       for (const line of formatReconcileBlockScrollbackNoticeLines(view)) {
         renderer.notice(line);
       }

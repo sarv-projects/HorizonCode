@@ -58,11 +58,30 @@ import {
   type NetnsSpawnWrappedConnectPosture,
 } from "./sandbox-netns-spawn-wrapped-connect";
 import {
+  assessNetnsSpawnWrappedExecCreateConnectPosture,
+  type NetnsSpawnWrappedExecCreatePosture,
+} from "./sandbox-netns-spawn-wrapped-exec-create-connect";
+import {
+  assessSandboxNetnsProductSpawnPosture,
+  sandboxNetnsProductSpawnDoctorFixLines,
+  type SandboxNetnsProductSpawnPosture,
+} from "./sandbox-netns-spawn-product-default";
+import {
   assessNetnsVethBridgePosture,
   assessNetnsVethRoutedConnectPosture,
   type NetnsVethBridgePosture,
 } from "./sandbox-netns-veth";
 import { netnsEgressRoutePosture } from "./sandbox-netns-route";
+import {
+  assessSandboxExecVethJoinPosture,
+  assessSandboxExecVethJoinSpawnWiring,
+  type SandboxExecVethJoinPosture,
+} from "./sandbox-exec-veth-join";
+import {
+  assessSandboxExecVethCreatePosture,
+  assessSandboxExecVethCreateSpawnWiring,
+  type SandboxExecVethCreatePosture,
+} from "./sandbox-exec-veth-create";
 import { sandboxPlatformHonesty } from "./sandbox-platform-honesty";
 import { jsonlFsyncEnabled } from "./jsonl-append";
 import { workspaceMountPosture } from "./workspace-mount";
@@ -692,6 +711,113 @@ function checkEgressNetnsSpawnWrapped(d: DoctorEnv): DoctorCheck {
   return formatNetnsSpawnWrappedDoctorCheck(posture);
 }
 
+function formatNetnsSpawnWrappedExecCreateDoctorCheck(
+  posture: NetnsSpawnWrappedExecCreatePosture,
+): DoctorCheck {
+  if (posture.kind === "not-applicable") {
+    return warn(
+      "egress.netns.spawn.wrapped.exec_create",
+      "spawnOwned in-wrapper CREATE CONNECT",
+      posture.detail,
+      "set HZ_SANDBOX_EXEC=1 + HZ_SANDBOX_NETNS=1 + HZ_EGRESS_NETNS_PROXY_ROUTED=1 + HZ_SANDBOX_VETH_CREATE=1",
+    );
+  }
+  if (posture.kind === "stack-unwired") {
+    return warn(
+      "egress.netns.spawn.wrapped.exec_create",
+      "spawnOwned in-wrapper CREATE CONNECT",
+      `${posture.detail} — never claim enforced`,
+      "wire ROUTED bridge HTTP_PROXY first; see egress.netns.spawn.routed",
+    );
+  }
+  if (posture.kind === "create-unwired") {
+    return warn(
+      "egress.netns.spawn.wrapped.exec_create",
+      "spawnOwned in-wrapper CREATE CONNECT",
+      `${posture.detail} — never claim enforced`,
+      "set HZ_SANDBOX_VETH_CREATE=1 + HOST/PEER_ADDR + DEFAULT_ROUTE on wrapped spawn; ops/netns-spawn-wrapped-exec-create-connect-probe.sh",
+    );
+  }
+  if (posture.kind === "cap-net-admin-missing") {
+    return warn(
+      "egress.netns.spawn.wrapped.exec_create",
+      "spawnOwned in-wrapper CREATE CONNECT",
+      `${posture.detail} — never claim enforced`,
+      "run probe when CAP_NET_ADMIN present; parent plumb path remains egress.netns.spawn.wrapped",
+    );
+  }
+  if (posture.kind === "nsenter-missing") {
+    return warn(
+      "egress.netns.spawn.wrapped.exec_create",
+      "spawnOwned in-wrapper CREATE CONNECT",
+      `${posture.detail} — never claim enforced`,
+      "install util-linux nsenter for peer ADDR plumb; ops/netns-spawn-wrapped-exec-create-connect-probe.sh",
+    );
+  }
+  if (posture.kind === "hermetic-exec-create-ok") {
+    return warn(
+      "egress.netns.spawn.wrapped.exec_create",
+      "spawnOwned in-wrapper CREATE CONNECT",
+      `${posture.detail} — hermetic suite only; never claim enforced`,
+      "ops/netns-spawn-wrapped-exec-create-connect-probe.sh; production routed netns-only egress still open",
+    );
+  }
+  return warn(
+    "egress.netns.spawn.wrapped.exec_create",
+    "spawnOwned in-wrapper CREATE CONNECT",
+    `${posture.detail} — never claim enforced`,
+    "run hermetic sandbox-netns-spawn-wrapped-exec-create-connect tests; ops/netns-spawn-wrapped-exec-create-connect-probe.sh",
+  );
+}
+
+function checkEgressNetnsSpawnWrappedExecCreate(d: DoctorEnv): DoctorCheck {
+  const posture = assessNetnsSpawnWrappedExecCreateConnectPosture(
+    d.env as Record<string, string | undefined>,
+    d.run,
+  );
+  return formatNetnsSpawnWrappedExecCreateDoctorCheck(posture);
+}
+
+function formatSandboxNetnsProductSpawnDoctorCheck(posture: SandboxNetnsProductSpawnPosture): DoctorCheck {
+  const fixHint = "run hzcode doctor --fix egress.netns.spawn.product for export lines";
+  if (posture.kind === "not-applicable") {
+    return warn(
+      "egress.netns.spawn.product",
+      "spawnOwned product netns routing",
+      posture.detail,
+      `set HZ_SANDBOX_EXEC=1 + HZ_SANDBOX_NETNS_SPAWN_ROUTED=1; ${fixHint}`,
+    );
+  }
+  if (posture.kind === "product-off-default") {
+    return warn(
+      "egress.netns.spawn.product",
+      "spawnOwned product netns routing",
+      `${posture.detail} — never claim enforced`,
+      fixHint,
+    );
+  }
+  if (posture.kind === "stack-partial") {
+    return warn(
+      "egress.netns.spawn.product",
+      "spawnOwned product netns routing",
+      `${posture.detail}`,
+      fixHint,
+    );
+  }
+  return warn(
+    "egress.netns.spawn.product",
+    "spawnOwned product netns routing",
+    `${posture.detail}`,
+    `${fixHint}; hermetic probes: egress.netns.spawn.wrapped / egress.netns.spawn.wrapped.exec_create`,
+  );
+}
+
+function checkEgressNetnsSpawnProductDefault(d: DoctorEnv): DoctorCheck {
+  return formatSandboxNetnsProductSpawnDoctorCheck(
+    assessSandboxNetnsProductSpawnPosture(d.env as Record<string, string | undefined>),
+  );
+}
+
 function formatNetnsSpawnVethRoutedDoctorCheck(posture: NetnsSpawnVethRoutedPosture): DoctorCheck {
   if (posture.kind === "not-applicable") {
     return warn(
@@ -733,6 +859,121 @@ function formatNetnsSpawnVethRoutedDoctorCheck(posture: NetnsSpawnVethRoutedPost
   );
 }
 
+function formatSandboxExecVethJoinDoctorCheck(posture: SandboxExecVethJoinPosture): DoctorCheck {
+  if (posture.kind === "not-applicable") {
+    return warn(
+      "egress.netns.exec.veth_join",
+      "hz-sandbox-exec veth join",
+      posture.detail,
+      "set HZ_SANDBOX_EXEC=1 + HZ_SANDBOX_NETNS=1 to assess in-wrapper netns join",
+    );
+  }
+  if (posture.kind === "join-off-default") {
+    return warn(
+      "egress.netns.exec.veth_join",
+      "hz-sandbox-exec veth join",
+      `${posture.detail} — never claim enforced`,
+      "parent prepares netns + veth; set HZ_SANDBOX_VETH_JOIN=1 + HZ_SANDBOX_VETH_NETNS on wrapped spawn",
+    );
+  }
+  if (posture.kind === "join-unconfigured") {
+    return warn(
+      "egress.netns.exec.veth_join",
+      "hz-sandbox-exec veth join",
+      `${posture.detail} — never claim enforced`,
+      "set HZ_SANDBOX_VETH_NETNS to parent-prepared path or name under /var/run/netns",
+    );
+  }
+  if (posture.kind === "cap-net-admin-missing") {
+    return warn(
+      "egress.netns.exec.veth_join",
+      "hz-sandbox-exec veth join",
+      `${posture.detail} — never claim enforced`,
+      "run ops/netns-exec-veth-join-probe.sh when CAP_NET_ADMIN present; veth plumb still parent-side",
+    );
+  }
+  const env = {
+    HZ_SANDBOX_VETH_JOIN: "1",
+    HZ_SANDBOX_VETH_NETNS: "hz-veth-reach-ns",
+  } as Record<string, string | undefined>;
+  const wire = assessSandboxExecVethJoinSpawnWiring(env, { sandboxWrapped: true });
+  return warn(
+    "egress.netns.exec.veth_join",
+    "hz-sandbox-exec veth join",
+    `${posture.detail} — advisory only; never claim enforced`,
+    wire.wired
+      ? "spawnOwned passes HZ_SANDBOX_VETH_* on wrapped children (**325**); parent must plumb veth; ops/netns-exec-veth-join-probe.sh"
+      : "set HZ_SANDBOX_VETH_JOIN=1 + HZ_SANDBOX_VETH_NETNS (or NETNS_AUTO=1) on wrapped spawn; ops/netns-exec-veth-join-probe.sh",
+  );
+}
+
+function checkSandboxExecVethJoin(d: DoctorEnv): DoctorCheck {
+  const posture = assessSandboxExecVethJoinPosture(d.env as Record<string, string | undefined>, d.run);
+  return formatSandboxExecVethJoinDoctorCheck(posture);
+}
+
+function formatSandboxExecVethCreateDoctorCheck(posture: SandboxExecVethCreatePosture): DoctorCheck {
+  if (posture.kind === "not-applicable") {
+    return warn(
+      "egress.netns.exec.veth_create",
+      "hz-sandbox-exec veth create",
+      posture.detail,
+      "set HZ_SANDBOX_EXEC=1 + HZ_SANDBOX_NETNS=1 to assess in-wrapper veth create",
+    );
+  }
+  if (posture.kind === "create-off-default") {
+    return warn(
+      "egress.netns.exec.veth_create",
+      "hz-sandbox-exec veth create",
+      `${posture.detail} — never claim enforced`,
+      "opt-in HZ_SANDBOX_VETH_CREATE=1 on wrapped child when parent-side plumb is insufficient",
+    );
+  }
+  if (posture.kind === "addr-without-create") {
+    return warn(
+      "egress.netns.exec.veth_create",
+      "hz-sandbox-exec veth create",
+      `${posture.detail} — never claim enforced`,
+      "set HZ_SANDBOX_VETH_CREATE=1 before ADDR/route env; ops/netns-exec-veth-create-probe.sh",
+    );
+  }
+  if (posture.kind === "create-mutually-exclusive") {
+    return warn(
+      "egress.netns.exec.veth_create",
+      "hz-sandbox-exec veth create",
+      `${posture.detail} — never claim enforced`,
+      "unset HZ_SANDBOX_VETH_JOIN when using in-wrapper create",
+    );
+  }
+  if (posture.kind === "cap-net-admin-missing") {
+    return warn(
+      "egress.netns.exec.veth_create",
+      "hz-sandbox-exec veth create",
+      `${posture.detail} — never claim enforced`,
+      "run ops/netns-exec-veth-create-probe.sh when CAP_NET_ADMIN present; prefer parent veth plumb otherwise",
+    );
+  }
+  const env = {
+    HZ_SANDBOX_VETH_CREATE: "1",
+    HZ_SANDBOX_VETH_HOST: "hz-exec-veth-create-h",
+    HZ_SANDBOX_VETH_PEER: "hz-exec-veth-create-p",
+  } as Record<string, string | undefined>;
+  const wire = assessSandboxExecVethCreateSpawnWiring(env, { sandboxWrapped: true });
+  return warn(
+    "egress.netns.exec.veth_create",
+    "hz-sandbox-exec veth create",
+    `${posture.detail} — advisory only; never claim enforced`,
+    wire.wired
+      ? "spawnOwned passes HZ_SANDBOX_VETH_CREATE (+ optional HOST/PEER) on wrapped children (**330**); ops/netns-exec-veth-create-probe.sh"
+      : "set HZ_SANDBOX_VETH_CREATE=1 on wrapped spawn (not with JOIN); ops/netns-exec-veth-create-probe.sh",
+  );
+}
+
+function checkSandboxExecVethCreate(d: DoctorEnv): DoctorCheck {
+  const posture = assessSandboxExecVethCreatePosture(d.env as Record<string, string | undefined>, d.run);
+  return formatSandboxExecVethCreateDoctorCheck(posture);
+}
+
 function formatNetnsSpawnWrappedDoctorCheck(posture: NetnsSpawnWrappedConnectPosture): DoctorCheck {
   if (posture.kind === "not-applicable") {
     return warn(
@@ -755,15 +996,23 @@ function formatNetnsSpawnWrappedDoctorCheck(posture: NetnsSpawnWrappedConnectPos
       "egress.netns.spawn.wrapped",
       "spawnOwned wrapped CONNECT",
       `${posture.detail} — never claim enforced`,
-      "veth inside hz-sandbox-exec still required for production child_net=off; run ops/netns-spawn-wrapped-connect-probe.sh when CAP_NET_ADMIN present",
+      "run ops/netns-spawn-wrapped-connect-probe.sh when CAP_NET_ADMIN present; see egress.netns.spawn.wrapped.exec_create for in-wrapper CREATE",
+    );
+  }
+  if (posture.kind === "hermetic-production-join-ok") {
+    return warn(
+      "egress.netns.spawn.wrapped",
+      "spawnOwned wrapped CONNECT",
+      `${posture.detail} — never claim enforced`,
+      "hermetic **326** production child_net=off CONNECT after veth join proven; ops/netns-spawn-wrapped-connect-probe.sh; in-wrapper CREATE CONNECT: egress.netns.spawn.wrapped.exec_create (**332**)",
     );
   }
   if (posture.kind === "hermetic-wrapped-ok") {
     return warn(
       "egress.netns.spawn.wrapped",
       "spawnOwned wrapped CONNECT",
-      `${posture.detail} — hermetic child_net=on only; never claim enforced`,
-      "production routed netns-only egress needs in-wrapper veth/bridge in hz-sandbox-exec",
+      `${posture.detail} — never claim enforced`,
+      "run hermetic sandbox-netns-spawn-wrapped-connect tests; ops/netns-spawn-wrapped-connect-probe.sh",
     );
   }
   return warn(
@@ -1119,6 +1368,10 @@ export function runDoctor(d: DoctorEnv): DoctorCheck[] {
         checkEgressNetnsVethRouted(d),
         checkEgressNetnsSpawnVethRouted(d),
         checkEgressNetnsSpawnWrapped(d),
+        checkEgressNetnsSpawnWrappedExecCreate(d),
+        checkEgressNetnsSpawnProductDefault(d),
+        checkSandboxExecVethJoin(d),
+        checkSandboxExecVethCreate(d),
         checkEgressTlsMitm(d),
         checkEgressProxyEnv(d),
         checkOuterEgressFirewall(d),
@@ -1170,5 +1423,6 @@ export function doctorFixSuggestion(
 ): string[] | undefined {
   if (checkId === "effect.host") return effectHostDoctorFixLines(env);
   if (checkId === "effect.postimage.replay") return postimageReplayDoctorFixLines(env);
+  if (checkId === "egress.netns.spawn.product") return sandboxNetnsProductSpawnDoctorFixLines(env);
   return undefined;
 }

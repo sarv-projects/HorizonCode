@@ -69,11 +69,25 @@ describe("effectHostKernelRequireRefusal", () => {
         effectHostKernelRequireRefusal("apply_patch", { patch: "..." }, false),
       )?.toContain(EFFECT_HOST_KERNEL_REQUIRE_NOTICE);
       expect(
+        effectHostKernelRequireRefusal(
+          "apply_patch",
+          { input: "*** Begin Patch\n*** Update File: src.txt\n@@\n-old\n+new\n*** End Patch" },
+          false,
+          { applyPatchProjectionMiss: "bun_fuzz_only" },
+        ),
+      )?.toContain("Bun-only fuzz");
+      expect(
         effectHostKernelRequireRefusal("shell", { command: "bash -c 'echo hi'" }, false),
-      )?.toContain("cannot kernel-route");
+      )?.toContain("interpreter");
       expect(
         effectHostKernelRequireRefusal("shell", { command: "echo a && echo b" }, false),
       )?.toContain("compound");
+      expect(
+        effectHostKernelRequireRefusal("shell", { command: "VAR=1 echo hi" }, false),
+      )?.toContain("inline");
+      expect(
+        effectHostKernelRequireRefusal("shell", { command: "echo hi", timeoutMs: 5000 }, false),
+      )?.toContain("timeoutMs");
       expect(effectHostKernelRequireRefusal("read", { path: "x" }, false)).toBeUndefined();
     } finally {
       restoreEnv(snap);
@@ -111,6 +125,13 @@ describe("effectHostDoctorPosture", () => {
     expect(on.detail.toLowerCase()).toContain("dominant score");
     expect(on.detail).toContain("0.97");
     expect(on.detail.toLowerCase()).toContain("line-patch");
+  });
+
+  test("unset doctor documents createRuntime spine (ruling 340)", () => {
+    expect(effectHostDoctorPosture({}).detail).toContain("createRuntime");
+    expect(effectHostDoctorPosture({}).detail).toContain("340");
+    const fix = effectHostDoctorFixLines({});
+    expect(fix.some((l) => l.includes("effectHostKernel"))).toBe(true);
   });
 
   test("doctor --fix effect.host suggests EDIT_REPAIR for dominant score rung (ruling 312)", () => {

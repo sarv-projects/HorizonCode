@@ -60,6 +60,7 @@ import {
   computeReceiptPostimage,
   computeReceiptPostimageFromKernel,
   postimageObservationNotice,
+  postimagePathForTool,
   receiptPostimageFields,
   type KernelExecutePostimageObserve,
 } from "./receipt-postimage";
@@ -71,10 +72,14 @@ import {
   toolResultDigest,
 } from "./effect-evidence";
 import { effectHostKernelRequireRefusal } from "./effect-host-posture";
-import { classifyAstEditKernelProjectionMiss } from "./effect-kernel-tool-projection";
+import {
+  classifyApplyPatchKernelProjectionMiss,
+  classifyAstEditKernelProjectionMiss,
+} from "./effect-kernel-tool-projection";
 import { EffectHost, createEffectId } from "./effect-host";
 import { mirrorEffectReconcileToKernel } from "./effect-kernel-reconcile";
 import {
+  effectReconcileBlockObservePendingRefusal,
   effectReconcileBlockRefusal,
   latchEffectReconcileBlock,
 } from "./effect-reconcile-block";
@@ -1800,6 +1805,16 @@ function planModeOutcome(
   };
 }
 
+function effectExecuteRecordDetail(
+  tool: string,
+  args: Record<string, unknown>,
+  workspace: string,
+  detail: { ok?: boolean; childEffectIds?: readonly string[] },
+): { ok?: boolean; childEffectIds?: readonly string[]; resourceKey?: string } {
+  const resourceKey = postimagePathForTool(tool, args, workspace);
+  return { ...detail, ...(resourceKey ? { resourceKey } : {}) };
+}
+
 async function executeTool(
   deps: LoopDeps,
   gate: GuardGate,
@@ -1874,6 +1889,19 @@ async function executeTool(
   if (reconcileBlockRefusal !== undefined) {
     return {
       result: { ok: false, output: reconcileBlockRefusal, error: reconcileBlockRefusal },
+      expected: true,
+    };
+  }
+
+  const observePendingRefusal = effectReconcileBlockObservePendingRefusal(
+    deps.workspace,
+    call.name,
+    parsed.args,
+    deps.effectHost,
+  );
+  if (observePendingRefusal !== undefined) {
+    return {
+      result: { ok: false, output: observePendingRefusal, error: observePendingRefusal },
       expected: true,
     };
   }
@@ -2011,7 +2039,10 @@ async function executeTool(
       if (routed.journalRecordFailed) {
         emit(deps.callbacks, { type: "notice", message: EFFECT_HOST_KERNEL_JOURNAL_FAIL_NOTICE });
       }
-      deps.effectHost?.recordExecute(effectId, { ok: routed.result.ok });
+      deps.effectHost?.recordExecute(
+        effectId,
+        effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: routed.result.ok }),
+      );
       return { result: routed.result, leaseId, kernelRouteObserve: routed.kernelObserve };
     }
   }
@@ -2021,11 +2052,19 @@ async function executeTool(
       call.name === "ast_edit" && !kernelRouted && astEditArgsEligibleForKernelRoute(parsed.args)
         ? await classifyAstEditKernelProjectionMiss(deps.workspace, parsed.args)
         : undefined;
+    const applyPatchProjectionMiss =
+      call.name === "apply_patch" && !kernelRouted
+        ? await classifyApplyPatchKernelProjectionMiss(deps.workspace, parsed.args)
+        : undefined;
     const requireRefusal = effectHostKernelRequireRefusal(call.name, parsed.args, kernelRouted, {
       ...(astEditProjectionMiss ? { astEditProjectionMiss } : {}),
+      ...(applyPatchProjectionMiss ? { applyPatchProjectionMiss } : {}),
     });
     if (requireRefusal) {
-      deps.effectHost?.recordExecute(effectId, { ok: false });
+      deps.effectHost?.recordExecute(
+        effectId,
+        effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+      );
       return { result: { ok: false, output: requireRefusal, error: requireRefusal }, expected: true, leaseId };
     }
   }
@@ -2048,14 +2087,20 @@ async function executeTool(
   try {
     const result = normalizeToolResult(await tool.execute(stripToolOutputContinuationArgs(parsed.args), context));
     const childEffectIds = result.childEffectIds?.length ? [...result.childEffectIds] : undefined;
-    deps.effectHost?.recordExecute(effectId, {
-      ok: result.ok,
-      ...(childEffectIds?.length ? { childEffectIds } : {}),
-    });
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, {
+        ok: result.ok,
+        ...(childEffectIds?.length ? { childEffectIds } : {}),
+      }),
+    );
     return { result, leaseId, ...(childEffectIds?.length ? { childEffectIds } : {}) };
   } catch (err) {
     const message = errorMessage(err);
-    deps.effectHost?.recordExecute(effectId, { ok: false });
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
     return { result: { ok: false, output: `Tool ${call.name} failed: ${message}`, error: message }, leaseId };
   }
 }
@@ -2116,23 +2161,32 @@ async function issueToolReceipt(
       ...(childEffectIds?.length ? { childEffectIds: [...childEffectIds] } : {}),
     });
     const digestEvidence = assessResultDigestEvidence(receipt.resultDigest, result);
-    const kernelShellDigestStable =
-      call.name === "shell" &&
+    const kernelRouteResultDigestUnstable =
       kernelRouteObserve !== undefined &&
+      (call.name === "shell" ||
+        call.name === "write" ||
+        call.name === "edit" ||
+        call.name === "apply_patch") &&
       kernelRouteObserve.resultDigestStable === false
         ? false
         : undefined;
     const resultDigestEvidenceStable =
-      kernelShellDigestStable === false ? false : digestEvidence.stable;
+      kernelRouteResultDigestUnstable === false ? false : digestEvidence.stable;
     if (!digestEvidence.stable) {
       emit(deps.callbacks, {
         type: "notice",
         message: resultDigestEvidenceNotice(call.name, receipt.resultDigest, digestEvidence.observedDigest),
       });
-    } else if (kernelShellDigestStable === false) {
+    } else if (kernelRouteResultDigestUnstable === false) {
+      const detail =
+        call.name === "shell"
+          ? "kernel shell.exec stream digest observe unstable"
+          : call.name === "apply_patch"
+            ? "kernel apply_patch aggregated result digest observe unstable"
+            : "kernel fs mutation result digest observe unstable";
       emit(deps.callbacks, {
         type: "notice",
-        message: `kernel shell.exec stream digest observe unstable for ${call.name}; effect marked unknown`,
+        message: `${detail} for ${call.name}; effect marked unknown`,
       });
     }
     deps.effectHost?.recordObserve(effectId, {

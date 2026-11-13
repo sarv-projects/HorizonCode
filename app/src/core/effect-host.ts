@@ -109,7 +109,7 @@ export class EffectHost {
 
   recordExecute(
     effectId: string,
-    detail?: { ok?: boolean; childEffectIds?: readonly string[] },
+    detail?: { ok?: boolean; childEffectIds?: readonly string[]; resourceKey?: string },
   ): void {
     const rec = this.require(effectId);
     rec.steps.push({
@@ -118,6 +118,7 @@ export class EffectHost {
       tool: rec.tool,
       callId: rec.callId,
       ok: detail?.ok,
+      resourceKey: detail?.resourceKey,
       ...(detail?.childEffectIds?.length ? { childEffectIds: [...detail.childEffectIds] } : {}),
     });
     this.snap(effectId);

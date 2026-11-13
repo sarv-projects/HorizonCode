@@ -1,16 +1,16 @@
 import { spawnSync } from "node:child_process";
 
 /**
- * spawnOwned + hz-sandbox-exec product-runtime CONNECT via bridge proxy (ruling **321**).
+ * spawnOwned + hz-sandbox-exec product-runtime CONNECT via bridge proxy (rulings **321**, **326**).
  *
- * In-wrapper veth/bridge inside `hz-sandbox-exec` is still open (see module header on
- * `kernel/src/bin/hz_sandbox_exec.rs`). The strongest feasible proof here is:
- * parent-side veth plumbing + spawn ROUTED child proxy env + wrapped child CONNECT
- * when the helper is allowed to use the parent routable netns (`HZ_SANDBOX_CHILD_NET=on`
- * hermetic only). Production `child_net=off` still cannot reach the bridge without
- * in-wrapper veth. Advisory only — never claim shell-net enforced.
+ * Parent-side veth plumbing + spawn ROUTED child proxy env; **326** proves production
+ * `HZ_SANDBOX_CHILD_NET=off` CONNECT via bridge when `HZ_SANDBOX_VETH_JOIN=1` +
+ * `HZ_SANDBOX_VETH_NETNS` join a parent-prepared netns (rulings 324, 325). In-wrapper
+ * CREATE+ADDR+default-route CONNECT without parent plumb is **332**
+ * (`egress.netns.spawn.wrapped.exec_create`). Advisory only — never claim shell-net enforced.
  */
 
+import { mergeSandboxExecVethJoinSpawnEnv } from "./sandbox-exec-veth-join";
 import { mergedSpawnRoutedChildProxyEnv, spawnRoutedChildProxyUrl } from "./sandbox-netns-spawn-veth";
 import {
   assessNetnsSpawnRoutedProxyWiring,
@@ -33,7 +33,8 @@ export type NetnsSpawnWrappedConnectKind =
   | "stack-unwired"
   | "cap-net-admin-missing"
   | "hermetic-wrapped-unproven"
-  | "hermetic-wrapped-ok";
+  | "hermetic-wrapped-ok"
+  | "hermetic-production-join-ok";
 
 export interface NetnsSpawnWrappedConnectPosture {
   kind: NetnsSpawnWrappedConnectKind;
@@ -43,6 +44,8 @@ export interface NetnsSpawnWrappedConnectPosture {
   detail: string;
   /** CONNECT from wrapped child when parent veth plumbing + hermetic child_net=on ran. */
   hermeticWrappedConnectOk?: boolean;
+  /** Production child_net=off CONNECT after veth netns join (**326**). */
+  hermeticProductionJoinConnectOk?: boolean;
 }
 
 export function buildConnectViaProxyProbePython(proxyUrl: string, connectAuthority: string): string {
@@ -159,7 +162,7 @@ export function assessNetnsSpawnWrappedConnectPosture(
     capNetAdmin: true,
     hermeticWrappedConnectOk: false,
     detail:
-      "hermetic suite may prove spawnOwned-wrapped CONNECT via bridge when parent veth plumbing present (child_net=on probe only); production child_net=off needs in-wrapper veth — never claim enforced",
+      "hermetic suite may prove spawnOwned-wrapped CONNECT via bridge when parent veth plumbing + HZ_SANDBOX_VETH_JOIN present (**326**); in-wrapper CREATE CONNECT (**332**) is separate doctor line — never claim enforced",
   };
 }
 
@@ -168,8 +171,9 @@ export type SpawnWrappedProductConnectOk = {
   bridgeHost: string;
   childProxyUrl: string;
   plumbingVethConnectOk: true;
-  wrappedConnectHermeticOk: true;
-  wrappedConnectProductionBlocked: true;
+  wrappedConnectHermeticOk?: boolean;
+  wrappedConnectProductionJoinOk: true;
+  wrappedConnectProductionWithoutJoinBlocked: true;
 };
 export type SpawnWrappedProductConnectFail = {
   ok: false;
@@ -177,7 +181,8 @@ export type SpawnWrappedProductConnectFail = {
   skipped?: boolean;
   plumbingVethConnectOk?: boolean;
   wrappedConnectHermeticOk?: boolean;
-  wrappedConnectProductionBlocked?: boolean;
+  wrappedConnectProductionJoinOk?: boolean;
+  wrappedConnectProductionWithoutJoinBlocked?: boolean;
 };
 export type SpawnWrappedProductConnectResult = SpawnWrappedProductConnectOk | SpawnWrappedProductConnectFail;
 
@@ -193,9 +198,32 @@ function probeVethConnectViaSpawnProxyUrl(
   return { ok: out.includes("CONNECT_VIA_SPAWN_PROXY_OK"), detail: out.slice(0, 280) };
 }
 
+function stripVethJoinEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  const next = { ...env };
+  delete next.HZ_SANDBOX_VETH_JOIN;
+  delete next.HZ_SANDBOX_VETH_NETNS;
+  delete next.HZ_SANDBOX_VETH_NETNS_AUTO;
+  return next;
+}
+
+function mergeProductionVethJoinChildEnv(
+  mergedChild: Record<string, string | undefined>,
+  vethNs: string,
+): Record<string, string | undefined> {
+  return mergeSandboxExecVethJoinSpawnEnv(
+    {
+      ...mergedChild,
+      HZ_SANDBOX_CHILD_NET: "off",
+      HZ_SANDBOX_VETH_JOIN: "1",
+      HZ_SANDBOX_VETH_NETNS: vethNs,
+    },
+    { sandboxWrapped: true },
+  );
+}
+
 /**
  * Parent veth + bridge CONNECT proxy + spawn ROUTED env; proves veth plumbing CONNECT,
- * wrapped hz-sandbox-exec CONNECT with hermetic child_net=on, and production child_net=off gap.
+ * production `child_net=off` CONNECT after veth join, and fail-closed without join (**326**).
  */
 export async function attemptNetnsSpawnWrappedProductConnectEgress(
   spawnEnv: Record<string, string | undefined>,
@@ -264,38 +292,57 @@ export async function attemptNetnsSpawnWrappedProductConnectEgress(
     const direct443Blocked = probeNetnsVethDirect443Blocked(run, vethNs);
     const vethConnect = probeVethConnectViaSpawnProxyUrl(childProxyUrl, connectAuthority, run, vethNs);
     let wrappedHermeticOk = false;
-    let wrappedProductionBlocked = false;
+    let wrappedProductionJoinOk = false;
+    let wrappedProductionWithoutJoinBlocked = false;
     if (bin !== undefined && bin !== "") {
       const hermeticEnv = { ...mergedChild, HZ_SANDBOX_CHILD_NET: "on" };
       const hermeticProbe = execProbe(bin, hermeticEnv, childProxyUrl, connectAuthority);
       wrappedHermeticOk = hermeticProbe.ok;
-      const prodEnv = { ...mergedChild, HZ_SANDBOX_CHILD_NET: "off" };
-      const prodProbe = execProbe(bin, prodEnv, childProxyUrl, connectAuthority);
-      wrappedProductionBlocked = !prodProbe.ok && (prodProbe.blocked === true || prodProbe.detail.length > 0);
+      const prodEnvNoJoin = stripVethJoinEnv({
+        ...mergedChild,
+        HZ_SANDBOX_CHILD_NET: "off",
+      });
+      const prodNoJoinProbe = execProbe(bin, prodEnvNoJoin, childProxyUrl, connectAuthority);
+      wrappedProductionWithoutJoinBlocked =
+        !prodNoJoinProbe.ok && (prodNoJoinProbe.blocked === true || prodNoJoinProbe.detail.length > 0);
+      const prodJoinEnv = mergeProductionVethJoinChildEnv(mergedChild, vethNs);
+      const prodJoinProbe = execProbe(bin, prodJoinEnv, childProxyUrl, connectAuthority);
+      wrappedProductionJoinOk = prodJoinProbe.ok;
     }
-    if (direct443Blocked && vethConnect.ok && wrappedHermeticOk && wrappedProductionBlocked) {
+    if (
+      direct443Blocked &&
+      vethConnect.ok &&
+      wrappedProductionJoinOk &&
+      wrappedProductionWithoutJoinBlocked
+    ) {
       return {
         ok: true,
         bridgeHost,
         childProxyUrl,
         plumbingVethConnectOk: true,
-        wrappedConnectHermeticOk: true,
-        wrappedConnectProductionBlocked: true,
+        wrappedConnectHermeticOk: wrappedHermeticOk || undefined,
+        wrappedConnectProductionJoinOk: true,
+        wrappedConnectProductionWithoutJoinBlocked: true,
       };
     }
-    const reason = !vethConnect.ok
-      ? vethConnect.detail || "veth netns CONNECT via spawn proxy failed"
-      : !wrappedHermeticOk
-        ? "wrapped hz-sandbox-exec CONNECT (hermetic child_net=on) failed — parent bridge reach or proxy URL"
-        : !wrappedProductionBlocked
-          ? "expected production child_net=off wrapped CONNECT to fail without in-wrapper veth"
-          : "direct :443 probe in veth netns did not fail as expected";
+    const reason = !direct443Blocked
+      ? "direct :443 probe in veth netns did not fail as expected"
+      : !vethConnect.ok
+        ? vethConnect.detail || "veth netns CONNECT via spawn proxy failed"
+        : bin === undefined || bin === ""
+          ? "hz-sandbox-exec binary missing — cannot prove wrapped production veth join CONNECT"
+          : !wrappedProductionJoinOk
+            ? "production child_net=off wrapped CONNECT via bridge failed after veth join — check HZ_SANDBOX_VETH_JOIN/NETNS and parent plumbing"
+            : !wrappedProductionWithoutJoinBlocked
+              ? "expected production child_net=off wrapped CONNECT without veth join to fail"
+              : "wrapped CONNECT probe incomplete";
     return {
       ok: false,
       reason,
       plumbingVethConnectOk: vethConnect.ok,
       wrappedConnectHermeticOk: wrappedHermeticOk,
-      wrappedConnectProductionBlocked: wrappedProductionBlocked,
+      wrappedConnectProductionJoinOk: wrappedProductionJoinOk,
+      wrappedConnectProductionWithoutJoinBlocked: wrappedProductionWithoutJoinBlocked,
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -321,12 +368,13 @@ export function postureFromHermeticSpawnWrappedConnect(
   if (!netnsIsolationExpected(env)) return base;
   if (!isSpawnWrappedProductConnectFail(hermetic)) {
     return {
-      kind: "hermetic-wrapped-ok",
+      kind: "hermetic-production-join-ok",
       spawnWired: true,
       childProxyUrl: hermetic.childProxyUrl,
       capNetAdmin: true,
-      hermeticWrappedConnectOk: true,
-      detail: `hermetic spawnOwned-wrapped CONNECT via ${hermetic.childProxyUrl} with parent veth plumbing (child_net=on probe); production child_net=off blocked — in-wrapper veth still open; never claim enforced`,
+      hermeticWrappedConnectOk: hermetic.wrappedConnectHermeticOk,
+      hermeticProductionJoinConnectOk: true,
+      detail: `hermetic production child_net=off CONNECT via ${hermetic.childProxyUrl} after parent veth join — direct :443 blocked in veth netns; in-wrapper CREATE path: **332**; never claim enforced`,
     };
   }
   if (hermetic.skipped) {

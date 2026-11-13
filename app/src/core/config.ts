@@ -331,6 +331,11 @@ interface ConfigFile {
   autonomy?: unknown;
   /** `off` → `HZ_SANDBOX_CHILD_NET=off` on wrapped children (user config only). */
   sandboxChildNet?: unknown;
+  /**
+   * `default` | `require` → `HZ_EFFECT_HOST_KERNEL` when env unset at `createRuntime`
+   * (ruling **340**; prototype spine — not full EffectHost).
+   */
+  effectHostKernel?: unknown;
   trustedWorkspaceHooks?: unknown;
   theme?: unknown;
   notify?: unknown;

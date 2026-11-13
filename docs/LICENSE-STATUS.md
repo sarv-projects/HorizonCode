@@ -1,4 +1,6 @@
-# License status (owner decision OPEN)
+# License status (owner decision OPEN — deferred in goal sprint 2026-11-13)
+
+> Next-agent queue: **not blocked** on root `LICENSE` — full backlog [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md) §F item 1.
 
 HorizonCode does **not** ship a root `LICENSE` file. No license is granted for
 the project source until the owner adds one. This is intentional hygiene — we do

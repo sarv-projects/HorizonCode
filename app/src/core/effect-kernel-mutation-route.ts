@@ -33,6 +33,12 @@ function kernelProjectionPath(proj: KernelToolProjection): string {
   return proj.path;
 }
 
+import {
+  kernelApplyPatchMultiOpSuccessOutput,
+  kernelFsMutationSuccessOutput,
+  observeKernelApplyPatchMultiOpResultDigest,
+} from "./effect-evidence";
+
 const KERNEL_ROUTE_TAG = "[effect-host-kernel]";
 
 /** Emitted only when kernel write/edit succeeded but change-journal recording failed. */
@@ -90,6 +96,56 @@ export function shellArgsEligibleForKernelRoute(args: Record<string, unknown>): 
   return simpleShellArgvFromCommand(args.command) !== undefined;
 }
 
+export type ShellKernelRouteMissReason =
+  | "empty"
+  | "timeout_arg"
+  | "compound"
+  | "unparsed"
+  | "metachar"
+  | "inline_env"
+  | "interpreter";
+
+export function classifyShellKernelRouteMiss(
+  command: string,
+  opts?: { timeoutMs?: unknown },
+): { reason: ShellKernelRouteMissReason; unparsedSubreason?: string } | undefined {
+  if (opts?.timeoutMs !== undefined) return { reason: "timeout_arg" };
+  const trimmed = command.trim();
+  if (trimmed === "") return { reason: "empty" };
+  const analysis = analyzeShellCompound(trimmed);
+  if (analysis.ok === false) {
+    return { reason: "unparsed", unparsedSubreason: analysis.reason };
+  }
+  if (analysis.compound) return { reason: "compound" };
+  if (/^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(trimmed)) return { reason: "inline_env" };
+  if (/[|;&<>$`()\\]/.test(trimmed)) return { reason: "metachar" };
+  if (simpleShellArgvFromCommand(trimmed) !== undefined) return undefined;
+  return { reason: "interpreter" };
+}
+
+export function shellKernelRouteMissRequireDetail(
+  miss: { reason: ShellKernelRouteMissReason; unparsedSubreason?: string },
+): string {
+  switch (miss.reason) {
+    case "empty":
+      return "empty shell command cannot kernel-route";
+    case "timeout_arg":
+      return "shell timeoutMs is Bun-owned — cannot kernel-route under require";
+    case "compound":
+      return "compound shell command cannot kernel-route (ambient Bun shell refused under require)";
+    case "unparsed":
+      return `shell command not safely splittable (${miss.unparsedSubreason ?? "unparsed"}) — ambient Bun shell refused under require`;
+    case "metachar":
+      return "shell metacharacters imply interpreter — cannot kernel-route under require";
+    case "inline_env":
+      return "inline VAR= assignment shell prefix — cannot kernel-route under require";
+    case "interpreter":
+      return "shell interpreter invocation — cannot kernel-route under require";
+    default:
+      return "shell command cannot kernel-route under require";
+  }
+}
+
 export type KernelExecuteObserveSnap = KernelExecutePostimageObserve & {
   exitCode?: number;
   stdoutDigest?: string;
@@ -128,6 +184,7 @@ export function kernelExecuteObserveFromResult(
     contentDigest: result.contentDigest,
     postimageObservationStable: result.postimageObservationStable,
     postimageConfirmDigest: result.postimageConfirmDigest,
+    resultDigest: result.resultDigest,
     resultDigestStable: result.resultDigestStable,
     exitCode: result.exitCode,
     stdoutDigest: result.stdoutDigest,
@@ -255,7 +312,7 @@ export async function tryKernelWriteRoute(
     }
     return outcomeFromExecuteResult(
       result,
-      `${KERNEL_ROUTE_TAG} wrote ${rel} (kernel fs.write; postimage digest ${result.contentDigest ?? "?"})`,
+      kernelFsMutationSuccessOutput("write", rel, result.contentDigest),
       `${KERNEL_ROUTE_TAG} kernel fs.write ${result.verdict}${
         result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
       }`,
@@ -316,7 +373,7 @@ export async function tryKernelEditRoute(
     }
     return outcomeFromExecuteResult(
       result,
-      `${KERNEL_ROUTE_TAG} edited ${rel} (kernel fs.edit; postimage digest ${result.contentDigest ?? "?"})`,
+      kernelFsMutationSuccessOutput("edit", rel, result.contentDigest),
       `${KERNEL_ROUTE_TAG} kernel fs.edit ${result.verdict}${
         result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
       }`,
@@ -462,7 +519,7 @@ export async function tryKernelRenameRoute(
     }
     return outcomeFromExecuteResult(
       result,
-      `${KERNEL_ROUTE_TAG} renamed ${fromRel} → ${toRel} (kernel fs.rename; postimage digest ${result.contentDigest ?? "?"})`,
+      kernelFsMutationSuccessOutput("rename", toRel, result.contentDigest, fromRel),
       `${KERNEL_ROUTE_TAG} kernel fs.rename ${result.verdict}${
         result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
       }`,
@@ -516,7 +573,7 @@ export async function tryKernelDeleteRoute(
     }
     return outcomeFromExecuteResult(
       result,
-      `${KERNEL_ROUTE_TAG} deleted ${rel} (kernel fs.delete; postimage digest ${result.contentDigest ?? "?"})`,
+      kernelFsMutationSuccessOutput("delete", rel, result.contentDigest),
       `${KERNEL_ROUTE_TAG} kernel fs.delete ${result.verdict}${
         result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
       }`,
@@ -603,14 +660,25 @@ export async function tryKernelApplyPatchRoute(
     return { ...lastOutcome, journalRecordFailed };
   }
   const paths = projections.map((p) => kernelProjectionPath(p)).join(", ");
+  const okOutput = kernelApplyPatchMultiOpSuccessOutput(
+    projections.length,
+    paths,
+    lastOutcome.kernelObserve.contentDigest,
+  );
+  const multiObs = observeKernelApplyPatchMultiOpResultDigest(
+    projections.length,
+    paths,
+    lastOutcome.kernelObserve.contentDigest,
+  );
   return {
     journalSkipped: lastOutcome.journalSkipped,
     journalRecordFailed,
-    kernelObserve: lastOutcome.kernelObserve,
-    result: {
-      ok: true,
-      output: `${KERNEL_ROUTE_TAG} apply_patch ${projections.length} op(s) via kernel (${paths}; postimage digest ${lastOutcome.kernelObserve.contentDigest ?? "?"})`,
+    kernelObserve: {
+      ...lastOutcome.kernelObserve,
+      resultDigest: multiObs.resultDigest ?? lastOutcome.kernelObserve.resultDigest,
+      resultDigestStable: multiObs.resultDigestStable,
     },
+    result: { ok: true, output: okOutput },
   };
 }
 

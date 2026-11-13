@@ -1,12 +1,30 @@
 //! hz-sandbox-exec — reduced portable confinement before exec (docs/33 §5.3).
 //!
-//! Order: `PR_SET_NO_NEW_PRIVS` → rlimits → unprivileged user+net namespace
-//! (network-off when `HZ_SANDBOX_CHILD_NET` is unset or `off`) → seccomp
+//! Order: `PR_SET_NO_NEW_PRIVS` → rlimits → user+net isolation
+//! (fresh netns, or `HZ_SANDBOX_VETH_JOIN=1` join + userns only when child net off) → seccomp
 //! deny-list → Landlock FS (+ TCP net when ABI≥4) → exec.
 //!
-//! **Ruled residual (321):** veth/bridge join so a `child_net=off` wrapped child can
-//! reach a parent CONNECT proxy on a bridge IP is not implemented here (parent-side
-//! veth plumbing + spawn ROUTED env is proven hermetically in TS only; never enforced).
+//! **Reduced in-wrapper join (324):** when `HZ_SANDBOX_VETH_JOIN=1` and
+//! `HZ_SANDBOX_CHILD_NET` is off, join a parent-prepared netns via
+//! `HZ_SANDBOX_VETH_NETNS` (absolute path or name under `/var/run/netns`) and
+//! isolate user namespace only — fail-closed if join is requested but the netns
+//! path is missing or `setns` fails. Does **not** create veth/bridge; full
+//! product routed egress still open (**321** residual).
+//!
+//! **Reduced in-wrapper create (329):** when `HZ_SANDBOX_VETH_CREATE=1` and
+//! `HZ_SANDBOX_CHILD_NET` is off, after user+net unshare create a veth pair and move
+//! the peer into the saved parent netns when CAP_NET_ADMIN is available — fail-closed
+//! when unsupported. Mutually exclusive with `HZ_SANDBOX_VETH_JOIN`. Bridge/routed
+//! product egress still open; never shell-net enforced.
+//!
+//! **Reduced in-wrapper plumb (331):** optional `HZ_SANDBOX_VETH_HOST_ADDR` (child host
+//! leg), `HZ_SANDBOX_VETH_PEER_ADDR` (parent peer leg), and `HZ_SANDBOX_VETH_DEFAULT_ROUTE=1`
+//! (+ optional `HZ_SANDBOX_VETH_DEFAULT_ROUTE_GW`) after successful CREATE. ADDR/route
+//! env without CREATE fails closed. Product CONNECT via spawnOwned CREATE+ADDR
+//! without parent plumb is ruling **332** (TS hermetic); never enforced.
+//!
+//! **Ruled residual (321):** parent-side veth plumbing + spawn ROUTED env is proven
+//! hermetically in TS only; never shell-net enforced.
 //!
 //! `HZ_SANDBOX_CHILD_NET=off` (set by `spawnOwned` when config/env requests child
 //! net lockdown) forces userns+netns isolation. `on` skips netns (debug only).
@@ -18,6 +36,9 @@
 //! read-only under workspace-write by granting RW only on sibling trees;
 //! common system prefixes are read+exec so interpreters can start. Fails closed
 //! if Landlock cannot be applied on this host.
+
+#[path = "../sandbox_veth_netlink.rs"]
+mod sandbox_veth_netlink;
 
 use std::env;
 use std::ffi::CString;
@@ -238,17 +259,169 @@ fn child_network_isolation_requested() -> bool {
     }
 }
 
-fn isolate_network() -> io::Result<()> {
-    let uid = unsafe { libc::getuid() };
-    let gid = unsafe { libc::getgid() };
-    let flags = libc::CLONE_NEWUSER | libc::CLONE_NEWNET;
-    if unsafe { libc::unshare(flags) } != 0 {
+fn env_flag_is_on(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_lowercase().as_str(),
+        "1" | "true" | "on" | "yes"
+    )
+}
+
+fn veth_join_requested() -> bool {
+    env::var("HZ_SANDBOX_VETH_JOIN")
+        .ok()
+        .is_some_and(|raw| env_flag_is_on(&raw))
+}
+
+fn veth_create_requested() -> bool {
+    env::var("HZ_SANDBOX_VETH_CREATE")
+        .ok()
+        .is_some_and(|raw| env_flag_is_on(&raw))
+}
+
+fn optional_env_trim(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn veth_default_route_requested() -> bool {
+    env::var("HZ_SANDBOX_VETH_DEFAULT_ROUTE")
+        .ok()
+        .is_some_and(|raw| env_flag_is_on(&raw))
+}
+
+fn veth_addr_or_route_env_without_create() -> bool {
+    !veth_create_requested()
+        && (optional_env_trim("HZ_SANDBOX_VETH_HOST_ADDR").is_some()
+            || optional_env_trim("HZ_SANDBOX_VETH_PEER_ADDR").is_some()
+            || veth_default_route_requested()
+            || optional_env_trim("HZ_SANDBOX_VETH_DEFAULT_ROUTE_GW").is_some())
+}
+
+fn resolve_veth_iface_names() -> (String, String) {
+    let host = env::var("HZ_SANDBOX_VETH_HOST")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "hz-sbx-veth-h".to_string());
+    let peer = env::var("HZ_SANDBOX_VETH_PEER")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "hz-sbx-veth-p".to_string());
+    (host, peer)
+}
+
+/// Parent-prepared netns: absolute path or name under `/var/run/netns/`.
+fn resolve_veth_netns_path() -> Option<PathBuf> {
+    let raw = env::var("HZ_SANDBOX_VETH_NETNS").ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let p = Path::new(trimmed);
+    if p.is_absolute() {
+        Some(p.to_path_buf())
+    } else {
+        Some(PathBuf::from("/var/run/netns").join(trimmed))
+    }
+}
+
+fn join_prepared_netns(path: &Path) -> io::Result<()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC)
+        .open(path)?;
+    let fd = file.as_raw_fd();
+    if unsafe { libc::setns(fd, libc::CLONE_NEWNET) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    Ok(())
+}
+
+fn map_userns_identities() -> io::Result<()> {
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
     let _ = write_proc("/proc/self/setgroups", "deny\n");
     write_proc("/proc/self/uid_map", &format!("0 {uid} 1\n"))?;
     write_proc("/proc/self/gid_map", &format!("0 {gid} 1\n"))?;
     Ok(())
+}
+
+fn isolate_user_namespace() -> io::Result<()> {
+    if unsafe { libc::unshare(libc::CLONE_NEWUSER) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    map_userns_identities()
+}
+
+fn isolate_network() -> io::Result<()> {
+    let flags = libc::CLONE_NEWUSER | libc::CLONE_NEWNET;
+    if unsafe { libc::unshare(flags) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    map_userns_identities()
+}
+
+fn apply_veth_create_isolation() -> io::Result<()> {
+    let parent_net = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC)
+        .open("/proc/self/ns/net")?;
+    isolate_network()?;
+    let (host, peer) = resolve_veth_iface_names();
+    let host_addr = optional_env_trim("HZ_SANDBOX_VETH_HOST_ADDR");
+    let peer_addr = optional_env_trim("HZ_SANDBOX_VETH_PEER_ADDR");
+    let route_gw = optional_env_trim("HZ_SANDBOX_VETH_DEFAULT_ROUTE_GW");
+    let route_on = veth_default_route_requested();
+    sandbox_veth_netlink::create_veth_move_peer_to_parent_with_plumb(
+        &parent_net,
+        &host,
+        &peer,
+        host_addr.as_deref(),
+        peer_addr.as_deref(),
+        route_gw.as_deref(),
+        route_on,
+    )
+}
+
+fn apply_child_network_isolation() -> io::Result<()> {
+    if veth_addr_or_route_env_without_create() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HZ_SANDBOX_VETH_HOST_ADDR, HZ_SANDBOX_VETH_PEER_ADDR, and HZ_SANDBOX_VETH_DEFAULT_ROUTE_* require HZ_SANDBOX_VETH_CREATE=1",
+        ));
+    }
+    if veth_create_requested() && veth_join_requested() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HZ_SANDBOX_VETH_CREATE and HZ_SANDBOX_VETH_JOIN are mutually exclusive",
+        ));
+    }
+    if veth_create_requested() {
+        return apply_veth_create_isolation();
+    }
+    if veth_join_requested() {
+        let path = resolve_veth_netns_path().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "HZ_SANDBOX_VETH_JOIN=1 requires HZ_SANDBOX_VETH_NETNS (path or netns name)",
+            )
+        })?;
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "HZ_SANDBOX_VETH_JOIN: prepared netns missing at {}",
+                    path.display()
+                ),
+            ));
+        }
+        join_prepared_netns(&path)?;
+        return isolate_user_namespace();
+    }
+    isolate_network()
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -527,7 +700,7 @@ fn pre_exec_confine() -> io::Result<()> {
     }
     apply_rlimits()?;
     if child_network_isolation_requested() {
-        isolate_network()?;
+        apply_child_network_isolation()?;
     }
     install_seccomp_denylist()?;
     apply_landlock(&resolve_fs_root(), resolve_fs_mode())?;
