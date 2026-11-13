@@ -10,6 +10,7 @@
 mod canon;
 mod effect_evidence;
 mod effect_host;
+mod effect_owner;
 mod edit_unicode_fold;
 mod effect_host_edit_repair;
 mod egress;
@@ -436,7 +437,9 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         }
     }
 
-    let eff_sandbox = scratch.join("effect-sandbox");
+    // Mutating effect fixtures MUST live outside the kernel's own protected
+    // OwnerLog state directory, even in selftest. Scope is not authority.
+    let eff_sandbox = std::env::temp_dir().join(format!("hz-selftest-eff-{}", Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&eff_sandbox);
     let probe = eff_sandbox.join("probe.txt");
     let _ = std::fs::write(&probe, b"hz-selftest-read");
@@ -499,8 +502,12 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             eprintln!("selftest: {}", e);
         }
     }
+    // An admitted but failed effect is UNKNOWN and must latch its OwnerLog.
+    // Run this intentional negative write against an isolated state dir; a
+    // later positive test may not bypass that real R170 barrier.
+    let negative_kernel = Kernel::new_with_anchor(&scratch.join("negative-write-owner"), anchor.clone());
     match call(
-        &kernel,
+        &negative_kernel,
         "effect.execute",
         json!({
             "effectId": "selftest-eff-write-esc",
@@ -850,6 +857,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         );
     }
 
+    let _ = std::fs::remove_dir_all(&eff_sandbox);
     let _ = std::fs::remove_dir_all(&scratch);
     if checks.failures == 0 {
         println!("SELFTEST OK ({} checks)", checks.total);

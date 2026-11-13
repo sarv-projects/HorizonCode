@@ -1,0 +1,546 @@
+//! Kernel-owned, cross-process admission and durable UNKNOWN fence for the
+//! supported `effect.execute` mutation classes (P0 R170 precursor).
+//!
+//! Unlike the Bun reconcile-latches.jsonl precursor, the OwnerLog is written
+//! inside the kernel and every participating Rust process takes the SAME OS
+//! file lock for prepare -> execute -> independent observe -> settle.
+//!
+//! This is not universal EffectHost ownership: ambient Bun effects still exist
+//! outside strict mode; a local actor who controls the state directory can
+//! replace files; and UNKNOWN clean-release requires further evidence.
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::path::Path;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+
+use crate::effect_host::{self, HermeticEffectLedger};
+use crate::eventlog::EventLog;
+use crate::receipts::Receipts;
+
+pub const STREAM: &str = "owner:effects";
+const LOCK_WAIT: Duration = Duration::from_secs(5);
+
+/// The lockfile is NEVER unlinked. A create_new + stale-takeover lock could be
+/// replaced while a live owner is executing. A persistent flock-backed inode
+/// allows processes to serialize without age-based unsafe takeovers.
+struct OwnerLock {
+    file: File,
+}
+impl OwnerLock {
+    fn acquire(state_dir: &Path) -> Result<Self, String> {
+        fs::create_dir_all(state_dir).map_err(|e| format!("owner: create state dir: {e}"))?;
+        let path = state_dir.join("owner-admission.lock");
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        let file = opts
+            .open(&path)
+            .map_err(|e| format!("HZ_PRECONDITION_FAILED: owner lock unavailable: {e}"))?;
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            return Err("HZ_PRECONDITION_FAILED: kernel OwnerLog requires POSIX flock".into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::MetadataExt;
+            let meta = file
+                .metadata()
+                .map_err(|e| format!("owner lock metadata: {e}"))?;
+            if !meta.is_file() || meta.nlink() != 1 {
+                return Err(
+                    "HZ_PRECONDITION_FAILED: owner lock must be a single-link regular file".into(),
+                );
+            }
+            let start = Instant::now();
+            loop {
+                let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                if rc == 0 {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::EWOULDBLOCK)
+                    && error.raw_os_error() != Some(libc::EAGAIN)
+                {
+                    return Err(format!(
+                        "HZ_PRECONDITION_FAILED: owner lock failed: {error}"
+                    ));
+                }
+                if start.elapsed() >= LOCK_WAIT {
+                    return Err("HZ_PRECONDITION_FAILED: owner admission busy; retry after current effect settles".into());
+                }
+                sleep(Duration::from_millis(10));
+            }
+            // Detect a replaced lock path after acquisition. No unlink of the
+            // permanent lockfile is part of normal kernel operation.
+            let on_disk = fs::symlink_metadata(&path)
+                .map_err(|e| format!("HZ_PRECONDITION_FAILED: owner lock was removed: {e}"))?;
+            if meta.ino() != on_disk.ino() || meta.dev() != on_disk.dev() || !on_disk.is_file() {
+                return Err(
+                    "HZ_PRECONDITION_FAILED: owner lock path changed during acquisition".into(),
+                );
+            }
+            Ok(Self { file })
+        }
+    }
+}
+impl Drop for OwnerLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
+}
+
+fn record(events: &EventLog, kind: &str, effect_id: &str, payload: Value) -> Result<(), String> {
+    events.append(
+        STREAM,
+        &json!({
+            "type": kind,
+            "actor": {"kind": "system", "id": "kernel-effect-owner"},
+            "payload": {"effectId": effect_id, "details": payload},
+        }),
+    )?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct OwnerState {
+    seen: BTreeSet<String>,
+    unresolved: BTreeMap<String, String>,
+    count: usize,
+}
+
+/// Rebuild from the verifiable hash chain on EVERY admission. Never treat a
+/// truncated/malformed/unknown transition as a clean state.
+fn rebuild(events: &EventLog) -> Result<OwnerState, String> {
+    let verified = events.verify(STREAM)?;
+    if !verified.ok {
+        return Err(format!(
+            "HZ_PRECONDITION_FAILED: owner EventLog verification failed at {:?}",
+            verified.broken_at,
+        ));
+    }
+    let mut state = OwnerState::default();
+    for event in events.read(STREAM, None, None)? {
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "HZ_PRECONDITION_FAILED: owner event type missing".to_string())?;
+        let payload = event
+            .get("payload")
+            .ok_or_else(|| "HZ_PRECONDITION_FAILED: owner event payload missing".to_string())?;
+        let effect_id = payload
+            .get("effectId")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "HZ_PRECONDITION_FAILED: owner effectId invalid".to_string())?;
+        match kind {
+            "owner.prepare" => {
+                if !state.seen.insert(effect_id.to_string()) {
+                    return Err("HZ_PRECONDITION_FAILED: duplicate owner effect id in log".into());
+                }
+                state.unresolved.insert(effect_id.into(), "prepared".into());
+            }
+            "owner.settled" | "owner.unknown" => {
+                let prior = state
+                    .unresolved
+                    .get(effect_id)
+                    .ok_or_else(|| "HZ_PRECONDITION_FAILED: orphan owner settlement".to_string())?;
+                if prior != "prepared" {
+                    return Err("HZ_PRECONDITION_FAILED: duplicate owner settlement".into());
+                }
+                if kind == "owner.settled" {
+                    state.unresolved.remove(effect_id);
+                } else {
+                    state.unresolved.insert(effect_id.into(), "UNKNOWN".into());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "HZ_PRECONDITION_FAILED: unexpected owner event type {kind}"
+                ))
+            }
+        }
+        state.count += 1;
+    }
+    Ok(state)
+}
+
+/// Chain-integrity alone is insufficient: receipt.effectId and postimage
+/// sidecars are outside the canonical receipt hash. Every owner settlement
+/// must match its exact kernel-issued receipt and the prepare intent digest.
+/// This runs under OwnerLock and obtains a receipt-file lock for a coherent
+/// verified snapshot. Unrelated legacy receipts are allowed.
+fn verify_settlement_receipt_links(events: &EventLog, receipts: &Receipts) -> Result<(), String> {
+    let records = receipts.read_verified()?;
+    let mut by_id: BTreeMap<&str, &Value> = BTreeMap::new();
+    for receipt in &records {
+        let id = receipt["id"].as_str().ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: owner receipt linkage: missing receipt id".to_string()
+        })?;
+        if by_id.insert(id, receipt).is_some() {
+            return Err(
+                "HZ_PRECONDITION_FAILED: owner receipt linkage: duplicate receipt id".into(),
+            );
+        }
+    }
+    let mut prepared: BTreeMap<String, (Value, Value)> = BTreeMap::new();
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for event in events.read(STREAM, None, None)? {
+        let kind = event["type"].as_str().unwrap_or("");
+        let effect_id = event["payload"]["effectId"].as_str().ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: owner receipt linkage: event has no effectId".to_string()
+        })?;
+        let details = &event["payload"]["details"];
+        if kind == "owner.prepare" {
+            prepared.insert(
+                effect_id.to_string(),
+                (
+                    details["argsDigest"].clone(),
+                    details["dispatchKind"].clone(),
+                ),
+            );
+        }
+        if kind != "owner.settled" {
+            continue;
+        }
+        let receipt_id = details["receiptId"].as_str().ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: owner receipt linkage: settlement receipt id missing"
+                .to_string()
+        })?;
+        let receipt = by_id.get(receipt_id).ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: owner receipt linkage: settlement receipt absent".to_string()
+        })?;
+        let Some((args_digest, dispatch_kind)) = prepared.get(effect_id) else {
+            return Err(
+                "HZ_PRECONDITION_FAILED: owner receipt linkage: settlement without prepare".into(),
+            );
+        };
+        if !used.insert(receipt_id.to_string())
+            || receipt["id"] != details["receiptId"]
+            || receipt["seq"] != details["receiptSeq"]
+            || receipt["hash"] != details["receiptHash"]
+            || receipt["resultDigest"] != details["resultDigest"]
+            || receipt["argsDigest"] != *args_digest
+            || receipt["tool"] != *dispatch_kind
+            || receipt["effectId"] != json!(effect_id)
+            || receipt["action"] != json!("effect.execute")
+        {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: owner receipt linkage: settlement and receipt disagree for {effect_id}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn status_json(state: OwnerState) -> Value {
+    let unresolved_ids: Vec<_> = state.unresolved.keys().take(32).cloned().collect();
+    json!({
+        "blocked": !state.unresolved.is_empty(),
+        "unresolved": state.unresolved.len(),
+        "unresolvedIds": unresolved_ids,
+        "events": state.count,
+    })
+}
+
+pub fn status(events: &EventLog, state_dir: &Path) -> Result<Value, String> {
+    let _lock = OwnerLock::acquire(state_dir)?;
+    Ok(status_json(rebuild(events)?))
+}
+
+pub fn verify(events: &EventLog, receipts: &Receipts, state_dir: &Path) -> Result<Value, String> {
+    let _lock = OwnerLock::acquire(state_dir)?;
+    let state = rebuild(events)?;
+    let receipt_state = receipts.verify()?;
+    if !receipt_state.ok {
+        return Err("HZ_PRECONDITION_FAILED: owner cannot verify broken receipt chain".into());
+    }
+    verify_settlement_receipt_links(events, receipts)?;
+    Ok(json!({
+        "ok": true,
+        "events": state.count,
+        "unresolved": state.unresolved.len(),
+        "blocked": !state.unresolved.is_empty(),
+        "receiptsVerified": receipt_state.count,
+    }))
+}
+
+pub fn is_mutating(params: &Value) -> bool {
+    let kind = params
+        .get("dispatch")
+        .and_then(|d| d.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    matches!(
+        kind.to_ascii_lowercase().as_str(),
+        "fs.write" | "fs.edit" | "fs.delete" | "fs.rename" | "shell.exec"
+    )
+}
+
+/// A caller's arbitrary sandboxRoot is never proof of permission to
+/// rewrite the kernel's own OwnerLog, receipt chain, lockfile or policy.
+/// Resolve all file targets symlink-aware; check BOTH rename endpoints.
+/// Refuse unreadable walks before creating an owner prepare row.
+fn refuse_kernel_state_target(state_dir: &Path, params: &Value, kind: &str) -> Result<(), String> {
+    let sandbox = params
+        .get("sandboxRoot")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let root = Path::new(sandbox);
+    let spec = params.get("dispatch").and_then(|v| v.get("spec"));
+    let fields: &[&str] = if kind == "fs.rename" {
+        &["from", "to"]
+    } else {
+        &["path"]
+    };
+    for field in fields {
+        let Some(raw) = spec
+            .and_then(|v| v.get(*field))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: missing mutation target {field}"
+            ));
+        };
+        let raw_path = Path::new(raw);
+        let candidate = if raw_path.is_absolute() {
+            raw_path.to_path_buf()
+        } else {
+            root.join(raw_path)
+        };
+        let resolved = crate::guard::lexical_resolve(&candidate).ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: mutation target cannot be resolved".to_string()
+        })?;
+        let state_resolved = crate::guard::lexical_resolve(state_dir).ok_or_else(|| {
+            "HZ_PRECONDITION_FAILED: kernel state directory cannot be resolved".to_string()
+        })?;
+        if resolved == state_resolved
+            || resolved.starts_with(&state_resolved)
+            || state_resolved.starts_with(&resolved)
+        {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: kernel-state-protected: {} overlaps protected kernel state",
+                raw
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Without verified product network/FS confinement, raw kernel shell.exec
+/// cannot be an arbitrary-program bypass. Only known output-only programs are
+/// accepted; scripts, interpreters, git, curl and user binaries refuse.
+fn refuse_unconfined_shell(params: &Value) -> Result<(), String> {
+    let program = params
+        .get("dispatch")
+        .and_then(|v| v.get("spec"))
+        .and_then(|v| v.get("argv"))
+        .and_then(Value::as_array)
+        .and_then(|v| v.first())
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    const SAFE: &[&str] = &[
+        "echo",
+        "/bin/echo",
+        "/usr/bin/echo",
+        "true",
+        "/bin/true",
+        "/usr/bin/true",
+        "false",
+        "/bin/false",
+        "/usr/bin/false",
+        "pwd",
+        "/bin/pwd",
+        "/usr/bin/pwd",
+    ];
+    if !SAFE.contains(&program) {
+        return Err(format!(
+            "HZ_PRECONDITION_FAILED: unconfined shell.exec program {:?} refused by kernel; routed egress and filesystem confinement are not proven",
+            program
+        ));
+    }
+    Ok(())
+}
+
+/// The kernel's durable five-step mutation seam. The OS lock is held across
+/// the entire effect, independent postimage/digest observation and settlement.
+/// A crash after prepare leaves a durably observable unresolved record; all
+/// later kernel-owned mutations refuse until independently reconciled.
+pub fn execute(
+    events: &EventLog,
+    receipts: &Receipts,
+    state_dir: &Path,
+    params: &Value,
+    ledger: &mut HermeticEffectLedger,
+) -> Result<Value, String> {
+    if !is_mutating(params) {
+        return effect_host::execute_params(params, ledger);
+    }
+    let id = params
+        .get("effectId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "effect.execute.effectId must be a non-empty string".to_string())?;
+    // The kernel primitive accepts case-insensitive names: owner admission
+    // MUST normalize in the identical way, or FS.WRITE bypasses the lock.
+    let canonical_kind = params["dispatch"]["kind"]
+        .as_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    let kind = canonical_kind.as_str();
+    // Do not create a pending row for a known ineligible shape: there is no
+    // eligible kernel execute path, and the pure Rust dispatcher will refuse it.
+    if params
+        .get("sandboxRoot")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return effect_host::execute_params(params, ledger);
+    }
+    // Structural kernel state protection and unconfined shell refusal are
+    // authorization prerequisites, not post-execution observations.
+    if kind == "shell.exec" {
+        refuse_unconfined_shell(params)?;
+    } else {
+        refuse_kernel_state_target(state_dir, params, kind)?;
+    }
+
+    let _lock = OwnerLock::acquire(state_dir)?;
+    let state = rebuild(events)?;
+    if !state.unresolved.is_empty() {
+        return Err(format!(
+            "HZ_PRECONDITION_FAILED: OwnerLog UNKNOWN: {} unresolved effect(s); mutation denied",
+            state.unresolved.len(),
+        ));
+    }
+    if state.seen.contains(id) {
+        return Err(
+            "HZ_PRECONDITION_FAILED: duplicate EffectHost effectId (replay cannot execute twice)"
+                .into(),
+        );
+    }
+    let receipt_verify = receipts.verify()?;
+    if !receipt_verify.ok {
+        return Err("HZ_PRECONDITION_FAILED: receipt chain broken; mutation denied".into());
+    }
+    verify_settlement_receipt_links(events, receipts)?;
+    let args_digest = crate::canon::sha256_hex(&crate::canon::canonical_json(params));
+    record(
+        events,
+        "owner.prepare",
+        id,
+        json!({
+            "dispatchKind": kind,
+            "argsDigest": args_digest,
+        }),
+    )?;
+
+    // Debug-only deterministic crash injection after durable prepare. The
+    // kernel exits without running destructors or writing a settlement, while
+    // the OS releases the cross-process flock. Release builds omit this hook.
+    #[cfg(debug_assertions)]
+    if std::env::var("HZ_EFFECT_OWNER_FAULT_AFTER_PREPARE")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        std::process::exit(86);
+    }
+
+    let result = effect_host::execute_params(params, ledger);
+    match result {
+        Ok(mut out)
+            if out.get("verdict").and_then(Value::as_str) == Some("settled")
+                && out.get("resultDigestStable").and_then(Value::as_bool) == Some(true) =>
+        {
+            // File effects already carry a kernel-derived output digest. Shell
+            // carries independently observed stdout/stderr digests and exit
+            // code; bind the entire kernel result shape into its owner receipt.
+            // This digest is NOT a proof of shell filesystem/network effects.
+            let digest = out
+                .get("resultDigest")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::canon::sha256_hex(&crate::canon::canonical_json(&out)));
+            let receipt = receipts.issue(&json!({
+                "action": "effect.execute", "tool": kind,
+                "argsDigest": args_digest, "resultDigest": digest, "effectId": id,
+            }))?;
+            let receipt_id = receipt["id"].as_str().unwrap();
+            let receipt_seq = receipt["seq"].as_u64().unwrap();
+            record(
+                events,
+                "owner.settled",
+                id,
+                json!({
+                    "resultDigest": digest,
+                    "receiptId": receipt_id,
+                    "receiptSeq": receipt_seq,
+                    "receiptHash": receipt["hash"],
+                }),
+            )?;
+            out["ownerReceiptId"] = json!(receipt_id);
+            out["ownerReceiptSeq"] = json!(receipt_seq);
+            out["ownerResultDigest"] = json!(digest);
+            out["ownerLogSettled"] = json!(true);
+            Ok(out)
+        }
+        Ok(out) => {
+            record(
+                events,
+                "owner.unknown",
+                id,
+                json!({"cause": "missing_or_unstable_independent_observation"}),
+            )?;
+            Ok(out)
+        }
+        Err(error) => {
+            // Even if the tool claims failure, the kernel cannot prove it never
+            // changed disk before the error. A terminal UNKNOWN blocks replay.
+            record(
+                events,
+                "owner.unknown",
+                id,
+                json!({"cause": "execute_error"}),
+            )?;
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eventlog::AnchorConfig;
+    #[test]
+    fn tamper_and_unpaired_owner_rows_are_never_clean() {
+        let root = std::env::temp_dir().join(format!("hz-owner-unit-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let events = EventLog::new_with_anchor(&root, AnchorConfig::default());
+        assert_eq!(status(&events, &root).unwrap()["blocked"], false);
+        record(&events, "owner.prepare", "pending", json!({})).unwrap();
+        assert_eq!(status(&events, &root).unwrap()["unresolved"], 1);
+        assert_eq!(status(&events, &root).unwrap()["blocked"], true);
+        record(&events, "owner.settled", "pending", json!({})).unwrap();
+        assert_eq!(status(&events, &root).unwrap()["blocked"], false);
+        record(&events, "owner.settled", "pending", json!({})).unwrap();
+        assert!(status(&events, &root).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+}

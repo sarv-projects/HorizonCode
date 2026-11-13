@@ -1,4 +1,8 @@
-//! EffectHost settle helper (docs/28 EffectHost residual).
+//! Direct kernel EffectHost execute primitives. The cross-process OwnerLog and
+//! independent kernel-issued receipt transaction now live in effect_owner.rs
+//! (ruling 348). This module retains the pure reconcile helper and per-class
+//! effects. Only direct Rust callers participating in effect_owner have that
+//! OS-level admission fence; Bun and extensions do not.
 //!
 //! Pure reconcile of allow → execute → observe. The Bun loop owns the in-run
 //! ledger, emits `hz.effect.settled` / `hz.effect.unknown`, and executes real
