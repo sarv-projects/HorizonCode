@@ -20,7 +20,7 @@ import { catalogModel, loadCatalog } from "./catalog/catalog";
 import { parseModelsPollIntervalMs } from "./catalog/catalog-poll";
 import { docs30SkipBacklogCount } from "./docs30-skip-backlog";
 import { readOAuthToken } from "./auth/store";
-import { defaultConfigPath, loadConfig, missingKey, type EnvLike } from "./config";
+import { defaultConfigPath, loadConfig, missingKey, readConfigFile, type EnvLike } from "./config";
 import { resolveKernelBinary, resolveSandboxExecBinary } from "./kernel";
 import { kernelStateDir } from "./paths";
 import { tuiFullscreenBlocksLabel } from "../tui/escape-writer";
@@ -33,6 +33,7 @@ import {
   effectHostPrototypeHonestyDoctorHint,
 } from "./effect-host-posture";
 import { postimageReplayDoctorFixLines, postimageReplayDoctorPosture } from "./effect-postimage-replay";
+import { applyEffectHostKernelFromUserConfig, applyEffectHostKernelSandboxDefault } from "./effect-host-runtime";
 import { effectReconcileBlockDoctorHint } from "./effect-reconcile-block";
 import { formatEffectReconcileProbeSummary, probeEffectReconcile } from "./effect-reconcile-probe";
 import {
@@ -665,10 +666,21 @@ function checkEffectReconcileProbe(d: DoctorEnv): DoctorCheck {
   }
 }
 
-/** EffectHost kernel mutation route — honesty only; never claim full EffectHost (ruling **285**, **299**). */
+/** EffectHost kernel mutation route - report the same user-config precedence as createRuntime. */
 function checkEffectHostKernel(d: DoctorEnv): DoctorCheck {
-  const env = d.env as Record<string, string | undefined>;
+  const env = { ...d.env } as Record<string, string | undefined>;
+  const configured = applyEffectHostKernelFromUserConfig(readConfigFile(defaultConfigPath(d.home)), env);
+  // The runtime can additionally enable =default after kernel startup. Doctor
+  // cannot certify the kernel capability here, so only project explicit Linux
+  // sandbox wrapping, and label that projection provisional.
+  const sandbox = applyEffectHostKernelSandboxDefault(env, false);
+  const source = configured.applied === "config"
+    ? "effective mode from user config (env unset)"
+    : sandbox.applied === "sandbox-default"
+      ? "projected Linux sandbox-wrap default (kernel capability not probed)"
+      : "effective mode from environment/default";
   const posture = effectHostDoctorPosture(env);
+  const detail = `${posture.detail}; ${source}`;
   const prototypeHint = effectHostPrototypeHonestyDoctorHint(env);
   const fixSuffix = "; run hzcode doctor --fix effect.host for export lines";
   const hintForOffOrOptIn =
@@ -676,15 +688,12 @@ function checkEffectHostKernel(d: DoctorEnv): DoctorCheck {
       ? `${posture.hint}; ${prototypeHint}${fixSuffix}`
       : `${posture.hint}${fixSuffix}`;
   if (posture.mode === "require") {
-    return warn("effect.host", "EffectHost kernel route", posture.detail, posture.hint);
+    return warn("effect.host", "EffectHost kernel route", detail, posture.hint);
   }
   if (posture.mode === "default") {
-    return warn("effect.host", "EffectHost kernel route", posture.detail, `${posture.hint}${fixSuffix}`);
+    return warn("effect.host", "EffectHost kernel route", detail, `${posture.hint}${fixSuffix}`);
   }
-  if (posture.mode === "opt-in") {
-    return warn("effect.host", "EffectHost kernel route", posture.detail, hintForOffOrOptIn);
-  }
-  return warn("effect.host", "EffectHost kernel route", posture.detail, hintForOffOrOptIn);
+  return warn("effect.host", "EffectHost kernel route", detail, hintForOffOrOptIn);
 }
 
 /** Netns veth/bridge parent-proxy reach — capability probe only at doctor time (ruling **299**). */

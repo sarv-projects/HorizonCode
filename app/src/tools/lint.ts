@@ -7,12 +7,12 @@
  */
 
 import { readFile } from "node:fs/promises";
-import type { ReceiptInput, Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, ReceiptInput, Tool, ToolContext, ToolResult } from "../contracts";
 import { canonicalJson, sha256Hex } from "../core/canon";
 import { DiagnosticsLedger } from "../core/diagnostics-ledger";
 import { workspaceDiagnostics } from "../core/lsp";
 import { isBinary, relPath, resolvePath } from "./helpers";
-import { loadConfig, type LspConfig } from "../core/config";
+import { defaultConfigPath, loadConfig, type LspConfig } from "../core/config";
 import {
   formatLintFindings,
   parseLintOutputLines,
@@ -55,6 +55,21 @@ function compilerErrorsOnly(messages: readonly string[]): string[] {
   return messages.filter((line) => ERROR_LINE.test(line));
 }
 
+/**
+ * A user-configured lint command is a full shell program, not a pure LSP read.
+ * The outer lint admission guards fs.read; this second guard is mandatory
+ * before /bin/sh -c runs anything, even if a config claims it is a linter.
+ */
+export async function admitUserLintCommand(command: string, ctx: ToolContext): Promise<boolean> {
+  const action: GuardAction = { kind: "shell.exec", target: command };
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") return false;
+  if (decision.decision === "ask") {
+    return ctx.approve({ title: "Run lint command", detail: command, kind: "shell.exec" }, action);
+  }
+  return true;
+}
+
 export const lintTool: Tool = {
   name: "lint",
   description:
@@ -84,10 +99,13 @@ export const lintTool: Tool = {
         return fail(`file not found: ${rel}`);
       }
 
-      const hz = loadConfig();
+      const hz = loadConfig(process.env, defaultConfigPath(process.env.HOME));
       const userLint = resolveLintCommand(resolved, hz.lint);
       if (userLint !== undefined) {
         const cmd = substituteLintFile(userLint.command, resolved);
+        if (!(await admitUserLintCommand(cmd, ctx))) {
+          return fail("HZ_PRECONDITION_FAILED: user lint shell command was denied or declined");
+        }
         const ran = await runUserLintCommand(cmd, ctx.cwd, ctx.signal);
         const parsed = parseLintOutputLines(ran.stdout);
         const errors = parsed.filter((row) => /error/i.test(row.message) || ran.exitCode !== 0);

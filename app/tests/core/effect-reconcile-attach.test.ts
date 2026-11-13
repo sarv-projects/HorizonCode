@@ -90,6 +90,67 @@ describe("effect reconcile on attach", () => {
     }
   });
 
+  test("receipt fallback does not borrow a different effectId with a reused callId", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-eff-foreign-"));
+    const sid = "s-other-session";
+    const effectId = "11a11111-1111-4111-8111-111111111111";
+    try {
+      const host = new EffectHost(new WorkspaceEffectLedger(ws));
+      host.begin(effectId, "write", "reused-call");
+      host.recordAllow(effectId);
+      host.recordExecute(effectId, { ok: true, resourceKey: path.join(ws, "target.txt") });
+      host.persistRecord(effectId, "unknown");
+
+      const receiptFile = receiptsPath(ws);
+      mkdirSync(path.dirname(receiptFile), { recursive: true });
+      writeFileSync(receiptFile, JSON.stringify({
+        id: "receipt-for-another-effect",
+        seq: 5,
+        effectId: "22b22222-2222-4222-8222-222222222222",
+        tool: "write",
+        callId: "reused-call",
+      }) + "\n");
+
+      const restored = new EffectHost();
+      const rows = reconcileEffectsOnAttach(ws, sid, restored);
+      expect(rows.some((r) => r.effectId === effectId && r.verdict === "settled")).toBe(false);
+      expect(restored.reconcileEffect(effectId)).toBe("unknown");
+      expect(restored.getRecord(effectId)?.steps.some((s) => s.phase === "observe")).toBe(false);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("foreign tool.call effectId cannot backfill a recycled callId's resourceKey", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-eff-foreign-args-"));
+    const sid = "s-foreign-args";
+    const effectId = "cc111111-1111-4111-8111-111111111111";
+    try {
+      const host = new EffectHost(new WorkspaceEffectLedger(ws));
+      host.begin(effectId, "write", "reused-call");
+      host.recordAllow(effectId);
+      host.recordExecute(effectId, { ok: true });
+      host.persistRecord(effectId, "unknown");
+      const eventFile = sessionEventsPath(ws, sid);
+      mkdirSync(path.dirname(eventFile), { recursive: true });
+      writeFileSync(eventFile, JSON.stringify({
+        type: EventTypes.toolCall,
+        payload: {
+          effectId: "dd222222-2222-4222-8222-222222222222",
+          callId: "reused-call",
+          name: "write",
+          args: { path: "foreign.txt", content: "x" },
+        },
+      }) + "\n");
+      const restored = new EffectHost();
+      reconcileEffectsOnAttach(ws, sid, restored);
+      expect(restored.getRecord(effectId)?.steps.find((s) => s.phase === "execute")?.resourceKey).toBeUndefined();
+      expect(restored.reconcileEffect(effectId)).toBe("unknown");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("reload preserves observe-pending resourceKey from durable ledger (ruling 338)", () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-eff-att338a-"));
     const effectId = "33333333-3333-4333-8333-333333333333";

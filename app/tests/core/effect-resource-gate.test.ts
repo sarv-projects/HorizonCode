@@ -94,6 +94,16 @@ describe("effect-resource-gate (R170 reduced)", () => {
     expect(observePendingResourceKeys(host).size).toBe(0);
   });
 
+  test("multi-file apply_patch cannot bypass in-run UNKNOWN with a disjoint final projection", () => {
+    const hot = path.resolve(workspace, "hot.ts");
+    const patch = "*** Begin Patch\n*** Add File: hot.ts\n+hot\n*** Add File: cold.ts\n+cold\n*** End Patch";
+    const refusal = r170ResourceGateRefusal(
+      "apply_patch", { input: patch }, workspace, new Set([hot]),
+    );
+    expect(refusal).toContain("blocked_by_unknown");
+    expect(refusal).toContain(hot);
+  });
+
   test("allows edit on different path", () => {
     const host = new EffectHost();
     const effectId = createEffectId();

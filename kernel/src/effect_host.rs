@@ -321,10 +321,11 @@ fn execute_fs_edit(
                 "HZ_PRECONDITION_FAILED: effect.execute fs.edit oldString not found in file".to_string()
             }
         })?;
+    let replacement = crate::effect_host_edit_repair::render_fs_edit_replacement(&new, &edit_span, &content);
     let updated = format!(
         "{}{}{}",
         &content[..edit_span.start],
-        new,
+        replacement,
         &content[edit_span.end..]
     );
     crate::sandbox_atomic_write::write_bytes_atomic_in_sandbox(root, &resolved, updated.as_bytes())?;

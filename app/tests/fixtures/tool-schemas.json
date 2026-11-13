@@ -392,6 +392,24 @@
   },
   {
     "concurrencyClass": "shared",
+    "description": "Compiler-grade diagnostics for a file: runs the language-server path and returns only severity error lines (warnings omitted).",
+    "exposure": "direct",
+    "name": "lint",
+    "parameters": {
+      "properties": {
+        "path": {
+          "description": "File path to lint.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
     "description": "Language-server diagnostics for a file. op:'diagnostics' (path required) syncs the file to any configured language server and reports only fresh diagnostics; a no-op when no server is configured for the file type.",
     "exposure": "direct",
     "name": "lsp",
@@ -458,6 +476,27 @@
     }
   },
   {
+    "concurrencyClass": "shared",
+    "description": "Declare the final file paths that satisfy the task (deliverables). Does not modify files; records intent for the session summary.",
+    "exposure": "direct",
+    "name": "present",
+    "parameters": {
+      "properties": {
+        "files": {
+          "description": "Workspace-relative paths that are the intended final outputs.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "concurrencyClass": "exclusive",
     "description": "Start, stop, or check a local preview server for the project (dev server, static server, or an explicit command).",
     "exposure": "deferred",
@@ -512,17 +551,21 @@
           "type": "number"
         },
         "offset": {
-          "description": "1-based line number to start at (default 1).",
+          "description": "1-based line to start at (default 1). Negative values count from the end (e.g. -100 = last 100 lines).",
           "type": "number"
         },
         "path": {
           "description": "File path to read.",
           "type": "string"
+        },
+        "paths": {
+          "description": "Optional batch: read multiple paths; returns a JSON array of per-path ok/output/error (never fails the whole call on one bad path).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
-      "required": [
-        "path"
-      ],
       "type": "object"
     }
   },
@@ -533,6 +576,10 @@
     "name": "repo_map",
     "parameters": {
       "properties": {
+        "fallbackLadder": {
+          "description": "When true (default), climb focus → repo → plain max-budget ladder if the map would be empty.",
+          "type": "boolean"
+        },
         "fileCursor": {
           "description": "Ranked-file offset for paging; use nextFileCursor from a prior truncated map.",
           "type": "number"
@@ -555,6 +602,10 @@
         "path": {
           "description": "Subdirectory to map (default: workspace root).",
           "type": "string"
+        },
+        "symbolCursor": {
+          "description": "Definition-row offset (after fileCursor slice) for symbol-level paging; use nextSymbolCursor from a prior truncated map.",
+          "type": "number"
         }
       },
       "type": "object"

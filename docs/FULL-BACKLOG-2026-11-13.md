@@ -28,7 +28,7 @@
 
 | Fact | Evidence |
 |---|---|
-| Branch | `main` + **large uncommitted diff** (rulings **315–342** may be local only) |
+| Branch | Baseline `main` at `7722dce` was clean when Batch 1 started; implementation on `fix/p0-effecthost-batch1` (rulings **343–347**, owner authorized commit/push; confirm remote state with git) |
 | Research | `repo_take/little-coder` @ `89d4fa0…`, `repo_take/aider` @ `5dc9490…` (gitignored) |
 | Never claim | Shell-net **`enforced`** |
 | WSL caveat | `kernel/tests/sandbox_exec.rs` may fail without CAP/Landlock |
@@ -40,8 +40,8 @@
 
 ## Z. What to implement first (P0 order)
 
-1. EffectHost: **338** `switchSession` hydrate → kernel `fs.edit` rungs → apply_patch `=require` → doctor effective **340** mode  
-2. R170: latch-until-clean (docs/13), not only opt-in block  
+1. EffectHost: **343** completed attach/strict facade; **345** opt-in relative-indent/UTF-8 repair; **347** adds unique trim-style reindent/line-patch anchors and closes lint command-admission bypass. **OPEN:** complete general 3-way/line-patch/fuzz parity, kernel pre-read proofs and universal Rust execute/observe ownership
+2. R170: **344** added durable opt-in latch-until-explicit-clean-release, first-admission checks and fail-closed unknown/multi-file paths. **OPEN:** default-on kernel-owned latch, atomic cross-process admission, full docs/13 guarantees.
 3. Egress: product netns path without `enforced`  
 4. Wave 0: R172 verify + hz.* honesty  
 5. Then §7 OPEN rows (§C) by family; Wave E after spine moves  
@@ -65,9 +65,9 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 
 | # | Area | Still open | Done bar | Docs / code |
 |---:|---|---|---|---|
-| 1 | Full EffectHost | Bun shell/write/edit default; doctor vs **340**; apply_patch **313**; kernel fs.edit; **338** switchSession | Kernel owns or refuses; `=require` fuzz/ast_edit; honest doctor | `effect-host-runtime.ts`, `index.ts` |
+| 1 | Full EffectHost | **343** closes attach/facade bypass; **347** reduces opt-in kernel unique trim/anchor edits and adds lint shell admission. Bun fallback, general patch/merge/fuzz parity and universal Rust ownership remain OPEN | Kernel owns or refuses every effect, full independent observe, `=require` kernel edit parity | `effect-host-runtime.ts`, `effect-reconcile-attach.ts`, `index.ts` |
 | 2 | Postimage / Rust observe | Not all tools on kernel; replay default off | Rust observes all; replay tested | `effect_host.rs`, `receipt-postimage.ts` |
-| 3 | Full R170 | **333–342** precursors only | docs/13 barrier + latch-until-clean | `13-tui.md`, reconcile block |
+| 3 | Full R170 | **344** closes opt-in sticky/durable latch, first-admission gate, unknown-target and multi-path bypasses. Default-on Rust OwnerLog and atomic cross-process fencing remain OPEN | Kernel-owned mandatory barrier and independent execute/observe settlement | `13-tui.md`, `effect-reconcile-block.ts`, `effect-reconcile-latch-store.ts` |
 | 4 | MITM / routed egress | **315–341** probes; not product default | Product netns E2E; never `enforced` | `egress-*.ts`, `kernel/` |
 
 ## B. Wave 0 spine residuals
@@ -76,10 +76,10 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 |---|---|---|
 | RC-18 `hz.*` | 23/44 types | **174b** |
 | R172 | Verify chain; nested stream; RC-7 terminal | **284**, **289**, **292**, **322** |
-| kernel fs.edit | relative_indent, line-patch, 3-way direct | **335–339** |
+| kernel fs.edit | **345** relative-indent + **347** per-line trim/3-way-style replacement rebase and unique anchored equal-length patch behind opt-in repair flag; generalized merge/patch/fuzz, pre-read and universal strict routing still open | **335–339**, **345**, **347** |
 | apply_patch | cross-file/ambiguous; **313** Bun fuzz | **306**, **313**, **323** |
-| **338** hydrate | same-process `switchSession` | **338** |
-| uncommitted tree | **315–342** local until commit | §0 above |
+| **338** hydrate | **343** closes same-process `switchSession` refresh from independently persisted ledger; broader cross-process fencing/owner identity still open | **338**, **343** |
+| Batches 1–4 branch | **343–347** source/tests/docs on `fix/p0-effecthost-batch1`; audit `audit/p0-effecthost-baseline-2026-11-13.md`. Push/PR state must be checked in git; no release claim | §0 above |
 
 ### B.1 Queued (not formal §7 yet)
 
@@ -135,7 +135,7 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | **I-7** | Configuration errors self-documenting: fix + doc link + escape hatch inside the exception text | **partial** (docs/28 ruling 81: `hzcode config check` reports unknown keys with the reason; fix and doc links inside every config exception are not yet uniform) |
 | **I-8** | Onboarding: OAuth-style setup, fuzzy `--list-models`, did-you-mean for unknown models | **partial** (2026-11-12 ruling 189: `hzcode --list-models [substr]` + startup did-you-mean for unknown catalog/registry ids; OAuth/onboarding UX still open) |
 | **J-1** | Standardised prediction schema (`preds.json`) with zero runtime dependency on the benchmark harness | **partial — TESTED** (ruling **191** reduced: `preds-writer.ts`; `bun run eval --preds-out preds.json`; SWE-bench submit wiring still open) |
-| **J-2** | Resumable batch runs purging stale entries; `--shuffle`/`--slice`/`--filter`; resumable long runs from runner-config sna | **partial — TESTED** (ruling **207** reduced: `batch-runner.ts` + `bun run batch --job` resume/dry-run JSONL stub; shuffle/slice/filter + runner-config snapshot still open) |
+| **J-2** | Resumable batch runs purging stale entries; `--shuffle`/`--slice`/`--filter`; resumable long runs from runner-config sna | **partial — TESTED** (ruling **207** reduced: `batch-runner.ts` + `bun run batch --job` resume/dry-run JSONL stub; ruling **346** adds deterministic --filter/--shuffle/--slice selection in dry-run and status (before resume); execution engine, runner-config snapshot and Ctrl-C drain still open) |
 | **J-3** | Default-deny network in the agent container - and prove it with a test against a real container | **partial** (PR #9: per-origin egress decider for `net.fetch` (ruling 43) and the fail-closed SandboxMode ladder (ruling 44); the OS confinement backend and a default-deny proof against a real contain |
 | **J-4** | Own the benchmark manager: typed metric definitions, arms grouped by job prefix, resume without re-specifying | **partial — TESTED** (ruling **212**: `benchmark-manager.ts` + `batch --status` arm report; full resume-without-re-spec open) |
 | **J-5** | Analyse your own session corpus to tune your own tools (read optimiser scripts over real transcripts) | **partial — TESTED** (ruling **213**: `session-corpus-stats.ts` + `bun run stats`; optimiser scripts over transcripts open) |
@@ -212,7 +212,7 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | **I-8** | OPEN | Onboarding: OAuth-style setup, fuzzy `--list-models`, did-you-mean for unknown models | **partial** (2026-11-12 ruling 189: `hzcode --list-models [substr]` + startup did-you-mean for unknown catalog/registry ids; OAuth/onboarding UX still open) |
 | **I-9** | DONE | Deterministic test model inside the library (with scriptable pseudo-actions `/sleep`, `/wa | **done** (`app/src/core/providers/scripted.ts` and the mock provider; `bun run eval` uses the scripted model in-library; the `/sleep` and `{"raise"}` pseudo-act |
 | **J-1** | OPEN | Standardised prediction schema (`preds.json`) with zero runtime dependency on the benchmar | **partial — TESTED** (ruling **191** reduced: `preds-writer.ts`; `bun run eval --preds-out preds.json`; SWE-bench submit wiring still open) |
-| **J-2** | OPEN | Resumable batch runs purging stale entries; `--shuffle`/`--slice`/`--filter`; resumable lo | **partial — TESTED** (ruling **207** reduced: `batch-runner.ts` + `bun run batch --job` resume/dry-run JSONL stub; shuffle/slice/filter + runner-config snapshot |
+| **J-2** | OPEN | Resumable batch runs purging stale entries; `--shuffle`/`--slice`/`--filter`; resumable lo | **partial — TESTED** (ruling **207** reduced: `batch-runner.ts` + `bun run batch --job` resume/dry-run JSONL stub; **346** filter/shuffle/slice selectors wired; execution and runner-config snapshot remain open) |
 | **J-3** | OPEN | Default-deny network in the agent container - and prove it with a test against a real cont | **partial** (PR #9: per-origin egress decider for `net.fetch` (ruling 43) and the fail-closed SandboxMode ladder (ruling 44); the OS confinement backend and a d |
 | **J-4** | OPEN | Own the benchmark manager: typed metric definitions, arms grouped by job prefix, resume wi | **partial — TESTED** (ruling **212**: `benchmark-manager.ts` + `batch --status` arm report; full resume-without-re-spec open) |
 | **J-5** | OPEN | Analyse your own session corpus to tune your own tools (read optimiser scripts over real t | **partial — TESTED** (ruling **213**: `session-corpus-stats.ts` + `bun run stats`; optimiser scripts over transcripts open) |

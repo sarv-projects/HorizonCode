@@ -3,11 +3,13 @@
  * text for batch ETA/histogram (docs/30 I-5 reduced).
  *
  * Each line is one job row. Resume skips rows whose status is `done` or `failed`.
- * `--shuffle` / `--slice` / runner-config snapshots are out of scope.
+ * Deterministic --filter/--shuffle/--slice selection is available for planning;
+ * runner-config snapshots, actually executing rows and Ctrl-C drain remain open.
  */
 
 import { appendFileSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 
 export type BatchJobStatus = "pending" | "running" | "done" | "failed";
@@ -70,6 +72,52 @@ export function loadBatchJob(file: string): BatchJobLoad {
     else rows.push(parsed);
   }
   return { path: file, rows, corrupt };
+}
+
+export interface BatchSelectionOptions {
+  /** Case-insensitive substring of the stable row id or task text. */
+  filter?: string;
+  /** Stable content-independent ordering key; job status is NOT part of the hash. */
+  shuffleSeed?: string;
+  /** Zero-based, half-open range applied after filtering and shuffling. */
+  slice?: { start: number; end?: number };
+}
+
+/**
+ * Select a reproducible job subset without modifying rows or their status.
+ * The full job population is selected BEFORE the pending/running resume filter,
+ * so completed rows cannot shift positions in --slice on subsequent runs.
+ */
+export function selectBatchRows(
+  rows: readonly BatchJobRow[],
+  opts: BatchSelectionOptions = {},
+): BatchJobRow[] {
+  let selected = [...rows];
+  if (opts.filter !== undefined) {
+    const query = opts.filter.trim().toLowerCase();
+    if (!query) throw new Error("batch selection: --filter must be non-empty");
+    selected = selected.filter((row) =>
+      row.id.toLowerCase().includes(query) || row.task.toLowerCase().includes(query));
+  }
+  if (opts.shuffleSeed !== undefined) {
+    const seed = opts.shuffleSeed;
+    const stableKey = (row: BatchJobRow): string =>
+      createHash("sha256").update(seed).update("\0").update(row.id).digest("hex");
+    selected = selected
+      .map((row) => ({ row, key: stableKey(row) }))
+      .sort((a, b) => a.key.localeCompare(b.key) ||
+        a.row.id.localeCompare(b.row.id) || a.row.task.localeCompare(b.row.task))
+      .map(({ row }) => row);
+  }
+  if (opts.slice) {
+    const { start, end } = opts.slice;
+    if (!Number.isSafeInteger(start) || start < 0 ||
+        (end !== undefined && (!Number.isSafeInteger(end) || end < start))) {
+      throw new Error("batch selection: --slice must be a valid nonnegative start:end range");
+    }
+    selected = selected.slice(start, end);
+  }
+  return selected;
 }
 
 /** Rows that still need execution (pending or a stale `running` from a crash). */

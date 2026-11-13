@@ -18,9 +18,9 @@
 
 | # | Area | Shipped partial (rulings) | **Done bar** (not met) |
 |---|---|---|---|
-| 1 | EffectHost | **220–328**, **340**, **323–327** | Kernel owns mutations or refuses under product posture; `=require` covers fuzz/ast_edit gaps; less Bun apply_patch; doctor honesty for **effective** runtime mode |
+| 1 | EffectHost | **220–328**, **340**, **343**, **345**, **347** | Kernel owns mutations or refuses under product posture; `=require` covers fuzz/ast_edit gaps; less Bun apply_patch; doctor honesty for **effective** runtime mode |
 | 2 | Postimage / Rust observe | **256–261**, **272**, **279–280**, **297**, **301**, **314**, **327–328** | Rust observes **all** mutating tools on kernel path; replay policy tested |
-| 3 | R170 | **293**, **303–304**, **307–310**, **316–318**, **333–338**, **342** | docs/13 full per-resource barrier + latch-until-clean (not only opt-in block) |
+| 3 | R170 | **293**, **303–304**, **307–310**, **316–318**, **333–338**, **342**, **344** | docs/13 full per-resource barrier + latch-until-clean (not only opt-in block) |
 | 4 | MITM / routed egress | **178**, **208**, **218**, **288–289**, **299**, **315–332**, **341** | Default product netns-only egress E2E; JOIN parent plumb; TLS claims match capability; **never** shell-net `enforced` |
 | 5 | LICENSE | **233** hygiene | **DEFERRED** — owner root `LICENSE` |
 
@@ -28,7 +28,7 @@
 
 | Item | Status | Residual / ruling |
 |---|---|---|
-| EffectHost five-phase settlement | **PARTIAL — TESTED** (**181**, **220**, **224**, **243**, **261**, **267**, **275**, **277**, **278**, **279**, **280**, **281**, **283**, **285**, **287**, **286**, **290**, **291**, **293**, **294**, **295**, **299**, **300**, **301**, **302**, **303**, **306**, **307**, **308**, **311**, **314**, **320**, **322**, **323**, **327**, **328**, **335**, **337**, **339**, **340**) | Durable `effects.jsonl` + attach reconcile (**224**, **338**); kernel `effect.execute` sandboxed fs/shell; `=default`/`=require` + **340** runtime spine; edit repair **335/337/339**; apply_patch require miss **323**. **Open:** full kernel ownership; `switchSession` hydrate; kernel fs.edit relative_indent/line-patch/3-way; Bun ambient shell when env unset outside runtime |
+| EffectHost five-phase settlement | **PARTIAL — TESTED** (**181**, **220**, **224**, **243**, **261**, **267**, **275**, **277**, **278**, **279**, **280**, **281**, **283**, **285**, **287**, **286**, **290**, **291**, **293**, **294**, **295**, **299**, **300**, **301**, **302**, **303**, **306**, **307**, **308**, **311**, **314**, **320**, **322**, **323**, **327**, **328**, **335**, **337**, **339**, **340**) | Durable `effects.jsonl` + attach reconcile (**224**, **338**); kernel `effect.execute` sandboxed fs/shell; `=default`/`=require` + **340** runtime spine; edit repair **335/337/339**; apply_patch require miss **323**. **Open:** full kernel ownership and default Bun ambient shell; general/full fs.edit merge and patch parity (unique relative-indent/trim/anchor reduced **345/347**); lint guarded via **347** |
 | Receipt independent postimage | **PARTIAL — TESTED** (**174b**, **256**, **257**, **260**, **261**, **272**, **279**, **280**, **295**, **297**, **301**, **314**, **327**, **328**) | **Open:** observe all tools in Rust; default replay honesty |
 | Session ↔ kernel / R170 | **PARTIAL** (**174b**, **235**, **293**, **303**, **304**, **307**, **309**, **310**, **316**, **318**, **333**, **334**, **336**, **338**, **342**) | **Open:** full R170 protocol |
 | MITM / shell egress | **PARTIAL** (**178**, **195**, **208**, **218**, **231**, **234**, **253**, **279**, **281**, **283**, **285**, **288**, **289**, **299**, **315**, **317**, **319**, **321**, **324**, **325**, **326**, **329**, **330**, **331**, **332**, **341**) | **Open:** production default routing; parent JOIN plumb |
@@ -59,9 +59,9 @@
 | DeepSeek child prompt sections | **TESTED** (**174b**) | — |
 | Full EffectHost + `hz.*` emission | **PARTIAL** (**220**) | Literal settle/unknown; not full catalogue |
 | Full R172 | **PARTIAL** (**284**, **289**, **292**, **322**) | Verify chain; nested stream; RC-7 depth |
-| apply_patch / fs.edit kernel | **PARTIAL** | Repair **335–339**; fuzz gaps; **313** Bun-only first-hit score fuzz; **307** relative_indent on patch not full on direct fs.edit |
-| **338** attach / switchSession | **PARTIAL** | Cross-process attach hydrate shipped; **same-process `switchSession` ledger reload** open |
-| Uncommitted local tree | **OPEN** | Rulings **315–342** + LC/aider research may exist only locally until owner commits |
+| apply_patch / fs.edit kernel | **PARTIAL** | Repair **335–339**, **345**, **347** relative_indent + unique trim/anchored direct fs.edit behind flag; general merge/patch, first-hit score fuzz **313**, cross-file and universal routing OPEN |
+| **338** attach / switchSession | **PARTIAL** | **343** same-process switchSession ledger reload shipped; cross-process owner identity and atomic fencing OPEN |
+| Topic branch review | **OPEN** | Rulings **343–347** + prior local work targeted for one docs+code commit; check git for push/PR, do not assume merged |
 
 ---
 
@@ -147,4 +147,4 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 
 ---
 
-*Last refreshed: 2026-11-13 (handoff + **AGENT-DOC-NAVIGATION**). Rulings through **342**. LICENSE **DEFERRED**. Uncommitted tree **315–342** + docs. P0 done bars **not met** — goal **NOT COMPLETE**.*
+*Last refreshed: 2026-11-13 (handoff + **AGENT-DOC-NAVIGATION**). Rulings through **347**. LICENSE **DEFERRED**. Uncommitted tree **315–342** + docs. P0 done bars **not met** — goal **NOT COMPLETE**.*

@@ -260,6 +260,8 @@ describe("every tool passes an admission", () => {
       grep: { pattern: "needle" },
       glob: { pattern: "*.ts" },
       repo_map: {},
+      lint: { path: "a.ts" },
+      present: { files: ["a.ts"] },
       shell: { command: "echo hi" },
       todo: { action: "list" },
       undo: {},
@@ -286,6 +288,10 @@ describe("every tool passes an admission", () => {
     }
     // The in-process mirror covers session-state tools; an unknown name is refused.
     expect(SESSION_STATE_TOOLS).toContain("todo");
+    expect(admissionFor("present", { files: ["a.ts"] }, "/ws")).toEqual({ kind: "session-state" });
+    expect(admissionFor("lint", { path: "a.ts" }, "/ws")).toEqual({
+      kind: "guard", action: { kind: "fs.read", target: "/ws/a.ts" },
+    });
     expect(admissionFor("not-a-tool", {}, "/ws")).toBeUndefined();
   });
 

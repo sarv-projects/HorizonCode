@@ -31,7 +31,7 @@ export function countOccurrences(haystack: string, needle: string): number {
 }
 
 export type KernelFsEditResolve =
-  | { ok: true; oldString: string; start: number; end: number }
+  | { ok: true; oldString: string; start: number; end: number; indentPrefix?: string }
   | { ok: false; reason: "not_found" | "ambiguous" };
 
 function uniqueSpan(haystack: string, needle: string): { start: number; end: number } | undefined {
@@ -99,6 +99,63 @@ function equalLines(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
   return true;
+}
+
+function commonIndentPrefix(lines: string[]): string {
+  let prefix: string | undefined;
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    const indent = /^[ \t]*/.exec(line)?.[0] ?? "";
+    if (prefix === undefined) {
+      prefix = indent;
+    } else {
+      let i = 0;
+      while (i < prefix.length && i < indent.length && prefix[i] === indent[i]) i += 1;
+      prefix = prefix.slice(0, i);
+    }
+  }
+  return prefix ?? "";
+}
+
+function stripRelativeIndent(line: string, prefix: string): string {
+  return line.trim() === "" ? "" : line.startsWith(prefix) ? line.slice(prefix.length) : line;
+}
+
+/** Return the unique block having the same relative indentation, not just per-line trimmed text. */
+function resolveRelativeIndentWindowUnique(original: string, oldString: string): KernelFsEditResolve | undefined {
+  const fileLines = toFileLines(original);
+  const want = toFileLines(oldString);
+  if (want.length === 0 || want.length > fileLines.length) return undefined;
+  const wantPrefix = commonIndentPrefix(want);
+  let found: number | undefined;
+  for (let start = 0; start + want.length <= fileLines.length; start += 1) {
+    const window = fileLines.slice(start, start + want.length);
+    const windowPrefix = commonIndentPrefix(window);
+    if (window.every((line, i) => stripRelativeIndent(line, windowPrefix) === stripRelativeIndent(want[i]!, wantPrefix))) {
+      if (found !== undefined) return { ok: false, reason: "ambiguous" };
+      found = start;
+    }
+  }
+  if (found === undefined) return undefined;
+  const span = spanForLineWindow(original, found, want.length);
+  if (!span) return undefined;
+  return { ok: true, ...span, indentPrefix: commonIndentPrefix(fileLines.slice(found, found + want.length)) };
+}
+
+/** Matched block decides the new text's indentation and native CRLF style. */
+export function renderKernelFsEditReplacement(
+  newString: string,
+  resolved: Extract<KernelFsEditResolve, { ok: true }>,
+  content: string,
+): string {
+  const prefix = resolved.indentPrefix;
+  if (prefix === undefined) return newString;
+  const lines = newString.replace(/\r\n/g, "\n").split("\n");
+  const ownPrefix = commonIndentPrefix(lines);
+  const reindented = lines.map((line) => line.trim() === "" ? "" : prefix + stripRelativeIndent(line, ownPrefix)).join("\n");
+  return content.slice(resolved.start, resolved.end).includes("\r\n")
+    ? reindented.replace(/\n/g, "\r\n")
+    : reindented;
 }
 
 /** Unique per-line trimEnd window start line index, or undefined when none / ambiguous. */
@@ -213,7 +270,10 @@ function resolveTrimLineWindowUnique(
   if (startLine === undefined) return undefined;
   const span = spanForLineWindow(original, startLine, want.length);
   if (!span) return undefined;
-  return { ok: true, oldString: span.oldString, start: span.start, end: span.end };
+  return {
+    ok: true, oldString: span.oldString, start: span.start, end: span.end,
+    indentPrefix: commonIndentPrefix(fileLines.slice(startLine, startLine + want.length)),
+  };
 }
 
 function resolveUnicodeFoldLineWindowUnique(
@@ -228,6 +288,31 @@ function resolveUnicodeFoldLineWindowUnique(
   const span = spanForLineWindow(original, startLine, want.length);
   if (!span) return undefined;
   return { ok: true, oldString: span.oldString, start: span.start, end: span.end };
+}
+
+/** Last-resort, unique two-anchor line patch; this repair is opt-in and refuses ties. */
+function resolveLinePatchWindowUnique(original: string, oldString: string): KernelFsEditResolve | undefined {
+  const fileLines = toFileLines(original);
+  const want = toFileLines(oldString);
+  const anchors = want.map((line, i) => line.trim() === "" ? -1 : i).filter((i) => i >= 0);
+  if (anchors.length < 2 || want.length > fileLines.length) return undefined;
+  const firstAt = anchors[0]!;
+  const lastAt = anchors[anchors.length - 1]!;
+  const first = want[firstAt]!.trim();
+  const last = want[lastAt]!.trim();
+  let found: number | undefined;
+  for (let start = 0; start + want.length <= fileLines.length; start += 1) {
+    if (fileLines[start + firstAt]!.trim() !== first || fileLines[start + lastAt]!.trim() !== last) continue;
+    if (found !== undefined) return { ok: false, reason: "ambiguous" };
+    found = start;
+  }
+  if (found === undefined) return undefined;
+  const span = spanForLineWindow(original, found, want.length);
+  if (!span) return undefined;
+  return {
+    ok: true, oldString: span.oldString, start: span.start, end: span.end,
+    indentPrefix: commonIndentPrefix(fileLines.slice(found, found + want.length)),
+  };
 }
 
 function resolveNormalizedUnique(original: string, oldString: string): KernelFsEditResolve | undefined {
@@ -269,6 +354,9 @@ export function resolveKernelFsEditOldString(
     }
     if (countOccurrences(content, trimmed) > 1) return { ok: false, reason: "ambiguous" };
   }
+
+  const indentWindow = resolveRelativeIndentWindowUnique(content, oldString);
+  if (indentWindow) return indentWindow;
 
   const trimEndWindow = resolveTrimEndLineWindowUnique(content, oldString);
   if (trimEndWindow) return trimEndWindow;
@@ -326,5 +414,7 @@ export function resolveKernelFsEditOldString(
   if (countOccurrences(content.replace(/\r\n/g, "\n"), normOld) > 1) {
     return { ok: false, reason: "ambiguous" };
   }
+  const anchored = resolveLinePatchWindowUnique(content, oldString);
+  if (anchored) return anchored;
   return { ok: false, reason: "not_found" };
 }

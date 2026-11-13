@@ -9,7 +9,9 @@
  */
 
 import * as path from "node:path";
+import { realpathish } from "./paths";
 import { postimagePathForTool } from "./receipt-postimage";
+import { applyPatchKernelProjections } from "./effect-kernel-tool-projection";
 import type { EffectHost, EffectRecord } from "./effect-host";
 
 const GATE_TOOLS = new Set(["write", "edit", "apply_patch", "ast_edit", "multi_edit"]);
@@ -51,6 +53,35 @@ export function observePendingTargetForTool(
   if (postimage) return postimage;
   if (tool === "shell" || tool === "bash") return shellExplicitResourceTarget(args, workspace);
   return undefined;
+}
+
+/** All workspace paths a mutation might touch, not merely the final receipt
+ * postimage. An unparseable/multi-target command returns undefined (unsafe to
+ * claim disjoint from a blocked resource). Rename includes source AND target. */
+export function mutationResourceTargets(
+  tool: string,
+  args: Record<string, unknown>,
+  workspace: string,
+): string[] | undefined {
+  // A shell command may write ANY path regardless of cwd or explicit path
+  // hints; treating a declared cwd as exhaustive evidence is unsafe.
+  if (tool === "shell" || tool === "bash") return undefined;
+  if (tool === "apply_patch") {
+    const projections = applyPatchKernelProjections(args);
+    if (!projections || projections.length === 0) return undefined;
+    const paths = new Set<string>();
+    for (const proj of projections) {
+      const raw = proj.kind === "rename" ? [proj.from, proj.to] : [proj.path];
+      for (const value of raw) {
+        const resolved = workspaceBoundedPath(workspace, value);
+        if (!resolved) return undefined;
+        paths.add(resolved);
+      }
+    }
+    return [...paths];
+  }
+  const target = observePendingTargetForTool(tool, args, workspace);
+  return target ? [target] : undefined;
 }
 
 export function mutatingToolResourceKey(
@@ -112,8 +143,10 @@ export function effectIdsWithObservePendingOnPath(
 }
 
 function resourcePathsOverlap(a: string, b: string): boolean {
-  const ra = path.resolve(a);
-  const rb = path.resolve(b);
+  // Resolve existing symlink aliases before comparing. A write to alias.ts
+  // must not bypass a barrier protecting the file it points at.
+  const ra = realpathish(a);
+  const rb = realpathish(b);
   if (ra === rb) return true;
   return ra.startsWith(rb + path.sep) || rb.startsWith(ra + path.sep);
 }
@@ -182,13 +215,22 @@ export function r170ResourceGateRefusal(
   frozenKeys: Set<string>,
   host?: EffectHost,
 ): string | undefined {
-  const key = mutatingToolResourceKey(tool, args, workspace);
-  if (!key || frozenKeys.size === 0) return undefined;
-  if (!frozenKeys.has(key)) return undefined;
-  const drivers = unknownEffectIdsForResourceKey(host, key);
-  return (
-    `HZ_PRECONDITION_FAILED: blocked_by_unknown: resource ${key} is frozen until effect reconciliation completes ` +
-    `(docs/13 R170); refusing ${tool} on the same path in this run` +
-    formatR170DrivingEffectHint(drivers)
-  );
+  if (!GATE_TOOLS.has(tool) || frozenKeys.size === 0) return undefined;
+  const targets = mutationResourceTargets(tool, args, workspace);
+  if (!targets) {
+    return `HZ_PRECONDITION_FAILED: blocked_by_unknown: refusing ${tool} — ` +
+      "unknown resource target cannot prove disjoint from frozen UNKNOWN effects (docs/13 R170)";
+  }
+  for (const target of targets) {
+    for (const frozen of frozenKeys) {
+      if (!resourcePathsOverlap(target, frozen)) continue;
+      const drivers = unknownEffectIdsForResourceKey(host, frozen);
+      return (
+        `HZ_PRECONDITION_FAILED: blocked_by_unknown: resource ${frozen} is frozen until effect reconciliation completes ` +
+        `(docs/13 R170); refusing ${tool} on the overlapping path ${target} in this run` +
+        formatR170DrivingEffectHint(drivers)
+      );
+    }
+  }
+  return undefined;
 }

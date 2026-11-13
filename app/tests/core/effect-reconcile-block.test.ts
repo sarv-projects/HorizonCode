@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { EventTypes, newId, nowIso } from "../../src/contracts";
@@ -28,6 +28,7 @@ import {
   tryReleaseEffectReconcileBlock,
 } from "../../src/core/effect-reconcile-block";
 import { writeFileSync } from "node:fs";
+import { appendReconcileLatch, reconcileLatchFile } from "../../src/core/effect-reconcile-latch-store";
 import { EffectHost, createEffectId } from "../../src/core/effect-host";
 import { KernelClient } from "../../src/core/kernel";
 import { kernelStateDir } from "../../src/core/paths";
@@ -115,16 +116,33 @@ describe("observe-pending gate (rulings 333, 334)", () => {
     ).toBeUndefined();
   });
 
-  test("shell skipped when no postimage path (ruling 334)", () => {
+  test("unscoped shell is denied while any resource remains observe-pending", () => {
     const host = new EffectHost();
     const effectId = createEffectId();
     const target = path.join(workspace, "sh.ts");
     host.begin(effectId, "write", "w-sh");
     host.recordAllow(effectId);
     host.recordExecute(effectId, { ok: true, resourceKey: target });
-    expect(
-      effectReconcileBlockObservePendingRefusal(workspace, "shell", { command: "echo hi" }, host),
-    ).toBeUndefined();
+    const refused = effectReconcileBlockObservePendingRefusal(workspace, "shell", { command: "echo hi" }, host);
+    expect(refused).toContain("observe not settled");
+    expect(refused).toContain("unknown resource");
+    host.recordObserve(effectId, { receiptId: "r-shell", receiptSeq: 1 });
+    expect(effectReconcileBlockObservePendingRefusal(workspace, "shell", { command: "echo hi" }, host)).toBeUndefined();
+  });
+
+  test("observe-pending barrier checks every file in a multi-op patch", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const hot = path.join(workspace, "hot.ts");
+    host.begin(effectId, "write", "pending-hot");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: hot });
+    const patch = "*** Begin Patch\n*** Add File: hot.ts\n+hot\n*** Add File: cold.ts\n+cold\n*** End Patch";
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace, "apply_patch", { input: patch }, host,
+    );
+    expect(refusal).toContain("observe not settled");
+    expect(refusal).toContain(effectId.slice(0, 13));
   });
 
   test("shell refused when explicit cwd overlaps observe-pending path (ruling 336)", () => {
@@ -142,9 +160,11 @@ describe("observe-pending gate (rulings 333, 334)", () => {
     );
     expect(refusal).toContain("observe not settled");
     expect(refusal).toContain("refusing shell");
+    // An apparently disjoint cwd is not proof: commands can reference
+    // absolute paths or ../ into a different pending resource.
     expect(
       effectReconcileBlockObservePendingRefusal(workspace, "shell", { command: "npm test", cwd: "other" }, host),
-    ).toBeUndefined();
+    ).toContain("unknown resource");
   });
 
   test("shell refused when explicit path overlaps (ruling 336)", () => {
@@ -211,6 +231,76 @@ describe("latch + refusal", () => {
     expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(false);
   });
 
+  test("a clean end-of-turn assessment never silently releases a prior latch", () => {
+    const sid = "sess-sticky";
+    __latchEffectReconcileBlockForTests(workspace, sid, "earlier UNKNOWN");
+    const notice = latchEffectReconcileBlock(workspace, sid);
+    expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(true);
+    expect(effectReconcileBlockRefusal(workspace, sid, "write", { path: "x.ts", content: "x" })).toContain(
+      "refusing write",
+    );
+    expect(notice).toContain("earlier UNKNOWN");
+    expect(tryReleaseEffectReconcileBlock(workspace, sid)).toBe(true);
+    expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(false);
+  });
+
+  test("a latch survives in-memory reset and only a clean explicit release persists its removal", () => {
+    const sid = "sess-durable";
+    __latchEffectReconcileBlockForTests(workspace, sid, "previously unpaired");
+    __resetEffectReconcileBlockForTests(); // simulate a different process attaching
+    expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(true);
+    expect(effectReconcileBlockRefusal(workspace, sid, "write", { path: "x.txt", content: "x" })).toContain(
+      "previously unpaired",
+    );
+    expect(tryReleaseEffectReconcileBlock(workspace, sid)).toBe(true);
+    __resetEffectReconcileBlockForTests();
+    expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(false);
+  });
+
+  test("a release from another runtime invalidates this process's stale latch cache", () => {
+    const sid = "sess-remote-release";
+    __latchEffectReconcileBlockForTests(workspace, sid, "old failure");
+    expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(true);
+    appendReconcileLatch(workspace, sid, null); // independent verified release
+    expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(false);
+    expect(effectReconcileBlockRefusal(workspace, sid, "write", { path: "free.ts", content: "x" })).toBeUndefined();
+  });
+
+  test("malformed durable latch state refuses mutations rather than assuming clean", () => {
+    const file = reconcileLatchFile(workspace);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "{not json}\n");
+    expect(effectReconcileBlockRefusal(workspace, "sess-corrupt", "write", {
+      path: "maybe.ts", content: "x",
+    })).toContain("journal unreadable or malformed");
+    expect(effectReconcileBlockRefusal(workspace, "sess-corrupt", "read", {
+      path: "maybe.ts",
+    })).toBeUndefined();
+  });
+
+  test("a first mutator admission latches an existing orphan without an earlier turn-end call", async () => {
+    const sid = "sess-preflight";
+    const kernel = new KernelClient({ workspace, stateDir: kernelStateDir(workspace) });
+    const stream = `session:${sid}`;
+    try {
+      await kernel.appendEvent(stream, {
+        id: newId(), ts: nowIso(), stream, type: EventTypes.toolCall,
+        actor: { kind: "tool", id: "write" },
+        payload: { id: "orphan-at-start", name: "write" },
+      });
+      expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(false);
+      const refused = effectReconcileBlockRefusal(workspace, sid, "write", {
+        path: "hazard.ts", content: "do not execute",
+      });
+      expect(refused).toContain("refusing write");
+      expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(true);
+      __resetEffectReconcileBlockForTests();
+      expect(isEffectReconcileBlockLatched(workspace, sid)).toBe(true);
+    } finally {
+      await kernel.close();
+    }
+  });
+
   test("assess reports clean empty workspace", () => {
     const assessment = assessEffectReconcileBlock(workspace, "none");
     expect(assessment.shouldBlock).toBe(false);
@@ -218,6 +308,26 @@ describe("latch + refusal", () => {
 });
 
 describe("resource mode path filter (ruling 302)", () => {
+  test("an unscoped latch cannot be narrowed by later path-scoped evidence", () => {
+    setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+    const sid = "sess-sticky-unscoped";
+    __latchEffectReconcileBlockForTests(workspace, sid, "unattributable effect", []);
+    __latchEffectReconcileBlockForTests(workspace, sid, "new scoped effect", [path.join(workspace, "hot.ts")]);
+    expect(effectReconcileBlockRefusal(workspace, sid, "write", { path: "cold.ts", content: "x" })).toContain(
+      "refusing write",
+    );
+  });
+
+  test("new unattributed evidence widens a previously scoped latch to session-wide", () => {
+    setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+    const sid = "sess-widen-unscoped";
+    __latchEffectReconcileBlockForTests(workspace, sid, "scoped", [path.join(workspace, "hot.ts")]);
+    __latchEffectReconcileBlockForTests(workspace, sid, "unattributable", []);
+    expect(effectReconcileBlockRefusal(workspace, sid, "write", { path: "cold.ts", content: "x" })).toContain(
+      "refusing write",
+    );
+  });
+
   test("allows mutating tool on a different path when latched with blocked paths", () => {
     setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
     const sid = "sess-resource";
@@ -231,6 +341,66 @@ describe("resource mode path filter (ruling 302)", () => {
     expect(refusal).toContain("HZ_EFFECT_RECONCILE_BLOCK=resource");
     expect(refusal).toContain("refusing write");
   });
+});
+
+test("resource latch refuses an unscoped shell while allowing known disjoint file mutation", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const sid = "sess-resource-unscoped";
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown file effect", [
+    path.join(workspace, "hot.ts"),
+  ]);
+  const refusal = effectReconcileBlockRefusal(workspace, sid, "shell", { command: "echo x > hot.ts" });
+  expect(refusal).toContain("refusing shell");
+  expect(refusal).toContain("unknown resource");
+  expect(effectReconcileBlockRefusal(workspace, sid, "write", { path: "cold.ts", content: "ok" })).toBeUndefined();
+});
+
+test("resource latch refuses writes via symlink aliases to blocked files", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const sid = "sess-symlink-alias";
+  const target = path.join(workspace, "hot.ts");
+  writeFileSync(target, "original");
+  symlinkSync(target, path.join(workspace, "alias.ts"));
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown hot effect", [target]);
+  const refusal = effectReconcileBlockRefusal(workspace, sid, "write", {
+    path: "alias.ts", content: "must be blocked",
+  });
+  expect(refusal).toContain("refusing write");
+});
+
+test("shell cwd outside blocked paths cannot certify arbitrary command effects", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const sid = "sess-shell-cwd-bypass";
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown hot effect", [
+    path.join(workspace, "hot.ts"),
+  ]);
+  const refusal = effectReconcileBlockRefusal(workspace, sid, "shell", {
+    cwd: "other", command: "sh -c 'echo malicious > ../hot.ts'",
+  });
+  expect(refusal).toContain("refusing shell");
+  expect(refusal).toContain("unknown resource");
+});
+
+test("multi-file apply_patch cannot hide a blocked earlier file behind a disjoint final file", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const sid = "sess-multi-patch";
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown hot effect", [
+    path.join(workspace, "hot.ts"),
+  ]);
+  const patch = "*** Begin Patch\n*** Add File: hot.ts\n+hot\n*** Add File: cold.ts\n+cold\n*** End Patch";
+  const refusal = effectReconcileBlockRefusal(workspace, sid, "apply_patch", { input: patch });
+  expect(refusal).toContain("refusing apply_patch");
+});
+
+test("an active reconcile latch refuses unclassified effect paths but permits read-only tools", () => {
+  const sid = "sess-new-tool";
+  __latchEffectReconcileBlockForTests(workspace, sid, "pending effects");
+  for (const name of ["shell_session", "code_mode", "agent", "preview", "todo", "mcp__remote__write", "new_tool"]) {
+    expect(effectReconcileBlockRefusal(workspace, sid, name, {})).toContain(`refusing ${name}`);
+  }
+  for (const name of ["read", "grep", "glob", "repo_map", "ast_search", "tool_search", "memory_search"]) {
+    expect(effectReconcileBlockRefusal(workspace, sid, name, {})).toBeUndefined();
+  }
 });
 
 describe("latch view for TUI (ruling 304, 307)", () => {

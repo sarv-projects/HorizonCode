@@ -402,6 +402,12 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const root = argString(args, "path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
     }
+    case "lint": {
+      // A lint reads a selected file. User-configured lint commands separately
+      // admit the ACTUAL shell string before spawning (tools/lint.ts).
+      const file = argString(args, "path");
+      return file ? { kind: "fs.read", target: resolved(file) } : undefined;
+    }
     case "write":
     case "edit": {
       const file = argString(args, "path", "file_path", "file");
@@ -565,7 +571,7 @@ export function taskHead(text: string, max = 120): string {
  * `write`/`close` are mapped here and `write` guards each typed input line as
  * shell.exec inside the tool (a start approval never covers later input).
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "preview", "undo", "shell_session", "tool_search"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "present", "preview", "undo", "shell_session", "tool_search"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission =
@@ -1823,6 +1829,7 @@ async function executeTool(
   faults: RunFaults,
   hooks: HooksConfig,
   effectId: string,
+  reconcilePreflighted = false,
 ): Promise<{
   result: ToolResult;
   leaseId?: string;
@@ -1885,6 +1892,8 @@ async function executeTool(
     deps.sessionId,
     call.name,
     parsed.args,
+    deps.effectHost,
+    { preflighted: reconcilePreflighted },
   );
   if (reconcileBlockRefusal !== undefined) {
     return {
@@ -2305,6 +2314,10 @@ async function runToolCall(
   attemptsAfterFailure?: (formatError: boolean) => number,
 ): Promise<ToolCallOutcome> {
   const parsed = parseCall(call);
+  // First-admission reconciliation must run BEFORE the current effect begins
+  // and before its tool.call event is logged. Otherwise it sees this call's
+  // not-yet-issued receipt as an old orphan and latches a healthy session.
+  effectReconcileBlockRefusal(deps.workspace, deps.sessionId, call.name, parsed.args, deps.effectHost);
   const effectId = createEffectId();
   deps.effectHost?.begin(effectId, call.name, call.id);
   const started = Date.now();
@@ -2334,7 +2347,7 @@ async function runToolCall(
     { kind: "tool", id: call.name },
   );
 
-  const executed = await executeTool(deps, gate, call, parsed, faults, hooks, effectId);
+  const executed = await executeTool(deps, gate, call, parsed, faults, hooks, effectId, true);
   const result = executed.result;
   // Completion evidence: what this run changed, and whether anything checked it.
   // A staged (plan-mode) write changed nothing on disk, so it is not evidence.

@@ -24,7 +24,7 @@ const APPLY_PATCH_FIRST_HIT_RESIDUAL =
   "Bun apply_patch position-ordered first-hit Levenshtein/score fuzz is intentionally Bun-only (kernel uses unique dominant / unique max-score, not first-hit)";
 
 const EDIT_REPAIR_FIX_LINE =
-  "export HZ_EFFECT_HOST_EDIT_REPAIR=1   # kernel fs.edit trim/trimEnd/per-line-trim line-windows + apply_patch fuzzy rungs (dominant score ≥0.97 Δ0.08, unique Levenshtein ≥0.66; first-hit score fuzz stays Bun-only)";
+  "export HZ_EFFECT_HOST_EDIT_REPAIR=1   # kernel fs.edit relative-indent, trim three-way, anchored unique line patch (opt-in) + apply_patch unique dominant score ≥0.97 Δ0.08 and Levenshtein ≥0.66 (first-hit score fuzz remains Bun-only)";
 
 /** Prototype trust spine — recommend require when not already on honesty gate (ruling **313**). */
 export const EFFECT_HOST_PROTOTYPE_HONESTY_REQUIRE_DETAIL =
@@ -67,7 +67,7 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
     "argv-only `shell` (no shell metachar/interpreter), sequential Add/exact-Update/Delete/exact-Move `apply_patch`, " +
     "and literal or metavar `ast_edit` (incl. variadic `$$$` when shape-eligible) when rewriteMatches yields one exact old→new (kernel fs.edit)";
   const repairResidual = effectHostEditRepairEnabled(env)
-    ? `kernel fs.edit + apply_patch projection: trim/newline + fs.edit trimEnd + per-line trim + per-line unicode-fold line-windows (**335**/**337**/**339**) + apply_patch trimEnd + per-line trim (3-way merge) + relative-indent + unicode-fold + unique line-patch anchors + unique dominant score (≥0.97, Δ0.08) + unique max-score Levenshtein (≥0.66) when \`HZ_EFFECT_HOST_EDIT_REPAIR=1\`; ${APPLY_PATCH_FIRST_HIT_RESIDUAL}`
+    ? `kernel fs.edit + apply_patch projection: trim/newline + fs.edit relative-indent replacement rebase (**345**), reindented trim three-way and unique anchored line-patch (**347**) + trimEnd + per-line trim + per-line unicode-fold line-windows (**335**/**337**/**339**) + apply_patch trimEnd + per-line trim (3-way merge) + relative-indent + unicode-fold + unique line-patch anchors + unique dominant score (≥0.97, Δ0.08) + unique max-score Levenshtein (≥0.66) when \`HZ_EFFECT_HOST_EDIT_REPAIR=1\`; ${APPLY_PATCH_FIRST_HIT_RESIDUAL}`
     : `kernel repair + apply_patch trim/indent/fold/Levenshtein rungs off unless \`HZ_EFFECT_HOST_EDIT_REPAIR=1\`; fuzz-needed patches stay Bun-owned at kernel route; ${APPLY_PATCH_FIRST_HIT_RESIDUAL}`;
   const shellResidual =
     "shell: argv-only simple commands may kernel-route; compound/interpreter shell strings cannot — under `=require` they are refused; under `=default`/`=1` they fall back to ambient Bun `shell` (not hermetic kernel `shell.exec`)";
@@ -146,6 +146,14 @@ export function effectHostDoctorFixLines(env: Record<string, string | undefined>
 }
 
 const REQUIRE_MUTATION_TOOLS = new Set(["write", "edit", "shell", "apply_patch", "ast_edit"]);
+// Strict mode must not turn a newly registered tool (or an MCP tool of unknown
+// effect class) into an ambient execution bypass. These are the explicitly
+// admitted local, non-host-effect operations; everything else needs a kernel
+// execute route or is refused until one is implemented.
+const REQUIRE_LOCAL_ONLY_TOOLS = new Set([
+  "read", "grep", "glob", "repo_map", "ast_search", "memory_search",
+  "handoff_search", "tool_search",
+]);
 
 export const EFFECT_HOST_KERNEL_REQUIRE_NOTICE =
   "[effect-host-kernel] HZ_EFFECT_HOST_KERNEL=require: refused — mutation not routed through kernel";
@@ -164,7 +172,13 @@ export function effectHostKernelRequireRefusal(
   },
 ): string | undefined {
   if (effectHostKernelMode() !== "require") return undefined;
-  if (!REQUIRE_MUTATION_TOOLS.has(tool)) return undefined;
+  if (REQUIRE_LOCAL_ONLY_TOOLS.has(tool)) return undefined;
+  // New or dynamically contributed tools are effectful until proven otherwise.
+  // In particular undo, shell_session, code_mode, preview, MCP and agent must
+  // not acquire ambient Bun execution merely by avoiding the five route names.
+  if (!REQUIRE_MUTATION_TOOLS.has(tool)) {
+    return `${EFFECT_HOST_KERNEL_REQUIRE_NOTICE} (no kernel EffectHost route for ${tool})`;
+  }
   if (kernelRouted) return undefined;
   if (tool === "apply_patch") {
     if (opts?.applyPatchProjectionMiss) {

@@ -113,8 +113,11 @@ import { loadEffectLedger, WorkspaceEffectLedger } from "./effect-ledger";
 import { collectUnknownEffectRows, type UnknownEffectRow } from "./effect-unknown-list";
 import { mirrorEffectReconcileToKernel } from "./effect-kernel-reconcile";
 import { reconcileEffectsOnAttach } from "./effect-reconcile-attach";
+import { effectHostKernelRequireRefusal } from "./effect-host-posture";
 import {
   effectReconcileBlockLatchView,
+  effectReconcileBlockObservePendingRefusal,
+  effectReconcileBlockRefusal,
   tryReleaseEffectReconcileBlock,
   type EffectReconcileBlockLatchView,
 } from "./effect-reconcile-block";
@@ -291,10 +294,13 @@ class HzRuntimeImpl implements HzRuntime {
     this.effectHost = args.effectHost;
   }
 
-  private async emitEffectReconciled(rows: ReturnType<typeof reconcileEffectsOnAttach>): Promise<void> {
+  private async emitEffectReconciled(
+    rows: ReturnType<typeof reconcileEffectsOnAttach>,
+    sessionId: string,
+  ): Promise<void> {
     for (const row of rows) {
       if (!row.reconciled) continue;
-      await this.append(streamFor(this.session.id), EventTypes.effectReconciled, {
+      await this.append(streamFor(sessionId), EventTypes.effectReconciled, {
         effectId: row.effectId,
         tool: row.tool,
         callId: row.callId,
@@ -302,17 +308,22 @@ class HzRuntimeImpl implements HzRuntime {
         verdict: row.verdict,
         observeOnly: true,
       });
-      if (this.active) emit(this.active, { type: "effect.reconciled", effectId: row.effectId });
+      // A session switch during an awaited kernel RPC must not notify the new
+      // session about the old session's attachment reconciliation.
+      if (this.session.id === sessionId && this.active) {
+        emit(this.active, { type: "effect.reconciled", effectId: row.effectId });
+      }
     }
   }
 
   async attachEffectLedger(): Promise<void> {
-    const rows = reconcileEffectsOnAttach(this.workspace, this.session.id, this.effectHost);
+    const sessionId = this.session.id;
+    const rows = reconcileEffectsOnAttach(this.workspace, sessionId, this.effectHost);
     for (const row of rows) {
       if (row.priorVerdict === row.verdict && !row.reconciled) continue;
       await mirrorEffectReconcileToKernel(this.kernel, this.effectHost.getRecord(row.effectId));
     }
-    await this.emitEffectReconciled(rows);
+    await this.emitEffectReconciled(rows, sessionId);
     const settled = rows.filter((r) => r.reconciled);
     if (settled.length > 0) {
       this.note(
@@ -346,6 +357,19 @@ class HzRuntimeImpl implements HzRuntime {
 
   setApprovalHandler(fn: ApprovalHandler): void {
     this.instanceApproval = typeof fn === "function" ? fn : undefined;
+  }
+
+  /**
+   * UI/CLI mutations that bypass runTurn still obey the EffectHost gates.
+   * They have not been wired to kernel effect.execute; strict mode therefore
+   * refuses rather than silently running an ambient Bun mutation.
+   */
+  private directMutationRefusal(tool: string, args: Record<string, unknown>): string | undefined {
+    return (
+      effectReconcileBlockRefusal(this.workspace, this.session.id, tool, args, this.effectHost) ??
+      effectReconcileBlockObservePendingRefusal(this.workspace, tool, args, this.effectHost) ??
+      effectHostKernelRequireRefusal(tool, args, false)
+    );
   }
 
   /**
@@ -464,6 +488,8 @@ class HzRuntimeImpl implements HzRuntime {
   }
 
   async runGuardedShell(command: string): Promise<{ ok: boolean; output: string }> {
+    const refusal = this.directMutationRefusal("shell", { command });
+    if (refusal) return { ok: false, output: refusal };
     const shell = getTool("shell");
     if (!shell) return { ok: false, output: "the shell tool is not available" };
     const ctx: ToolContext = {
@@ -528,7 +554,7 @@ class HzRuntimeImpl implements HzRuntime {
       if (row.priorVerdict === row.verdict && !row.reconciled) continue;
       await mirrorEffectReconcileToKernel(this.kernel, this.effectHost.getRecord(row.effectId));
     }
-    await this.emitEffectReconciled(rows);
+    await this.emitEffectReconciled(rows, this.session.id);
     const settled = rows.filter((r) => r.reconciled);
     if (settled.length > 0) {
       this.note(
@@ -608,6 +634,13 @@ class HzRuntimeImpl implements HzRuntime {
     const plan = rewindPlan(this.workspace, checkpoint.id);
     if (plan.refusal !== undefined) throw new Error(plan.refusal);
     const restorable = plan.restores.filter((item) => item.restorable);
+    // Rewind restores with writeAtomic outside runTurn. Refuse the entire
+    // file+conversation rewind BEFORE any mutation when its path is blocked;
+    // otherwise the transcript could rewind while the workspace did not.
+    for (const item of restorable) {
+      const refusal = this.directMutationRefusal("write", { path: item.rel });
+      if (refusal) return `rewind refused (workspace and transcript unchanged): ${item.rel}: ${refusal}`;
+    }
     const skippedNote =
       plan.skipped.length > 0
         ? `${plan.skipped.length} change(s) cannot be put back (content not kept, or the change created the file) and were left as they are`
@@ -792,6 +825,11 @@ class HzRuntimeImpl implements HzRuntime {
     const written: string[] = [];
     const kept: string[] = [];
     for (const change of pending) {
+      const refusal = this.directMutationRefusal("write", { path: change.rel, content: change.after });
+      if (refusal) {
+        kept.push(`${change.rel}: ${refusal}`);
+        continue;
+      }
       // A staged change is a snapshot, not a lock: if the file moved on since it
       // was staged, applying would silently overwrite the newer content. The
       // change is KEPT and the reason stated — the user re-stages against the
