@@ -69,6 +69,7 @@ import { kernelEnforcesProcessSandbox } from "../core/sandbox-spawn";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
 import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
+import { wallSeconds } from "./exec-output-format";
 import { minimiseShellOutput } from "./shell";
 
 const MAX_OUTPUT = 30_000;
@@ -135,6 +136,15 @@ interface Session {
 /** The process-wide session registry (bounded by MAX_SESSIONS). */
 const sessions = new Map<string, Session>();
 
+/** Non-exited `shell_session` count for run-level terminal.run snapshots (ruling **298**). */
+export function activeShellSessionCount(): number {
+  let n = 0;
+  for (const s of sessions.values()) {
+    if (!s.exited) n += 1;
+  }
+  return n;
+}
+
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
 }
@@ -146,11 +156,6 @@ function msg(e: unknown): string {
 function numberOr(value: unknown, fallback: number): number {
   const n = typeof value === "string" ? Number(value) : value;
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-/** 0.1s-rounded wall time string, e.g. 1234ms → "1.2". */
-function wallSeconds(ms: number): string {
-  return (Math.round(ms / 100) / 10).toFixed(1);
 }
 
 export interface PtyCapabilityOptions {

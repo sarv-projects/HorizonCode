@@ -38,6 +38,9 @@
  */
 
 import type { ChatMsg } from "../contracts";
+import { pruneToolResultsForCompaction } from "./compaction-pruner";
+import type { CompactionHoldBuffer } from "./compaction-hold";
+import { summariseElidedWithHold } from "./compaction-hold";
 import { estimateTokens, FRAMING_CHARGE_TOKENS } from "./output-budget";
 
 /** The headings are contract, not prose: tests and the model both key off them. */
@@ -162,6 +165,8 @@ export interface CompactionResult {
   summary: string;
   /** One line for the UI ("" when not compacted). */
   notice: string;
+  /** True when the summary came from a staged hold buffer (hold-then-swap). */
+  holdSwap?: boolean;
 }
 
 function countByRole(messages: readonly ChatMsg[]): Record<string, number> {
@@ -432,7 +437,7 @@ export function renderPinnedBlock(pinned: PinnedConstraints): string {
 }
 
 /** Tokens in a set of messages, using the loop's own accounting. */
-function tokensIn(messages: readonly ChatMsg[]): number {
+export function tokensIn(messages: readonly ChatMsg[]): number {
   let total = 0;
   for (const message of messages) {
     total += FRAMING_CHARGE_TOKENS + estimateTokens(typeof message?.content === "string" ? message.content : "");
@@ -529,6 +534,8 @@ export function summariseElided(elided: readonly ChatMsg[], total: number, limit
 export interface CompactionOptions {
   /** Messages the provider view may hold, the loop's HISTORY_LIMIT. */
   limit: number;
+  /** When set, compaction swaps in a held elision summary when the prefix matches. */
+  holdBuffer?: CompactionHoldBuffer;
 }
 
 /** The one line the UI shows. Kept under ~250 chars so a notice stays a notice. */
@@ -543,6 +550,18 @@ export function renderCompactionNotice(result: CompactionResult): string {
   );
 }
 
+/** Elided prefix that `compactHistory` would summarise, or null when under the limit. */
+export function elidedPrefixForCompaction(messages: ChatMsg[], limit: number): readonly ChatMsg[] | null {
+  const list = Array.isArray(messages) ? messages : [];
+  const lim = Number.isFinite(limit) && limit >= 1 ? Math.floor(limit) : 1;
+  if (list.length <= lim) return null;
+  const window = list.slice(-lim);
+  while (window.length > 0 && window[0]?.role !== "user") window.shift();
+  if (window.length === 0) return null;
+  const elided = list.slice(0, list.length - window.length);
+  return elided.length > 0 ? elided : null;
+}
+
 function unchanged(messages: ChatMsg[]): CompactionResult {
   return {
     history: messages,
@@ -554,6 +573,7 @@ function unchanged(messages: ChatMsg[]): CompactionResult {
     pinned: null,
     summary: "",
     notice: "",
+    holdSwap: false,
   };
 }
 
@@ -579,7 +599,8 @@ export function compactHistory(messages: ChatMsg[], options: CompactionOptions):
   if (elided.length === 0) return unchanged(list);
 
   const pinned = pinnedConstraintsFrom(list);
-  const summary = summariseElided(elided, list.length, limit);
+  const prunedElided = pruneToolResultsForCompaction(elided);
+  const { summary, holdSwap } = summariseElidedWithHold(prunedElided, list.length, limit, options.holdBuffer);
   const first = window[0] as ChatMsg;
   // Merge rather than prepend: one user turn, so user/assistant alternation is
   // preserved and the pinned block is the first thing every request carries.
@@ -594,11 +615,12 @@ export function compactHistory(messages: ChatMsg[], options: CompactionOptions):
     compacted: true,
     dropped: elided.length,
     kept: history.length,
-    elidedTokens: tokensIn(elided),
+    elidedTokens: tokensIn(prunedElided),
     droppedByRole: countByRole(elided),
     pinned,
     summary,
     notice: "",
+    holdSwap,
   };
   result.notice = renderCompactionNotice(result);
   return result;

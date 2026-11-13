@@ -17,10 +17,17 @@
  * every byte stays exactly as it was before keying existed.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHmac } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readlinkSync, statSync } from "node:fs";
-import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, createHmac } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendJsonl } from "./jsonl-append";
+import { deleteFileInSandbox } from "./effect-host-atomic-delete";
+import { renameFileInSandbox } from "./effect-host-atomic-rename";
+import { writeBytesAtomicInSandbox } from "./effect-host-atomic-write";
+import { resolveKernelFsEditOldString } from "./effect-host-edit-repair";
+import { observeCapturedShellStreamDigest, shellExecResultDigestStable } from "./effect-evidence";
+import { assessPostimageObservation, observePostimageDigest } from "./receipt-postimage";
 import * as path from "node:path";
 import type {
   EventEnvelope,
@@ -316,24 +323,82 @@ export function loadPolicy(stateDir: string): PolicyRule[] {
 }
 
 /**
+ * Workspace root inferred from a kernel state dir spelling:
+ * canonical `…/.hz/state/kernel` or legacy `…/.hzcode/kernel`.
+ */
+export function workspaceFromKernelStateDir(stateDir: string): string {
+  const resolved = path.resolve(stateDir);
+  const parent = path.dirname(resolved);
+  if (path.basename(parent) === "state") {
+    return path.dirname(path.dirname(parent));
+  }
+  return path.dirname(parent);
+}
+
+/** Path-like tokens in a shell command (conservative; fail closed on hits). */
+function pathTokensInShellCommand(command: string): string[] {
+  const out: string[] = [];
+  const re = /(?:(?:\.\.?|~)\/|\/|\.hz(?:code)?\/)[^\s;&|<>()'"`]+/g;
+  for (const raw of command.match(re) ?? []) {
+    out.push(raw.replace(/\\+$/g, "").replace(/['"]/g, ""));
+  }
+  return out;
+}
+
+/**
+ * True when a shell command string names (or resolves into) the kernel state
+ * directory. Absolute state-dir substrings, canonical/legacy relative markers,
+ * and path-like tokens resolved against the workspace are checked. Unresolvable
+ * symlink walks count as a hit (fail closed).
+ */
+export function shellCommandReferencesKernelState(command: string, stateDir: string): boolean {
+  if (typeof command !== "string" || command.trim() === "") return false;
+  const normalized = command.replace(/\\/g, "/");
+  const stateNorm = path.resolve(stateDir).replace(/\\/g, "/");
+  if (normalized.includes(stateNorm)) return true;
+  for (const marker of [".hz/state/kernel", ".hzcode/kernel"]) {
+    if (normalized.includes(marker)) return true;
+  }
+  const workspace = workspaceFromKernelStateDir(stateDir);
+  for (const token of pathTokensInShellCommand(normalized)) {
+    const abs =
+      token.startsWith("/") || /^[A-Za-z]:\//.test(token)
+        ? path.resolve(token)
+        : path.resolve(workspace, token);
+    if (resolvedInside(abs, stateDir) !== false) return true;
+  }
+  return false;
+}
+
+/**
  * The kernel state directory is structurally protected: no fs.write may target
- * it, whatever the policy says (the policy itself lives there — a model able to
- * rewrite it governs itself). The check runs in both transports before any
- * policy or lease evaluation, resolves the target through symlinks for its
- * deepest existing ancestor (the same resolution the workspace scope uses),
- * and fails closed with the registered wire code HZ_PRECONDITION_FAILED.
- * Returns the refusal message, or undefined when the write is not protected.
+ * it, and no shell.exec may name it, whatever the policy says (the policy
+ * itself lives there — a model able to rewrite it governs itself). The check
+ * runs in both transports before any policy or lease evaluation, resolves
+ * write targets through symlinks for their deepest existing ancestor (the same
+ * resolution the workspace scope uses), and fails closed with the registered
+ * wire code HZ_PRECONDITION_FAILED. Returns the refusal message, or undefined
+ * when the action is not protected.
  */
 export function protectedPathRefusal(action: GuardAction, stateDir: string): string | undefined {
-  if (action === null || typeof action !== "object" || action.kind !== "fs.write") return undefined;
-  const target = typeof action.target === "string" ? action.target : "";
-  if (target === "") return undefined;
-  // The chain walk resolves dangling links too: a link to `<state>/policy.json`
-  // that does not exist yet still lands inside the state dir. An unresolvable
-  // walk (a link loop) is a refusal as well — undefined must never widen a write.
-  const inside = resolvedInside(path.resolve(target), stateDir);
-  if (inside === false) return undefined;
-  return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
+  if (action === null || typeof action !== "object") return undefined;
+  if (action.kind === "fs.write") {
+    const target = typeof action.target === "string" ? action.target : "";
+    if (target === "") return undefined;
+    // The chain walk resolves dangling links too: a link to `<state>/policy.json`
+    // that does not exist yet still lands inside the state dir. An unresolvable
+    // walk (a link loop) is a refusal as well — undefined must never widen a write.
+    const inside = resolvedInside(path.resolve(target), stateDir);
+    if (inside === false) return undefined;
+    return `HZ_PRECONDITION_FAILED: kernel-state-protected: fs.write target ${target} resolves inside the kernel state directory (${stateDir})`;
+  }
+  if (action.kind === "shell.exec") {
+    const target = typeof action.target === "string" ? action.target : "";
+    if (target === "") return undefined;
+    if (!shellCommandReferencesKernelState(target, stateDir)) return undefined;
+    return `HZ_PRECONDITION_FAILED: kernel-state-protected: shell.exec command references the kernel state directory (${stateDir})`;
+  }
+  return undefined;
 }
 
 /**
@@ -424,7 +489,7 @@ async function privateFile(file: string): Promise<void> {
  */
 async function appendChain(file: string, data: string): Promise<void> {
   try {
-    await appendFile(file, data, "utf8");
+    await appendJsonl(file, data);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes(file)) throw err;
@@ -848,7 +913,16 @@ export class LocalKernel {
         leaseId: input?.leaseId,
         prevHash: tail ? tail.hash : null,
       };
-      const receipt: Receipt = { ...base, hash: hashReceipt(base) };
+      // Hash the chain-stable fields only; postimage* are additive observation
+      // sidecars (EffectHost precursor) and must not diverge TS/Rust hashes.
+      const hash = hashReceipt(base);
+      const receipt: Receipt = {
+        ...base,
+        ...(input?.postimageDigest ? { postimageDigest: input.postimageDigest } : {}),
+        ...(input?.postimagePath ? { postimagePath: input.postimagePath } : {}),
+        ...(input?.effectId ? { effectId: input.effectId } : {}),
+        hash,
+      };
       await appendChain(file, canonicalJson(receipt) + "\n");
       await privateFile(file);
       await this.writeHead(file, receipt.seq, this.anchorDigest("receipt", receipt));
@@ -882,7 +956,13 @@ export class LocalKernel {
       }
       if (receipt.seq !== expected) return { ok: false, count, brokenAt: receipt.seq > 0 ? receipt.seq : expected };
       if (receipt.prevHash !== prevHash) return { ok: false, count, brokenAt: receipt.seq };
-      const { hash, ...rest } = receipt;
+      // Additive observation sidecars (effectId / postimage*) are not hashed at
+      // issue time — strip them before recompute so verify matches Rust RECEIPT_FIELDS.
+      const { hash, effectId: _effectId, postimageDigest: _pd, postimagePath: _pp, ...rest } = receipt as Receipt & {
+        effectId?: string;
+        postimageDigest?: string;
+        postimagePath?: string;
+      };
       if (hashReceipt(rest) !== hash) return { ok: false, count, brokenAt: receipt.seq };
       prevHash = hash;
       lastRecord = { hash, record: receipt as unknown as Record<string, unknown> };
@@ -905,9 +985,9 @@ export class LocalKernel {
       return { decision: "deny", reason: unknownKindRefusal(action.kind) };
     }
     // Structural, before policy and leases: the state directory holds the policy
-    // this decision comes from, so it is never a legal fs.write target.
-    // NOTE: keyed to `fs.write`, the only mutating kind shipped; a future
-    // mutating kind must be added to protectedPathRefusal too.
+    // this decision comes from, so it is never a legal fs.write / shell.exec target.
+    // NOTE: keyed to fs.write + shell.exec; a future mutating kind must be added
+    // to protectedPathRefusal too.
     const refusal = protectedPathRefusal(action, this.stateDir);
     if (refusal !== undefined) throw new Error(refusal);
     // The kernel defaults a missing/empty scope to "*" (guard.rs: scope.filter(non-empty).unwrap_or("*")).
@@ -1449,6 +1529,435 @@ export class KernelClient {
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      case "effect.execute": {
+        const effectId = String(p.effectId ?? "");
+        if (!effectId) {
+          return Promise.reject(new Error("effect.execute.effectId must be a non-empty string"));
+        }
+        const dispatch = p.dispatch as { kind?: string; spec?: Record<string, unknown> } | undefined;
+        const kind = typeof dispatch?.kind === "string" ? dispatch.kind : "";
+        const mutating = new Set([
+          "fs.patch",
+          "process.exec",
+          "process.spawn",
+          "files.write",
+          "files.patch",
+          "terminal.run",
+          "net.fetch",
+          "web.fetch",
+          "artifact.write",
+        ]);
+        if (mutating.has(kind)) {
+          return Promise.reject(
+            new Error(
+              `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "${kind}" is not implemented in the kernel; TypeScript owns real tool execution`,
+            ),
+          );
+        }
+        const kindLower = kind.toLowerCase();
+        const SHELL_STDOUT_CAP = 256 * 1024;
+        const SHELL_STDERR_CAP = 64 * 1024;
+        const pathInsideSandbox = (
+          root: string,
+          rawPath: string,
+          op: "fs.read" | "fs.write" | "fs.edit" | "fs.delete" | "fs.rename",
+        ): string => {
+          const resolvedRoot = path.resolve(root);
+          const candidate = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.join(resolvedRoot, rawPath);
+          const rootPrefix = resolvedRoot.endsWith(path.sep) ? resolvedRoot : `${resolvedRoot}${path.sep}`;
+          if (candidate !== resolvedRoot && !candidate.startsWith(rootPrefix)) {
+            throw new Error(`HZ_PRECONDITION_FAILED: effect.execute ${op} path must resolve inside sandboxRoot`);
+          }
+          return candidate;
+        };
+        if (kindLower === "fs.write") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          if (!sandboxRoot) {
+            return Promise.reject(
+              new Error(
+                `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "fs.write" is not implemented in the kernel; TypeScript owns real tool execution`,
+              ),
+            );
+          }
+          const rawPath = typeof dispatch?.spec?.path === "string" ? dispatch.spec.path : "";
+          if (!rawPath) {
+            return Promise.reject(
+              new Error("HZ_PRECONDITION_FAILED: effect.execute fs.write requires dispatch.spec.path"),
+            );
+          }
+          const spec = dispatch?.spec ?? {};
+          let payload: Buffer;
+          if (typeof spec.text === "string") {
+            payload = Buffer.from(spec.text, "utf8");
+          } else if (Array.isArray(spec.bytes)) {
+            payload = Buffer.from(spec.bytes as number[]);
+          } else if (typeof spec.bytes === "string") {
+            payload = Buffer.from(spec.bytes, "utf8");
+          } else {
+            return Promise.reject(
+              new Error(
+                "HZ_PRECONDITION_FAILED: effect.execute fs.write requires dispatch.spec.text or dispatch.spec.bytes",
+              ),
+            );
+          }
+          const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.write");
+          return writeBytesAtomicInSandbox(sandboxRoot, candidate, payload)
+            .then(() => {
+              const primary = observePostimageDigest(candidate);
+              const confirm = observePostimageDigest(candidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              const observationStable = stability.observationStable;
+              const result: KernelRequestMap["effect.execute"]["result"] = {
+                verdict: observationStable ? "settled" : "unknown",
+                effectId,
+                phases: ["allow", "execute", "observe"],
+                postimageObservationStable: observationStable,
+                ...(observationStable && primary !== undefined ? { contentDigest: primary } : {}),
+                ...(stability.confirmDigest !== undefined
+                  ? { postimageConfirmDigest: stability.confirmDigest }
+                  : {}),
+                writePath: candidate,
+              };
+              return result as unknown as KernelRequestMap[M]["result"];
+            })
+            .catch((err) => {
+            const msg = errorMessage(err);
+              if (msg.includes("HZ_PRECONDITION_FAILED")) {
+                throw err instanceof Error ? err : new Error(msg);
+              }
+              throw new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.write failed: ${msg}`);
+            });
+        }
+        if (kindLower === "fs.edit") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          if (!sandboxRoot) {
+            return Promise.reject(
+              new Error(
+                `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "fs.edit" is not implemented in the kernel; TypeScript owns real tool execution`,
+              ),
+            );
+          }
+          const rawPath = typeof dispatch?.spec?.path === "string" ? dispatch.spec.path : "";
+          const spec = dispatch?.spec ?? {};
+          const oldString =
+            typeof spec.oldString === "string"
+              ? spec.oldString
+              : typeof spec.old_string === "string"
+                ? spec.old_string
+                : "";
+          const newString =
+            typeof spec.newString === "string"
+              ? spec.newString
+              : typeof spec.new_string === "string"
+                ? spec.new_string
+                : "";
+          const hasOld = typeof spec.oldString === "string" || typeof spec.old_string === "string";
+          const hasNew = typeof spec.newString === "string" || typeof spec.new_string === "string";
+          if (!rawPath || !hasOld || !hasNew) {
+            return Promise.reject(
+              new Error(
+                "HZ_PRECONDITION_FAILED: effect.execute fs.edit requires dispatch.spec.path, oldString, and newString",
+              ),
+            );
+          }
+          const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.edit");
+          if (!existsSync(candidate)) {
+            return Promise.reject(
+              new Error("HZ_PRECONDITION_FAILED: effect.execute fs.edit requires an existing file"),
+            );
+          }
+          const content = readFileSync(candidate, "utf8");
+          const resolvedOld = resolveKernelFsEditOldString(content, oldString, process.env);
+          if (resolvedOld.ok === false) {
+            const msg =
+              resolvedOld.reason === "ambiguous"
+                ? "HZ_PRECONDITION_FAILED: effect.execute fs.edit oldString must match exactly once"
+                : "HZ_PRECONDITION_FAILED: effect.execute fs.edit oldString not found in file";
+            return Promise.reject(new Error(msg));
+          }
+          const updated =
+            content.slice(0, resolvedOld.start) + newString + content.slice(resolvedOld.end);
+          const payload = Buffer.from(updated, "utf8");
+          return writeBytesAtomicInSandbox(sandboxRoot, candidate, payload)
+            .then(() => {
+              const primary = observePostimageDigest(candidate);
+              const confirm = observePostimageDigest(candidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              const observationStable = stability.observationStable;
+              const result: KernelRequestMap["effect.execute"]["result"] = {
+                verdict: observationStable ? "settled" : "unknown",
+                effectId,
+                phases: ["allow", "execute", "observe"],
+                postimageObservationStable: observationStable,
+                ...(observationStable && primary !== undefined ? { contentDigest: primary } : {}),
+                ...(stability.confirmDigest !== undefined
+                  ? { postimageConfirmDigest: stability.confirmDigest }
+                  : {}),
+                editPath: candidate,
+              };
+              return result as unknown as KernelRequestMap[M]["result"];
+            })
+            .catch((err) => {
+              const msg = errorMessage(err);
+              if (msg.includes("HZ_PRECONDITION_FAILED")) {
+                throw err instanceof Error ? err : new Error(msg);
+              }
+              throw new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.edit failed: ${msg}`);
+            });
+        }
+        if (kindLower === "fs.delete") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          if (!sandboxRoot) {
+            return Promise.reject(
+              new Error(
+                `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "fs.delete" is not implemented in the kernel; TypeScript owns real tool execution`,
+              ),
+            );
+          }
+          const rawPath = typeof dispatch?.spec?.path === "string" ? dispatch.spec.path : "";
+          if (!rawPath) {
+            return Promise.reject(
+              new Error("HZ_PRECONDITION_FAILED: effect.execute fs.delete requires dispatch.spec.path"),
+            );
+          }
+          const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.delete");
+          const missing = (): boolean => !existsSync(candidate);
+          return deleteFileInSandbox(sandboxRoot, candidate)
+            .then(() => {
+              const observationStable = missing() && missing();
+              const emptyDigest = sha256Hex("");
+              const result: KernelRequestMap["effect.execute"]["result"] = {
+                verdict: observationStable ? "settled" : "unknown",
+                effectId,
+                phases: ["allow", "execute", "observe"],
+                postimageObservationStable: observationStable,
+                ...(observationStable ? { contentDigest: emptyDigest } : {}),
+                deletePath: candidate,
+              };
+              return result as unknown as KernelRequestMap[M]["result"];
+            })
+            .catch((err) => {
+              const msg = errorMessage(err);
+              if (msg.includes("HZ_PRECONDITION_FAILED")) {
+                throw err instanceof Error ? err : new Error(msg);
+              }
+              throw new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.delete failed: ${msg}`);
+            });
+        }
+        if (kindLower === "fs.rename") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          if (!sandboxRoot) {
+            return Promise.reject(
+              new Error(
+                `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "fs.rename" is not implemented in the kernel; TypeScript owns real tool execution`,
+              ),
+            );
+          }
+          const rawFrom = typeof dispatch?.spec?.from === "string" ? dispatch.spec.from : "";
+          const rawTo = typeof dispatch?.spec?.to === "string" ? dispatch.spec.to : "";
+          if (!rawFrom || !rawTo) {
+            return Promise.reject(
+              new Error("HZ_PRECONDITION_FAILED: effect.execute fs.rename requires dispatch.spec.from and spec.to"),
+            );
+          }
+          const fromCandidate = pathInsideSandbox(sandboxRoot, rawFrom, "fs.rename");
+          const toCandidate = pathInsideSandbox(sandboxRoot, rawTo, "fs.rename");
+          return renameFileInSandbox(sandboxRoot, fromCandidate, toCandidate)
+            .then(() => {
+              const primary = observePostimageDigest(toCandidate);
+              const confirm = observePostimageDigest(toCandidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              const observationStable = stability.observationStable;
+              const result: KernelRequestMap["effect.execute"]["result"] = {
+                verdict: observationStable ? "settled" : "unknown",
+                effectId,
+                phases: ["allow", "execute", "observe"],
+                postimageObservationStable: observationStable,
+                ...(observationStable && primary !== undefined ? { contentDigest: primary } : {}),
+                ...(stability.confirmDigest !== undefined
+                  ? { postimageConfirmDigest: stability.confirmDigest }
+                  : {}),
+                renameToPath: toCandidate,
+              };
+              return result as unknown as KernelRequestMap[M]["result"];
+            })
+            .catch((err) => {
+              const msg = errorMessage(err);
+              if (msg.includes("HZ_PRECONDITION_FAILED")) {
+                throw err instanceof Error ? err : new Error(msg);
+              }
+              throw new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.rename failed: ${msg}`);
+            });
+        }
+        if (kindLower === "shell.exec") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          if (!sandboxRoot) {
+            return Promise.reject(
+              new Error(
+                `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "shell.exec" is not implemented in the kernel; TypeScript owns real tool execution`,
+              ),
+            );
+          }
+          const spec = dispatch?.spec ?? {};
+          const argvRaw = spec.argv;
+          if (!Array.isArray(argvRaw) || argvRaw.length === 0) {
+            return Promise.reject(
+              new Error("HZ_PRECONDITION_FAILED: effect.execute shell.exec requires dispatch.spec.argv (array)"),
+            );
+          }
+          const argv: string[] = [];
+          for (let i = 0; i < argvRaw.length; i += 1) {
+            const item = argvRaw[i];
+            if (typeof item !== "string" || item === "") {
+              return Promise.reject(
+                new Error(`HZ_PRECONDITION_FAILED: effect.execute shell.exec spec.argv[${i}] must be a non-empty string`),
+              );
+            }
+            if (/[\0\n\r]/.test(item)) {
+              return Promise.reject(
+                new Error(
+                  `HZ_PRECONDITION_FAILED: effect.execute shell.exec spec.argv[${i}] must not contain control characters`,
+                ),
+              );
+            }
+            argv.push(item);
+          }
+          let shellCwd: string;
+          try {
+            const cwdRaw = typeof spec.cwd === "string" && spec.cwd !== "" ? spec.cwd : ".";
+            shellCwd = pathInsideSandbox(sandboxRoot, cwdRaw, "fs.read");
+          } catch (err) {
+            return Promise.reject(err instanceof Error ? err : new Error(errorMessage(err)));
+          }
+          try {
+            const proc = spawnSync(argv[0], argv.slice(1), {
+              cwd: shellCwd,
+              env: { PATH: "/usr/bin:/bin", HOME: shellCwd, LANG: "C.UTF-8" },
+              encoding: "buffer",
+              maxBuffer: SHELL_STDOUT_CAP + SHELL_STDERR_CAP,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            if (proc.error) {
+              return Promise.reject(
+                new Error(`HZ_PRECONDITION_FAILED: effect.execute shell.exec failed: ${proc.error.message}`),
+              );
+            }
+            if (proc.status === null) {
+              return Promise.reject(
+                new Error("HZ_PRECONDITION_FAILED: effect.execute shell.exec process terminated by signal"),
+              );
+            }
+            const stdoutBuf = Buffer.isBuffer(proc.stdout) ? proc.stdout : Buffer.from([]);
+            const stderrBuf = Buffer.isBuffer(proc.stderr) ? proc.stderr : Buffer.from([]);
+            const stdoutTruncated = stdoutBuf.length > SHELL_STDOUT_CAP;
+            const stderrTruncated = stderrBuf.length > SHELL_STDERR_CAP;
+            const stdout = stdoutTruncated ? stdoutBuf.subarray(0, SHELL_STDOUT_CAP) : stdoutBuf;
+            const stderr = stderrTruncated ? stderrBuf.subarray(0, SHELL_STDERR_CAP) : stderrBuf;
+            const stdoutObs = observeCapturedShellStreamDigest(stdout);
+            const stderrObs = observeCapturedShellStreamDigest(stderr);
+            const resultDigestStable = shellExecResultDigestStable(stdoutObs, stderrObs);
+            const result: KernelRequestMap["effect.execute"]["result"] = {
+              verdict: resultDigestStable ? "settled" : "unknown",
+              effectId,
+              phases: ["allow", "execute", "observe"],
+              exitCode: proc.status,
+              resultDigestStable,
+              shellCwd,
+              stdoutTruncated,
+              stderrTruncated,
+              ...(stdoutObs.observationStable && stdoutObs.digest ? { stdoutDigest: stdoutObs.digest } : {}),
+              ...(stderrObs.observationStable && stderrObs.digest ? { stderrDigest: stderrObs.digest } : {}),
+              ...(stdoutObs.confirmDigest ? { stdoutConfirmDigest: stdoutObs.confirmDigest } : {}),
+              ...(stderrObs.confirmDigest ? { stderrConfirmDigest: stderrObs.confirmDigest } : {}),
+            };
+            return Promise.resolve(result) as unknown as Promise<KernelRequestMap[M]["result"]>;
+          } catch (err) {
+            return Promise.reject(
+              new Error(`HZ_PRECONDITION_FAILED: effect.execute shell.exec failed: ${errorMessage(err)}`),
+            );
+          }
+        }
+        if (kindLower === "fs.read") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          const rawPath = typeof dispatch?.spec?.path === "string" ? dispatch.spec.path : "";
+          if (!sandboxRoot || !rawPath) {
+            return Promise.reject(
+              new Error(
+                "HZ_PRECONDITION_FAILED: effect.execute fs.read requires sandboxRoot and dispatch.spec.path",
+              ),
+            );
+          }
+          let candidate: string;
+          try {
+            candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.read");
+          } catch (err) {
+            return Promise.reject(err instanceof Error ? err : new Error(errorMessage(err)));
+          }
+          try {
+            const bytes = readFileSync(candidate);
+            const contentDigest = createHash("sha256").update(bytes).digest("hex");
+            const result: KernelRequestMap["effect.execute"]["result"] = {
+              verdict: "settled",
+              effectId,
+              phases: ["allow", "execute", "observe"],
+              contentDigest,
+              readPath: candidate,
+            };
+            return Promise.resolve(result) as unknown as Promise<KernelRequestMap[M]["result"]>;
+          } catch (err) {
+            return Promise.reject(
+              new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.read failed: ${errorMessage(err)}`),
+            );
+          }
+        }
+        const hermetic = new Set(["pure", "echo", "test"]);
+        if (!hermetic.has(kindLower)) {
+          return Promise.reject(
+            new Error(
+              `HZ_PRECONDITION_FAILED: effect.execute dispatch kind "${kind}" is unknown; only hermetic pure/echo/test/fs.read/fs.write/fs.edit/shell.exec (with sandboxRoot) are supported`,
+            ),
+          );
+        }
+        if (typeof p.sandboxRoot === "string" && p.sandboxRoot) {
+          return Promise.reject(
+            new Error(
+              "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot is only valid for fs.read, fs.write, fs.edit, and shell.exec",
+            ),
+          );
+        }
+        const result: KernelRequestMap["effect.execute"]["result"] = {
+          verdict: "settled",
+          effectId,
+          phases: ["allow", "execute", "observe"],
+          ...(kindLower === "echo" && typeof dispatch?.spec?.echo === "string"
+            ? { echo: dispatch.spec.echo }
+            : {}),
+        };
+        return Promise.resolve(result) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      }
+      case "effect.reconcile": {
+        const reconcile = p as KernelRequestMap["effect.reconcile"]["params"];
+        const phases = Array.isArray(reconcile.phases) ? reconcile.phases : [];
+        const hasAllow = phases.includes("allow");
+        const hasExecute = phases.includes("execute");
+        const hasObserve = phases.includes("observe");
+        if (!hasAllow || !hasExecute || !hasObserve) {
+          return Promise.resolve({ verdict: "unknown" }) as unknown as Promise<KernelRequestMap[M]["result"]>;
+        }
+        const receiptId = typeof reconcile.receiptId === "string" ? reconcile.receiptId : "";
+        const receiptSeq = reconcile.receiptSeq;
+        if (!receiptId || receiptSeq === undefined) {
+          return Promise.resolve({ verdict: "unknown" }) as unknown as Promise<KernelRequestMap[M]["result"]>;
+        }
+        if (
+          reconcile.resultDigestStable === false ||
+          reconcile.postimageMissing === true ||
+          reconcile.postimageObservationStable === false
+        ) {
+          return Promise.resolve({ verdict: "unknown" }) as unknown as Promise<KernelRequestMap[M]["result"]>;
+        }
+        return Promise.resolve({ verdict: "settled" }) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      }
       default:
         return Promise.reject(new Error(`unsupported kernel method: ${String(method)}`));
     }
@@ -1506,8 +2015,8 @@ export class KernelClient {
    */
   async checkGuard(action: GuardAction, scope?: PolicyScope, leases?: Lease[], sessionId?: string): Promise<GuardDecision> {
     // Structural, before any guard.check request: the trusted transport must
-    // refuse a protected fs.write itself, and the Rust kernel refuses it again
-    // on its side (defense in depth).
+    // refuse a protected fs.write / shell.exec itself, and the Rust kernel
+    // refuses it again on its side (defense in depth).
     const refusal = protectedPathRefusal(action, this.stateDir);
     if (refusal !== undefined) throw new Error(refusal);
     return this.rpc(
@@ -1547,6 +2056,20 @@ export class KernelClient {
     opts: { allowPartial?: boolean; sandboxPermissions?: KernelRequestMap["sandbox.report"]["params"]["sandboxPermissions"]; justification?: string } = {},
   ): Promise<KernelRequestMap["sandbox.report"]["result"]> {
     return this.rpc("sandbox.report", { mode, ...opts });
+  }
+
+  /** Kernel hermetic effect.execute stub (ruling 243, sandboxed fs/shell 267/275/277/278); Bun owns live tools. */
+  async executeEffect(
+    params: KernelRequestMap["effect.execute"]["params"],
+  ): Promise<KernelRequestMap["effect.execute"]["result"]> {
+    return this.rpc("effect.execute", params);
+  }
+
+  /** EffectHost settle mirror (ruling **261**); TS verdict remains authoritative on failure. */
+  async reconcileEffect(
+    params: KernelRequestMap["effect.reconcile"]["params"],
+  ): Promise<KernelRequestMap["effect.reconcile"]["result"]> {
+    return this.rpc("effect.reconcile", params);
   }
 
   /** Kill the kernel child (when any) and release the client. */

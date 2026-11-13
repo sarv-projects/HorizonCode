@@ -111,48 +111,68 @@ function parseBraceObject(body: string): Record<string, unknown> {
   return out;
 }
 
+function parseGemmaInner(
+  inner: string,
+  allowed: ReadonlySet<string>,
+): { call?: ParsedGemmaToolCall; error?: string } {
+  const head = /^call:([A-Za-z_]\w*)\{([\s\S]*)\}$/.exec(inner);
+  if (!head) {
+    const loose = /^call:([A-Za-z_]\w*)\{([\s\S]*)$/.exec(inner);
+    if (!loose) return { error: "gemma tool block: malformed call head" };
+    const name = loose[1];
+    if (!allowed.has(name)) return { error: `gemma tool block: unknown tool ${JSON.stringify(name)}` };
+    return { call: { name, args: parseBraceObject(loose[2]) } };
+  }
+  const name = head[1];
+  if (!allowed.has(name)) return { error: `gemma tool block: unknown tool ${JSON.stringify(name)}` };
+  return { call: { name, args: parseBraceObject(head[2]) } };
+}
+
+/**
+ * Scan `buffer` from `fromIndex` for closed Gemma `<|tool_call>…<tool_call|>` blocks only.
+ * Stops at the first incomplete opener (fail-closed for partial streams).
+ */
+export function drainCompleteGemmaToolCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedGemmaToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedGemmaToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const open = buffer.indexOf(GEMMA_CALL_OPEN, i);
+    if (open < 0) break;
+    const bodyStart = open + GEMMA_CALL_OPEN.length;
+    const close = findClose(buffer, bodyStart);
+    if (close < 0) break;
+    const blockEnd = close + GEMMA_CALL_CLOSE.length;
+    const inner = buffer.slice(bodyStart, close).trim();
+    const parsed = parseGemmaInner(inner, allowed);
+    if (parsed.error) errors.push(parsed.error);
+    else if (parsed.call) calls.push(parsed.call);
+    i = blockEnd;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse complete Gemma 4 `<|tool_call>…<tool_call|>` blocks. */
 export function parseGemmaToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedGemmaToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedGemmaToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteGemmaToolCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
   let searchFrom = 0;
-  while (searchFrom < text.length) {
+  while (searchFrom < nextIndex) {
     const open = text.indexOf(GEMMA_CALL_OPEN, searchFrom);
     if (open < 0) break;
     const bodyStart = open + GEMMA_CALL_OPEN.length;
     const close = findClose(text, bodyStart);
     if (close < 0) break;
-    const block = text.slice(open, close + GEMMA_CALL_CLOSE.length);
-    consumed.push(block);
+    consumed.push(text.slice(open, close + GEMMA_CALL_CLOSE.length));
     searchFrom = close + GEMMA_CALL_CLOSE.length;
-    const inner = text.slice(bodyStart, close).trim();
-    const head = /^call:([A-Za-z_]\w*)\{([\s\S]*)\}$/.exec(inner);
-    if (!head) {
-      // Tolerate missing final brace: call:NAME{body
-      const loose = /^call:([A-Za-z_]\w*)\{([\s\S]*)$/.exec(inner);
-      if (!loose) {
-        errors.push("gemma tool block: malformed call head");
-        continue;
-      }
-      const name = loose[1];
-      if (!allowed.has(name)) {
-        errors.push(`gemma tool block: unknown tool ${JSON.stringify(name)}`);
-        continue;
-      }
-      calls.push({ name, args: parseBraceObject(loose[2]) });
-      continue;
-    }
-    const name = head[1];
-    if (!allowed.has(name)) {
-      errors.push(`gemma tool block: unknown tool ${JSON.stringify(name)}`);
-      continue;
-    }
-    calls.push({ name, args: parseBraceObject(head[2]) });
   }
   for (const block of consumed) rest = rest.replace(block, "");
   return { calls, rest: rest.trim(), errors };

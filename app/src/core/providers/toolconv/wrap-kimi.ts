@@ -1,31 +1,42 @@
 /**
- * wrap-kimi.ts — turn assistant text into tool_call events after the stream ends.
+ * wrap-kimi.ts — turn assistant text into tool_call events when a Kimi section closes.
  */
 
 import { randomUUID } from "node:crypto";
 import type { Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../../contracts";
-import { parseKimiToolCalls, renderKimiToolInstructions } from "./kimi";
+import { drainCompleteKimiToolCalls, renderKimiToolInstructions } from "./kimi";
+import { prepareInnerTextToolRequest } from "./wrap-shared";
 
 function allowedToolNames(tools: ToolSpec[]): ReadonlySet<string> {
   return new Set(tools.map((t) => t.name));
 }
 
-/** Wrap a text-only provider: Kimi section markers become `tool_call` events on `done`. */
+/** Wrap a text-only provider: Kimi section markers become `tool_call` events when closed. */
 export function wrapKimiToolProvider(inner: Provider): Provider {
   return {
     name: inner.name,
     async *stream(req: ProviderRequest): AsyncIterable<ProviderEvent> {
       const allowed = allowedToolNames(req.tools);
-      const innerReq: ProviderRequest = {
-        ...req,
-        system: req.system + "\n\n" + renderKimiToolInstructions(req.tools),
-        tools: [],
-      };
+      const innerReq = prepareInnerTextToolRequest(req, "kimi", renderKimiToolInstructions);
       let buffer = "";
+      let scanFrom = 0;
+      let toolCallCount = 0;
       let doneEvent: Extract<ProviderEvent, { type: "done" }> | undefined;
       for await (const event of inner.stream(innerReq)) {
         if (event.type === "text") {
           buffer += event.text;
+          const drained = drainCompleteKimiToolCalls(buffer, allowed, scanFrom);
+          scanFrom = drained.nextIndex;
+          for (const message of drained.errors) yield { type: "notice", message };
+          for (const call of drained.calls) {
+            toolCallCount++;
+            yield {
+              type: "tool_call",
+              id: call.callId ?? `kimi_${randomUUID()}`,
+              name: call.name,
+              arguments: JSON.stringify(call.args),
+            };
+          }
           yield event;
         } else if (event.type === "thinking" || event.type === "notice" || event.type === "quirks") {
           yield event;
@@ -42,9 +53,10 @@ export function wrapKimiToolProvider(inner: Provider): Provider {
           return;
         }
       }
-      const { calls, errors } = parseKimiToolCalls(buffer, allowed);
-      for (const message of errors) yield { type: "notice", message };
-      for (const call of calls) {
+      const tail = drainCompleteKimiToolCalls(buffer, allowed, scanFrom);
+      for (const message of tail.errors) yield { type: "notice", message };
+      for (const call of tail.calls) {
+        toolCallCount++;
         yield {
           type: "tool_call",
           id: call.callId ?? `kimi_${randomUUID()}`,
@@ -52,7 +64,7 @@ export function wrapKimiToolProvider(inner: Provider): Provider {
           arguments: JSON.stringify(call.args),
         };
       }
-      const stopReason = calls.length > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
+      const stopReason = toolCallCount > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
       yield { type: "done", stopReason, usage: doneEvent?.usage };
     },
   };

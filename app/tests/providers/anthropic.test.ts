@@ -460,6 +460,55 @@ describe("anthropic request shape", () => {
     });
   });
 
+  test("HZ_ANTHROPIC_CACHE_SYSTEM=1 sends system as a cached block array", async () => {
+    const prev = process.env.HZ_ANTHROPIC_CACHE_SYSTEM;
+    process.env.HZ_ANTHROPIC_CACHE_SYSTEM = "1";
+    try {
+      await withServer(() => sseResponse(textTurn()), async (server) => {
+        await collect(providerFor(server), makeRequest({ system: "cached slab" }));
+        const body = server.requests[0]!.body as { system: unknown };
+        expect(body.system).toEqual([{ type: "text", text: "cached slab", cache_control: { type: "ephemeral" } }]);
+      });
+    } finally {
+      if (prev === undefined) delete process.env.HZ_ANTHROPIC_CACHE_SYSTEM;
+      else process.env.HZ_ANTHROPIC_CACHE_SYSTEM = prev;
+    }
+  });
+
+  test("HZ_ANTHROPIC_CACHE_BREAKPOINTS=1 stamps message cache_control", async () => {
+    const prev = process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
+    process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = "1";
+    try {
+      await withServer(() => sseResponse(textTurn()), async (server) => {
+        await collect(
+          providerFor(server),
+          makeRequest({
+            system: "sys",
+            messages: [
+              { role: "user", content: "hello" },
+              {
+                role: "assistant",
+                content: "",
+                toolCalls: [{ id: "toolu_1", name: "read", arguments: "{}" }],
+              },
+              { role: "tool", content: "file body", toolCallId: "toolu_1", toolName: "read" },
+            ],
+          }),
+        );
+        const body = server.requests[0]!.body as {
+          system: unknown;
+          messages: Array<{ content: Array<Record<string, unknown>> }>;
+        };
+        expect(body.system).toEqual([{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }]);
+        const toolResult = body.messages[2]!.content[0]!;
+        expect(toolResult.cache_control).toEqual({ type: "ephemeral" });
+      });
+    } finally {
+      if (prev === undefined) delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
+      else process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = prev;
+    }
+  });
+
   test("defaults max_tokens to 4096, or to the provider setting when there is one", async () => {
     await withServer(() => sseResponse(textTurn()), async (server) => {
       await collect(providerFor(server));

@@ -35,7 +35,8 @@ const READ_ONLY_FORBIDDEN = ["write", "edit", "shell", "apply_patch", "ast_edit"
 describe("built-in presets", () => {
   test("explore, plan, code and review exist; read-only ones hold no mutating tool; none holds agent", () => {
     const by = new Map(BUILTIN_PRESETS.map((p) => [p.name, p]));
-    expect([...by.keys()].sort()).toEqual(["code", "explore", "plan", "review"]);
+    expect([...by.keys()].sort()).toEqual(["code", "explore", "never", "plan", "review"]);
+    expect(by.get("never")!.tools).toEqual(["grep", "glob"]);
     for (const name of ["explore", "plan", "review"]) {
       const tools = by.get(name)!.tools;
       expect(tools).toEqual(expect.arrayContaining(["read", "grep", "glob", "repo_map", "ast_search", "lsp"]));

@@ -78,6 +78,10 @@ export const EventTypes = {
   approvalRequest: "approval.request",
   approvalDecision: "approval.decision",
   receiptIssued: "receipt.issued",
+  /** Literal hz.* settle observation (EffectHost; docs/28). */
+  effectSettled: "hz.effect.settled",
+  effectUnknown: "hz.effect.unknown",
+  effectReconciled: "hz.effect.reconciled",
   error: "error",
 } as const;
 export type EventType = (typeof EventTypes)[keyof typeof EventTypes] | string;
@@ -334,6 +338,8 @@ export interface EnforcementReport {
   dimensions: SandboxDimensionReport[];
   unavailableReason?: string;
   hostCapabilities?: SandboxHostCapabilities;
+  /** Cross-platform honesty — informational only; never implies enforcement. */
+  platformNotes?: string[];
 }
 /**
  * The typed SANDBOX_UNAVAILABLE outcome (status "sandbox_unavailable"): a mode
@@ -345,6 +351,7 @@ export interface SandboxUnavailable {
   mode: SandboxMode;
   reason: string; // typed SANDBOX_UNAVAILABLE reason
   hostCapabilities?: SandboxHostCapabilities;
+  platformNotes?: string[];
 }
 /** The sandbox.report outcome: either a report (possibly partial) or unavailable. */
 export type EnforcementOutcome = EnforcementReport | SandboxUnavailable;
@@ -378,6 +385,24 @@ export interface ReceiptInput {
   argsDigest: string; // sha256 hex of canonical JSON of args
   resultDigest: string; // sha256 hex of result output
   leaseId?: string;
+  /**
+   * Additive (EffectHost precursor): sha256 of bytes independently re-read from
+   * the workspace after a mutating file tool. Absent when observation is skipped
+   * or impossible. Does not replace resultDigest.
+   */
+  postimageDigest?: string;
+  /** Absolute path that was hashed for postimageDigest, when present. */
+  postimagePath?: string;
+  /**
+   * Additive (EffectHost precursor): correlates this receipt with the in-run
+   * allow→execute→observe ledger. Not part of `hashReceipt`.
+   */
+  effectId?: string;
+  /**
+   * Additive (R172): child spawn/subagent effect ids observed for this parent receipt.
+   * Not part of `hashReceipt`.
+   */
+  childEffectIds?: string[];
 }
 export interface Receipt extends ReceiptInput {
   id: string;
@@ -395,6 +420,12 @@ export interface ApprovalRequest {
   kind: GuardKind | "other";
   /** Advisory guardian line (`· guardian: flag - reason`); additive, never changes the decision. */
   guardian?: string;
+  /** EffectHost id for the guarded tool call (docs/28 ruling 254); prompt-only. */
+  effectId?: string;
+  /** Kernel lease covering the action when known at ask time; prompt-only. */
+  leaseId?: string;
+  /** Dispatch tool name (e.g. `shell`, `write`); prompt-only linkage to the call card. */
+  tool?: string;
 }
 export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
 
@@ -430,6 +461,8 @@ export interface ToolResult {
   ok: boolean;
   output: string;
   error?: string;
+  /** Child effect ids spawned during this tool (e.g. `agent` / subagent; R172). */
+  childEffectIds?: string[];
 }
 
 /**
@@ -496,7 +529,31 @@ export interface ToolSpec {
 export interface Usage {
   inputTokens?: number;
   outputTokens?: number;
+  /** Provider-reported cache creation tokens (Anthropic / OpenAI prompt cache), when present. */
+  cacheCreationInputTokens?: number;
+  /** Provider-reported cache read tokens, when present. */
+  cacheReadInputTokens?: number;
 }
+
+/**
+ * Stable provider failure taxonomy (additive; docs/30 §8 #12, deepseek-harness +
+ * codex convergence). Route retry and compaction on `code`, not message text.
+ */
+export type ProviderFailureCode =
+  | "NO_ADAPTER"
+  | "MISSING_CREDENTIAL"
+  | "INVALID_CREDENTIAL"
+  | "AUTH"
+  | "RATE_LIMIT"
+  | "OVERLOADED"
+  | "TRANSIENT"
+  | "CONTEXT_WINDOW_EXCEEDED"
+  | "QUOTA"
+  | "ACCOUNT_QUOTA"
+  | "EMPTY_RESPONSE"
+  | "IMAGE_OFFLOAD_REQUIRED"
+  | "UNKNOWN";
+
 export type ProviderEvent =
   | { type: "text"; text: string }
   // ADDITIVE (TUI part 3, C3): streamed reasoning (openai-compatible
@@ -508,13 +565,15 @@ export type ProviderEvent =
   /** Per-request provider quirk ids (forge T-8; docs/33 §5.10). */
   | { type: "quirks"; applied: string[] }
   | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: ProviderFailureCode };
 export interface ProviderRequest {
   model: string;
   system: string;
   messages: ChatMsg[];
   tools: ToolSpec[];
   maxTokens?: number;
+  /** C-11 reduced: explicit effort only (`reasoning_effort` on OpenAI-compatible hosts). */
+  reasoningEffort?: string;
   signal: AbortSignal;
 }
 export interface Provider {
@@ -587,8 +646,22 @@ export type RuntimeEvent =
       // `output` (bounded combined stdout/stderr, trailing `exit N` line
       // removed) and `exitCode` for shell tools, `count` for read/grep/glob. Old consumers ignore it.
       detail?: ToolCardDetail;
+      // ADDITIVE (docs/28 ruling 250): EffectHost linkage for the ToolCallCard.
+      // `effectId` from tool start; `receiptId` / `receiptSeq` after issuance.
+      effectId?: string;
+      receiptId?: string;
+      receiptSeq?: number;
     }
   | { type: "notice"; message: string }
+  // ADDITIVE (docs/28 ruling 235): EffectHost unknown/reconciled for TUI status.
+  // Harness-side facade events only; the kernel catalogue is unchanged.
+  | { type: "effect.unknown"; effectId: string; tool: string; receiptId?: string; callId?: string }
+  | { type: "effect.reconciled"; effectId: string }
+  // ADDITIVE (docs/30 §8 #8 / C-9): mid-turn steer admitted to the transcript.
+  // `text` is the raw user body (display); the stored message carries the
+  // synthetic envelope. Ignored by consumers that do not render interjections.
+  | { type: "interjection.queued"; text: string }
+  | { type: "interjection.admitted"; text: string }
   | { type: "error"; message: string }
   | ({ type: "context.usage" } & ContextUsage)
   // ADDITIVE (FEAT-003): the per-turn aggregated file diff. This is a
@@ -665,6 +738,17 @@ export interface Runtime {
   readonly providerName: string;
   readonly kernelMode: KernelMode;
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit?: RunExit }>;
+  /**
+   * Mid-turn steer (C-9 reduced): queue user text for the in-flight turn.
+   * Returns `accepted: false` when no turn is running.
+   */
+  interject?(text: string, opts?: { images?: readonly unknown[] }): {
+    accepted: boolean;
+    reason?: "idle" | "empty" | "closed";
+    imagesRefused?: true;
+  };
+  /** True while `send()` is in flight for this runtime instance. */
+  turnInFlight?(): boolean;
   abort(): void;
   close(): Promise<void>;
 }
@@ -766,6 +850,71 @@ export interface KernelRequestMap {
     };
     result: EnforcementOutcome;
   };
+  /** EffectHost settle mirror — phases + receipt facts → settled|unknown. */
+  "effect.reconcile": {
+    params: {
+      phases: Array<"allow" | "execute" | "observe">;
+      receiptId?: string;
+      receiptSeq?: number;
+      /** When `false`, observe evidence disagreed with tool output (**257**, kernel **260**). */
+      resultDigestStable?: boolean;
+      /** When `true`, expected postimage file was absent at observe (**257**, kernel **260**). */
+      postimageMissing?: boolean;
+      /** False when independent postimage re-read digests disagree (ruling **279**). */
+      postimageObservationStable?: boolean;
+    };
+    result: { verdict: "settled" | "unknown" };
+  };
+  /**
+   * Ruling 243 + **267** + **275** + **277** + **278** — kernel execute stub only. Mutating dispatch kinds
+   * fail closed (`HZ_PRECONDITION_FAILED`); hermetic `pure`/`echo`, sandboxed `fs.read`,
+   * sandboxed `fs.write`, sandboxed `fs.edit`, sandboxed `fs.delete`, sandboxed `fs.rename`, and sandboxed `shell.exec` (caller `sandboxRoot`)
+   * record allow→execute→observe in-kernel. NOT netns/Landlock shell-net enforced. Bun still owns
+   * unrestricted workspace writes, edits, and ambient shell.
+   */
+  "effect.execute": {
+    params: {
+      effectId: string;
+      dispatch: { kind: string; spec?: Record<string, unknown> };
+      leaseId?: string;
+      /** Required for `fs.read` / `fs.write` / `fs.edit` / `fs.delete` / `fs.rename` / `shell.exec`; paths/cwd must resolve inside this root only. */
+      sandboxRoot?: string;
+    };
+    result: {
+      verdict: "settled" | "unknown";
+      effectId: string;
+      phases: Array<"allow" | "execute" | "observe">;
+      echo?: string;
+      /** sha256 hex of file bytes after stable double-read (**267**, **275**, **279**). Omitted when unstable. */
+      contentDigest?: string;
+      /** Present when postimage double-read disagreed (fail-closed; **279**). */
+      postimageObservationStable?: boolean;
+      postimageConfirmDigest?: string;
+      readPath?: string;
+      writePath?: string;
+      editPath?: string;
+      deletePath?: string;
+      renameToPath?: string;
+      /** Hermetic argv-only exec (**278**); advisory — not netns/Landlock enforced. */
+      exitCode?: number;
+      stdoutDigest?: string;
+      stderrDigest?: string;
+      stdoutConfirmDigest?: string;
+      stderrConfirmDigest?: string;
+      /** Independent double-hash on capped stdout/stderr (**314**); false → `unknown` at reconcile. */
+      resultDigestStable?: boolean;
+      shellCwd?: string;
+      stdoutTruncated?: boolean;
+      stderrTruncated?: boolean;
+    };
+  };
+  /** §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced). */
+  "egress.connect.listen": {
+    params: { action?: "start" | "stop"; port?: number; forward?: boolean; tlsPeek?: boolean };
+    result:
+      | { url: string; port: number; forward: boolean; tlsPeek?: boolean }
+      | { stopped: boolean; port?: number; reason?: string };
+  };
 }
 
 export type KernelMethod = keyof KernelRequestMap;
@@ -781,6 +930,9 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "guard.grant",
   "guard.allowlist.amend",
   "sandbox.report",
+  "effect.reconcile",
+  "effect.execute",
+  "egress.connect.listen",
 ];
 
 /* --------------------------- Server protocol --------------------------- */

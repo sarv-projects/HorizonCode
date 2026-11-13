@@ -264,6 +264,16 @@ fn sha256_hex(s: &str) -> String {
         .collect()
 }
 
+fn sha256_bytes(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
+}
+
 /// Test-side HMAC-SHA256 (RFC 2104): an independent statement of the keyed
 /// anchor format, so the kernel's own canon.rs is never its own witness.
 fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
@@ -2999,6 +3009,76 @@ fn malformed_egress_policy_is_a_typed_refusal() {
     );
 }
 
+/* ---------------------- 8b. egress CONNECT listener stub ---------------------- */
+
+// §5.2 reduced (ruling 234): kernel loopback CONNECT consults egress.json; 403 on
+// deny. Hermetic — no real internet. Does NOT prove shell-net enforced.
+
+fn write_egress_connect_policy(dir: &Path, doc: Value) {
+    fs::write(dir.join("egress.json"), serde_json::to_string(&doc).unwrap()).unwrap();
+}
+
+fn kernel_connect_status(port: u16, authority: &str) -> u16 {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let req = format!("CONNECT {} HTTP/1.1\r\nHost: {}\r\n\r\n", authority, authority);
+    for attempt in 0..40 {
+        let mut stream = match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => s,
+            Err(_) => {
+                sleep(Duration::from_millis(25));
+                continue;
+            }
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        if stream.write_all(req.as_bytes()).and_then(|_| stream.flush()).is_err() {
+            sleep(Duration::from_millis(25));
+            continue;
+        }
+        let mut buf = [0u8; 512];
+        let status = match stream.read(&mut buf) {
+            Ok(0) => 0,
+            Ok(n) => {
+                let head = std::str::from_utf8(&buf[..n]).unwrap_or_default();
+                head.lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0)
+            }
+            Err(_) => 0,
+        };
+        if status != 0 || attempt + 1 >= 40 {
+            return status;
+        }
+        sleep(Duration::from_millis(25));
+    }
+    0
+}
+
+#[test]
+fn egress_connect_listen_denies_and_allows_without_enforcement_claim() {
+    let dir = TempDir::new("egress-connect-kernel");
+    write_egress_connect_policy(
+        dir.path(),
+        json!([
+            { "host": "deny.kernel.test", "decision": "deny" },
+            { "host": "allow.kernel.test", "decision": "allow" }
+        ]),
+    );
+    let mut kernel = Kernel::start(dir.path());
+    let started = kernel.ok(
+        "egress.connect.listen",
+        json!({ "action": "start", "port": 0, "forward": false }),
+    );
+    let port = started["port"].as_u64().expect("port") as u16;
+    sleep(Duration::from_millis(50));
+    assert_eq!(kernel_connect_status(port, "deny.kernel.test:443"), 403);
+    assert_eq!(kernel_connect_status(port, "allow.kernel.test:443"), 502);
+    let stopped = kernel.ok("egress.connect.listen", json!({ "action": "stop" }));
+    assert_eq!(stopped["stopped"], json!(true));
+}
+
 /* --------------------------- 9. sandbox-mode ladder --------------------------- */
 
 // FEAT-004: the fail-closed SandboxMode ladder over `sandbox.report`.
@@ -3044,6 +3124,12 @@ fn sandbox_report_fs_mode_is_unavailable_not_silently_enforced() {
         }
         assert_eq!(result["mode"], json!(mode));
         assert!(result["hostCapabilities"]["landlockFs"].is_boolean(), "{}", result);
+        let notes = result["platformNotes"].as_array().expect("platformNotes");
+        assert!(
+            notes.iter().any(|n| n.as_str().unwrap_or("").contains("Seatbelt")),
+            "platform honesty must name macOS backends as unavailable on Linux: {}",
+            result
+        );
     }
 }
 
@@ -3166,4 +3252,210 @@ fn sandbox_report_validates_escalation_args_over_the_protocol() {
     } else {
         assert_eq!(result["status"], json!("sandbox_unavailable"), "{}", result);
     }
+}
+
+#[test]
+fn effect_execute_hermetic_pure_settles() {
+    let dir = TempDir::new("effect-execute-pure");
+    let mut kernel = Kernel::start(dir.path());
+
+    let result = kernel.ok(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-pure",
+            "dispatch": { "kind": "pure" }
+        }),
+    );
+    assert_eq!(result["verdict"], json!("settled"), "{}", result);
+    assert_eq!(
+        result["phases"],
+        json!(["allow", "execute", "observe"]),
+        "{}",
+        result
+    );
+}
+
+#[test]
+fn effect_execute_refuses_mutating_dispatch() {
+    let dir = TempDir::new("effect-execute-mut");
+    let mut kernel = Kernel::start(dir.path());
+
+    let message = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-mut",
+            "dispatch": { "kind": "shell.exec", "spec": { "command": "true" } }
+        }),
+    );
+    assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
+    assert!(message.contains("shell.exec"), "{}", message);
+    assert!(message.contains("TypeScript"), "{}", message);
+}
+
+#[test]
+fn effect_execute_fs_read_under_sandbox_root() {
+    let dir = TempDir::new("effect-execute-read");
+    let sandbox = dir.path().join("sandbox");
+    std::fs::create_dir_all(&sandbox).expect("sandbox dir");
+    let probe = sandbox.join("data.bin");
+    std::fs::write(&probe, b"integration-read").expect("probe file");
+    let expected = sha256_bytes(b"integration-read");
+
+    let mut kernel = Kernel::start(dir.path());
+    let result = kernel.ok(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-read",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.read", "spec": { "path": "data.bin" } }
+        }),
+    );
+    assert_eq!(result["verdict"], json!("settled"), "{}", result);
+    assert_eq!(result["contentDigest"], json!(expected), "{}", result);
+
+    let message = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-read-esc",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.read", "spec": { "path": "../../etc/passwd" } }
+        }),
+    );
+    assert!(message.contains("sandboxRoot"), "{}", message);
+}
+
+#[test]
+fn effect_execute_fs_write_under_sandbox_root() {
+    let dir = TempDir::new("effect-execute-write");
+    let sandbox = dir.path().join("sandbox");
+    std::fs::create_dir_all(&sandbox).expect("sandbox dir");
+    let expected = sha256_bytes(b"integration-write");
+
+    let mut kernel = Kernel::start(dir.path());
+    let result = kernel.ok(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-write",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "out.bin", "text": "integration-write" } }
+        }),
+    );
+    assert_eq!(result["verdict"], json!("settled"), "{}", result);
+    assert_eq!(result["contentDigest"], json!(expected), "{}", result);
+    let on_disk = std::fs::read(sandbox.join("out.bin")).expect("written file");
+    assert_eq!(on_disk, b"integration-write");
+
+    let message = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-write-esc",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "../../etc/passwd", "text": "x" } }
+        }),
+    );
+    assert!(message.contains("sandboxRoot"), "{}", message);
+
+    let unrestricted = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-write-open",
+            "dispatch": { "kind": "fs.write", "spec": { "path": "x", "text": "y" } }
+        }),
+    );
+    assert!(unrestricted.contains("HZ_PRECONDITION_FAILED"), "{}", unrestricted);
+    assert!(unrestricted.contains("fs.write"), "{}", unrestricted);
+}
+
+#[test]
+fn effect_execute_fs_edit_under_sandbox_root() {
+    let dir = TempDir::new("effect-execute-edit");
+    let sandbox = dir.path().join("sandbox");
+    std::fs::create_dir_all(&sandbox).expect("sandbox dir");
+    std::fs::write(sandbox.join("src.txt"), b"alpha-beta").expect("seed file");
+    let expected = sha256_bytes(b"alpha-OMEGA");
+
+    let mut kernel = Kernel::start(dir.path());
+    let result = kernel.ok(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-edit",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": {
+                "kind": "fs.edit",
+                "spec": { "path": "src.txt", "oldString": "beta", "newString": "OMEGA" }
+            }
+        }),
+    );
+    assert_eq!(result["verdict"], json!("settled"), "{}", result);
+    assert_eq!(result["contentDigest"], json!(expected), "{}", result);
+    let on_disk = std::fs::read_to_string(sandbox.join("src.txt")).expect("edited file");
+    assert_eq!(on_disk, "alpha-OMEGA");
+
+    let message = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-edit-miss",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": {
+                "kind": "fs.edit",
+                "spec": { "path": "src.txt", "oldString": "nope", "newString": "x" }
+            }
+        }),
+    );
+    assert!(message.contains("oldString not found"), "{}", message);
+
+    let unrestricted = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-edit-open",
+            "dispatch": {
+                "kind": "fs.edit",
+                "spec": { "path": "src.txt", "oldString": "a", "newString": "b" }
+            }
+        }),
+    );
+    assert!(unrestricted.contains("HZ_PRECONDITION_FAILED"), "{}", unrestricted);
+    assert!(unrestricted.contains("fs.edit"), "{}", unrestricted);
+}
+
+#[test]
+fn effect_execute_shell_exec_under_sandbox_root() {
+    let dir = TempDir::new("effect-execute-shell");
+    let sandbox = dir.path().join("sandbox");
+    std::fs::create_dir_all(&sandbox).expect("sandbox dir");
+    let expected_stdout = sha256_bytes(b"hello\n");
+
+    let mut kernel = Kernel::start(dir.path());
+    let result = kernel.ok(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-shell",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": { "kind": "shell.exec", "spec": { "argv": ["echo", "hello"] } }
+        }),
+    );
+    assert_eq!(result["verdict"], json!("settled"), "{}", result);
+    assert_eq!(result["exitCode"], json!(0), "{}", result);
+    assert_eq!(result["stdoutDigest"], json!(expected_stdout), "{}", result);
+    assert_eq!(result["resultDigestStable"], json!(true), "{}", result);
+
+    let unrestricted = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-shell-open",
+            "dispatch": { "kind": "shell.exec", "spec": { "argv": ["true"] } }
+        }),
+    );
+    assert!(unrestricted.contains("HZ_PRECONDITION_FAILED"), "{}", unrestricted);
+    assert!(unrestricted.contains("shell.exec"), "{}", unrestricted);
+
+    let cwd_escape = kernel.err(
+        "effect.execute",
+        json!({
+            "effectId": "it-eff-shell-cwd",
+            "sandboxRoot": sandbox.to_string_lossy(),
+            "dispatch": { "kind": "shell.exec", "spec": { "argv": ["pwd"], "cwd": "../" } }
+        }),
+    );
+    assert!(cwd_escape.contains("sandboxRoot"), "{}", cwd_escape);
 }

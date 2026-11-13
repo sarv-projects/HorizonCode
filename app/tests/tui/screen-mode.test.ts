@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { fullscreenNotImplementedMessage, resolveTuiScreenMode } from "../../src/tui/screen-mode";
+import {
+  fullscreenNotImplementedMessage,
+  isFullscreenChatMode,
+  resolveTuiScreenMode,
+} from "../../src/tui/screen-mode";
 
 describe("tui screen mode", () => {
   test("defaults to scrollback", () => {
@@ -13,6 +17,13 @@ describe("tui screen mode", () => {
   test("HZ_TUI_MODE recognises aliases", () => {
     expect(resolveTuiScreenMode({ HZ_TUI_MODE: "full" })).toBe("fullscreen");
     expect(resolveTuiScreenMode({ HZ_TUI_MODE: "minimal" })).toBe("scrollback");
+    expect(resolveTuiScreenMode({ HZ_TUI_MODE: "fullscreen-experimental" })).toBe("fullscreen-experimental");
+  });
+
+  test("fullscreen and experimental both select alt-screen chat", () => {
+    expect(isFullscreenChatMode("fullscreen")).toBe(true);
+    expect(isFullscreenChatMode("fullscreen-experimental")).toBe(true);
+    expect(isFullscreenChatMode("scrollback")).toBe(false);
   });
 
   test("fullscreen message points at scrollback default", () => {

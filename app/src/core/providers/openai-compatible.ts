@@ -17,6 +17,7 @@
 import { homedir } from "node:os";
 import type { Credential, Provider, ProviderEvent, ProviderRequest } from "../../contracts";
 import { refreshOAuthAccessToken } from "../auth/refresh";
+import { OAuthCredentialHandle } from "../auth/store";
 import type { ProviderOAuthEndpoints } from "../config";
 import { streamOpenAiCompatible } from "./openai";
 
@@ -52,17 +53,24 @@ function authorizationHeader(credential: Credential): string | undefined {
 export function createOpenAiCompatibleProvider(opts: OpenAiCompatibleOptions): Provider {
   let credential = opts.credential;
   const home = opts.home ?? homedir();
+  const oauthHandle =
+    opts.credential.kind === "oauth" ? new OAuthCredentialHandle(opts.name, home) : undefined;
+  if (oauthHandle) oauthHandle.bindCredential(opts.credential);
   const wire = (): Parameters<typeof streamOpenAiCompatible>[0] => ({
     name: opts.name,
     baseUrl: opts.baseUrl,
     maxTokens: opts.maxTokens,
-    getAuthorization: () => authorizationHeader(credential),
+    getAuthorization: () => {
+      const live = oauthHandle?.pollCredential() ?? credential;
+      return authorizationHeader(live);
+    },
     onUnauthorized:
       opts.oauth && credential.kind === "oauth"
         ? async () => {
             const next = await refreshOAuthAccessToken(opts.name, opts.oauth!, home);
             if (!next || next.kind !== "oauth") return false;
             credential = next;
+            oauthHandle?.bindCredential(next);
             return true;
           }
         : undefined,

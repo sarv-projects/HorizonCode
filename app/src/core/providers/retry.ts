@@ -1,3 +1,6 @@
+import type { ProviderFailureCode } from "../../contracts";
+import { classifyProviderFailure, isRetryableFailureCode, retryAttemptsForFailureCode } from "./failure-codes";
+
 /**
  * retry.ts — transient-failure recovery for provider HTTP calls.
  *
@@ -60,6 +63,20 @@ const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 522, 5
 
 export function isRetryableStatus(status: number): boolean {
   return RETRYABLE_STATUS.has(status);
+}
+
+/** Status retry OR a classified code that is still transient/rate/overload. */
+export function shouldRetryHttpFailure(status: number, body?: string): boolean {
+  if (!isRetryableStatus(status)) return false;
+  const code = classifyProviderFailure(status, body);
+  return isRetryableFailureCode(code);
+}
+
+export { classifyProviderFailure, isRetryableFailureCode, retryAttemptsForFailureCode };
+
+export function effectiveRetryAttempts(policy: RetryPolicy, code?: ProviderFailureCode): number {
+  const base = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_ATTEMPTS));
+  return retryAttemptsForFailureCode(code, base);
 }
 
 /**
@@ -140,29 +157,28 @@ export async function fetchWithRetry(
   init: RequestInit,
   policy: RetryPolicy = {},
 ): Promise<Response> {
-  const attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_ATTEMPTS));
   const baseDelayMs = policy.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
   const maxDelayMs = policy.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
   const signal = init.signal ?? undefined;
   let lastError: unknown;
+  let attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_ATTEMPTS));
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (signal?.aborted === true) throw lastError ?? new Error("aborted before request");
     try {
       const response = await fetch(url, init);
-      if (!isRetryableStatus(response.status) || attempt >= attempts) return response;
+      if (!isRetryableStatus(response.status)) return response;
+      const detail = await response.text().catch(() => "");
+      const code = classifyProviderFailure(response.status, detail);
+      attempts = Math.min(attempts, effectiveRetryAttempts(policy, code));
+      if (!shouldRetryHttpFailure(response.status, detail) || attempt >= attempts) {
+        return new Response(detail, { status: response.status, headers: response.headers });
+      }
       const waitMs = backoffDelay(attempt, {
         baseDelayMs,
         maxDelayMs,
         retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
       });
-      // Release the failed response before waiting, or an unread body holds the
-      // connection open for the whole backoff.
-      try {
-        await response.body?.cancel();
-      } catch {
-        /* a body that cannot be cancelled is not a reason to stop retrying */
-      }
       policy.onRetry?.({ attempt, status: response.status, delayMs: waitMs });
       await delay(waitMs, signal);
     } catch (err) {

@@ -166,6 +166,14 @@ export function spillDir(workspace: string): string {
 }
 
 /**
+ * Content-addressed blob bodies (F7 reduced): `<workspace>/.hzcode/blobs` (legacy)
+ * or `<workspace>/.hz/state/blobs` (canonical, docs/12 §4.1 two-level shards).
+ */
+export function blobsDir(workspace: string): string {
+  return statePath(workspace, "blobs");
+}
+
+/**
  * Workspace skills: `<workspace>/.hzcode/skills` (legacy) or
  * `<workspace>/.hz/state/skills` (canonical; not named by docs/12 §4.1 — the
  * shipped relative name mirrored under `state/`).

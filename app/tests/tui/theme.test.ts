@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { createRuntime } from "../../src/core/index";
+import { defaultConfigPath, persistThemeMode } from "../../src/core/config";
 import { runThemeCommand } from "../../src/tui/interactive";
 import { createRenderer } from "../../src/tui/render";
 import { activeTheme, bgCode, fgCode, onBg, paint, setColorEnabled, setThemeMode, strip, themeMode } from "../../src/tui/style";
@@ -54,5 +59,45 @@ describe("/theme", () => {
     process.env.NO_COLOR = "1";
     expect(notices("dark")).toContain("NO_COLOR is set, so colours stay off");
     expect(notices("")).toContain("(NO_COLOR is set)");
+  });
+
+  test("persistThemeMode writes user config and /theme uses it", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-theme-home-"));
+    try {
+      persistThemeMode("dark", home);
+      const file = JSON.parse(readFileSync(defaultConfigPath(home), "utf8")) as { theme?: string };
+      expect(file.theme).toBe("dark");
+      runThemeCommand("light", createRenderer({ out: () => {} }));
+      persistThemeMode("light", home);
+      expect(JSON.parse(readFileSync(defaultConfigPath(home), "utf8")).theme).toBe("light");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("createRuntime applies theme from user config on startup", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-theme-rt-"));
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-theme-ws-"));
+    const prevHome = process.env.HOME;
+    const prevUser = process.env.USERPROFILE;
+    try {
+      const cfg = defaultConfigPath(home);
+      mkdirSync(path.dirname(cfg), { recursive: true });
+      writeFileSync(cfg, JSON.stringify({ theme: "light", provider: "mock" }, null, 2) + "\n");
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      setThemeMode("dark");
+      const rt = await createRuntime({ workspace, mock: true });
+      expect(themeMode()).toBe("light");
+      expect(activeTheme()).toBe("light");
+      rt.close();
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUser === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUser;
+      rmSync(home, { recursive: true, force: true });
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });

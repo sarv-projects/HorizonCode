@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ApprovalRequest } from "../../src/contracts";
 import { createApprovalHandler, createApprovalUi } from "../../src/tui/approval";
-import { approvalCard, keyChoice, riskOf } from "../../src/tui/approval-card";
+import { approvalCard, formatApprovalLinkage, keyChoice, riskOf } from "../../src/tui/approval-card";
 import { createRenderer } from "../../src/tui/render";
 import { colorEnabled, setColorEnabled, strip, visibleWidth } from "../../src/tui/style";
 
@@ -23,6 +23,39 @@ describe("approval card", () => {
     expect(plain.join("\n")).toContain("risk high");
     expect(plain.join("\n")).toContain("y yes  n no  a always this session  Esc deny");
     for (const l of lines) expect(visibleWidth(l)).toBe(60);
+  });
+
+  test("effect, lease and tool linkage after risk when present", () => {
+    const lines = approvalCard({
+      kind: "shell.exec",
+      title: "run",
+      detail: "ls",
+      width: 72,
+      effectId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      leaseId: "lease-abcdef01",
+      tool: "shell",
+    });
+    const plain = lines.map(strip).join("\n");
+    expect(formatApprovalLinkage({
+      effectId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      leaseId: "lease-abcdef01",
+      tool: "shell",
+    })).toBe("effect aaaaaaaa \u00b7 lease lease-ab \u00b7 tool shell");
+    expect(plain).toContain("effect aaaaaaaa");
+    expect(plain).toContain("lease lease-ab");
+    expect(plain).toContain("tool shell");
+    const riskIdx = plain.indexOf("risk ");
+    const linkIdx = plain.indexOf("effect aaaaaaaa");
+    const keysIdx = plain.indexOf("y yes");
+    expect(riskIdx).toBeGreaterThan(-1);
+    expect(linkIdx).toBeGreaterThan(riskIdx);
+    expect(keysIdx).toBeGreaterThan(linkIdx);
+    for (const l of lines) expect(visibleWidth(l)).toBe(72);
+  });
+
+  test("omits linkage row when no effect, lease or tool", () => {
+    const lines = approvalCard({ kind: "fs.read", title: "read", width: 50 });
+    expect(lines.map(strip).join("\n")).not.toMatch(/\beffect\b|\blease\b|\btool shell\b/);
   });
 
   test("ASCII borders, narrow width, long detail folded", () => {
@@ -61,7 +94,7 @@ describe("approval card", () => {
     const ok = await (createApprovalHandler(ui) as unknown as (r: ApprovalRequest) => Promise<boolean>)(req);
     expect(ok).toBe(true);
     const text = chunks.join("");
-    expect(text).toContain("Approve run this command?");
+    expect(text).toContain("Approve Shell command?");
     expect(text).toContain("npm test");
     expect(text).toContain("approved (this time)");
 

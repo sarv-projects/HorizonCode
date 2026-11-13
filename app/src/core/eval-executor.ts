@@ -93,6 +93,10 @@ export interface EvalObservation {
   toolCalls: string[];
   /** Length of the run's final assistant text, in characters. */
   textChars: number;
+  /** Final assistant text (preds.json `model_patch` reduced form). */
+  submission: string;
+  model: string;
+  sessionId: string;
   /** Wall time for the case, milliseconds. */
   durationMs: number;
   /** True when the workspace was left on disk. */
@@ -170,6 +174,9 @@ export function makeRuntimeExecutor(opts: LoopEvalExecutorOptions = {}): LoopEva
         terminal,
         toolCalls,
         textChars: result.text.length,
+        submission: result.text,
+        model: runtime.model,
+        sessionId: runtime.sessionId,
         durationMs: Date.now() - started,
         kept: keep,
       });
@@ -228,6 +235,9 @@ export function makeScriptedExecutor(
         terminal,
         toolCalls,
         textChars: result.text.length,
+        submission: result.text,
+        model: deps.model,
+        sessionId: deps.sessionId,
         durationMs: Date.now() - started,
         kept: keep,
       });

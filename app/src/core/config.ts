@@ -21,7 +21,9 @@ import { catalogDefaultModel, catalogModel, loadCatalog, type LoadedCatalog } fr
 import { stateRoot, userConfigDir } from "./paths";
 import { maskSecrets } from "./compaction";
 import type { PermissionMode } from "./permission-mode";
+import { autonomyPresetError, parseAutonomyPreset } from "./autonomy-presets";
 import { parsePermissionMode, permissionModeError } from "./permission-mode";
+import { parseLintConfig, type LintConfig } from "./lint-commands";
 import {
   noticeUntrustedWorkspaceMcp,
   noticeUntrustedWorkspaceProviders,
@@ -85,18 +87,17 @@ export interface HzConfig {
   /** NF-073 run budgets from the environment; absent keys stay unlimited. */
   budget?: RunBudget;
   /**
-   * MCP servers, v1 reduced form (docs/09 §4.7). ONLY entries from the USER
-   * config file are eligible: a workspace cannot name a server that would run
-   * with the user's authority (README §3.4 "programs named by a workspace stay
-   * off until trusted" — v1 has no trust store, so it has no workspace path at
-   * all). Entries that do not parse are skipped and named in `rejected`; a
-   * malformed entry must never stop the chat from starting.
+   * MCP servers, v1 reduced form (docs/09 §4.7). User-config entries always
+   * eligible; workspace `mcp.json` may merge only when digests match
+   * `trust.json` (rulings 105/113 — see `trust.ts` / `augmentConfigWithTrustedWorkspace`).
+   * Entries that do not parse are skipped and named in `rejected`; a malformed
+   * entry must never stop the chat from starting.
    */
   mcp?: McpConfig;
   /**
-   * User-declared providers, v1 reduced form (docs/15 §3.1). Like `mcp`, ONLY
-   * entries from the USER config file are eligible, and a malformed entry is a
-   * named skip (collected in `providers.rejected`), never a startup failure.
+   * User-declared providers, v1 reduced form (docs/15 §3.1). User-config entries
+   * plus trusted workspace `providers.json` (same trust gate as MCP). A
+   * malformed entry is a named skip (`providers.rejected`), never a startup failure.
    */
   providers?: ProviderRegistry;
   /**
@@ -116,6 +117,8 @@ export interface HzConfig {
    * from starting. The server list is pure config DATA — no command is baked in.
    */
   lsp?: LspConfig;
+  /** F-3: user-supplied lint commands (USER config only). */
+  lint?: LintConfig;
   /**
    * The starting permission mode (permission-mode.ts). USER config file only:
    * no workspace file is ever read for it, and a bypass/unknown value is
@@ -123,12 +126,17 @@ export interface HzConfig {
    */
   permissionMode?: PermissionMode;
   permissionModeRejected?: string;
+  /** Plandex-style autonomy preset → permission mode when `permissionMode` is absent. */
+  autonomy?: string;
+  autonomyRejected?: string;
   /**
    * Absolute workspace paths allowed to load workspace hooks (user config only).
    */
   trustedWorkspaceHooks?: string[];
   /** Persisted TUI theme (`dark` | `light` | `auto` | `mono`). User config only. */
   theme?: "dark" | "light" | "auto" | "mono";
+  /** Turn-end bell prefs (user config only; env `HZ_NOTIFY_*` overrides). */
+  notify?: NotifyConfig;
   /** User-only status-line script (stdin JSON, up to 5 lines). */
   statusLine?: { command: string; args?: string[] };
   /** Where the values came from, for the banner and for debugging. */
@@ -198,6 +206,8 @@ export interface ProviderOAuthEndpoints {
   authorizeUrl: string;
   tokenUrl: string;
   clientId: string;
+  /** Optional confidential-client secret (`client_secret_post` on token exchange). */
+  clientSecret?: string;
   scopes?: string[];
   callbackPath?: string;
   /** RFC 8628 device authorization endpoint (`hzcode login --device`). */
@@ -283,6 +293,31 @@ export interface LspConfig {
 
 export type EnvLike = Record<string, string | undefined>;
 
+/** Persisted notification prefs (`docs/13` D15). User config only. */
+export interface NotifyConfig {
+  bell?: boolean;
+  minMs?: number;
+}
+
+/**
+ * Workspace-layer sentinel: inherit the user value for this key (mini-swe-agent
+ * H-3 reduced). Only keys in `WORKSPACE_CONFIG_LAYER_KEYS` honour this in the
+ * workspace `config.json` under the state root.
+ */
+export const CONFIG_UNSET = "__HZ_UNSET__";
+
+/** Keys a workspace file may layer over the user config (narrowing / style only). */
+export const WORKSPACE_CONFIG_LAYER_KEYS = new Set([
+  "permissionMode",
+  "autonomy",
+  "theme",
+  "toolFormat",
+]);
+
+export function isConfigUnset(value: unknown): boolean {
+  return value === CONFIG_UNSET;
+}
+
 interface ConfigFile {
   provider?: unknown;
   model?: unknown;
@@ -290,10 +325,15 @@ interface ConfigFile {
   apiKey?: unknown;
   mcp?: unknown;
   lsp?: unknown;
+  lint?: unknown;
   providers?: unknown;
   permissionMode?: unknown;
+  autonomy?: unknown;
+  /** `off` → `HZ_SANDBOX_CHILD_NET=off` on wrapped children (user config only). */
+  sandboxChildNet?: unknown;
   trustedWorkspaceHooks?: unknown;
   theme?: unknown;
+  notify?: unknown;
   statusLine?: unknown;
 }
 
@@ -346,6 +386,15 @@ function parseStatusLine(value: unknown): HzConfig["statusLine"] | undefined {
   return { command, ...(args && args.length > 0 ? { args } : {}) };
 }
 
+function parseNotify(value: unknown): NotifyConfig | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const o = value as Record<string, unknown>;
+  const bell = o.bell === true ? true : o.bell === false ? false : undefined;
+  const minMs = typeof o.minMs === "number" && Number.isFinite(o.minMs) ? Math.max(0, Math.floor(o.minMs)) : undefined;
+  if (bell === undefined && minMs === undefined) return undefined;
+  return { ...(bell !== undefined ? { bell } : {}), ...(minMs !== undefined ? { minMs } : {}) };
+}
+
 /** Merge `theme` into the user config file (user config only). */
 export function persistThemeMode(mode: HzConfig["theme"], home: string = homedir()): void {
   if (mode === undefined) return;
@@ -356,6 +405,24 @@ export function persistThemeMode(mode: HzConfig["theme"], home: string = homedir
   } catch {
   }
   const next = { ...current, theme: mode };
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  try {
+    chmodSync(file, 0o600);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Merge `notify` into the user config file (user config only). */
+export function persistNotifyConfig(notify: NotifyConfig, home: string = homedir()): void {
+  const file = defaultConfigPath(home);
+  let current: ConfigFile = {};
+  try {
+    current = readConfigFile(file) as ConfigFile;
+  } catch {
+  }
+  const next = { ...current, notify };
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   try {
@@ -659,6 +726,9 @@ function parseProviderOAuth(value: unknown, where: string): ProviderOAuthEndpoin
   if (typeof raw.callbackPath === "string" && raw.callbackPath.trim() !== "") {
     out.callbackPath = raw.callbackPath.trim();
   }
+  if (typeof raw.clientSecret === "string" && raw.clientSecret.trim() !== "") {
+    out.clientSecret = raw.clientSecret.trim();
+  }
   if (typeof raw.deviceAuthorizationUrl === "string" && raw.deviceAuthorizationUrl.trim() !== "") {
     const deviceUrl = raw.deviceAuthorizationUrl.trim();
     if (!/^https?:\/\//i.test(deviceUrl)) return `${where}.oauth deviceAuthorizationUrl must be http(s)`;
@@ -721,6 +791,28 @@ export function resolveRegistryCredential(entry: ProviderRegistryEntry, env: Env
  * Read the config file. Anything unreadable, malformed or of the wrong shape is
  * treated as absent: a broken config file must never stop the chat from starting.
  */
+/** Parsed workspace `config.json` (missing / bad → `{}`). */
+export function readWorkspaceConfigFile(workspace: string): ConfigFile {
+  const file = workspaceConfigFile(workspace);
+  return readConfigFile(file);
+}
+
+/**
+ * Merge user then workspace config files. `CONFIG_UNSET` drops the workspace
+ * override so the user value wins.
+ */
+export function mergeConfigFileLayers(user: ConfigFile, workspace: ConfigFile): ConfigFile {
+  const out: ConfigFile = { ...user };
+  for (const [key, raw] of Object.entries(workspace)) {
+    if (!WORKSPACE_CONFIG_LAYER_KEYS.has(key)) continue;
+    if (isConfigUnset(raw)) {
+      continue;
+    }
+    (out as Record<string, unknown>)[key] = raw;
+  }
+  return out;
+}
+
 export function readConfigFile(file: string = defaultConfigPath()): ConfigFile {
   let raw: string;
   try {
@@ -755,8 +847,15 @@ function providerKey(provider: ProviderName, env: EnvLike): string | undefined {
 }
 
 /** Resolve the effective configuration (pure; the environment is injectable). */
-export function loadConfig(env: EnvLike = process.env, file: string = defaultConfigPath()): HzConfig {
-  const fromFile = readConfigFile(file);
+export function loadConfig(
+  env: EnvLike = process.env,
+  file: string = defaultConfigPath(),
+  workspace?: string,
+): HzConfig {
+  const fromFile = mergeConfigFileLayers(
+    readConfigFile(file),
+    workspace !== undefined && workspace.trim() !== "" ? readWorkspaceConfigFile(workspace) : {},
+  );
   const registry = parseProviderRegistry(fromFile.providers);
 
   // Built-ins resolve FIRST (a registered id may not collide with one anyway);
@@ -882,13 +981,24 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
   if (envWall !== undefined) budget.maxWallMs = envWall;
 
   const fileMode = str(fromFile.permissionMode);
-  const permissionMode = fileMode !== undefined ? parsePermissionMode(fileMode) : undefined;
+  const fileAutonomy = str(fromFile.autonomy);
+  const autonomyParsed = fileAutonomy !== undefined ? parseAutonomyPreset(fileAutonomy) : undefined;
+  const autonomyRejected =
+    fileAutonomy !== undefined && autonomyParsed === undefined ? autonomyPresetError(fileAutonomy) : undefined;
+  const permissionMode =
+    fileMode !== undefined
+      ? parsePermissionMode(fileMode)
+      : autonomyParsed !== undefined
+        ? autonomyParsed.permissionMode
+        : undefined;
   const permissionModeRejected = fileMode !== undefined && permissionMode === undefined ? permissionModeError(fileMode) : undefined;
 
   const mcp = parseMcpConfig(fromFile.mcp);
   const lsp = parseLspConfig(fromFile.lsp);
+  const lint = parseLintConfig(fromFile.lint);
   const trustedWorkspaceHooks = parseTrustedWorkspaceHooks(fromFile.trustedWorkspaceHooks);
   const theme = parseTheme(fromFile.theme);
+  const notify = parseNotify(fromFile.notify);
   const statusLine = parseStatusLine(fromFile.statusLine);
 
   // Where the registry key came from, for the banner: an inline apiKey or the
@@ -907,10 +1017,14 @@ export function loadConfig(env: EnvLike = process.env, file: string = defaultCon
     budget: Object.keys(budget).length > 0 ? budget : undefined,
     mcp,
     lsp,
+    lint,
     permissionMode,
     permissionModeRejected,
+    autonomy: autonomyParsed?.id,
+    autonomyRejected,
     trustedWorkspaceHooks,
     theme,
+    notify,
     statusLine,
     providers: registry,
     resolved,
@@ -1108,8 +1222,14 @@ export const CONFIG_KEYS: Record<string, { type: string; description: string; en
     description: "Starting permission mode.",
     enum: ["default", "plan", "accept-edits", "read-only"],
   },
+  autonomy: {
+    type: "string",
+    description: "Autonomy preset when permissionMode is unset (maps to permission mode).",
+    enum: ["manual", "assisted", "auto-edits", "plan-only"],
+  },
   trustedWorkspaceHooks: { type: "array", description: "Absolute workspace paths allowed to load workspace hooks.json." },
   theme: { type: "string", description: "Default TUI palette.", enum: ["dark", "light", "auto", "mono"] },
+  notify: { type: "object", description: "Turn-end bell prefs (`bell`, `minMs`). User config only." },
   statusLine: { type: "object", description: "User status-line script: command + optional args (JSON on stdin)." },
 };
 
@@ -1168,6 +1288,8 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
   }
   const mode = str(cfg.permissionMode);
   if (mode !== undefined && parsePermissionMode(mode) === undefined) result.rejected.push(permissionModeError(mode));
+  const autonomy = str(cfg.autonomy);
+  if (autonomy !== undefined && parseAutonomyPreset(autonomy) === undefined) result.rejected.push(autonomyPresetError(autonomy));
   const mcpServers = (cfg.mcp as { servers?: unknown } | undefined)?.servers;
   const lspServers = (cfg.lsp as { servers?: unknown } | undefined)?.servers;
   unknownEntryKeys(mcpServers, "mcp.servers", result.unknown);
@@ -1181,6 +1303,7 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
   }
   result.rejected.push(...(parseMcpConfig(cfg.mcp)?.rejected ?? []));
   result.rejected.push(...(parseLspConfig(cfg.lsp)?.rejected ?? []));
+  result.rejected.push(...(parseLintConfig(cfg.lint)?.rejected ?? []));
   result.rejected.push(...(parseProviderRegistry(cfg.providers)?.rejected ?? []));
   return result;
 }

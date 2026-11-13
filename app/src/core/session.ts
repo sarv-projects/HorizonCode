@@ -30,12 +30,17 @@ import type { ChatMsg, ToolCall } from "../contracts";
 import { newId, nowIso } from "../contracts";
 import { withFileLockSync } from "./file-lock";
 import { sessionDbPath } from "./paths";
+import { migrateSessionDb } from "./session-migrate";
+import { parsePermissionMode, type PermissionMode } from "./permission-mode";
+import { upsertSessionSearch } from "./session-search";
 
 export interface SessionInfo {
   id: string;
   title: string;
   created: string;
   updated: string;
+  /** Stored posture at creation/fork (nullable for legacy rows; docs/12 S-46 reduced). */
+  permissionMode?: PermissionMode;
   /** Present only on a fork (session.ts forkSession): where it came from. */
   forkedFrom?: SessionFork;
 }
@@ -119,12 +124,15 @@ interface SessionRow {
   forked_from?: string | null;
   fork_index?: number | null;
   fork_seq?: number | null;
+  permission_mode?: string | null;
 }
 
-const SESSION_COLS = "id, title, created, updated, forked_from, fork_index, fork_seq";
+const SESSION_COLS = "id, title, created, updated, forked_from, fork_index, fork_seq, permission_mode";
 
 function rowToInfo(row: SessionRow): SessionInfo {
   const info: SessionInfo = { id: row.id, title: row.title, created: row.created, updated: row.updated };
+  const parsedMode = parsePermissionMode(row.permission_mode ?? undefined);
+  if (parsedMode !== undefined) info.permissionMode = parsedMode;
   if (typeof row.forked_from === "string" && row.forked_from !== "") {
     info.forkedFrom = {
       sessionId: row.forked_from,
@@ -299,6 +307,7 @@ function metaFor(msg: ChatMsg): string | null {
 
 /** The session store: create sessions, append messages, read history back. */
 export class SessionStore {
+  readonly workspace: string;
   readonly dbPath: string;
   /**
    * The shared SQLite handle. Public so additive stores in this directory can
@@ -316,6 +325,7 @@ export class SessionStore {
   readonly recovered: SessionRecovery | null;
 
   constructor(workspace: string) {
+    this.workspace = workspace;
     // Canonical `<workspace>/.hz/state/hzcode.db`, or the legacy
     // `<workspace>/.hzcode/db.sqlite` in place (paths.ts owns the rule).
     this.dbPath = sessionDbPath(workspace);
@@ -380,6 +390,8 @@ export class SessionStore {
       if (!have.has("forked_from")) this.db.exec("ALTER TABLE sessions ADD COLUMN forked_from TEXT");
       if (!have.has("fork_index")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_index INTEGER");
       if (!have.has("fork_seq")) this.db.exec("ALTER TABLE sessions ADD COLUMN fork_seq INTEGER");
+      if (!have.has("permission_mode")) this.db.exec("ALTER TABLE sessions ADD COLUMN permission_mode TEXT");
+      migrateSessionDb(this.db);
     });
 
     // Owner-only state, applied after the schema and WAL pragmas so the file
@@ -390,19 +402,19 @@ export class SessionStore {
     setOwnerOnly(`${this.dbPath}-shm`, STATE_FILE_MODE);
   }
 
-  createSession(title = "New chat"): SessionInfo {
+  createSession(title = "New chat", opts: { permissionMode?: PermissionMode } = {}): SessionInfo {
     const session: SessionInfo = {
       id: newId(),
       title,
       created: nowIso(),
       updated: nowIso(),
     };
-    this.db.run("INSERT INTO sessions (id, title, created, updated) VALUES (?, ?, ?, ?)", [
-      session.id,
-      session.title,
-      session.created,
-      session.updated,
-    ]);
+    if (opts.permissionMode !== undefined) session.permissionMode = opts.permissionMode;
+    this.db.run(
+      "INSERT INTO sessions (id, title, created, updated, permission_mode) VALUES (?, ?, ?, ?, ?)",
+      [session.id, session.title, session.created, session.updated, opts.permissionMode ?? null],
+    );
+    this.refreshSearchIndex(session.id);
     return session;
   }
 
@@ -437,7 +449,10 @@ export class SessionStore {
    * transaction, all-or-nothing. `parentSeq` is the caller's reading of the
    * parent's event stream head (the store does not own the log).
    */
-  forkSession(parentId: string, opts: { at?: number; parentSeq?: number; title?: string } = {}): SessionInfo {
+  forkSession(
+    parentId: string,
+    opts: { at?: number; parentSeq?: number; title?: string; permissionMode?: PermissionMode } = {},
+  ): SessionInfo {
     const parent = this.getSession(parentId);
     if (!parent) throw new Error(`no session ${parentId} in this workspace`);
     const rows = this.db
@@ -460,6 +475,7 @@ export class SessionStore {
             Math.min(opts.at, rows.length),
           );
     const now = nowIso();
+    const childMode = opts.permissionMode;
     const child: SessionInfo = {
       id: newId(),
       title: opts.title ?? `${parent.title} (fork)`,
@@ -467,10 +483,11 @@ export class SessionStore {
       updated: now,
       forkedFrom: { sessionId: parentId, messageIndex: keep, parentSeq: opts.parentSeq ?? 0 },
     };
+    if (childMode !== undefined) child.permissionMode = childMode;
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO sessions (id, title, created, updated, forked_from, fork_index, fork_seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [child.id, child.title, child.created, child.updated, parentId, keep, opts.parentSeq ?? 0],
+        "INSERT INTO sessions (id, title, created, updated, forked_from, fork_index, fork_seq, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [child.id, child.title, child.created, child.updated, parentId, keep, opts.parentSeq ?? 0, childMode ?? null],
       );
       for (const row of rows.slice(0, keep)) {
         this.db.run("INSERT INTO messages (id, session_id, role, content, ts, meta) VALUES (?, ?, ?, ?, ?, ?)", [
@@ -483,6 +500,7 @@ export class SessionStore {
         ]);
       }
     })();
+    this.refreshSearchIndex(child.id);
     return child;
   }
 
@@ -491,9 +509,10 @@ export class SessionStore {
     const updated = nowIso();
     if (title !== undefined) {
       this.db.run("UPDATE sessions SET updated = ?, title = ? WHERE id = ?", [updated, title, id]);
-      return;
+    } else {
+      this.db.run("UPDATE sessions SET updated = ? WHERE id = ?", [updated, id]);
     }
-    this.db.run("UPDATE sessions SET updated = ? WHERE id = ?", [updated, id]);
+    this.refreshSearchIndex(id);
   }
 
   appendMessage(sessionId: string, msg: ChatMsg): string {
@@ -508,7 +527,52 @@ export class SessionStore {
       metaFor(msg),
     ]);
     this.db.run("UPDATE sessions SET updated = ? WHERE id = ?", [ts, sessionId]);
+    // Index titles + user prompts only (Grok session-search content shape).
+    if (msg.role === "user" || msg.role === "assistant") this.refreshSearchIndex(sessionId);
     return id;
+  }
+
+  /** User-prompt body for the FTS sidecar (empty string when none). */
+  userPromptText(sessionId: string): string {
+    const rows = this.db
+      .query("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid ASC")
+      .all(sessionId) as Array<{ content: string | null }>;
+    return rows
+      .map((r) => (r.content ?? "").trim())
+      .filter((t) => t.length > 0)
+      .join("\n");
+  }
+
+  /** First line of the most recent user message (resume list preview; docs/12 F8). */
+  lastUserPromptPreview(sessionId: string, max = 120): string {
+    const row = this.db
+      .query("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid DESC LIMIT 1")
+      .get(sessionId) as { content: string | null } | null;
+    const raw = row?.content ?? "";
+    const first =
+      raw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0) ?? "";
+    const flat = first.replace(/\s+/g, " ").trim();
+    if (flat.length <= max) return flat;
+    return flat.slice(0, max) + "…";
+  }
+
+  /** Best-effort FTS upsert; search failures must never break the transcript. */
+  refreshSearchIndex(sessionId: string): void {
+    const info = this.getSession(sessionId);
+    if (!info) return;
+    try {
+      upsertSessionSearch(this.workspace, {
+        sessionId: info.id,
+        title: info.title,
+        updated: info.updated,
+        content: this.userPromptText(sessionId),
+      });
+    } catch {
+      /* sidecar is a cache */
+    }
   }
 
   /** Full transcript in insertion order; tool messages keep their call wiring. */

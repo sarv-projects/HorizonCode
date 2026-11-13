@@ -55,6 +55,7 @@ import { readTool } from "./read";
 import { shellTool } from "./shell";
 import { todoTool } from "./todo";
 import { writeTool } from "./write";
+import { ptcLimitTerminationMessage, ptcSubCallAllowance } from "./codemode-ptc";
 
 const CHILD = path.join(import.meta.dir, "codemode-child.ts");
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -300,6 +301,7 @@ export const codemodeTool: Tool = {
     if (code.trim() === "") return { ok: false, output: "", error: "code is required" };
     if (ctx.signal.aborted) return { ok: false, output: "code_mode aborted", error: "aborted" };
     const timeoutMs = clampTimeout(args.timeout_ms);
+    const subCallAllowance = ptcSubCallAllowance(timeoutMs);
     const started = Date.now();
 
     // The bootstrap half of the frame protocol: it travels in the child's
@@ -438,6 +440,13 @@ export const codemodeTool: Tool = {
         const tool = BASE_TOOLS.get(name);
         if (!tool) {
           reply(message.rpcId, { ok: false, output: `unknown tool: ${name}`, error: `unknown tool "${name}"` });
+          return;
+        }
+
+        if (calls >= subCallAllowance) {
+          const msg = ptcLimitTerminationMessage(subCallAllowance, calls + 1);
+          reply(message.rpcId, { ok: false, output: msg, error: "sub_call_limit" });
+          finish({ ok: false, output: msg, error: "sub_call_limit" });
           return;
         }
 

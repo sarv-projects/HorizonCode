@@ -41,9 +41,18 @@
 import * as path from "node:path";
 import type { GuardAction, Tool, ToolSpec, ToolContext, ToolResult } from "../../contracts";
 import { canonicalJson, sha256Hex } from "../canon";
+import { stripToolOutputContinuationArgs } from "../output-budget";
 import { McpError, McpServerDownError, McpTransportError, type McpToolCaller, type McpToolInfo } from "./client";
 
 export type { McpToolInfo } from "./client";
+export {
+  listAllMcpTools,
+  listAllMcpResources,
+  mcpListRequestParams,
+  parseMcpListNextCursor,
+  MCP_LIST_MAX_PAGES,
+} from "./list-pagination";
+export type { ListAllMcpListOptions, ListAllMcpToolsOptions } from "./list-pagination";
 
 /** The namespace prefix every MCP tool name carries. */
 export const MCP_TOOL_PREFIX = "mcp__";
@@ -281,7 +290,7 @@ async function executeMcpTool(
   }
 
   try {
-    const result = await caller.callTool(toolName, args ?? {}, { signal: ctx.signal });
+    const result = await caller.callTool(toolName, stripToolOutputContinuationArgs(args ?? {}), { signal: ctx.signal });
     const fenced = fenceMcpResult(serverId, toolName, result.text);
     if (result.isError) return { ok: false, output: fenced, error: fenced };
     return { ok: true, output: fenced };

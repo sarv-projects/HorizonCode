@@ -107,3 +107,70 @@ export function echoedRows(rawLines: readonly string[], promptWidth: number, col
   });
   return rows;
 }
+
+/** Collector for `emitKeypressEvents` editors (fullscreen alt-screen). */
+export interface KeypressPasteCollector {
+  key(name: string | undefined): boolean;
+  active(): boolean;
+  pasting(): boolean;
+  chunk(str: string | undefined): void;
+  flushAfterEnd(): PasteResult | undefined;
+  finish(): PasteResult | undefined;
+}
+
+function finalizeKeypressBuffer(buf: string): PasteResult {
+  const normalized = buf.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const raw = normalized === "" ? [] : normalized.split("\n");
+  return finalizePaste(raw);
+}
+
+export function createKeypressPasteCollector(): KeypressPasteCollector {
+  let inside = false;
+  let ended = false;
+  let buf = "";
+  return {
+    key(name) {
+      if (name === "paste-start") {
+        inside = true;
+        ended = false;
+        buf = "";
+        return true;
+      }
+      if (name === "paste-end") {
+        if (inside) ended = true;
+        return true;
+      }
+      return false;
+    },
+    active: () => inside,
+    pasting: () => inside && !ended,
+    chunk(str) {
+      if (!inside || ended) return;
+      if (typeof str === "string" && str !== "") buf += str;
+    },
+    flushAfterEnd() {
+      if (!inside || !ended || buf === "") return undefined;
+      const out = finalizeKeypressBuffer(buf);
+      inside = false;
+      ended = false;
+      buf = "";
+      return out;
+    },
+    finish() {
+      if (!inside) return undefined;
+      const out = finalizeKeypressBuffer(buf);
+      inside = false;
+      ended = false;
+      buf = "";
+      return out;
+    },
+  };
+}
+
+/** Collapsed label in the editor when the submit body is the full paste. */
+export function editorPasteDisplay(pasted: PasteResult): { display: string; submitText: string } {
+  if (pasted.lines > 1) {
+    return { display: pasteLabel(pasted.lines), submitText: pasted.text };
+  }
+  return { display: pasted.text, submitText: pasted.text };
+}

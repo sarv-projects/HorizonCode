@@ -6,7 +6,7 @@ A terminal coding agent that separates what the model proposes from what is allo
 
 The model can request an action; a Rust trust kernel decides whether it runs (`deny > lease > ask > allow`) and settles each admitted action into a receipt in a tamper-evident event log. The runtime is TypeScript on Bun with no runtime dependencies. The terminal UI is scrollback-native: finished output goes into your terminal's own history, and only the prompt and the running turn are redrawn.
 
-> **Status: pre-release.** Nothing is published or packaged; you build from source. The version is `0.1.0`. There is no OS-level sandbox: the kernel is a decision layer, not a confinement layer. See [Status and limitations](#status-and-limitations).
+> **Status: pre-release.** Nothing is published or packaged; you build from source. The version is `0.1.0`. The kernel is primarily a decision/audit layer; Linux children can optionally be wrapped by `hz-sandbox-exec` (seccomp/rlimits/netns/Landlock when the host allows). There is no EffectHost and no MITM egress proxy. See [Status and limitations](#status-and-limitations).
 
 ## Contents
 
@@ -152,7 +152,9 @@ Piped input without `-p` runs headless, one message per line. `hzcode serve` ans
 printf '{"jsonrpc":"2.0","id":1,"method":"server.hello","params":{}}\n' | ./bin/hzcode serve
 ```
 
-`hzcode doctor` is diagnose-only. It checks the Bun version, the kernel binary and its `--selftest`, trusted or untrusted kernel mode, the config file, the provider, key presence (the key itself is never printed) and model, workspace and state-directory permissions, git, and the terminal (TTY, colour level, UTF-8 locale, `NO_COLOR`). It prints one line per check with a `fix:` line under every WARN or FAIL, and exits 1 if anything FAILs. `--json` gives the same report as JSON, suitable for a support ticket. Its only filesystem touch is the kernel selftest's scratch directory under the OS temp dir, removed afterwards.
+`hzcode doctor` is diagnose-only. It checks the Bun version, the kernel binary and its `--selftest`, trusted or untrusted kernel mode, the config file, the provider, key presence (the key itself is never printed) and model, workspace and state-directory permissions, git, and the terminal (TTY, colour level, UTF-8 locale, `NO_COLOR`). It prints one line per check with a `fix:` line under every WARN or FAIL, and exits 1 if anything FAILs. `--json` gives the same report as JSON, suitable for a support ticket. `--fix <check>` prints read-only export hints for one check (for example `hzcode doctor --fix effect.host` suggests `HZ_EFFECT_HOST_KERNEL=default` for prototype kernel-routed mutations and `=require` as the fail-closed honesty gate). Its only filesystem touch is the kernel selftest's scratch directory under the OS temp dir, removed afterwards.
+
+Prototype EffectHost routing: `HZ_EFFECT_HOST_KERNEL=default` routes eligible `write` / `edit` / argv-only `shell` / reduced `apply_patch` / literal `ast_edit` through the kernel like `=1`, falling back to Bun when ineligible (does not silently change production defaults). `HZ_EFFECT_HOST_KERNEL=require` refuses Bun-owned mutations that cannot kernel-route.
 
 Other flags: `--workspace <path>`, `--model <name>`, `--max-steps <n>`, `--max-tokens <n>`, `--max-wall-ms <n>` (0 means unlimited). `hzcode --help` prints the full list.
 
@@ -304,7 +306,7 @@ The hosted workflow is [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
 Pre-release and single-platform. Read this before relying on it.
 
-- **OS sandboxing (partial).** Optional `hz-sandbox-exec` can apply seccomp/rlimits to shell children when the helper is built; **Landlock FS and network namespaces are not applied** — `hzcode doctor` and `ops/landlock-probe.sh` report host capability only.
+- **OS sandboxing (partial).** Optional `hz-sandbox-exec` can apply seccomp/rlimits/userns+netns/Landlock FS to shell/code_mode children when the helper is built and the host canary succeeds; macOS/Windows and MITM egress remain open. `hzcode doctor` / `ops/landlock-probe.sh` report host capability separately from enforcement.
 - **Not released.** There is no package, installer, signed binary or auto-update. Build from source.
 - **Live providers.** Live runs have been exercised only against an OpenAI-compatible endpoint (NVIDIA NIM). The Anthropic, OpenAI, Google and Ollama adapters are covered by tests against recorded and mock streams, not by live runs against those vendors.
 
@@ -314,8 +316,8 @@ Pre-release and single-platform. Read this before relying on it.
 | NVIDIA NIM connection smoke | `ops/nvidia-smoke.sh` | 2026-11-11 | pass models list with repo `.env` (CRLF-safe) |
 | NVIDIA NIM models API | `integrate.api.nvidia.com` | 2026-11-11 | pass (`tests/providers/nvidia-live.test.ts` with `NVIDIA_API_KEY`; lists 100+ model ids) |
 | NVIDIA NIM chat turn | `minimaxai/minimax-m3.1-flash` + repo `.env` key | 2026-11-11 | **pass** (`ops/nvidia-chat-probe.sh` HTTP 200; headless `hzcode -p`); default `.env` `HZ_MODEL` still **410 EOL** — point at a deployed id |
-| models.dev catalog snapshot | committed `models-dev.snapshot.json` | 2026-11-11 | pass floor + &lt;2 MiB (`catalog.test.ts`; file **staged**, commit pending) |
-| Landlock host probe | `ops/landlock-probe.sh` | 2026-11-11 | pass exit 0\|3 (`tests/ops/landlock-probe.test.ts`; honest — no FS rules applied) |
+| models.dev catalog snapshot | committed `models-dev.curated.json` + optional user cache | 2026-11-12 | third-party metadata — see `NOTICE`; refresh via `hzcode models refresh`; optional poll `HZ_MODELS_POLL_MS` |
+| Landlock host probe | `ops/landlock-probe.sh` | 2026-11-11 | pass exit 0\|3 (`tests/ops/landlock-probe.test.ts`; probe reports host capability — enforcement is via `hz-sandbox-exec`) |
 | TUI `/model` + `/models` | mock + NVIDIA catalog ids | 2026-11-11 | pass (`pty.test.ts`, `list-models.test.ts`, `models-slash.test.ts`; live `/model <id>` on 2026-11-09 in `CURRENT_RUN` §5.0.2 item 9) |
 | Memory FTS recall | deferred `memory_search` | 2026-11-11 | pass (`memory-store.test.ts`, `memory-search.test.ts`) |
 
@@ -323,8 +325,8 @@ Pre-release and single-platform. Read this before relying on it.
 - **Platforms.** Linux x86_64 is the only tested platform. macOS and Windows are untested.
 - **Not wired by default.** Speculative execution exists as code and tests but is off, and a test pins it inert. The guardian is advisory unless `HORIZON_GUARDIAN=enforce`. The language server loop is off until you configure a server. Hashline anchors are opt-in.
 - **Partial.** Per-model tool dialects beyond `apply_patch` (the routing table exists, one dialect ships). The server accepts one client over stdio; there is no socket, TCP or HTTP transport and no SDK. Workspace trust loads hooks, skills, agent presets, **MCP** and **providers** when listed in `trustedWorkspaceHooks` and digests match `trust.json` (see `docs/33` §6.2).
-- **Not started.** Alternate-screen fullscreen TUI renderer (cell buffer + layout); MITM or routed egress proxy (egress decisions are recorded, nothing intercepts traffic); episodic and semantic memory tiers and background consolidation (only the instruction-file hierarchy ships); same-model benchmarks.
-- **Partial.** Scrollback TUI only; `HZ_TUI_MODE=fullscreen` / `--fullscreen` fail closed (ruling **129**). Deferred **`debug`** tool (DAP stack/variables/`launch` adapter handshake; attach/step open; rulings **120**, **128**, **129**). Deferred **`memory_search`** over SQLite FTS5 + `MEMORY.md` (ruling **124**); no dream/embedding tier yet.
+- **Not started.** Alternate-screen fullscreen TUI renderer (cell buffer + layout); MITM or routed egress proxy (egress decisions are recorded, nothing intercepts traffic); EffectHost / independent receipt postimage; same-model benchmarks.
+- **Partial.** Scrollback TUI only; `HZ_TUI_MODE=fullscreen` / `--fullscreen` fail closed (ruling **129**). Linux OS confinement via `hz-sandbox-exec` (Landlock/seccomp/netns/rlimits when host canary allows; macOS/Windows open). Deferred **`debug`** tool (DAP launch/step/attach slices; live dlv/js-debug e2e open). Deferred **`memory_search`** (FTS5 + `MEMORY.md` + dream plan; embeddings/auto-apply open).
 - **Tamper-evident, not tamper-proof.** See Features. In `untrusted` mode the guarantees are weaker still.
 
 The authoritative status table is `CURRENT_RUN.md` §5.0, and the implemented-versus-designed map is [`docs/28-implementation-status.md`](./docs/28-implementation-status.md). Many capabilities described in `docs/` (web and desktop apps, IDE bridge, SDKs, plugin marketplace, collaboration, voice) are designs, not shipped code.
@@ -363,4 +365,4 @@ Claims in documentation should cite a command that produces them; `docs/28-imple
 
 ## Licence
 
-Not yet chosen. The repository has no `LICENSE` file, so no licence is granted until one is added. Third-party attribution rows live in `NOTICE` (hygiene only, not a grant of rights).
+Not yet chosen. The repository has no `LICENSE` file, so no licence is granted until one is added. See `docs/LICENSE-STATUS.md` for the honest status ladder; third-party attribution rows live in `NOTICE` (hygiene only, not a grant of rights). `hzcode doctor` reports `repo.license`.

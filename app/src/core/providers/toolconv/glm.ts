@@ -13,6 +13,8 @@ export interface ParsedGlmToolCall {
   args: Record<string, unknown>;
 }
 
+const OPEN_TAG = /<tool_call>/i;
+const CLOSE_TAG = /<\/tool_call>/i;
 const BLOCK = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
 const PAIR = /<arg_key>\s*([\s\S]*?)\s*<\/arg_key>\s*<arg_value>\s*([\s\S]*?)\s*<\/arg_value>/gi;
 
@@ -34,37 +36,70 @@ function parseArgValue(raw: string): unknown {
   return v;
 }
 
+function parseGlmInner(
+  inner: string,
+  allowed: ReadonlySet<string>,
+): { call?: ParsedGlmToolCall; error?: string } {
+  const nl = inner.indexOf("\n");
+  const nameLine = (nl === -1 ? inner : inner.slice(0, nl)).trim();
+  const body = nl === -1 ? "" : inner.slice(nl + 1);
+  const name = nameLine;
+  if (name === "" || !allowed.has(name)) {
+    return { error: `glm tool block: unknown or missing tool ${JSON.stringify(name)}` };
+  }
+  const args: Record<string, unknown> = {};
+  PAIR.lastIndex = 0;
+  let p: RegExpExecArray | null;
+  while ((p = PAIR.exec(body)) !== null) {
+    const key = p[1].trim();
+    if (key === "") continue;
+    args[key] = parseArgValue(p[2]);
+  }
+  return { call: { name, args } };
+}
+
+/**
+ * Scan `buffer` from `fromIndex` for closed GLM `<tool_call>` blocks only.
+ * Stops at the first incomplete open tag (fail-closed for partial streams).
+ */
+export function drainCompleteGlmToolCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedGlmToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedGlmToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const tail = buffer.slice(i);
+    const openMatch = OPEN_TAG.exec(tail);
+    if (!openMatch) break;
+    const afterOpen = i + openMatch.index + openMatch[0].length;
+    const closeTail = buffer.slice(afterOpen);
+    const closeMatch = CLOSE_TAG.exec(closeTail);
+    if (!closeMatch) break;
+    const inner = closeTail.slice(0, closeMatch.index);
+    const closeEnd = afterOpen + closeMatch.index + closeMatch[0].length;
+    const parsed = parseGlmInner(inner, allowed);
+    if (parsed.error) errors.push(parsed.error);
+    else if (parsed.call) calls.push(parsed.call);
+    i = closeEnd;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse complete GLM `<tool_call>` blocks from assistant text. */
 export function parseGlmToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedGlmToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedGlmToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteGlmToolCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
   BLOCK.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = BLOCK.exec(text)) !== null) {
+  while ((m = BLOCK.exec(text.slice(0, nextIndex))) !== null) {
     consumed.push(m[0]);
-    const inner = m[1];
-    const nl = inner.indexOf("\n");
-    const nameLine = (nl === -1 ? inner : inner.slice(0, nl)).trim();
-    const body = nl === -1 ? "" : inner.slice(nl + 1);
-    const name = nameLine;
-    if (name === "" || !allowed.has(name)) {
-      errors.push(`glm tool block: unknown or missing tool ${JSON.stringify(name)}`);
-      continue;
-    }
-    const args: Record<string, unknown> = {};
-    PAIR.lastIndex = 0;
-    let p: RegExpExecArray | null;
-    while ((p = PAIR.exec(body)) !== null) {
-      const key = p[1].trim();
-      if (key === "") continue;
-      args[key] = parseArgValue(p[2]);
-    }
-    calls.push({ name, args });
   }
   for (const block of consumed) rest = rest.replace(block, "");
   return { calls, rest: rest.trim(), errors };

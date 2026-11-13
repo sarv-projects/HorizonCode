@@ -1,16 +1,17 @@
 /**
- * loop-detection.test.ts — SAFETY-RAILS rail 1 (identical-tool-call detection).
- *
- * Signature canonicalization (key-order independence, string/null/non-serializable
- * fallbacks), the soft warning at exactly 3, the hard escalation at >= 5, and a
- * reset when a different call breaks the streak. Every assertion fails if the
- * rail is reverted (no module, no thresholds, no exact messages).
+ * loop-detection.test.ts — SAFETY-RAILS rail 1 (tiered identical-step detection).
  */
 
 import { describe, expect, test } from "bun:test";
 import {
   LoopDetectionTracker,
+  MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
+  MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS,
+  NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
+  NUDGE_AFTER_IDENTICAL_TOOL_CALLS,
   sortKeys,
+  stepIsProblematicallyRepeating,
+  stepSignature,
   toolCallSignature,
 } from "../../../src/core/guards/loop-detection";
 
@@ -32,7 +33,6 @@ describe("toolCallSignature canonicalization", () => {
   test("a non-serializable input falls back to String(input)", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
-    // JSON.stringify would throw on the cycle; the rail must not.
     expect(toolCallSignature(cyclic)).toBe(String(cyclic));
   });
 
@@ -42,44 +42,81 @@ describe("toolCallSignature canonicalization", () => {
   });
 });
 
-describe("LoopDetectionTracker thresholds", () => {
-  test("the soft warning fires at exactly the 3rd identical call and not before", () => {
-    const tracker = new LoopDetectionTracker();
-    const call = { name: "read", input: { path: "a.txt" } };
-    expect(tracker.inspect(call).kind).toBe("ok");
-    expect(tracker.inspect(call).kind).toBe("ok");
-    const third = tracker.inspect(call);
-    expect(third.kind).toBe("soft");
-    expect(third.message).toBe("Detected 3 consecutive identical calls to `read`; consider trying a different approach.");
+describe("step signature", () => {
+  test("parallel call order does not change the step signature", () => {
+    const a = [{ name: "read", input: { path: "a" } }, { name: "grep", input: { pattern: "x" } }];
+    const b = [{ name: "grep", input: { pattern: "x" } }, { name: "read", input: { path: "a" } }];
+    expect(stepSignature(a)).toBe(stepSignature(b));
   });
 
-  test("the hard escalation fires at the 5th identical call with the exact message", () => {
+  test("mixed problematic and exec tools use the loose tier", () => {
+    expect(
+      stepIsProblematicallyRepeating([
+        { name: "read", input: {} },
+        { name: "shell", input: { command: "true" } },
+      ]),
+    ).toBe(false);
+    expect(stepIsProblematicallyRepeating([{ name: "read", input: {} }, { name: "grep", input: {} }])).toBe(true);
+  });
+});
+
+describe("LoopDetectionTracker — tight tier (read)", () => {
+  test("soft nudge at the 4th identical step", () => {
     const tracker = new LoopDetectionTracker();
-    const call = { name: "grep", input: { pattern: "x" } };
-    for (let i = 0; i < 4; i += 1) tracker.inspect(call);
-    const fifth = tracker.inspect(call);
-    expect(fifth.kind).toBe("hard");
-    expect(fifth.message).toBe("Detected 5 consecutive identical calls to `grep`; stopping to avoid a loop.");
+    const step = [{ name: "read", input: { path: "a.txt" } }];
+    for (let i = 0; i < NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS - 1; i += 1) {
+      expect(tracker.inspectStep(step).kind).toBe("ok");
+    }
+    const nudge = tracker.inspectStep(step);
+    expect(nudge.kind).toBe("soft");
+    expect(nudge.message).toContain("4 consecutive identical");
   });
 
-  test("a different call name or argument resets the streak", () => {
+  test("hard stop at the 8th identical step", () => {
     const tracker = new LoopDetectionTracker();
-    const a = { name: "read", input: { path: "a.txt" } };
-    tracker.inspect(a);
-    tracker.inspect(a);
-    // Different arguments break the streak back to 1.
-    expect(tracker.inspect({ name: "read", input: { path: "b.txt" } }).kind).toBe("ok");
-    expect(tracker.inspect({ name: "read", input: { path: "b.txt" } }).kind).toBe("ok");
-    // The 3rd identical call to the NEW target is the soft point, proving reset.
-    expect(tracker.inspect({ name: "read", input: { path: "b.txt" } }).kind).toBe("soft");
+    const step = [{ name: "grep", input: { pattern: "x" } }];
+    for (let i = 0; i < MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS - 1; i += 1) {
+      tracker.inspectStep(step);
+    }
+    const stop = tracker.inspectStep(step);
+    expect(stop.kind).toBe("hard");
+    expect(stop.message).toContain("stopping to avoid a loop");
+  });
+});
+
+describe("LoopDetectionTracker — default tier (shell)", () => {
+  test("soft nudge at the 8th identical step", () => {
+    const tracker = new LoopDetectionTracker();
+    const step = [{ name: "shell", input: { command: "true" } }];
+    for (let i = 0; i < NUDGE_AFTER_IDENTICAL_TOOL_CALLS - 1; i += 1) {
+      expect(tracker.inspectStep(step).kind).toBe("ok");
+    }
+    expect(tracker.inspectStep(step).kind).toBe("soft");
+  });
+
+  test("hard stop at the 12th identical step", () => {
+    const tracker = new LoopDetectionTracker();
+    const step = [{ name: "write", input: { path: "x", content: "y" } }];
+    for (let i = 0; i < MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS - 1; i += 1) {
+      tracker.inspectStep(step);
+    }
+    expect(tracker.inspectStep(step).kind).toBe("hard");
+  });
+
+  test("a different step resets the streak", () => {
+    const tracker = new LoopDetectionTracker();
+    const a = [{ name: "shell", input: { command: "ls" } }];
+    tracker.inspectStep(a);
+    tracker.inspectStep(a);
+    expect(tracker.inspectStep([{ name: "shell", input: { command: "pwd" } }]).kind).toBe("ok");
   });
 
   test("reset() clears the streak", () => {
     const tracker = new LoopDetectionTracker();
-    const call = { name: "read", input: { path: "a.txt" } };
-    tracker.inspect(call);
-    tracker.inspect(call);
+    const step = [{ name: "read", input: { path: "a.txt" } }];
+    tracker.inspectStep(step);
+    tracker.inspectStep(step);
     tracker.reset();
-    expect(tracker.inspect(call).kind).toBe("ok");
+    expect(tracker.inspectStep(step).kind).toBe("ok");
   });
 });

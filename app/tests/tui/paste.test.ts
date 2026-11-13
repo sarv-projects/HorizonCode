@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createPasteCollector, echoedRows, pasteLabel } from "../../src/tui/paste";
+import {
+  createKeypressPasteCollector,
+  createPasteCollector,
+  editorPasteDisplay,
+  echoedRows,
+  pasteLabel,
+} from "../../src/tui/paste";
 
 describe("bracketed paste", () => {
   test("lines outside a paste are not collected", () => {
@@ -49,5 +55,24 @@ describe("bracketed paste", () => {
     expect(c.pasting()).toBe(true);
     c.key("paste-end");
     expect(c.pasting()).toBe(false);
+  });
+});
+
+describe("keypress bracketed paste", () => {
+  test("multi-line paste is one chunk", () => {
+    const c = createKeypressPasteCollector();
+    c.key("paste-start");
+    expect(c.pasting()).toBe(true);
+    c.chunk("one");
+    c.chunk("\n");
+    c.chunk("two");
+    c.key("paste-end");
+    const r = c.flushAfterEnd();
+    expect(r).toEqual({ text: "one\ntwo", lines: 2, raw: ["one", "two"] });
+  });
+
+  test("editor display collapses multi-line", () => {
+    const r = { text: "a\nb", lines: 2, raw: ["a", "b"] };
+    expect(editorPasteDisplay(r)).toEqual({ display: "[pasted 2 lines]", submitText: "a\nb" });
   });
 });

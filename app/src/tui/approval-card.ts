@@ -7,7 +7,9 @@
  * stays the fallback for every other situation.
  */
 
-import { bold, dim, paint, truncate, visibleWidth } from "./style";
+import { analyzeShellCompound, maxSegmentRisk } from "../core/shell-split";
+import { formatToolEffectLinkage } from "./cards";
+import { bold, dim, paint, sanitizeText, truncate, visibleWidth } from "./style";
 
 export type Risk = "low" | "medium" | "high";
 export type KeyAnswer = "y" | "n" | "a";
@@ -16,9 +18,17 @@ export interface ApprovalCardInput {
   /** The tool or guard kind, e.g. `shell.exec`. */
   kind: string;
   title: string;
+  /** Optional presentation icon prefix (OpenCode-style). */
+  icon?: string;
+  /** Extra lines between tool row and risk (e.g. path / command summary). */
+  presentationLines?: string[];
   /** Arguments summary: the command, path or URL. */
   detail?: string;
   guardian?: string;
+  /** EffectHost / lease / dispatch-tool linkage (docs/28 ruling 254). */
+  effectId?: string;
+  leaseId?: string;
+  tool?: string;
   /** Terminal columns available; the card never exceeds it. */
   width: number;
   /** False selects ASCII borders for non-UTF-8 locales. */
@@ -31,7 +41,9 @@ export interface ApprovalCardInput {
 export function riskOf(kind: string, detail = ""): Risk {
   if (kind === "fs.read") return "low";
   if (kind === "shell.exec") {
-    return /\b(rm|sudo|chmod|chown|dd|mkfs|curl|wget|git\s+push|kill)\b|[|;&]|>\s*\S/.test(detail) ? "high" : "medium";
+    const analysis = analyzeShellCompound(detail);
+    if (analysis.ok) return maxSegmentRisk(analysis.segments) as Risk;
+    return "high";
   }
   if (kind === "net.fetch" || kind === "mcp.invoke" || kind === "spawn") return "high";
   return "medium";
@@ -39,6 +51,22 @@ export function riskOf(kind: string, detail = ""): Risk {
 
 function riskPaint(risk: Risk, text: string): string {
   return risk === "high" ? paint("err", text) : risk === "medium" ? paint("warn", text) : paint("ok", text);
+}
+
+/** Dim linkage line for approvals (`effect … · lease … · tool …`). */
+export function formatApprovalLinkage(input: {
+  effectId?: string;
+  leaseId?: string;
+  tool?: string;
+}): string {
+  const bits: string[] = [];
+  const effectPart = formatToolEffectLinkage({ effectId: input.effectId });
+  if (effectPart !== "") bits.push(effectPart);
+  const lid = typeof input.leaseId === "string" ? input.leaseId.trim() : "";
+  if (lid !== "") bits.push(`lease ${sanitizeText(lid).slice(0, 8)}`);
+  const tool = typeof input.tool === "string" ? input.tool.trim() : "";
+  if (tool !== "") bits.push(`tool ${sanitizeText(tool)}`);
+  return bits.join(" \u00b7 ");
 }
 
 /** The key legend: keys bold, labels dim. */
@@ -56,7 +84,10 @@ export function approvalCard(input: ApprovalCardInput): string[] {
   const inner = width - 4;
   const risk = riskOf(input.kind, input.detail ?? "");
   const rows: string[] = [];
-  rows.push(dim("tool ") + bold(input.kind));
+  const icon = (input.icon ?? "").trim();
+  rows.push(dim("tool ") + (icon !== "" ? icon + " " : "") + bold(input.kind));
+  const pres = (input.presentationLines ?? []).filter((l) => l.trim() !== "");
+  if (pres.length > 0) rows.push(...pres.map((l) => truncate(l, inner)));
   const detail = (input.detail ?? "").trim();
   if (detail !== "") {
     const all = detail.split("\n");
@@ -65,6 +96,12 @@ export function approvalCard(input: ApprovalCardInput): string[] {
     if (all.length > 4) rows.push(dim(`${u ? "\u2026" : "..."} +${all.length - 4} lines`));
   }
   rows.push(dim("risk ") + riskPaint(risk, risk));
+  const linkage = formatApprovalLinkage({
+    effectId: input.effectId,
+    leaseId: input.leaseId,
+    tool: input.tool,
+  });
+  if (linkage !== "") rows.push(dim(truncate(linkage, inner)));
   if (input.guardian) rows.push(dim(truncate(input.guardian, inner)));
   rows.push(keyLegend(input.canAlways !== false));
 

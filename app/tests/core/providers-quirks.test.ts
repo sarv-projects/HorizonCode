@@ -61,4 +61,35 @@ describe("provider quirks", () => {
     applyQuirks({ provider: "custom", model: "m", baseUrl: "https://api.groq.com" }, body);
     expect((body.messages as { name?: string }[])[0].name).toBeUndefined();
   });
+
+  test("xAI host drops tool_choice", () => {
+    const body: Record<string, unknown> = {
+      messages: [{ role: "user", content: "u" }],
+      tool_choice: "auto",
+    };
+    const applied = applyQuirks(
+      { provider: "custom", model: "grok-2", baseUrl: "https://api.x.ai/v1" },
+      body,
+    );
+    expect(applied).toContain("drop_tool_choice");
+    expect(body.tool_choice).toBeUndefined();
+  });
+
+  test("together host appends user after trailing tool message", () => {
+    const body: Record<string, unknown> = {
+      messages: [
+        { role: "user", content: "go" },
+        { role: "assistant", content: "", tool_calls: [] },
+        { role: "tool", tool_call_id: "c1", content: "{}" },
+      ],
+    };
+    const applied = applyQuirks(
+      { provider: "custom", model: "m", baseUrl: "https://api.together.xyz" },
+      body,
+    );
+    expect(applied).toContain("force_user_message");
+    const msgs = body.messages as { role: string; content?: string }[];
+    expect(msgs[msgs.length - 1].role).toBe("user");
+    expect(msgs[msgs.length - 1].content).toBe("Continue.");
+  });
 });

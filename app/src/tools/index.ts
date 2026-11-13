@@ -14,8 +14,11 @@ import { editTool } from "./edit";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
 import { interactiveExecTool } from "./interactive-exec";
+import { lintTool } from "./lint";
 import { lspTool } from "./lsp";
+import { handoffCreateTool, handoffResumeTool, handoffSearchTool } from "./handoff";
 import { memorySearchTool } from "./memory-search";
+import { presentTool } from "./present";
 import { previewTool } from "./preview";
 import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
@@ -33,6 +36,7 @@ export const tools: Tool[] = [
   grepTool,
   globTool,
   repoMapTool,
+  presentTool,
   shellTool,
   todoTool,
   agentTool,
@@ -41,8 +45,12 @@ export const tools: Tool[] = [
   applyPatchTool,
   interactiveExecTool,
   lspTool,
+  lintTool,
   debugTool,
   memorySearchTool,
+  handoffCreateTool,
+  handoffResumeTool,
+  handoffSearchTool,
   toolSearchTool,
   astSearchTool,
   astEditTool,

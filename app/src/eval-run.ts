@@ -19,12 +19,14 @@
  * refusal — missing `--forbidden`, a corrupt post-mortem store — never runs).
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { PostmortemEvalCase } from "./core/evals";
 import { evalCaseFromPostmortem, runEvalSet } from "./core/evals";
 import { makeRuntimeExecutor } from "./core/eval-executor";
 import { loadPostmortems } from "./core/postmortem";
+import { assertEvalApprovalFresh, buildEvalApproval } from "./core/eval-approval";
+import { upsertPredsRecord, type PredsRecordV1 } from "./core/preds-writer";
 
 export interface EvalCliIo {
   out(line: string): void;
@@ -43,7 +45,7 @@ interface CaseFileEntry {
 }
 
 const USAGE =
-  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir>) --forbidden <text-or-file> [--keep] [--live]";
+  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir>) --forbidden <text-or-file> [--preds-out <preds.json>] [--approval <file.json>] [--write-approval <file.json>] [--keep] [--live]";
 
 /** The value of `--flag`, or `undefined` when absent (an empty string when bare). */
 function argValue(argv: readonly string[], flag: string): string | undefined {
@@ -152,8 +154,18 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
     return 2;
   }
 
+  const approvalPath = argValue(argv, "--approval");
+  const writeApprovalPath = argValue(argv, "--write-approval");
+  try {
+    if (approvalPath !== undefined && approvalPath !== "") assertEvalApprovalFresh(cases, approvalPath);
+  } catch (err) {
+    io.err(err instanceof Error ? err.message : String(err));
+    return 2;
+  }
+
   const live = argv.includes("--live");
   const keep = argv.includes("--keep");
+  const predsOut = argValue(argv, "--preds-out");
   const handle = makeRuntimeExecutor({ mock: !live, keepWorkspaces: keep });
 
   io.out(`eval runner: ${cases.length} case(s) · model=${live ? "configured live provider" : "mock (hermetic)"}`);
@@ -176,11 +188,31 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
       `${result?.passed === true ? "PASS" : "FAIL"} ${observation.caseId} · terminal=${observation.terminal} · tools=${tools} · ${observation.durationMs}ms${kept}`,
     );
     for (const failure of result?.failures ?? []) io.out(`     ${failure.kind}: ${failure.detail}`);
+    if (predsOut !== undefined && predsOut !== "") {
+      const record: PredsRecordV1 = {
+        instance_id: observation.caseId,
+        model_name_or_path: observation.model,
+        model_patch: observation.submission,
+        exit_status: observation.terminal,
+        horizon: {
+          terminal: observation.terminal,
+          durationMs: observation.durationMs,
+          sessionId: observation.sessionId,
+        },
+      };
+      upsertPredsRecord(predsOut, record);
+    }
   }
 
   for (const block of run.aggregate.published) io.out(block);
   const passed = run.results.filter((result) => result.passed).length;
   io.out(`summary: ${run.results.length} case(s), ${passed} passed, ${run.results.length - passed} failed`);
+
+  if (writeApprovalPath !== undefined && writeApprovalPath !== "") {
+    const approval = buildEvalApproval(cases);
+    writeFileSync(writeApprovalPath, `${JSON.stringify(approval, null, 2)}\n`, "utf8");
+    io.out(`wrote approval: ${writeApprovalPath} (casesContentHash ${approval.casesContentHash})`);
+  }
 
   return passed === run.results.length ? 0 : 1;
 }

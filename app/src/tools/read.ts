@@ -33,30 +33,20 @@ async function checkAccess(ctx: ToolContext, resolved: string, rel: string): Pro
   return null;
 }
 
-export const readTool: Tool = {
-  name: "read",
-  description: "Read a text file with line numbers, optionally a line range.",
-  parameters: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "File path to read." },
-      offset: { type: "number", description: "1-based line number to start at (default 1)." },
-      limit: { type: "number", description: `Maximum lines to return (default and cap ${MAX_LINES}).` },
-      anchors: {
-        type: "boolean",
-        description: "Prefix each line with a LINE:abc:def anchor usable by edit start_anchor/end_anchor (default false).",
-      },
-    },
-    required: ["path"],
-  },
+export type ReadBatchItem = {
+  path: string;
+  ok: boolean;
+  output?: string;
+  error?: string;
+};
 
-  async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    try {
-      if (typeof args.path !== "string" || args.path === "") return fail("path is required");
+async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, pathArg: string): Promise<ToolResult> {
+  try {
+    if (pathArg === "") return fail("path is required");
       // Resolve symlinks BEFORE Guard: the guard must see the path whose bytes
       // will actually be read. Guarding the lexical path while `readFile`
       // follows a symlink is an escape (workspace/link -> /etc/...).
-      let resolved = resolvePath(ctx.cwd, args.path);
+      let resolved = resolvePath(ctx.cwd, pathArg);
       try {
         resolved = await realpath(resolved);
       } catch {
@@ -93,7 +83,14 @@ export const readTool: Tool = {
       const all = text.split("\n");
       if (all.length > 1 && all[all.length - 1] === "") all.pop(); // trailing newline
 
-      const start = Math.max(1, Math.floor(Number(args.offset) || 1)) - 1;
+      const rawOffset = Number(args.offset);
+      const line1 =
+        Number.isFinite(rawOffset) && rawOffset !== 0
+          ? rawOffset < 0
+            ? Math.max(1, all.length + Math.floor(rawOffset) + 1)
+            : Math.max(1, Math.floor(rawOffset))
+          : 1;
+      const start = line1 - 1;
       const wanted = Math.max(1, Math.floor(Number(args.limit) || MAX_LINES));
       const limit = Math.min(wanted, MAX_LINES);
 
@@ -148,5 +145,59 @@ export const readTool: Tool = {
     } catch (e) {
       return fail(msg(e));
     }
+}
+
+export const readTool: Tool = {
+  name: "read",
+  description: "Read a text file with line numbers, optionally a line range.",
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File path to read." },
+      paths: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Optional batch: read multiple paths; returns a JSON array of per-path ok/output/error (never fails the whole call on one bad path).",
+      },
+      offset: {
+        type: "number",
+        description: "1-based line to start at (default 1). Negative values count from the end (e.g. -100 = last 100 lines).",
+      },
+      limit: { type: "number", description: `Maximum lines to return (default and cap ${MAX_LINES}).` },
+      anchors: {
+        type: "boolean",
+        description: "Prefix each line with a LINE:abc:def anchor usable by edit start_anchor/end_anchor (default false).",
+      },
+    },
+    // Either `path` or `paths` (batch); execute fails closed if both or neither.
+  },
+
+  async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    const pathStr = typeof args.path === "string" ? args.path : "";
+    const hasPath = pathStr !== "";
+    const pathsArg = args.paths;
+    const batchPaths = Array.isArray(pathsArg) ? pathsArg : undefined;
+    const hasBatch = batchPaths !== undefined && batchPaths.length > 0;
+    if (hasPath && hasBatch) return fail("set either path or paths, not both");
+    if (hasBatch) {
+      const items: ReadBatchItem[] = [];
+      for (const entry of batchPaths!) {
+        if (typeof entry !== "string" || entry === "") {
+          items.push({ path: String(entry), ok: false, error: "invalid path entry" });
+          continue;
+        }
+        const one = await readOnePath(args, ctx, entry);
+        items.push({
+          path: entry,
+          ok: one.ok,
+          output: one.ok ? one.output : undefined,
+          error: one.ok ? undefined : one.error ?? "read failed",
+        });
+      }
+      return { ok: true, output: JSON.stringify(items, null, 2) };
+    }
+    if (!hasPath) return fail("path or paths is required");
+    return readOnePath(args, ctx, pathStr);
   },
 };

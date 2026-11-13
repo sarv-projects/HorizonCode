@@ -56,6 +56,30 @@ impl Receipts {
             ),
             _ => None,
         };
+        let postimage_digest = match input.get("postimageDigest") {
+            Some(v) if !v.is_null() => Some(
+                v.as_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "receipt.postimageDigest must be a string".to_string())?,
+            ),
+            _ => None,
+        };
+        let postimage_path = match input.get("postimagePath") {
+            Some(v) if !v.is_null() => Some(
+                v.as_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "receipt.postimagePath must be a string".to_string())?,
+            ),
+            _ => None,
+        };
+        let effect_id = match input.get("effectId") {
+            Some(v) if !v.is_null() => Some(
+                v.as_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "receipt.effectId must be a string".to_string())?,
+            ),
+            _ => None,
+        };
 
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
@@ -94,6 +118,16 @@ impl Receipts {
         let mut receipt = receipt;
         if let Value::Object(map) = &mut receipt {
             map.insert("hash".to_string(), json!(hash));
+            // Additive observation sidecars — not in RECEIPT_FIELDS / hash.
+            if let Some(d) = &postimage_digest {
+                map.insert("postimageDigest".to_string(), json!(d));
+            }
+            if let Some(p) = &postimage_path {
+                map.insert("postimagePath".to_string(), json!(p));
+            }
+            if let Some(e) = &effect_id {
+                map.insert("effectId".to_string(), json!(e));
+            }
         }
 
         append_line(&self.path, &receipt)?;
@@ -125,5 +159,7 @@ fn append_line(path: &Path, value: &Value) -> Result<(), String> {
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.flush())
         .map_err(|e| format!("cannot append to {}: {}", path.display(), e))?;
+    crate::jsonl_append::sync_jsonl_append(path, &file)
+        .map_err(|e| format!("cannot fsync {}: {}", path.display(), e))?;
     Ok(())
 }

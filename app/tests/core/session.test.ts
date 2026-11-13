@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import * as path from "node:path";
 import type { ChatMsg, ToolCall } from "../../src/contracts";
 import { AdmissionIdCollisionError, AdmissionQueue } from "../../src/core/admission";
+import { SESSION_DB_USER_VERSION, readSessionDbUserVersion } from "../../src/core/session-migrate";
 import { SessionStore, rowToChatMsg } from "../../src/core/session";
 import { cleanupTemps, tempDir } from "./helpers";
 
@@ -35,6 +36,16 @@ afterAll(() => {
 test("the database lives under <workspace>/.hz/state/hzcode.db (canonical)", () => {
   expect(store.dbPath).toBe(path.join(workspace, ".hz", "state", "hzcode.db"));
   expect(existsSync(store.dbPath)).toBe(true);
+});
+
+test("F5: user_version and projection_watermark migrate on open", () => {
+  expect(readSessionDbUserVersion(store.db)).toBe(SESSION_DB_USER_VERSION);
+  const row = store.db
+    .query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='projection_watermark'`,
+    )
+    .get() as { name: string } | null;
+  expect(row?.name).toBe("projection_watermark");
 });
 
 test("durability: journal_mode=WAL and synchronous=FULL at open, and they stick across reopen (RC-16)", () => {

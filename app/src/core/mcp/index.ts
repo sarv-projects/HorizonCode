@@ -19,9 +19,9 @@
  *
  * Reduced form, stated honestly, because the holes are the interesting part:
  *
- *  - ONLY servers from the user config are eligible. There is no workspace path
- *    to MCP (no trust store exists yet), so a cloned repo cannot name a program
- *    that would then run with the user's authority.
+ *  - User-config servers are always eligible. Workspace `mcp.json` merges only
+ *    when digests match `trust.json` (rulings 105/113); an untrusted workspace
+ *    cannot name a program that would then run with the user's authority.
  *  - A malformed entry is skipped with a notice; a failed connect is skipped
  *    with a notice. Neither stops the session.
  *  - `start` does not retry a failed initial connect: the human named the
@@ -301,7 +301,7 @@ export {
   MCP_MAX_RECONNECTS,
   MCP_PROTOCOL_VERSION,
 } from "./client";
-export type { McpCallResult, McpClientOptions, McpToolCaller, McpToolInfo } from "./client";
+export type { McpCallResult, McpClientOptions, McpResourceInfo, McpToolCaller, McpToolInfo } from "./client";
 export {
   registerMcpTools,
   clearMcpTools,
@@ -316,4 +316,10 @@ export {
   MCP_FENCE_CLOSE,
   MCP_TOOL_PREFIX,
   MCP_SERVER_ID_SLUG,
+  listAllMcpTools,
+  listAllMcpResources,
+  mcpListRequestParams,
+  parseMcpListNextCursor,
+  MCP_LIST_MAX_PAGES,
 } from "./registry";
+export type { ListAllMcpListOptions, ListAllMcpToolsOptions } from "./registry";

@@ -11,6 +11,8 @@ import {
   loadTrustStore,
   resolveWorkspaceHookTrust,
   workspaceHooksTrusted,
+  workspaceTrustRiskBlurb,
+  workspaceTrustSurfaceSummary,
 } from "../../src/core/trust";
 
 let workspace: string;
@@ -41,11 +43,13 @@ describe("workspace hook trust", () => {
     expect(cfg.state).toBe("none");
   });
 
-  test("trusted workspace hooks load when the path is listed", () => {
+  test("trusted workspace hooks load when the path is listed", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
     home = mkdtempSync(path.join(tmpdir(), "hz-hook-home-"));
     wsHooks();
     const resolved = path.resolve(workspace);
+    const bound = await ensureWorkspaceHookTrust(workspace, [resolved], home, async () => true);
+    expect(bound).toBe(true);
     const opts = hooksLoadOptions(workspace, { trustedWorkspaceHooks: [resolved] }, undefined, home);
     const files = hooksConfigFiles(workspace, opts);
     expect(files).toContain(path.join(workspace, ".hz", "hooks.json"));
@@ -56,6 +60,27 @@ describe("workspace hook trust", () => {
     expect(digest).not.toBeNull();
     const store = loadTrustStore(home);
     expect(store.records.some((r) => r.hooksDigest === digest)).toBe(true);
+  });
+
+  test("trust prompt surfaces risk and hooks inventory", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
+    wsHooks();
+    const summary = workspaceTrustSurfaceSummary(workspace);
+    expect(summary.join("\n")).toContain("hooks.json");
+    expect(summary.join("\n")).toContain("shell commands");
+    expect(workspaceTrustRiskBlurb()).toContain("not git trust");
+  });
+
+  test("first bind requires approval (no silent TOFU)", async () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
+    home = mkdtempSync(path.join(tmpdir(), "hz-hook-home-"));
+    wsHooks();
+    const resolved = path.resolve(workspace);
+    const notes: string[] = [];
+    expect(resolveWorkspaceHookTrust(workspace, [resolved], home, (m) => notes.push(m))).toBe(false);
+    expect(notes.join("\n")).toContain("not bound");
+    expect(await ensureWorkspaceHookTrust(workspace, [resolved], home)).toBe(false);
+    expect(loadTrustStore(home).records).toHaveLength(0);
   });
 
   test("digest change revokes workspace hooks until re-bound", () => {
@@ -113,5 +138,25 @@ describe("workspace hook trust", () => {
     wsHooks(JSON.stringify({ hooks: { sessionStart: [{ command: "false" }] } }));
     const ok = await ensureWorkspaceHookTrust(workspace, [resolved], home);
     expect(ok).toBe(false);
+  });
+
+  test("directory digest cap overflow fails closed", async () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
+    home = mkdtempSync(path.join(tmpdir(), "hz-hook-home-"));
+    const skills = path.join(workspace, ".hz", "state", "skills");
+    mkdirSync(skills, { recursive: true });
+    for (let i = 0; i < 220; i += 1) {
+      writeFileSync(path.join(skills, `f${i}.md`), `skill ${i}`);
+    }
+    const { digestDirectory, TRUST_DIR_DIGEST_TRUNCATED, resolveWorkspaceProjectSkillsTrust } = await import(
+      "../../src/core/trust"
+    );
+    expect(digestDirectory(skills)).toBe(TRUST_DIR_DIGEST_TRUNCATED);
+    const resolved = path.resolve(workspace);
+    const notes: string[] = [];
+    expect(
+      resolveWorkspaceProjectSkillsTrust(workspace, [resolved], home, (m) => notes.push(m)),
+    ).toBe(false);
+    expect(notes.join("\n")).toContain("too large");
   });
 });

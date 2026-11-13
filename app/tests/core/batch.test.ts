@@ -214,7 +214,7 @@ describe("parallel batches through the loop", () => {
 
         const shells = toolContents(store, deps.sessionId, "shell");
         expect(shells.length).toBe(2);
-        for (const content of shells) expect(content).toContain("exit 0");
+        for (const content of shells) expect(content).toMatch(/exit(?: code)?:\s*0/i);
         const receipts = await kernel.verifyReceipts();
         expect(receipts.ok).toBe(true);
         expect(receipts.count).toBe(2);

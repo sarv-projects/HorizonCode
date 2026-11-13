@@ -13,6 +13,7 @@ import { sha256Hex } from "../core/canon";
 import { withFileLock, targetLockPath } from "../core/file-lock";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
+import { checkpointDirtyPathBeforeEdit } from "../core/git-dirty-checkpoint";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { resolveAnchor } from "./hashline";
@@ -25,6 +26,13 @@ function fail(error: string): ToolResult {
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function dirtyCheckpointPrefix(ctx: ToolContext, rel: string): string {
+  const cp = checkpointDirtyPathBeforeEdit(ctx.workspace, rel);
+  if (cp.committed && cp.notice) return `${cp.notice}\n`;
+  if (cp.error) return `[git checkpoint failed: ${cp.error}]\n`;
+  return "";
 }
 
 /** Non-overlapping occurrences of `needle` in `hay`. */
@@ -592,6 +600,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
   } catch {
     return fail(`file not found: ${rel}`);
   }
+  const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
 
   const lf = toLfView(before);
   const model = fuzzyModel(before, lf.view);
@@ -649,7 +658,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
 
   noteRead(ctx, resolved);
   const suffix = shifts.length > 0 ? ` (anchors shifted: ${shifts.join(", ")})` : "";
-  return { ok: true, output: `Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}` };
+  return { ok: true, output: `${checkpointNote}Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}` };
 }
 
 export const editTool: Tool = {
@@ -705,6 +714,7 @@ export const editTool: Tool = {
       } catch {
         return fail(`file not found: ${rel}`);
       }
+      const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
 
       // CRLF safety: match against the LF VIEW the model sees. The old/new
       // strings are normalised to LF too (models emit LF; this is defensive
@@ -844,7 +854,7 @@ export const editTool: Tool = {
 
       reflections.delete(reflectionKey(ctx, resolved));
       const suffix = rung === "exact" ? "" : ` (matched via ${rung})`;
-      return { ok: true, output: `Replaced ${replacements} occurrence(s) in ${rel}${suffix}` };
+      return { ok: true, output: `${checkpointNote}Replaced ${replacements} occurrence(s) in ${rel}${suffix}` };
     } catch (e) {
       return fail(msg(e));
     }

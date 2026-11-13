@@ -37,8 +37,21 @@ import type {
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
 import { AdmissionQueue } from "./admission";
-import { augmentConfigWithTrustedWorkspace, loadConfig, type HzConfig, type McpConfig } from "./config";
+import { acceptInterjection, InterjectionBuffer } from "./interjection";
+import { resolveThinkingEffort } from "./thinking-effort";
+import { augmentConfigWithTrustedWorkspace, defaultConfigPath, loadConfig, readConfigFile, type HzConfig, type McpConfig } from "./config";
+import { applySandboxChildNetFromConfig } from "./sandbox-child-net";
 import { catalogWindow, loadCatalog } from "./catalog/catalog";
+import { startModelsCatalogPoll, type ModelsPollStop } from "./catalog/catalog-poll";
+import {
+  startAnthropicCacheKeepalive,
+  type AnthropicCacheKeepaliveStop,
+} from "./providers/anthropic-cache-keepalive";
+import {
+  formatCacheablePrefixMeasure,
+  measureCacheablePrefix,
+} from "./providers/anthropic-cache-measure";
+import type { EffectRecord } from "./effect-host";
 import { KernelClient } from "./kernel";
 import {
   BudgetLedger,
@@ -57,6 +70,7 @@ import { makeProvider } from "./providers";
 import { loadHooks, runLifecycleHooks } from "./hooks";
 import { ensureWorkspaceHookTrust, hooksLoadOptions } from "./trust";
 import { SessionStore, type SessionInfo } from "./session";
+import { reindexSessionSearch, searchSessions as ftsSearchSessions } from "./session-search";
 import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
 import { runNested } from "./subagent";
 import { stopAllPreviews } from "../tools/preview";
@@ -84,11 +98,21 @@ import {
   type CheckpointView,
 } from "./checkpoints";
 import type { PermissionMode } from "./permission-mode";
-import { isPermissionMode, permissionModeError } from "./permission-mode";
+import { isPermissionMode, meetPermissionMode, permissionModeError } from "./permission-mode";
 import { consumeChange, reloadFromDisk } from "../tools/change-journal";
 import { receiptHead, type ChainStatus } from "./convo";
 import { isRefused, writeAtomic } from "../tools/atomic-write";
 import { setThemeMode } from "../tui/style";
+import { EffectHost } from "./effect-host";
+import { loadEffectLedger, WorkspaceEffectLedger } from "./effect-ledger";
+import { collectUnknownEffectRows, type UnknownEffectRow } from "./effect-unknown-list";
+import { mirrorEffectReconcileToKernel } from "./effect-kernel-reconcile";
+import { reconcileEffectsOnAttach } from "./effect-reconcile-attach";
+import {
+  effectReconcileBlockLatchView,
+  tryReleaseEffectReconcileBlock,
+  type EffectReconcileBlockLatchView,
+} from "./effect-reconcile-block";
 
 /** The runtime the TUI drives: the base contract plus the hooks it offers. */
 export interface HzRuntime extends Runtime {
@@ -103,6 +127,14 @@ export interface HzRuntime extends Runtime {
   setModel(model: string): string;
   history(): ChatMsg[];
   sessions(): SessionInfo[];
+  /**
+   * Full-text search over session titles + user prompts (docs/12 F8).
+   * Empty query returns the recent list (same as `sessions()`).
+   * Hits may carry a `snippet` of the matched user-prompt body.
+   */
+  searchSessions(query: string, limit?: number): Array<
+    SessionInfo & { snippet?: string; messageCount?: number; totalCostUsd?: number }
+  >;
   /** The most recent dispatch's context estimate, or undefined before one ran. */
   contextUsage(): ContextUsage | undefined;
   /**
@@ -158,6 +190,25 @@ export interface HzRuntime extends Runtime {
   receiptHead?(): string | undefined;
   /** T-12: the receipt chain status for exports (verify + head hash). */
   receiptChain?(): Promise<ChainStatus>;
+  /** Mid-turn steer into the active turn (C-9); no-op when idle. */
+  interject(text: string, opts?: { images?: readonly unknown[] }): {
+    accepted: boolean;
+    reason?: "idle" | "empty" | "closed";
+    imagesRefused?: true;
+  };
+  turnInFlight(): boolean;
+  /** Unreconciled EffectHost rows for the workspace session (docs/28 ruling 264). */
+  unknownEffects(): UnknownEffectRow[];
+  /** EffectHost row for UNKNOWN inspect (ruling 282). */
+  getEffectRecord(effectId: string): EffectRecord | undefined;
+  /** In-run EffectHost ids (durable + open). */
+  listEffectIds(): string[];
+  /** Observe-only reconcile from session logs + receipts (R169 reduced; ruling 282). */
+  reconcileUnknownEffectsNow(): Promise<number>;
+  /** Drops `HZ_EFFECT_RECONCILE_BLOCK` latch when ledger/probe/unpaired/UNKNOWN are clean (ruling **293**). */
+  tryReleaseReconcileBlockIfClean(): boolean;
+  /** Active reconcile-block latch for TUI status (ruling **304**). */
+  reconcileBlockLatch(): EffectReconcileBlockLatchView;
 }
 
 function emit(cb: RuntimeCallbacks, event: RuntimeEvent): void {
@@ -180,6 +231,8 @@ class HzRuntimeImpl implements HzRuntime {
   private instanceApproval?: ApprovalHandler;
   private controller?: AbortController;
   private active?: RuntimeCallbacks;
+  /** Per-turn mid-turn steer buffer; set for the duration of `runSend`. */
+  private turnInterjection?: InterjectionBuffer;
   private readonly queued: string[] = [];
   private sendQueue: Promise<unknown> = Promise.resolve();
   private closed = false;
@@ -193,6 +246,20 @@ class HzRuntimeImpl implements HzRuntime {
   private mode: Exclude<PermissionMode, "plan"> = "default";
   /** The MCP manager this runtime owns, started by createRuntime, stopped by close(). */
   private mcp: McpManager | undefined;
+  /** Optional models.dev background poll (`HZ_MODELS_POLL_MS`). */
+  private modelsCatalogPollStop?: ModelsPollStop;
+  /** Optional Anthropic cache keep-alive stub (`HZ_ANTHROPIC_CACHE_KEEPALIVE_MS`). */
+  private anthropicCacheKeepaliveStop?: AnthropicCacheKeepaliveStop;
+  /** Durable EffectHost ledger (ruling 224); shared across turns for this runtime. */
+  private readonly effectHost: EffectHost;
+
+  beginModelsCatalogPoll(stop: ModelsPollStop): void {
+    this.modelsCatalogPollStop = stop;
+  }
+
+  beginAnthropicCacheKeepalive(stop: AnthropicCacheKeepaliveStop): void {
+    this.anthropicCacheKeepaliveStop = stop;
+  }
 
   constructor(args: {
     workspace: string;
@@ -204,6 +271,7 @@ class HzRuntimeImpl implements HzRuntime {
     kernel: KernelClient;
     budget: RunBudget;
     permissionMode?: PermissionMode;
+    effectHost: EffectHost;
   }) {
     if (args.permissionMode === "plan") this.planOn = true;
     else if (args.permissionMode !== undefined) this.mode = args.permissionMode;
@@ -215,6 +283,38 @@ class HzRuntimeImpl implements HzRuntime {
     this.session = args.session;
     this.kernel = args.kernel;
     this.budget = args.budget;
+    this.effectHost = args.effectHost;
+  }
+
+  private async emitEffectReconciled(rows: ReturnType<typeof reconcileEffectsOnAttach>): Promise<void> {
+    for (const row of rows) {
+      if (!row.reconciled) continue;
+      await this.append(streamFor(this.session.id), EventTypes.effectReconciled, {
+        effectId: row.effectId,
+        tool: row.tool,
+        callId: row.callId,
+        priorVerdict: row.priorVerdict,
+        verdict: row.verdict,
+        observeOnly: true,
+      });
+      if (this.active) emit(this.active, { type: "effect.reconciled", effectId: row.effectId });
+    }
+  }
+
+  async attachEffectLedger(): Promise<void> {
+    const rows = reconcileEffectsOnAttach(this.workspace, this.session.id, this.effectHost);
+    for (const row of rows) {
+      if (row.priorVerdict === row.verdict && !row.reconciled) continue;
+      await mirrorEffectReconcileToKernel(this.kernel, this.effectHost.getRecord(row.effectId));
+    }
+    await this.emitEffectReconciled(rows);
+    const settled = rows.filter((r) => r.reconciled);
+    if (settled.length > 0) {
+      this.note(
+        `reconciled ${settled.length} effect(s) from the durable ledger after restart ` +
+          `(${settled.map((r) => r.effectId).join(", ")})`,
+      );
+    }
   }
 
   get sessionId(): string {
@@ -257,10 +357,11 @@ class HzRuntimeImpl implements HzRuntime {
 
   newSession(title = "New chat"): HzRuntime {
     const previous = this.session;
-    this.session = this.store.createSession(title);
+    this.session = this.store.createSession(title, { permissionMode: this.permissionMode() });
     this.leases.length = 0;
     void this.logSessionEnd(previous.id);
     void this.logSessionStart();
+    void this.attachEffectLedger();
     return this;
   }
 
@@ -279,7 +380,8 @@ class HzRuntimeImpl implements HzRuntime {
     } catch {
       /* an unreadable parent log records seq 0; the fork itself still works */
     }
-    const child = this.store.forkSession(this.session.id, { at, parentSeq });
+    const childMode = meetPermissionMode(this.session.permissionMode, this.permissionMode());
+    const child = this.store.forkSession(this.session.id, { at, parentSeq, permissionMode: childMode });
     const payload: SessionForkPayload = {
       parentSessionId: this.session.id,
       parentStream,
@@ -305,9 +407,11 @@ class HzRuntimeImpl implements HzRuntime {
     // Resume runs the same transcript repair createRuntime runs on open.
     this.store.repairDanglingToolCalls(next.id);
     this.session = next;
+    if (next.permissionMode !== undefined) this.setPermissionMode(next.permissionMode);
     this.leases.length = 0;
     void this.logSessionEnd(previous.id);
     void this.logSessionStart();
+    void this.attachEffectLedger();
     return this;
   }
 
@@ -375,7 +479,15 @@ class HzRuntimeImpl implements HzRuntime {
         action: "tool.execute",
         tool: "shell",
         argsDigest: sha256Hex(canonicalJson(args)),
-        resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+        resultDigest: sha256Hex(
+          typeof result.output === "string"
+            ? result.output
+            : canonicalJson({
+                ok: result.ok,
+                output: result.output ?? null,
+                error: result.error ?? null,
+              }),
+        ),
       });
     } catch {
       /* the commit already happened or was refused; a lost receipt is reported by verify */
@@ -390,6 +502,47 @@ class HzRuntimeImpl implements HzRuntime {
 
   contextUsage(): ContextUsage | undefined {
     return this.lastContext;
+  }
+
+  unknownEffects(): UnknownEffectRow[] {
+    const { verdicts } = loadEffectLedger(this.workspace);
+    return collectUnknownEffectRows(this.effectHost, verdicts);
+  }
+
+  getEffectRecord(effectId: string) {
+    return this.effectHost.getRecord(effectId);
+  }
+
+  listEffectIds(): string[] {
+    return this.effectHost.listEffectIds();
+  }
+
+  async reconcileUnknownEffectsNow(): Promise<number> {
+    const rows = reconcileEffectsOnAttach(this.workspace, this.session.id, this.effectHost);
+    for (const row of rows) {
+      if (row.priorVerdict === row.verdict && !row.reconciled) continue;
+      await mirrorEffectReconcileToKernel(this.kernel, this.effectHost.getRecord(row.effectId));
+    }
+    await this.emitEffectReconciled(rows);
+    const settled = rows.filter((r) => r.reconciled);
+    if (settled.length > 0) {
+      this.note(
+        `/unknown reconcile: settled ${settled.length} effect(s) from logs ` +
+          `(${settled.map((r) => r.effectId).join(", ")})`,
+      );
+    }
+    if (tryReleaseEffectReconcileBlock(this.workspace, this.session.id, this.effectHost)) {
+      this.note("effect reconcile block cleared (/unknown reconcile)");
+    }
+    return settled.length;
+  }
+
+  tryReleaseReconcileBlockIfClean(): boolean {
+    return tryReleaseEffectReconcileBlock(this.workspace, this.session.id, this.effectHost);
+  }
+
+  reconcileBlockLatch(): EffectReconcileBlockLatchView {
+    return effectReconcileBlockLatchView(this.workspace, this.session.id, this.effectHost);
   }
 
   setPlanMode(on: boolean): void {
@@ -671,7 +824,15 @@ class HzRuntimeImpl implements HzRuntime {
             action: "tool.execute",
             tool: "write",
             argsDigest: sha256Hex(canonicalJson({ path: change.rel, content: change.after })),
-            resultDigest: sha256Hex(typeof result.output === "string" ? result.output : ""),
+            resultDigest: sha256Hex(
+              typeof result.output === "string"
+                ? result.output
+                : canonicalJson({
+                    ok: result.ok,
+                    output: result.output ?? null,
+                    error: result.error ?? null,
+                  }),
+            ),
           });
         } catch (err) {
           this.note(`could not issue a receipt for the applied write ${change.rel}: ${errorMessage(err)}`);
@@ -716,6 +877,41 @@ class HzRuntimeImpl implements HzRuntime {
 
   sessions(): SessionInfo[] {
     return this.store.listSessions();
+  }
+
+  searchSessions(query: string, limit = 20): Array<
+    SessionInfo & { snippet?: string; messageCount?: number; totalCostUsd?: number }
+  > {
+    const enrich = (
+      row: SessionInfo & { snippet?: string },
+    ): SessionInfo & { snippet?: string; messageCount?: number } => ({
+      ...row,
+      messageCount: this.store.messageCount(row.id),
+    });
+    const q = query.trim();
+    if (q === "") {
+      return this.store.listSessions(limit).map((info) => {
+        const preview = this.store.lastUserPromptPreview(info.id);
+        const base = preview === "" ? info : { ...info, snippet: preview };
+        return enrich(base);
+      });
+    }
+    const mapHits = (): Array<SessionInfo & { snippet?: string; messageCount?: number }> => {
+      const hits = ftsSearchSessions(this.workspace, q, limit);
+      const out: Array<SessionInfo & { snippet?: string; messageCount?: number }> = [];
+      for (const hit of hits) {
+        const info = this.store.getSession(hit.sessionId);
+        if (info) out.push(enrich({ ...info, snippet: hit.snippet || undefined }));
+      }
+      return out;
+    };
+    let out = mapHits();
+    if (out.length === 0) {
+      // Heal a missing/stale sidecar once (Grok bootstrap idea, sync and cheap).
+      reindexSessionSearch(this.workspace, this.store.listSessions(500), (id) => this.store.userPromptText(id));
+      out = mapHits();
+    }
+    return out;
   }
 
   private pruneLeases(): void {
@@ -834,12 +1030,38 @@ class HzRuntimeImpl implements HzRuntime {
       }
       const firstLine = userText.trim().split(/\r?\n/, 1)[0] ?? "";
       recordCheckpoint(this.workspace, this.session.id, this.store.messageCount(this.session.id), since.entries.map((entry) => entry.id), {
-        label: firstLine.slice(0, 80),
+        label: firstLine.slice(0, 60),
         onAppendFailure: (message) => this.note(message),
       });
     } catch (err) {
       this.note(`could not record a checkpoint for this turn: ${errorMessage(err)}`);
     }
+  }
+
+  turnInFlight(): boolean {
+    return this.controller !== undefined && !this.closed;
+  }
+
+  interject(text: string, opts?: { images?: readonly unknown[] }): {
+    accepted: boolean;
+    reason?: "idle" | "empty" | "closed";
+    imagesRefused?: true;
+  } {
+    if (this.closed) return { accepted: false, reason: "closed" };
+    if (!this.turnInFlight() || this.turnInterjection === undefined) return { accepted: false, reason: "idle" };
+    const outcome = acceptInterjection(this.turnInterjection, text, opts);
+    if (!outcome.accepted) return outcome;
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (this.active) {
+      emit(this.active, { type: "interjection.queued", text: trimmed });
+      if (outcome.imagesRefused === true) {
+        emit(this.active, {
+          type: "notice",
+          message: "mid-turn steer: image attachments are not supported yet — your text was queued; images were dropped",
+        });
+      }
+    }
+    return outcome;
   }
 
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
@@ -868,8 +1090,25 @@ class HzRuntimeImpl implements HzRuntime {
     const controller = new AbortController();
     this.controller = controller;
     this.active = cb;
+    const interjection = new InterjectionBuffer();
+    this.turnInterjection = interjection;
     while (this.queued.length > 0) emit(cb, { type: "notice", message: this.queued.shift() ?? "" });
     this.pruneLeases();
+    const queue = new AdmissionQueue(this.store);
+    const admissionId = queue.admit(this.session.id, text);
+    if (!queue.begin(admissionId)) {
+      const next = queue.nextRunnable(this.session.id);
+      const reason =
+        next.runnable === false && next.halted === true
+          ? `admission halted (blocked by ${next.blockedBy})`
+          : "admission could not begin (queue busy or already settled)";
+      emit(cb, { type: "error", message: reason });
+      queue.settle(admissionId, "failed", reason);
+      if (this.controller === controller) this.controller = undefined;
+      if (this.active === cb) this.active = undefined;
+      if (this.turnInterjection === interjection) this.turnInterjection = undefined;
+      return { text: "", aborted: false, exit: { terminal: "failed", detail: "internal_error" } };
+    }
     try {
       const home = homedir();
       await this.ensureHookTrust();
@@ -904,6 +1143,17 @@ class HzRuntimeImpl implements HzRuntime {
       const turnStartedAt = Date.now();
       const catalog = loadCatalog();
       const contextWindowTokens = catalogWindow(this.provider.name, this.currentModel, catalog);
+      const thinking = resolveThinkingEffort({
+        userText: userContent,
+        envValue: process.env.HZ_THINKING_EFFORT,
+        autoDifficulty: process.env.HZ_THINKING_AUTO === "1",
+      });
+      if (thinking.effort !== undefined && thinking.source !== undefined) {
+        emit(callbacks, {
+          type: "notice",
+          message: `thinking effort: ${thinking.effort} (${thinking.source})`,
+        });
+      }
       const outcome = await runTurn(
         {
           workspace: this.workspace,
@@ -916,7 +1166,9 @@ class HzRuntimeImpl implements HzRuntime {
           store: this.store,
           signal: controller.signal,
           callbacks,
+          interjection,
           sessionLeases: this.leases,
+          thinkingEffort: thinking.effort,
           // Plan mode rides this run's deps: staging/refusals happen inside
           // executeTool, and the model is told via the plan rail line.
           planMode: this.planOn,
@@ -924,6 +1176,7 @@ class HzRuntimeImpl implements HzRuntime {
           approve: this.instanceApproval ?? getApprovalHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
+          effectHost: this.effectHost,
           trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
           delegate: (task, maxSteps, profile) =>
             runNested({
@@ -940,6 +1193,7 @@ class HzRuntimeImpl implements HzRuntime {
               approve: this.instanceApproval ?? getApprovalHandler(),
               permissionMode: this.mode,
               ledger,
+              effectHost: this.effectHost,
               trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
               onEvent: (ev) => emit(cb, ev),
             }),
@@ -950,8 +1204,16 @@ class HzRuntimeImpl implements HzRuntime {
       // label is the user's first line; the change ids come from the durable
       // journal's window, so a resumed process still rewinds by file state.
       this.recordTurnCheckpoint(text, turnStartedAt);
+      const settlement =
+        outcome.exit.terminal === "succeeded"
+          ? "done"
+          : outcome.exit.terminal === "interrupted" || outcome.exit.terminal === "unknown" || outcome.aborted
+            ? "unknown"
+            : "failed";
+      queue.settle(admissionId, settlement, outcome.exit.detail ?? outcome.exit.terminal);
       return outcome;
     } catch (err) {
+      queue.settle(admissionId, "unknown", errorMessage(err));
       emit(cb, { type: "error", message: `runtime error: ${errorMessage(err)}` });
       emit(cb, { type: "turn.done" });
       // Every outcome carries an exit (plan-mode turns included), so a caller
@@ -964,8 +1226,14 @@ class HzRuntimeImpl implements HzRuntime {
           : { terminal: "failed", detail: "internal_error" },
       };
     } finally {
+      const stranded = interjection.drainAll();
+      for (const entry of stranded) {
+        if (this.queued.length < 32) this.queued.push(entry.text);
+        else this.note("mid-turn steer: a buffered message was dropped (queue full)");
+      }
       if (this.controller === controller) this.controller = undefined;
       if (this.active === cb) this.active = undefined;
+      if (this.turnInterjection === interjection) this.turnInterjection = undefined;
     }
   }
 
@@ -984,6 +1252,10 @@ class HzRuntimeImpl implements HzRuntime {
     await this.sendQueue.catch(() => undefined);
     // MCP children are this runtime's spawns: reap them before the kernel goes
     // down, so no server process outlives the session that started it.
+    this.modelsCatalogPollStop?.();
+    this.modelsCatalogPollStop = undefined;
+    this.anthropicCacheKeepaliveStop?.();
+    this.anthropicCacheKeepaliveStop = undefined;
     await this.mcp?.stop();
     // Previews are process-global (tools/preview.ts): stop every live one, from
     // any session, so no dev server outlives the runtime that started it.
@@ -1005,7 +1277,8 @@ class HzRuntimeImpl implements HzRuntime {
 export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
   const startupNotices: string[] = [];
-  const config = augmentConfigWithTrustedWorkspace(loadConfig(), workspace, process.env, homedir(), (message) =>
+  applySandboxChildNetFromConfig(readConfigFile(defaultConfigPath(homedir())), process.env);
+  const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, undefined, workspace), workspace, process.env, homedir(), (message) =>
     startupNotices.push(message),
   );
   if (config.theme !== undefined) setThemeMode(config.theme);
@@ -1027,7 +1300,8 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     }
   }
   if (!session && opts?.continueSession) session = store.latestSession();
-  if (!session) session = store.createSession();
+  const initialMode = opts?.permissionMode ?? config.permissionMode;
+  if (!session) session = store.createSession("New chat", { permissionMode: initialMode });
 
   // Crash-recovery on open is TWO complementary repairs, not one — see external
   // audit finding 2 and the dsh ToolCallRecovery reference. A run killed between
@@ -1061,6 +1335,10 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   });
   await kernel.start();
 
+  const effectLedger = new WorkspaceEffectLedger(workspace);
+  const effectHost = new EffectHost(effectLedger);
+  effectHost.hydrate(loadEffectLedger(workspace).records);
+
   const rawBudget: RunBudget = { ...(config.budget ?? {}), ...(opts?.budget ?? {}) };
 
   impl = new HzRuntimeImpl({
@@ -1079,8 +1357,10 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
       maxTokens: rawBudget.maxTokens ?? 0,
       maxWallMs: rawBudget.maxWallMs ?? 0,
     },
+    effectHost,
   });
   await impl.logSessionStart();
+  await impl.attachEffectLedger();
   for (const message of startupNotices) impl.note(message);
   if (config.permissionModeRejected !== undefined) {
     impl.note(`config permissionMode ignored: ${config.permissionModeRejected}`);
@@ -1116,6 +1396,23 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   // MCP servers: user-config only, spawned via the spawn-kind admission, and
   // reaped by close(). Starting them never fails the session.
   await impl.startMcp(config.mcp);
+  impl.beginModelsCatalogPoll(
+    startModelsCatalogPoll({
+      home: homedir(),
+      onNotice: (message) => impl.note(message),
+    }),
+  );
+  impl.beginAnthropicCacheKeepalive(
+    startAnthropicCacheKeepalive({
+      onNotice: (message) => impl!.note(message),
+      onMeasure: () => {
+        if (impl!.providerName !== "anthropic") return undefined;
+        const msgs = impl!.history();
+        if (msgs.length === 0) return undefined;
+        return formatCacheablePrefixMeasure(measureCacheablePrefix(msgs));
+      },
+    }),
+  );
   return impl;
 }
 

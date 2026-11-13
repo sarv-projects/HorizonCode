@@ -38,6 +38,11 @@ describe("rich diff", () => {
     const plain = richDiffLines(d, { level: 0 }).map(strip).join("\n");
     expect(plain).toContain("8 unchanged lines");
     expect(richDiffLines("@@ -1 +1 @@\n+x", { level: 2 })[1]).toContain("\u001b[48;5;");
+    const ctxShort = Array.from({ length: 10 }, (_, i) => ` ${i}`).join("\n");
+    const folded = richDiffLines(`@@ -1,10 +1,10 @@\n${ctxShort}`, { level: 0, expandContext: false });
+    const expanded = richDiffLines(`@@ -1,10 +1,10 @@\n${ctxShort}`, { level: 0, expandContext: true });
+    expect(folded.some((l) => l.includes("unchanged lines"))).toBe(true);
+    expect(expanded.some((l) => l.includes("unchanged lines"))).toBe(false);
     expect(richDiffLines("@@ -1 +1 @@\n+x", { level: 1 })[1]).not.toContain("\u001b[48");
   });
 

@@ -1,11 +1,21 @@
 //! hz-sandbox-exec — reduced portable confinement before exec (docs/33 §5.3).
 //!
 //! Order: `PR_SET_NO_NEW_PRIVS` → rlimits → unprivileged user+net namespace
-//! (network-off) → seccomp deny-list → Landlock FS (+ TCP net when ABI≥4) → exec.
+//! (network-off when `HZ_SANDBOX_CHILD_NET` is unset or `off`) → seccomp
+//! deny-list → Landlock FS (+ TCP net when ABI≥4) → exec.
+//!
+//! **Ruled residual (321):** veth/bridge join so a `child_net=off` wrapped child can
+//! reach a parent CONNECT proxy on a bridge IP is not implemented here (parent-side
+//! veth plumbing + spawn ROUTED env is proven hermetically in TS only; never enforced).
+//!
+//! `HZ_SANDBOX_CHILD_NET=off` (set by `spawnOwned` when config/env requests child
+//! net lockdown) forces userns+netns isolation. `on` skips netns (debug only).
 //!
 //! Landlock: `HZ_SANDBOX_FS_ROOT` (default `.`) is the workspace fence;
 //! `HZ_SANDBOX_FS_MODE=read-only|workspace-write` (default workspace-write)
 //! chooses RO vs RW access on that root;
+//! `HZ_SANDBOX_FS_RO_PATHS` (optional, `:`-separated) keeps named subtrees
+//! read-only under workspace-write by granting RW only on sibling trees;
 //! common system prefixes are read+exec so interpreters can start. Fails closed
 //! if Landlock cannot be applied on this host.
 
@@ -219,6 +229,15 @@ fn write_proc(path: &str, body: &str) -> io::Result<()> {
     Ok(())
 }
 
+fn child_network_isolation_requested() -> bool {
+    match env::var("HZ_SANDBOX_CHILD_NET").ok() {
+        None => true,
+        Some(raw) => {
+            raw.trim().to_lowercase() != "on"
+        }
+    }
+}
+
 fn isolate_network() -> io::Result<()> {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
@@ -362,16 +381,109 @@ fn apply_landlock(_fs_root: &Path, _mode: FsMode) -> io::Result<()> {
     ))
 }
 
+/// Optional `:`-separated absolute paths that must stay read-only even when the
+/// workspace fence is `workspace-write` (typically the kernel state directory).
+fn resolve_ro_paths() -> Vec<PathBuf> {
+    let Ok(raw) = env::var("HZ_SANDBOX_FS_RO_PATHS") else {
+        return Vec::new();
+    };
+    raw.split(':')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            PathBuf::from(p)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(p))
+        })
+        .collect()
+}
+
+fn path_is_or_under(path: &Path, ancestor: &Path) -> bool {
+    path == ancestor || path.starts_with(ancestor)
+}
+
+fn path_covers_any_ro(path: &Path, ro_paths: &[PathBuf]) -> bool {
+    ro_paths.iter().any(|ro| path_is_or_under(ro, path) && path != ro)
+}
+
+fn path_is_ro_protected(path: &Path, ro_paths: &[PathBuf]) -> bool {
+    ro_paths
+        .iter()
+        .any(|ro| path_is_or_under(path, ro))
+}
+
+/// Explicit ACCESS_RO on every entry under `dir` (files do not inherit reliably).
+#[cfg(target_arch = "x86_64")]
+fn landlock_add_ro_tree(ruleset: RawFd, dir: &Path) {
+    let _ = landlock_add_path(ruleset, dir, ACCESS_RO);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let _ = landlock_add_path(ruleset, &p, ACCESS_RO);
+        if p.is_dir() {
+            landlock_add_ro_tree(ruleset, &p);
+        }
+    }
+}
+
+/// Grant RW on each directory entry under `dir`, recursing into ancestors of an
+/// RO path so the protected subtree never inherits a parent RW grant.
+#[cfg(target_arch = "x86_64")]
+fn landlock_add_rw_excluding(ruleset: RawFd, dir: &Path, ro_paths: &[PathBuf]) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if path_is_ro_protected(&p, ro_paths) {
+            if p.is_dir() {
+                landlock_add_ro_tree(ruleset, &p);
+            } else {
+                let _ = landlock_add_path(ruleset, &p, ACCESS_RO);
+            }
+            continue;
+        }
+        if path_covers_any_ro(&p, ro_paths) {
+            let _ = landlock_add_path(ruleset, &p, ACCESS_RO);
+            landlock_add_rw_excluding(ruleset, &p, ro_paths);
+            continue;
+        }
+        let _ = landlock_add_path(ruleset, &p, ACCESS_RW);
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 fn apply_landlock(fs_root: &Path, mode: FsMode) -> io::Result<()> {
     // ABI ≥ 4: handled_access_net is set with no LANDLOCK_RULE_NET_PORT allows,
     // so TCP bind/connect are denied (complements userns+netns network-off).
     let ruleset = landlock_create_ruleset()?;
-    let root_access = match mode {
-        FsMode::ReadOnly => ACCESS_RO,
-        FsMode::WorkspaceWrite => ACCESS_RW,
-    };
-    landlock_add_path(ruleset, fs_root, root_access)?;
+    let ro_paths = resolve_ro_paths();
+    match mode {
+        FsMode::ReadOnly => {
+            landlock_add_path(ruleset, fs_root, ACCESS_RO)?;
+        }
+        FsMode::WorkspaceWrite if ro_paths.is_empty() => {
+            landlock_add_path(ruleset, fs_root, ACCESS_RW)?;
+        }
+        FsMode::WorkspaceWrite => {
+            // Default RO on the whole workspace, then RW grants only on paths that
+            // are not under HZ_SANDBOX_FS_RO_PATHS (hook/state write-deny adapt).
+            landlock_add_path(ruleset, fs_root, ACCESS_RO)?;
+            for ro in &ro_paths {
+                if path_is_or_under(ro, fs_root) {
+                    if ro.is_dir() {
+                        landlock_add_ro_tree(ruleset, ro);
+                    } else {
+                        landlock_add_path(ruleset, ro, ACCESS_RO)?;
+                    }
+                }
+            }
+            landlock_add_rw_excluding(ruleset, fs_root, &ro_paths);
+        }
+    }
     // System prefixes so dynamic loaders / interpreters can run.
     // In read-only mode keep /tmp and /dev RO too so the child cannot stage
     // writes outside the workspace via those prefixes.
@@ -380,12 +492,18 @@ fn apply_landlock(fs_root: &Path, mode: FsMode) -> io::Result<()> {
     ] {
         let p = Path::new(prefix);
         if p.exists() {
-            let access = if mode == FsMode::WorkspaceWrite && (prefix == "/tmp" || prefix == "/dev")
+            let mut access = if mode == FsMode::WorkspaceWrite && (prefix == "/tmp" || prefix == "/dev")
             {
                 ACCESS_RW
             } else {
                 ACCESS_RO
             };
+            // Landlock access is the union of matching rules. A broad RW rule on
+            // `/tmp` would defeat HZ_SANDBOX_FS_RO_PATHS when the workspace lives
+            // under /tmp (the usual probe layout).
+            if (prefix == "/tmp" || prefix == "/dev") && path_is_or_under(fs_root, p) {
+                access = ACCESS_RO;
+            }
             let _ = landlock_add_path(ruleset, p, access);
         }
     }
@@ -408,7 +526,9 @@ fn pre_exec_confine() -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     apply_rlimits()?;
-    isolate_network()?;
+    if child_network_isolation_requested() {
+        isolate_network()?;
+    }
     install_seccomp_denylist()?;
     apply_landlock(&resolve_fs_root(), resolve_fs_mode())?;
     Ok(())

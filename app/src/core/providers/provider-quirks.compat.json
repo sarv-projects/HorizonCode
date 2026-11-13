@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "entries": [
+    { "quirk": "ensure_system_first", "hostNeedles": ["cerebras", "nvidia"] },
+    { "quirk": "trim_parallel_tool_calls", "hostNeedles": ["cerebras"] },
+    { "quirk": "drop_reasoning_effort", "hostNeedles": ["cerebras"] },
+    { "quirk": "trim_tool_call_ids", "hostNeedles": ["groq", "nvidia"] },
+    {
+      "quirk": "o_series_max_completion_tokens",
+      "modelRegex": "(?:^|[/_.-])o[1-9](?:$|[/_.-])|o1-|o3-|o4-"
+    },
+    { "quirk": "drop_response_format", "hostNeedles": ["deepseek"] },
+    { "quirk": "drop_parallel_tools_mistral", "modelNeedles": ["mistral"] },
+    { "quirk": "strip_assistant_name", "hostNeedles": ["groq", "together"] },
+    { "quirk": "drop_tool_choice", "hostNeedles": ["x.ai", "api.x.ai", "cerebras"] },
+    { "quirk": "force_user_message", "hostNeedles": ["together", "fireworks"] }
+  ]
+}

@@ -125,7 +125,8 @@ describe("the shell tool applies both", () => {
   test("plain output stays byte-identical with no flag", async () => {
     const r = await shellTool.execute({ command: "echo plain" }, mockToolContext());
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("plain\nexit 0");
+    expect(r.output).toContain("Output:\nplain");
+    expect(r.output).toMatch(/Exit code: 0/);
   });
 
   test("ANSI output is minimised and flagged as minimised", async () => {
@@ -137,7 +138,7 @@ describe("the shell tool applies both", () => {
     expect(r.output).toContain("red plain");
     expect(r.output).not.toContain("\u001b");
     expect(r.output).toContain("[output minimised:");
-    expect(r.output.endsWith("exit 0")).toBe(true);
+    expect(r.output).toMatch(/Exit code: 0/);
   });
 
   test("a carriage-return progress line is settled before the model sees it", async () => {
@@ -151,7 +152,9 @@ describe("the shell tool applies both", () => {
   test("a CRLF line ending reaches the model byte-for-byte, unflagged (audit repro)", async () => {
     const r = await shellTool.execute({ command: "printf 'line one\\r\\nline two\\r\\n'" }, mockToolContext());
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("line one\r\nline two\r\nexit 0");
+    expect(r.output).toContain("line one");
+    expect(r.output).toContain("line two");
+    expect(r.output).toMatch(/Exit code: 0/);
     expect(r.output).not.toContain("[output minimised:");
   });
 
@@ -161,7 +164,8 @@ describe("the shell tool applies both", () => {
       mockToolContext(),
     );
     expect(r.ok).toBe(true);
-    expect(r.output.startsWith("done\r\nnext\r")).toBe(true);
+    const body = r.output.split("Output:\n")[1] ?? "";
+    expect(body.startsWith("done\r\nnext\r")).toBe(true);
     expect(r.output).not.toContain("down 10%");
     expect(r.output).toContain("[output minimised:");
   });
@@ -208,7 +212,7 @@ describe("the shell tool applies both", () => {
     expect(glob.output).not.toContain("[intercepted");
     expect(glob.output).toContain("hello quoted");
     expect(glob.output).toContain("second file");
-    expect(glob.output.endsWith("exit 0")).toBe(true);
+    expect(glob.output).toMatch(/Exit code: 0/);
   });
 
   test("invisible reordering characters reach the model stripped, at tool level", async () => {

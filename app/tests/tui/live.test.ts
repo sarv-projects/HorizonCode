@@ -13,6 +13,7 @@ import {
   TIPS,
   clockTime,
   composeStatusBar,
+  formatIdleStatusLine,
   formatTokenHint,
   createLive,
   formatDuration,
@@ -128,6 +129,19 @@ describe("status bar", () => {
     } finally {
       setColorEnabled(false);
     }
+  });
+
+  test("formatIdleStatusLine shares composeStatusBar and adds plain unknown + busy", () => {
+    const plain = formatIdleStatusLine(
+      { ...info, badge: "READ-ONLY", unknownCount: 2 },
+      100,
+      { plain: true, busy: true },
+    );
+    expect(plain).toContain("READ-ONLY");
+    expect(plain).toContain("mock-1");
+    expect(plain).toContain("UNKNOWN 2");
+    expect(plain).toContain("busy");
+    expect(plain).not.toMatch(/\u001b\[/);
   });
 
   test("used/window segment and high-pressure hint", () => {

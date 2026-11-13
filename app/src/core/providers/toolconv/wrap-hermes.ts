@@ -4,28 +4,45 @@
 
 import { randomUUID } from "node:crypto";
 import type { Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../../contracts";
-import { parseHermesToolCalls, renderHermesToolInstructions } from "./hermes";
+import { drainCompleteHermesToolCalls, renderHermesToolInstructions } from "./hermes";
+import { prepareInnerTextToolRequest } from "./wrap-shared";
 
 function allowedToolNames(tools: ToolSpec[]): ReadonlySet<string> {
   return new Set(tools.map((t) => t.name));
 }
 
-/** Wrap a text-only provider: Hermes `<tool_call>` blocks become `tool_call` events on `done`. */
+function emitHermesCalls(
+  calls: { name: string; args: Record<string, unknown> }[],
+): Extract<ProviderEvent, { type: "tool_call" }>[] {
+  return calls.map((call) => ({
+    type: "tool_call" as const,
+    id: `hermes_${randomUUID()}`,
+    name: call.name,
+    arguments: JSON.stringify(call.args),
+  }));
+}
+
+/** Wrap a text-only provider: Hermes blocks become `tool_call` events when closed. */
 export function wrapHermesToolProvider(inner: Provider): Provider {
   return {
     name: inner.name,
     async *stream(req: ProviderRequest): AsyncIterable<ProviderEvent> {
       const allowed = allowedToolNames(req.tools);
-      const innerReq: ProviderRequest = {
-        ...req,
-        system: req.system + "\n\n" + renderHermesToolInstructions(req.tools),
-        tools: [],
-      };
+      const innerReq = prepareInnerTextToolRequest(req, "hermes", renderHermesToolInstructions);
       let buffer = "";
+      let scanFrom = 0;
+      let toolCallCount = 0;
       let doneEvent: Extract<ProviderEvent, { type: "done" }> | undefined;
       for await (const event of inner.stream(innerReq)) {
         if (event.type === "text") {
           buffer += event.text;
+          const drained = drainCompleteHermesToolCalls(buffer, allowed, scanFrom);
+          scanFrom = drained.nextIndex;
+          for (const message of drained.errors) yield { type: "notice", message };
+          for (const call of emitHermesCalls(drained.calls)) {
+            toolCallCount++;
+            yield call;
+          }
           yield event;
         } else if (event.type === "thinking" || event.type === "notice" || event.type === "quirks") {
           yield event;
@@ -42,17 +59,13 @@ export function wrapHermesToolProvider(inner: Provider): Provider {
           return;
         }
       }
-      const { calls, errors } = parseHermesToolCalls(buffer, allowed);
-      for (const message of errors) yield { type: "notice", message };
-      for (const call of calls) {
-        yield {
-          type: "tool_call",
-          id: `hermes_${randomUUID()}`,
-          name: call.name,
-          arguments: JSON.stringify(call.args),
-        };
+      const tail = drainCompleteHermesToolCalls(buffer, allowed, scanFrom);
+      for (const message of tail.errors) yield { type: "notice", message };
+      for (const call of emitHermesCalls(tail.calls)) {
+        toolCallCount++;
+        yield call;
       }
-      const stopReason = calls.length > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
+      const stopReason = toolCallCount > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
       yield { type: "done", stopReason, usage: doneEvent?.usage };
     },
   };

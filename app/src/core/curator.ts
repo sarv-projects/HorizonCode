@@ -57,7 +57,8 @@
  * in that weaker, stated sense (a residual, recorded).
  */
 
-import { appendFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { appendJsonlSync } from "./jsonl-append";
 import * as path from "node:path";
 import { canonicalJson, digestOf } from "./canon";
 import {
@@ -574,7 +575,8 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
     setOwnerOnly(path.dirname(file), 0o700);
     // One append of whole lines: a crash cannot interleave two curators' rows
     // beyond what O_APPEND already prevents, and prior bytes are never rewritten.
-    appendFileSync(file, lines.map((line) => `${line}\n`).join(""), "utf8");
+    // fsync by default (docs/33 §6.5).
+    appendJsonlSync(file, lines.map((line) => `${line}\n`).join(""));
     setOwnerOnly(file, 0o600);
   }
   return result;

@@ -13,24 +13,60 @@
 
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
 import type { PermissionMode } from "./core/permission-mode";
 import { describeMode, parsePermissionMode, permissionModeError } from "./core/permission-mode";
-import { doctorExitCode, realDoctorEnv, renderDoctor, renderDoctorJson, runDoctor } from "./core/doctor";
+import {
+  doctorExitCode,
+  doctorFixSuggestion,
+  realDoctorEnv,
+  renderDoctor,
+  renderDoctorJson,
+  runDoctor,
+} from "./core/doctor";
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
-import { PRINT_FORMATS, createApprovalUi, installApprovalHandler, runHeadless, runInteractive, runPrint } from "./tui";
+import {
+  PRINT_FORMATS,
+  createApprovalUi,
+  installApprovalHandler,
+  runFullscreenExperimentalChat,
+  runHeadless,
+  runInteractive,
+  runPrint,
+} from "./tui";
 import { checkKeymapOverrides, defaultKeymap } from "./tui/keymap";
-import { fullscreenNotImplementedMessage, resolveTuiScreenMode, type TuiScreenMode } from "./tui/screen-mode";
+import { consumeTuiHandoff } from "./tui/handoff";
+import { isFullscreenChatMode, resolveTuiScreenMode, type TuiScreenMode } from "./tui/screen-mode";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
-import { checkConfigFile, renderConfigCheck } from "./core/config";
+import { loadCatalog } from "./core/catalog/catalog";
+import {
+  allCatalogModelIds,
+  filterModelIds,
+  formatDidYouMean,
+  isKnownModel,
+  modelIdsForProvider,
+  suggestModelIds,
+} from "./core/catalog/model-suggest";
+import {
+  augmentConfigWithTrustedWorkspace,
+  checkConfigFile,
+  defaultConfigPath,
+  loadConfig,
+  renderConfigCheck,
+} from "./core/config";
+import { buildShowPromptsRequest, renderShowPrompts } from "./core/show-prompts";
+import { buildShowRepoMap } from "./core/show-repo-map";
+import { appendAttributionToMessage, parseCommitAttributeArgs } from "./core/commit-attribution";
 import { cleanCommitMessage, commitCommand, commitPrompt, stagedDiff, withReceiptTrailer } from "./core/commit";
 import { resolveCommandForMessage } from "./core/commands";
 import { cleanSuggestedCommand, suggestPrompt } from "./core/suggest";
-import { validateWorktreeName, worktreeAddCommand, worktreeSiblingPath } from "./core/worktree";
+import { validateWorktreeName } from "./core/worktree";
+import { resolveWorktreeAcquire, worktreePoolMaxFromEnv } from "./core/worktree-pool";
 import {
   catalogCachePath,
   CATALOG_PATH,
@@ -41,6 +77,14 @@ import {
   writeCatalogCache,
 } from "./core/catalog/catalog";
 import { KernelClient } from "./core/kernel";
+import { effectReconcileExitCode, renderEffectReconcile } from "./core/effect-cli";
+import { renderReceiptShow } from "./core/receipt-cli";
+import { exportSessionCli, forkSessionCli, renderSessionList } from "./core/session-cli";
+import {
+  buildSessionVerifyReport,
+  renderSessionVerify,
+  sessionVerifyExitCode,
+} from "./core/session-verify-cli";
 
 const VERSION = "0.1.0";
 
@@ -53,18 +97,27 @@ const HELP = [
   "  hzcode keybind check  validate optional keybind overrides JSON (docs/33 §5.19)",
   "  hzcode commit        write a commit message for the staged diff and commit it through the guard (--preview, --receipt)",
   "  hzcode suggest       print one shell command for a task (never executes it)",
-  "  hzcode doctor        diagnose this install (OK/WARN/FAIL + a fix per problem; --json, --workspace <path>)",
+  "  hzcode doctor        diagnose this install (OK/WARN/FAIL + a fix per problem; --json, --fix <check>, --workspace <path>)",
+  "  hzcode session list  list sessions in a workspace",
+  "  hzcode session fork <id> [--at n]  fork a session transcript (no chat)",
+  "  hzcode session export <id> [-o path]  portable .hzs archive (export only; no import)",
+  "  hzcode session verify <id>  receipt chain + reconcile probe (read-only; exit 3 on failure)",
+  "  hzcode effect reconcile [--session <id>] [--probe]  observe-only reconcile report (no writes)",
+  "  hzcode receipt show <id>            read-only receipt inspector + local chain verify (R172 reduced)",
   "  --worktree <name>    create a git worktree beside the repo and start there (not OS sandbox)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
+  "  --list-models [sub]  list known model ids (optional substring filter)",
+  "  --show-prompts       dump the rendered provider request and exit (no API)",
+  "  --show-repo-map      dump the repo_map render and exit (no API)",
   "  --mock               offline demo, no key   --version    print the version",
   "  -p, --print [text]   one non-interactive turn, print the answer (prompt from stdin if no text)",
   "  --output-format <f>  with -p: text (default) | json | stream-json",
   "  --permission-mode <m>  default | plan | accept-edits | read-only (no bypass mode; /mode in chat)",
   "  --max-steps <n>      cap model steps per turn (0 = unlimited)",
   "  --max-tokens <n>     cap tokens per turn    --max-wall-ms <n>  cap wall clock per turn",
-  "  --fullscreen         not implemented (scrollback chat is the default; docs/33 §5.17)",
-  "  --tui-mode <m>       scrollback (default) or fullscreen (not implemented)",
+  "  --fullscreen         reduced alt-screen chat (docs/33 §5.17; residuals remain)",
+  "  --tui-mode <m>       scrollback (default) | fullscreen | fullscreen-experimental",
 ].join("\n");
 
 interface CliOptions {
@@ -83,7 +136,19 @@ interface CliOptions {
   permissionMode?: PermissionMode;
   worktree?: string;
   tuiScreenMode?: TuiScreenMode;
+  listModels: boolean;
+  listModelsFilter?: string;
+  showPrompts: boolean;
+  showRepoMap: boolean;
   errors: string[];
+}
+
+function cliConfig(workspace: string, opts: CliOptions): ReturnType<typeof loadConfig> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  if (opts.mock) env.HZ_PROVIDER = "mock";
+  if (opts.model !== undefined) env.HZ_MODEL = opts.model;
+  const home = typeof env.HOME === "string" && env.HOME !== "" ? env.HOME : os.homedir();
+  return augmentConfigWithTrustedWorkspace(loadConfig(env, defaultConfigPath(home), workspace), workspace, env, home, () => {});
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -94,6 +159,9 @@ function parseArgs(argv: string[]): CliOptions {
     help: false,
     version: false,
     print: false,
+    listModels: false,
+    showPrompts: false,
+    showRepoMap: false,
     errors: [],
   };
   const rest: string[] = [];
@@ -169,6 +237,24 @@ function parseArgs(argv: string[]): CliOptions {
       case "--mock":
         opts.mock = true;
         break;
+      case "--show-prompts":
+        opts.showPrompts = true;
+        break;
+      case "--show-repo-map":
+        opts.showRepoMap = true;
+        break;
+      case "--list-models": {
+        opts.listModels = true;
+        if (inline !== undefined) opts.listModelsFilter = inline;
+        else {
+          const next = argv[i + 1];
+          if (next !== undefined && !String(next).startsWith("-")) {
+            i += 1;
+            opts.listModelsFilter = String(next);
+          }
+        }
+        break;
+      }
       case "--fullscreen":
         opts.tuiScreenMode = "fullscreen";
         break;
@@ -283,12 +369,23 @@ async function runServe(opts: CliOptions, workspace: string): Promise<number> {
 /** `hzcode doctor [--json] [--workspace <path>]`: diagnose only, exit 1 on any FAIL. */
 function runDoctorCommand(args: string[]): number {
   let json = false;
+  let fixCheck: string | undefined;
   let workspace = process.cwd();
   for (let i = 0; i < args.length; i += 1) {
     const arg = String(args[i] ?? "");
     if (arg === "--json") json = true;
-    else if (arg === "--help" || arg === "-h") {
-      process.stdout.write("hzcode doctor [--json] [--workspace <path>]\n  check bun, the kernel, config, provider, workspace, git and terminal; prints OK/WARN/FAIL with a fix per problem; exits 1 on FAIL; changes nothing\n");
+    else if (arg === "--fix" || arg.startsWith("--fix=")) {
+      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
+      if (value === undefined || value === "" || (!arg.includes("=") && String(value).startsWith("--"))) {
+        process.stderr.write("hzcode: --fix needs a check id (e.g. effect.host)\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      fixCheck = value;
+    } else if (arg === "--help" || arg === "-h") {
+      process.stdout.write(
+        "hzcode doctor [--json] [--fix <check>] [--workspace <path>]\n  check bun, the kernel, config, provider, workspace, git and terminal; prints OK/WARN/FAIL with a fix per problem; --fix prints read-only export hints for one check id; exits 1 on FAIL; changes nothing\n",
+      );
       return 0;
     } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
       const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
@@ -303,9 +400,235 @@ function runDoctorCommand(args: string[]): number {
       return 2;
     }
   }
-  const checks = runDoctor(realDoctorEnv(path.resolve(workspace)));
+  const env = realDoctorEnv(path.resolve(workspace));
+  const checks = runDoctor(env);
+  if (fixCheck !== undefined) {
+    const lines = doctorFixSuggestion(fixCheck, env.env as Record<string, string | undefined>);
+    if (lines === undefined) {
+      process.stderr.write(`hzcode doctor --fix: no suggestions for check id ${fixCheck}\n`);
+      return 2;
+    }
+    process.stdout.write(`doctor --fix ${fixCheck} (read-only suggestions; nothing changed)\n`);
+    for (const line of lines) process.stdout.write(`${line}\n`);
+    return 0;
+  }
   process.stdout.write((json ? renderDoctorJson(checks) : renderDoctor(checks)) + "\n");
   return doctorExitCode(checks);
+}
+
+function runEffectCommand(args: string[]): number {
+  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
+    process.stdout.write(
+      "usage: hzcode effect reconcile [--workspace <path>] [--session <id>] [--probe]\n  observe-only reconcile simulation; --probe adds read-only fs/vcs probes (docs/06); no ledger writes\n",
+    );
+    return args.length === 0 ? 2 : 0;
+  }
+  if (args[0] !== "reconcile") {
+    process.stderr.write(
+      "usage: hzcode effect reconcile [--workspace <path>] [--session <id>] [--probe]\n",
+    );
+    return 2;
+  }
+  let workspace = process.cwd();
+  let sessionId: string | undefined;
+  let probe = false;
+  for (let i = 1; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--probe") probe = true;
+    else if (arg === "--session") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        process.stderr.write("hzcode effect reconcile: --session needs an id\n");
+        return 2;
+      }
+      sessionId = value;
+      i += 1;
+    } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
+      if (value === undefined || value === "") {
+        process.stderr.write("hzcode: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = value;
+    } else {
+      process.stderr.write(`hzcode effect reconcile: unknown argument ${arg}\n`);
+      return 2;
+    }
+  }
+  workspace = path.resolve(workspace);
+  try {
+    process.stdout.write(`${renderEffectReconcile(workspace, { sessionId, probe })}\n`);
+    return effectReconcileExitCode(workspace, { sessionId, probe });
+  } catch (err) {
+    process.stderr.write(`hzcode effect reconcile: ${errorMessage(err)}\n`);
+    return 1;
+  }
+}
+
+function runReceiptCommand(args: string[]): number {
+  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
+    process.stdout.write("usage: hzcode receipt show <receiptId> [--workspace <path>]\n");
+    return args.length === 0 ? 2 : 0;
+  }
+  let workspace = process.cwd();
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
+      if (value === undefined || value === "") {
+        process.stderr.write("hzcode: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = value;
+    } else {
+      rest.push(arg);
+    }
+  }
+  workspace = path.resolve(workspace);
+  if (rest[0] !== "show") {
+    process.stderr.write("usage: hzcode receipt show <receiptId> [--workspace <path>]\n");
+    return 2;
+  }
+  const receiptId = rest[1];
+  if (receiptId === undefined || receiptId.startsWith("--")) {
+    process.stderr.write("hzcode receipt show: missing receipt id\n");
+    return 2;
+  }
+  try {
+    process.stdout.write(`${renderReceiptShow(workspace, receiptId)}\n`);
+    return 0;
+  } catch (err) {
+    process.stderr.write(`hzcode receipt show: ${errorMessage(err)}\n`);
+    return 1;
+  }
+}
+
+function runSessionCommand(args: string[]): number {
+  if (args.length === 0) {
+    process.stderr.write(
+      "usage: hzcode session list [--workspace <path>] | hzcode session fork <id> [--at n] | hzcode session export <id> [-o path] | hzcode session verify <id> [--workspace <path>]\n",
+    );
+    return 2;
+  }
+  let workspace = process.cwd();
+  const verb = args[0];
+  const rest: string[] = [];
+  for (let i = 1; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
+      if (value === undefined || value === "") {
+        process.stderr.write("hzcode: --workspace needs a folder\n");
+        return 2;
+      }
+      if (!arg.includes("=")) i += 1;
+      workspace = value;
+    } else {
+      rest.push(arg);
+    }
+  }
+  workspace = path.resolve(workspace);
+  try {
+    if (!fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) {
+      process.stderr.write(`hzcode: not a folder: ${workspace}\n`);
+      return 2;
+    }
+  } catch (err) {
+    process.stderr.write(`hzcode: cannot use ${workspace}: ${errorMessage(err)}\n`);
+    return 2;
+  }
+  if (verb === "list") {
+    process.stdout.write(`${renderSessionList(workspace)}\n`);
+    return 0;
+  }
+  if (verb === "export") {
+    const sessionId = rest[0];
+    if (sessionId === undefined || sessionId.startsWith("--")) {
+      process.stderr.write("usage: hzcode session export <sessionId> [-o <path>]\n");
+      return 2;
+    }
+    let out: string | undefined;
+    for (let j = 1; j < rest.length; j += 1) {
+      if (rest[j] === "-o" || rest[j] === "--output") {
+        const p = rest[j + 1];
+        if (p === undefined || p.startsWith("-")) {
+          process.stderr.write("hzcode session export: -o needs a file path\n");
+          return 2;
+        }
+        out = p;
+        j += 1;
+      } else {
+        process.stderr.write(`hzcode session export: unknown argument ${rest[j]}\n`);
+        return 2;
+      }
+    }
+    try {
+      const result = exportSessionCli(workspace, sessionId, { out });
+      process.stdout.write(
+        `exported ${result.messageCount} message(s), ${result.checkpointCount} checkpoint(s)` +
+          (result.eventCount > 0 ? `, ${result.eventCount} event(s)` : "") +
+          ` → ${result.path}\n`,
+      );
+      return 0;
+    } catch (err) {
+      process.stderr.write(`hzcode session export: ${errorMessage(err)}\n`);
+      return 1;
+    }
+  }
+  if (verb === "verify") {
+    const sessionId = rest[0];
+    if (sessionId === undefined || sessionId.startsWith("--")) {
+      process.stderr.write("usage: hzcode session verify <sessionId> [--workspace <path>]\n");
+      return 2;
+    }
+    for (let j = 1; j < rest.length; j += 1) {
+      process.stderr.write(`hzcode session verify: unknown argument ${rest[j]}\n`);
+      return 2;
+    }
+    try {
+      const report = buildSessionVerifyReport(workspace, sessionId);
+      process.stdout.write(`${renderSessionVerify(report)}\n`);
+      return sessionVerifyExitCode(report);
+    } catch (err) {
+      process.stderr.write(`hzcode session verify: ${errorMessage(err)}\n`);
+      return 1;
+    }
+  }
+  if (verb === "fork") {
+    const parentId = rest[0];
+    if (parentId === undefined || parentId.startsWith("--")) {
+      process.stderr.write("usage: hzcode session fork <parentSessionId> [--at n]\n");
+      return 2;
+    }
+    let at: number | undefined;
+    for (let j = 1; j < rest.length; j += 1) {
+      if (rest[j] === "--at") {
+        const n = Number(rest[j + 1]);
+        if (!Number.isInteger(n) || n < 0) {
+          process.stderr.write("hzcode: --at must be a non-negative integer\n");
+          return 2;
+        }
+        at = n;
+        j += 1;
+      } else {
+        process.stderr.write(`hzcode session fork: unknown argument ${rest[j]}\n`);
+        return 2;
+      }
+    }
+    try {
+      const child = forkSessionCli(workspace, parentId, { at });
+      process.stdout.write(`forked ${parentId} → ${child.childId} (${child.title}) at message ${child.messageIndex}\n`);
+      return 0;
+    } catch (err) {
+      process.stderr.write(`hzcode session fork: ${errorMessage(err)}\n`);
+      return 1;
+    }
+  }
+  process.stderr.write(`hzcode session: unknown verb ${verb}\n`);
+  return 2;
 }
 
 function runConfigCommand(args: string[]): number {
@@ -338,12 +661,27 @@ function reexecInWorkspace(dest: string, argvTail: string[]): number {
   return typeof code === "number" ? code : 1;
 }
 
+function gitWorktreePorcelain(cwd: string): string | undefined {
+  const r = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd, encoding: "utf8" });
+  if (r.status !== 0) return undefined;
+  return r.stdout ?? "";
+}
+
 async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promise<number> {
   const name = opts.worktree ?? "";
-  const why = validateWorktreeName(name);
-  if (why !== undefined) {
-    process.stderr.write(`hzcode: ${why}\n`);
-    return 2;
+  const porcelain = gitWorktreePorcelain(workspace);
+  const decision = resolveWorktreeAcquire(workspace, name, {
+    max: worktreePoolMaxFromEnv(process.env),
+    porcelain: porcelain ?? "",
+  });
+  if (decision.kind === "refuse") {
+    process.stderr.write(`hzcode: ${decision.reason}\n`);
+    return decision.reason.startsWith("invalid worktree") || decision.reason.includes("required") ? 2 : 1;
+  }
+  const dest = decision.dest;
+  if (decision.kind === "reuse") {
+    process.stderr.write(`hzcode: worktree: reusing idle pool tree ${dest} (branch ${decision.branch})\n`);
+    return reexecInWorkspace(dest, process.argv.slice(2));
   }
   const mod = core as unknown as CoreModule;
   const createRuntime = typeof mod.createRuntime === "function" ? mod.createRuntime : mod?.default?.createRuntime;
@@ -359,7 +697,6 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
     return 1;
   }
   const extras = runtime as Runtime & { runGuardedShell?: (command: string) => Promise<{ ok: boolean; output: string }> };
-  const dest = worktreeSiblingPath(workspace, name);
   try {
     const ui = createApprovalUi(Boolean(process.stdin.isTTY));
     ui.runtime = runtime;
@@ -368,12 +705,12 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
       process.stderr.write("hzcode: worktree: this build cannot run a guarded command\n");
       return 1;
     }
-    const out = await extras.runGuardedShell(worktreeAddCommand(workspace, name));
+    const out = await extras.runGuardedShell(decision.command);
     if (!out.ok) {
       process.stderr.write(`hzcode: worktree: ${out.output.trim() || "git worktree add failed"}\n`);
       return 1;
     }
-    process.stderr.write(`hzcode: worktree ${dest} (branch hz/${name.trim()})\n`);
+    process.stderr.write(`hzcode: worktree ${dest} (branch ${decision.branch})\n`);
   } finally {
     try {
       await runtime.close();
@@ -439,6 +776,24 @@ async function runLoginCommand(args: string[]): Promise<number> {
     process.stderr.write(`hzcode login: ${errorMessage(e)}\n`);
     return 1;
   }
+}
+
+/** `hzcode tui relaunch` — consume one-shot handoff (docs/13 D2 reduced). */
+function runTuiCommand(args: string[]): number {
+  if (args[0] !== "relaunch") {
+    process.stderr.write("usage: hzcode tui relaunch  (consumes <state>/tui-handoff.json)\n");
+    return 2;
+  }
+  const workspace = process.cwd();
+  const handoff = consumeTuiHandoff(workspace);
+  if (handoff === undefined) {
+    process.stderr.write("hzcode tui relaunch: no handoff file (nothing to restore)\n");
+    return 1;
+  }
+  process.stdout.write(
+    `relaunch handoff consumed: session ${handoff.sessionId}, mode ${handoff.mode}, draft ${handoff.draft.length} bytes\n`,
+  );
+  return 0;
 }
 
 /** `hzcode keybind check [file]` — validate keybind override JSON (docs/33 §5.19). */
@@ -593,8 +948,16 @@ async function runSuggestCommand(args: string[]): Promise<number> {
   }
 }
 
-/** `hzcode commit [--preview] [--receipt] [--workspace <path>] [context...]` (T-16). */
-async function runCommitCommand(args: string[]): Promise<number> {
+/** `hzcode commit [--preview] [--receipt] [--attribute-*] [--workspace <path>] [context...]` (T-16). */
+async function runCommitCommand(rawArgs: string[]): Promise<number> {
+  let attribution;
+  let args: string[];
+  try {
+    ({ attribution, rest: args } = parseCommitAttributeArgs(rawArgs));
+  } catch (err) {
+    process.stderr.write(`hzcode: commit: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 2;
+  }
   let preview = false;
   let receipt = false;
   let workspace = process.cwd();
@@ -607,7 +970,9 @@ async function runCommitCommand(args: string[]): Promise<number> {
     else if (arg === "--mock") mock = true;
     else if (arg === "--workspace" && args[i + 1] !== undefined) workspace = args[(i += 1)];
     else if (arg.startsWith("--")) {
-      process.stderr.write(`hzcode: commit: unknown option ${arg}\nusage: hzcode commit [--preview] [--receipt] [context...]\n`);
+      process.stderr.write(
+        `hzcode: commit: unknown option ${arg}\nusage: hzcode commit [--preview] [--receipt] [--attribute-coauthor <email>] [context...]\n`,
+      );
       return 2;
     } else context.push(arg);
   }
@@ -643,11 +1008,12 @@ async function runCommitCommand(args: string[]): Promise<number> {
     ui.runtime = runtime;
     installApprovalHandler(ui);
     const res = await runtime.send(commitPrompt(staged.diff, staged.truncated, context.join(" ")), { onEvent: () => {} });
-    const message = cleanCommitMessage(res.text);
+    let message = cleanCommitMessage(res.text);
     if (res.aborted || message === "") {
       process.stderr.write("hzcode: commit: no message was produced\n");
       return 1;
     }
+    message = appendAttributionToMessage(message, attribution);
     // The head named in the trailer is the chain as it stands when the commit
     // is made; the commit's own receipt comes after it.
     const head = receipt ? extras.receiptHead?.() : undefined;
@@ -683,7 +1049,11 @@ async function main(): Promise<number> {
   if (rawArgs[0] === "login" || rawArgs[0] === "logout") return runLoginCommand(rawArgs);
   if (rawArgs[0] === "config") return runConfigCommand(rawArgs.slice(1));
   if (rawArgs[0] === "keybind") return runKeybindCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "tui") return runTuiCommand(rawArgs.slice(1));
   if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "receipt") return runReceiptCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "effect") return runEffectCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "session") return runSessionCommand(rawArgs.slice(1));
   if (rawArgs[0] === "serve") {
     const serveOpts = parseArgs(rawArgs.slice(1));
     if (serveOpts.errors.length > 0) {
@@ -747,16 +1117,50 @@ async function main(): Promise<number> {
     return runWorktreeBootstrap(opts, workspace);
   }
 
+  if (opts.showPrompts) {
+    const config = cliConfig(workspace, opts);
+    const request = buildShowPromptsRequest({ workspace, config, model: config.model });
+    process.stdout.write(renderShowPrompts(request));
+    return 0;
+  }
+
+  if (opts.showRepoMap) {
+    process.stdout.write(buildShowRepoMap({ workspace }));
+    return 0;
+  }
+
+  if (opts.listModels) {
+    const config = cliConfig(workspace, opts);
+    const catalog = loadCatalog(process.env);
+    const provider = String(config.resolved?.name ?? config.provider);
+    const ids = filterModelIds(modelIdsForProvider(provider, config, catalog), opts.listModelsFilter);
+    if (ids.length === 0) {
+      const hint = opts.listModelsFilter !== undefined && opts.listModelsFilter !== "" ? ` matching ${opts.listModelsFilter}` : "";
+      process.stdout.write(`(no models for provider ${provider}${hint})\n`);
+    } else {
+      for (const id of ids) process.stdout.write(`${id}\n`);
+    }
+    return 0;
+  }
+
+  const config = cliConfig(workspace, opts);
+  const catalog = loadCatalog(process.env);
+  const provider = String(config.resolved?.name ?? config.provider);
+  if (!isKnownModel(provider, config.model, config, catalog)) {
+    const pool = modelIdsForProvider(provider, config, catalog);
+    const suggestions = suggestModelIds(
+      config.model,
+      pool.length > 0 ? pool : allCatalogModelIds(config, catalog),
+    );
+    process.stderr.write(`hzcode: ${formatDidYouMean(config.model, suggestions)}\n`);
+    return 2;
+  }
+
   // A human is attached when they typed into a terminal; a pipe is a script.
   // -p is always a script: never a chat bar, never an approval prompt.
   const interactive = !opts.print && Boolean(process.stdin.isTTY);
 
   const screenMode = resolveTuiScreenMode(process.env as Record<string, string | undefined>, opts.tuiScreenMode);
-  if (interactive && screenMode === "fullscreen") {
-    process.stderr.write(fullscreenNotImplementedMessage());
-    return 2;
-  }
-
   let printPrompt = "";
   if (opts.print) {
     printPrompt = [opts.printText, opts.initialMessage].filter((x) => x !== undefined && x !== "").join(" ");
@@ -827,9 +1231,30 @@ async function main(): Promise<number> {
   };
   process.once("SIGTERM", stop);
 
+  const handoff = interactive ? consumeTuiHandoff(workspace) : undefined;
+  if (handoff !== undefined && handoff.sessionId !== runtime.sessionId) {
+    process.stderr.write(
+      `hzcode: relaunch handoff targets session ${handoff.sessionId}; current is ${runtime.sessionId} (draft discarded)\n`,
+    );
+  }
+
   try {
     if (interactive) {
-      return await runInteractive({ runtime, workspace, version: VERSION, ui, initialMessage: opts.initialMessage });
+      const interactiveOpts = {
+        runtime,
+        workspace,
+        version: VERSION,
+        ui,
+        initialMessage: opts.initialMessage,
+        resumedDraft:
+          handoff !== undefined && handoff.sessionId === runtime.sessionId ? handoff.draft : undefined,
+        skipResumePickerOnStart:
+          opts.continueSession || (opts.initialMessage !== undefined && opts.initialMessage.trim() !== ""),
+      };
+      if (isFullscreenChatMode(screenMode)) {
+        return await runFullscreenExperimentalChat(interactiveOpts);
+      }
+      return await runInteractive(interactiveOpts);
     }
     if (opts.print) {
       // `-p "/name args"` expands a custom command file; anything else is untouched.

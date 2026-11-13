@@ -27,41 +27,46 @@ describe("shell tool", () => {
   test("captures stdout and reports the exit code", async () => {
     const r = await shellTool.execute({ command: "echo hello" }, mockToolContext());
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("hello\nexit 0");
+    expect(r.output).toMatch(/Exit code: 0/);
+    expect(r.output).toMatch(/Wall time: \d+\.\d+s/);
+    expect(r.output).toContain("Output:\nhello");
   });
 
   test("captures stderr in the same output", async () => {
     const r = await shellTool.execute({ command: "echo boom 1>&2" }, mockToolContext());
     expect(r.ok).toBe(true);
     expect(r.output).toContain("boom");
-    expect(r.output.endsWith("exit 0")).toBe(true);
+    expect(r.output).toMatch(/Exit code: 0/);
   });
 
   test("reports a non-zero exit code as a result, not an error", async () => {
     const r = await shellTool.execute({ command: "exit 3" }, mockToolContext());
     expect(r.ok).toBe(true);
     expect(r.error).toBeUndefined();
-    expect(r.output).toBe("exit 3");
+    expect(r.output).toMatch(/Exit code: 3/);
   });
 
   test("reports a command that writes nothing as just the exit code", async () => {
     const r = await shellTool.execute({ command: "true" }, mockToolContext());
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("exit 0");
+    expect(r.output).toMatch(/Exit code: 0/);
+    expect(r.output).not.toContain("Total output lines:");
   });
 
   test("runs in the workspace by default", async () => {
     const ws = makeWorkspace();
     const r = await shellTool.execute({ command: "pwd" }, mockToolContext({ cwd: ws }));
     expect(r.ok).toBe(true);
-    expect(r.output.split("\n")[0]).toBe(realpathSync(ws));
+    const body = r.output.split("Output:\n")[1] ?? "";
+    expect(body.split("\n")[0]).toBe(realpathSync(ws));
   });
 
   test("honours the cwd argument", async () => {
     const ws = makeWorkspace({ "sub/keep.txt": "x\n" });
     const r = await shellTool.execute({ command: "pwd", cwd: "sub" }, mockToolContext({ cwd: ws }));
     expect(r.ok).toBe(true);
-    expect(r.output.split("\n")[0]).toBe(realpathSync(path.join(ws, "sub")));
+    const body = r.output.split("Output:\n")[1] ?? "";
+    expect(body.split("\n")[0]).toBe(realpathSync(path.join(ws, "sub")));
   });
 
   test("requires a command", async () => {
@@ -95,7 +100,8 @@ describe("shell tool", () => {
     const r = await shellTool.execute({ command: "sleep 5 & echo started" }, mockToolContext());
     const elapsed = Date.now() - started;
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("started\nexit 0");
+    expect(r.output).toContain("Output:\nstarted");
+    expect(r.output).toMatch(/Exit code: 0/);
     expect(elapsed).toBeLessThan(3000);
   });
 
@@ -113,7 +119,8 @@ describe("shell tool", () => {
     const ctx = mockToolContext({ decision: "ask", approve: true });
     const r = await shellTool.execute({ command: "echo approved" }, ctx);
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("approved\nexit 0");
+    expect(r.output).toContain("approved");
+    expect(r.output).toMatch(/Exit code: 0/);
     expect(ctx.approveCalls.length).toBe(1);
   });
 
@@ -146,7 +153,8 @@ describe("shell tool", () => {
         expect(r.output).not.toContain("secret-api-key-value");
         expect(r.output).not.toContain("hidden-secret-value");
         expect(r.output).not.toContain("hidden-password-value");
-        expect(r.output).toBe("||||plain-visible-value|end\nexit 0");
+        expect(r.output).toContain("||||plain-visible-value|end");
+        expect(r.output).toMatch(/Exit code: 0/);
       },
     );
   });

@@ -13,6 +13,8 @@ export interface ParsedGeminiToolCall {
 }
 
 const FENCE = /```tool_code\s*\n([\s\S]*?)```/gi;
+const FENCE_OPEN = /```tool_code\s*\n/i;
+const FENCE_CLOSE = /```/;
 
 /** Decode a Python-ish literal used in kwargs (not a full interpreter). */
 export function decodePythonLiteral(raw: string): unknown {
@@ -164,20 +166,46 @@ export function extractGeminiCallsFromBody(
   return calls;
 }
 
+/**
+ * Scan `buffer` from `fromIndex` for closed ```tool_code fences only.
+ * Stops at the first incomplete fence (fail-closed for partial streams).
+ */
+export function drainCompleteGeminiToolCalls(
+  buffer: string,
+  allowed: ReadonlySet<string>,
+  fromIndex: number,
+): { calls: ParsedGeminiToolCall[]; errors: string[]; nextIndex: number } {
+  const calls: ParsedGeminiToolCall[] = [];
+  const errors: string[] = [];
+  let i = fromIndex;
+  while (i < buffer.length) {
+    const tail = buffer.slice(i);
+    const openMatch = FENCE_OPEN.exec(tail);
+    if (!openMatch) break;
+    const afterOpen = i + openMatch.index + openMatch[0].length;
+    const bodyTail = buffer.slice(afterOpen);
+    const closeMatch = FENCE_CLOSE.exec(bodyTail);
+    if (!closeMatch) break;
+    const body = bodyTail.slice(0, closeMatch.index);
+    const closeEnd = afterOpen + closeMatch.index + closeMatch[0].length;
+    calls.push(...extractGeminiCallsFromBody(body, allowed, errors));
+    i = closeEnd;
+  }
+  return { calls, errors, nextIndex: i };
+}
+
 /** Parse complete ```tool_code fences from assistant text. */
 export function parseGeminiToolCalls(
   text: string,
   allowed: ReadonlySet<string>,
 ): { calls: ParsedGeminiToolCall[]; rest: string; errors: string[] } {
-  const errors: string[] = [];
-  const calls: ParsedGeminiToolCall[] = [];
+  const { calls, errors, nextIndex } = drainCompleteGeminiToolCalls(text, allowed, 0);
   let rest = text;
   const consumed: string[] = [];
   FENCE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = FENCE.exec(text)) !== null) {
+  while ((m = FENCE.exec(text.slice(0, nextIndex))) !== null) {
     consumed.push(m[0]);
-    calls.push(...extractGeminiCallsFromBody(m[1], allowed, errors));
   }
   for (const block of consumed) rest = rest.replace(block, "");
   return { calls, rest: rest.trim(), errors };

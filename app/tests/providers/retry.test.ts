@@ -138,6 +138,28 @@ describe("fetchWithRetry — the request-phase recovery window", () => {
     }
   });
 
+  test("429 with quota wording is not retried (route on code)", async () => {
+    let hits = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        hits += 1;
+        return new Response("insufficient quota for this model", { status: 429 });
+      },
+    });
+    try {
+      const response = await fetchWithRetry(
+        `http://127.0.0.1:${server.port}/v1/chat/completions`,
+        { method: "POST" },
+        { baseDelayMs: 1, attempts: 4 },
+      );
+      expect(response.status).toBe(429);
+      expect(hits).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("a 400 is returned untouched — one request, no retry", async () => {
     const stub = await flakyServer(400, 99);
     try {

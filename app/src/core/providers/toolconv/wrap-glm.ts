@@ -1,31 +1,48 @@
 /**
- * wrap-glm.ts — turn assistant text into tool_call events after the stream ends.
+ * wrap-glm.ts — turn assistant text into tool_call events when a GLM block closes.
  */
 
 import { randomUUID } from "node:crypto";
 import type { Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../../contracts";
-import { parseGlmToolCalls, renderGlmToolInstructions } from "./glm";
+import { drainCompleteGlmToolCalls, renderGlmToolInstructions } from "./glm";
+import { prepareInnerTextToolRequest } from "./wrap-shared";
 
 function allowedToolNames(tools: ToolSpec[]): ReadonlySet<string> {
   return new Set(tools.map((t) => t.name));
 }
 
-/** Wrap a text-only provider: GLM `<tool_call>` blocks become `tool_call` events on `done`. */
+function emitGlmCalls(
+  calls: { name: string; args: Record<string, unknown> }[],
+): Extract<ProviderEvent, { type: "tool_call" }>[] {
+  return calls.map((call) => ({
+    type: "tool_call" as const,
+    id: `glm_${randomUUID()}`,
+    name: call.name,
+    arguments: JSON.stringify(call.args),
+  }));
+}
+
+/** Wrap a text-only provider: GLM `<tool_call>` blocks become `tool_call` events when closed. */
 export function wrapGlmToolProvider(inner: Provider): Provider {
   return {
     name: inner.name,
     async *stream(req: ProviderRequest): AsyncIterable<ProviderEvent> {
       const allowed = allowedToolNames(req.tools);
-      const innerReq: ProviderRequest = {
-        ...req,
-        system: req.system + "\n\n" + renderGlmToolInstructions(req.tools),
-        tools: [],
-      };
+      const innerReq = prepareInnerTextToolRequest(req, "glm", renderGlmToolInstructions);
       let buffer = "";
+      let scanFrom = 0;
+      let toolCallCount = 0;
       let doneEvent: Extract<ProviderEvent, { type: "done" }> | undefined;
       for await (const event of inner.stream(innerReq)) {
         if (event.type === "text") {
           buffer += event.text;
+          const drained = drainCompleteGlmToolCalls(buffer, allowed, scanFrom);
+          scanFrom = drained.nextIndex;
+          for (const message of drained.errors) yield { type: "notice", message };
+          for (const call of emitGlmCalls(drained.calls)) {
+            toolCallCount++;
+            yield call;
+          }
           yield event;
         } else if (event.type === "thinking" || event.type === "notice" || event.type === "quirks") {
           yield event;
@@ -42,17 +59,13 @@ export function wrapGlmToolProvider(inner: Provider): Provider {
           return;
         }
       }
-      const { calls, errors } = parseGlmToolCalls(buffer, allowed);
-      for (const message of errors) yield { type: "notice", message };
-      for (const call of calls) {
-        yield {
-          type: "tool_call",
-          id: `glm_${randomUUID()}`,
-          name: call.name,
-          arguments: JSON.stringify(call.args),
-        };
+      const tail = drainCompleteGlmToolCalls(buffer, allowed, scanFrom);
+      for (const message of tail.errors) yield { type: "notice", message };
+      for (const call of emitGlmCalls(tail.calls)) {
+        toolCallCount++;
+        yield call;
       }
-      const stopReason = calls.length > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
+      const stopReason = toolCallCount > 0 ? "tool_use" : (doneEvent?.stopReason ?? "end");
       yield { type: "done", stopReason, usage: doneEvent?.usage };
     },
   };

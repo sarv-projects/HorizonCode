@@ -9,6 +9,7 @@
  */
 
 import type { ToolCardDetail } from "../contracts";
+import { foldMiddleLines, isFoldedMiddleMarker } from "./fold-lines";
 import { colorLevel, onBg, paint, sanitizeText, strip, truncate, visibleWidth, wrapText, type ColorLevel, type Role } from "./style";
 
 export interface CardStyle {
@@ -17,6 +18,8 @@ export interface CardStyle {
   level?: ColorLevel;
   /** false selects ASCII glyphs of the same width */
   unicode?: boolean;
+  /** When true, shell output panels show every line (docs/13 D9). */
+  expandOutput?: boolean;
 }
 
 export interface Glyphs {
@@ -206,6 +209,38 @@ export interface CardInput {
   detail?: ToolCardDetail;
   /** duration when the core did not report one */
   elapsedMs?: number;
+  /** EffectHost id for this tool call (docs/28 ruling 250). */
+  effectId?: string;
+  receiptId?: string;
+  receiptSeq?: number;
+}
+
+/** Dim linkage text: `effect abcd1234 · r#3` when receipt seq is known. */
+export function formatToolEffectLinkage(input: Pick<CardInput, "effectId" | "receiptId" | "receiptSeq">): string {
+  const bits: string[] = [];
+  const eid = typeof input.effectId === "string" ? input.effectId.trim() : "";
+  if (eid !== "") bits.push(`effect ${sanitizeText(eid).slice(0, 8)}`);
+  if (typeof input.receiptSeq === "number" && Number.isFinite(input.receiptSeq)) {
+    bits.push(`r#${Math.floor(input.receiptSeq)}`);
+  } else {
+    const rid = typeof input.receiptId === "string" ? input.receiptId.trim() : "";
+    if (rid !== "") bits.push(`receipt ${sanitizeText(rid).slice(0, 8)}`);
+  }
+  return bits.join(" \u00b7 ");
+}
+
+type EffectLinkageFields = Pick<CardInput, "effectId" | "receiptId" | "receiptSeq">;
+
+function linkageLine(input: EffectLinkageFields, style: CardStyle): string | undefined {
+  const text = formatToolEffectLinkage(input);
+  if (text === "") return undefined;
+  const level = style.level ?? colorLevel();
+  return "  " + dimmed(text, level);
+}
+
+function appendLinkage(lines: string[], input: EffectLinkageFields, style: CardStyle): void {
+  const line = linkageLine(input, style);
+  if (line !== undefined) lines.push(line);
 }
 
 function bulletFor(status: CardInput["status"], g: Glyphs, level: ColorLevel): string {
@@ -269,6 +304,7 @@ function toolCardLinesRaw(input: CardInput, style: CardStyle): string[] {
     const wrapped = wrapText(`error: ${text}`, width - 4);
     wrapped.forEach((part, i) => lines.push((i === 0 ? "  " + paint("err", g.err, level) + " " : "    ") + paint("err", part, level)));
   }
+  appendLinkage(lines, input, style);
   return lines;
 }
 
@@ -289,7 +325,9 @@ function resultLineRaw(input: CardInput, style: CardStyle): string[] {
   if (d.delta) bits.push(deltaText(d.delta, level));
   else if (input.summary) bits.push(dimmed(truncate(sanitizeText(input.summary).split("\n")[0] ?? "", Math.max(10, width - 16)), level));
   if (dur) bits.push(dimmed(dur, level));
-  return ["  " + dimmed(g.branch, level) + " " + (bits.join(dimmed(" \u00b7 ", level)) || dimmed("ok", level))];
+  const lines = ["  " + dimmed(g.branch, level) + " " + (bits.join(dimmed(" \u00b7 ", level)) || dimmed("ok", level))];
+  appendLinkage(lines, input, style);
+  return lines;
 }
 
 /* -------------------------------- shell card -------------------------------- */
@@ -321,17 +359,14 @@ function shellOutputLinesRaw(output: string, style: CardStyle): string[] {
   const text = sanitizeText(output).replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(/\n+$/, "");
   if (text === "") return [];
   const all = text.split("\n");
-  let rows: Array<{ text: string; marker?: boolean }>;
-  const cap = SHELL_FIRST_LINES + SHELL_LAST_LINES;
-  if (all.length <= cap + 1) rows = all.map((t) => ({ text: t }));
-  else {
-    const hidden = all.length - cap;
-    rows = [
-      ...all.slice(0, SHELL_FIRST_LINES).map((t) => ({ text: t })),
-      { text: `${g.ellipsis} +${hidden} line${hidden === 1 ? "" : "s"}`, marker: true },
-      ...all.slice(all.length - SHELL_LAST_LINES).map((t) => ({ text: t })),
-    ];
-  }
+  const expanded = style.expandOutput === true;
+  const displayed = expanded
+    ? all
+    : foldMiddleLines(all, { first: SHELL_FIRST_LINES, last: SHELL_LAST_LINES, ellipsis: g.ellipsis });
+  const rows: Array<{ text: string; marker?: boolean }> = displayed.map((line) => ({
+    text: line,
+    marker: !expanded && isFoldedMiddleMarker(line, g.ellipsis),
+  }));
   return rows.map((r) => {
     const clipped = truncate(r.text, Math.max(4, width - 4));
     const body = r.marker ? dimmed(clipped, level) : clipped;
@@ -341,7 +376,10 @@ function shellOutputLinesRaw(output: string, style: CardStyle): string[] {
 }
 
 /** `  └ exit 0 · 4.2s` (faint) or `  └ exit 1 · 4.2s` (red). */
-function shellFooterRaw(input: { status: "ok" | "error"; exitCode?: number; durationMs?: number; summary?: string }, style: CardStyle): string {
+function shellFooterRaw(
+  input: { status: "ok" | "error"; exitCode?: number; durationMs?: number; summary?: string } & EffectLinkageFields,
+  style: CardStyle,
+): string[] {
   const level = style.level ?? colorLevel();
   const g = glyphsFor(style.unicode ?? true);
   const failed = input.status === "error" || (input.exitCode !== undefined && input.exitCode !== 0);
@@ -350,7 +388,9 @@ function shellFooterRaw(input: { status: "ok" | "error"; exitCode?: number; dura
   else if (input.status === "error") bits.push(truncate(sanitizeText(input.summary ?? "").split("\n")[0] || "error", 60));
   if (input.durationMs !== undefined) bits.push(cardDuration(input.durationMs));
   const text = bits.join(" \u00b7 ") || "ok";
-  return failed ? "  " + paint("err", `${g.branch} ${text}`, level) : "  " + dimmed(`${g.branch} ${text}`, level);
+  const lines = [failed ? "  " + paint("err", `${g.branch} ${text}`, level) : "  " + dimmed(`${g.branch} ${text}`, level)];
+  appendLinkage(lines, input, style);
+  return lines;
 }
 
 /* ------------------------------- folded runs ------------------------------- */
@@ -529,7 +569,8 @@ export const shellHeader = (command: string, style: CardStyle): string => finish
 /** The output panel: first 2 lines, `\u2026 +N lines`, last 3; rows clipped to the width. */
 export const shellOutputLines = (output: string, style: CardStyle): string[] => finish(shellOutputLinesRaw(output, style), style);
 /** `  \u2514 exit 0 \u00b7 4.2s` (faint) or `  \u2514 exit 1 \u00b7 4.2s` (red). */
-export const shellFooter = (input: Parameters<typeof shellFooterRaw>[0], style: CardStyle): string => finish([shellFooterRaw(input, style)], style)[0] ?? "";
+export const shellFooter = (input: Parameters<typeof shellFooterRaw>[0], style: CardStyle): string[] =>
+  finish(shellFooterRaw(input, style), style);
 /** The single line a folded run commits as, with the total time right-aligned. */
 export const foldLine = (items: readonly FoldItem[], style: CardStyle): string => finish([foldLineRaw(items, style)], style)[0] ?? "";
 /** `\u25c6 Subagent running: \u201ctask\u201d \u00b7 activity` / `\u25c6 Subagent completed in 20s: \u201ctask\u201d`. */

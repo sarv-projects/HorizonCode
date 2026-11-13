@@ -8,14 +8,24 @@
 //! State dir defaults to $HZ_STATE_DIR, then ~/.hzcode/kernel.
 
 mod canon;
+mod effect_evidence;
+mod effect_host;
+mod effect_host_edit_repair;
 mod egress;
+mod egress_connect;
+mod egress_tls_intercept;
+mod egress_tls_peek;
+mod egress_tls_terminate;
+mod receipt_postimage;
 mod eventlog;
 mod execpolicy;
 mod guard;
+mod jsonl_append;
 mod permm;
 mod protocol;
 mod receipts;
 mod sandbox;
+mod sandbox_atomic_write;
 mod time;
 
 use std::io::{BufRead, BufWriter, Write};
@@ -311,6 +321,262 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             }
             Err(e) => {
                 checks.check(&format!("receipt.issue #{}", i + 1), false);
+                eprintln!("selftest: {}", e);
+            }
+        }
+    }
+
+    // 5b. effect.reconcile settle mirror
+    match call(
+        &kernel,
+        "effect.reconcile",
+        json!({
+            "phases": ["allow", "execute", "observe"],
+            "receiptId": "selftest-rcp",
+            "receiptSeq": 1
+        }),
+    ) {
+        Ok(v) => {
+            let ok = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
+            checks.check("effect.reconcile settled", ok);
+        }
+        Err(e) => {
+            checks.check("effect.reconcile settled", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.reconcile",
+        json!({ "phases": ["allow", "execute"] }),
+    ) {
+        Ok(v) => {
+            let ok = v.get("verdict").and_then(|x| x.as_str()) == Some("unknown");
+            checks.check("effect.reconcile unknown", ok);
+        }
+        Err(e) => {
+            checks.check("effect.reconcile unknown", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.reconcile",
+        json!({
+            "phases": ["allow", "execute", "observe"],
+            "receiptId": "selftest-rcp",
+            "receiptSeq": 1,
+            "resultDigestStable": false
+        }),
+    ) {
+        Ok(v) => {
+            let ok = v.get("verdict").and_then(|x| x.as_str()) == Some("unknown");
+            checks.check("effect.reconcile evidence digest unstable", ok);
+        }
+        Err(e) => {
+            checks.check("effect.reconcile evidence digest unstable", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.reconcile",
+        json!({
+            "phases": ["allow", "execute", "observe"],
+            "receiptId": "selftest-rcp",
+            "receiptSeq": 1,
+            "postimageMissing": true
+        }),
+    ) {
+        Ok(v) => {
+            let ok = v.get("verdict").and_then(|x| x.as_str()) == Some("unknown");
+            checks.check("effect.reconcile evidence postimage missing", ok);
+        }
+        Err(e) => {
+            checks.check("effect.reconcile evidence postimage missing", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-pure",
+            "dispatch": { "kind": "pure" }
+        }),
+    ) {
+        Ok(v) => {
+            let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
+            checks.check("effect.execute pure settled", settled);
+        }
+        Err(e) => {
+            checks.check("effect.execute pure settled", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-mut",
+            "dispatch": { "kind": "fs.write", "spec": { "path": "x" } }
+        }),
+    ) {
+        Ok(_) => {
+            checks.check("effect.execute fs.write refused", false);
+        }
+        Err(e) => {
+            let ok = e.contains("HZ_PRECONDITION_FAILED") && e.contains("fs.write");
+            checks.check("effect.execute fs.write refused", ok);
+            if !ok {
+                eprintln!("selftest: {}", e);
+            }
+        }
+    }
+
+    let eff_sandbox = scratch.join("effect-sandbox");
+    let _ = std::fs::create_dir_all(&eff_sandbox);
+    let probe = eff_sandbox.join("probe.txt");
+    let _ = std::fs::write(&probe, b"hz-selftest-read");
+    let expected_digest = canon::sha256_bytes(b"hz-selftest-read");
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-read",
+            "sandboxRoot": eff_sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.read", "spec": { "path": "probe.txt" } }
+        }),
+    ) {
+        Ok(v) => {
+            let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
+            let digest = v.get("contentDigest").and_then(|x| x.as_str()) == Some(expected_digest.as_str());
+            checks.check("effect.execute fs.read sandbox digest", settled && digest);
+        }
+        Err(e) => {
+            checks.check("effect.execute fs.read sandbox digest", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-read-esc",
+            "sandboxRoot": eff_sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.read", "spec": { "path": "../probe.txt" } }
+        }),
+    ) {
+        Ok(_) => checks.check("effect.execute fs.read escape refused", false),
+        Err(e) => {
+            let ok = e.contains("HZ_PRECONDITION_FAILED") && e.contains("sandboxRoot");
+            checks.check("effect.execute fs.read escape refused", ok);
+            if !ok {
+                eprintln!("selftest: {}", e);
+            }
+        }
+    }
+
+    let write_expected = canon::sha256_bytes(b"hz-selftest-write");
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-write",
+            "sandboxRoot": eff_sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "written.txt", "text": "hz-selftest-write" } }
+        }),
+    ) {
+        Ok(v) => {
+            let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
+            let digest = v.get("contentDigest").and_then(|x| x.as_str()) == Some(write_expected.as_str());
+            checks.check("effect.execute fs.write sandbox digest", settled && digest);
+        }
+        Err(e) => {
+            checks.check("effect.execute fs.write sandbox digest", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-write-esc",
+            "sandboxRoot": eff_sandbox.to_string_lossy(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "../written.txt", "text": "x" } }
+        }),
+    ) {
+        Ok(_) => checks.check("effect.execute fs.write escape refused", false),
+        Err(e) => {
+            let ok = e.contains("HZ_PRECONDITION_FAILED") && e.contains("sandboxRoot");
+            checks.check("effect.execute fs.write escape refused", ok);
+            if !ok {
+                eprintln!("selftest: {}", e);
+            }
+        }
+    }
+
+    let _ = std::fs::write(eff_sandbox.join("edit-me.txt"), b"one-two");
+    let edit_expected = canon::sha256_bytes(b"one-THREE");
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-edit",
+            "sandboxRoot": eff_sandbox.to_string_lossy(),
+            "dispatch": {
+                "kind": "fs.edit",
+                "spec": { "path": "edit-me.txt", "oldString": "two", "newString": "THREE" }
+            }
+        }),
+    ) {
+        Ok(v) => {
+            let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
+            let digest = v.get("contentDigest").and_then(|x| x.as_str()) == Some(edit_expected.as_str());
+            checks.check("effect.execute fs.edit sandbox digest", settled && digest);
+        }
+        Err(e) => {
+            checks.check("effect.execute fs.edit sandbox digest", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+
+    let shell_stdout_expected = canon::sha256_bytes(b"hz-selftest-shell\n");
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-shell",
+            "sandboxRoot": eff_sandbox.to_string_lossy(),
+            "dispatch": { "kind": "shell.exec", "spec": { "argv": ["echo", "hz-selftest-shell"] } }
+        }),
+    ) {
+        Ok(v) => {
+            let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
+            let code = v.get("exitCode").and_then(|x| x.as_i64()) == Some(0);
+            let digest = v.get("stdoutDigest").and_then(|x| x.as_str()) == Some(shell_stdout_expected.as_str());
+            let stable = v.get("resultDigestStable").and_then(|x| x.as_bool()) == Some(true);
+            checks.check("effect.execute shell.exec sandbox digest", settled && code && digest && stable);
+        }
+        Err(e) => {
+            checks.check("effect.execute shell.exec sandbox digest", false);
+            eprintln!("selftest: {}", e);
+        }
+    }
+    match call(
+        &kernel,
+        "effect.execute",
+        json!({
+            "effectId": "selftest-eff-shell-open",
+            "dispatch": { "kind": "shell.exec", "spec": { "argv": ["true"] } }
+        }),
+    ) {
+        Ok(_) => checks.check("effect.execute shell.exec refused without sandbox", false),
+        Err(e) => {
+            let ok = e.contains("HZ_PRECONDITION_FAILED") && e.contains("shell.exec");
+            checks.check("effect.execute shell.exec refused without sandbox", ok);
+            if !ok {
                 eprintln!("selftest: {}", e);
             }
         }

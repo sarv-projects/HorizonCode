@@ -57,6 +57,8 @@ export interface WorkspaceTrustDigests {
 
 const TRUST_FILENAME = "trust.json";
 const DIR_DIGEST_CAP = 200;
+/** Sentinel when a directory tree exceeds `DIR_DIGEST_CAP` — must not bind. */
+export const TRUST_DIR_DIGEST_TRUNCATED = "hz:dir-digest-truncated";
 
 export function trustStorePath(home: string): string {
   return path.join(userConfigDir(home), TRUST_FILENAME);
@@ -100,6 +102,7 @@ export function digestWorkspaceHooks(workspace: string): string | null {
 export function digestDirectory(root: string): string | null {
   if (!existsSync(root)) return null;
   const files: string[] = [];
+  let truncated = false;
   const walk = (dir: string, rel: string, depth: number): void => {
     let names: string[];
     try {
@@ -108,7 +111,10 @@ export function digestDirectory(root: string): string | null {
       return;
     }
     for (const name of names) {
-      if (files.length >= DIR_DIGEST_CAP) return;
+      if (files.length >= DIR_DIGEST_CAP) {
+        truncated = true;
+        return;
+      }
       if (name.startsWith(".")) continue;
       const full = path.join(dir, name);
       const r = rel === "" ? name : `${rel}/${name}`;
@@ -126,6 +132,7 @@ export function digestDirectory(root: string): string | null {
     }
   };
   walk(root, "", 0);
+  if (truncated) return TRUST_DIR_DIGEST_TRUNCATED;
   if (files.length === 0) return null;
   const h = createHash("sha256");
   for (const rel of files.sort()) {
@@ -212,6 +219,163 @@ const DIGEST_FIELDS: { key: DigestKey; field: DigestField; label: string }[] = [
   { key: "providers", field: "providersDigest", label: "workspace providers.json" },
 ];
 
+const SURFACE_RISK: Record<DigestKey, string> = {
+  hooks: "project hooks may run shell commands and deny or narrow tools",
+  skills: "skills inject instructions into every turn",
+  agents: "agent presets choose models and tool subsets for subagents",
+  mcp: "MCP servers add third-party tools and network reach",
+  providers: "providers.json can redirect API traffic and credentials",
+};
+
+/** Human-readable inventory for trust prompts (Grok folder-trust UX adapt). */
+export function workspaceTrustSurfaceSummary(workspace: string): string[] {
+  const currents = collectWorkspaceTrustDigests(workspace);
+  const lines: string[] = [];
+  for (const { key, label } of DIGEST_FIELDS) {
+    const digest = currents[key];
+    if (digest === null) continue;
+    const risk = SURFACE_RISK[key];
+    if (digest === TRUST_DIR_DIGEST_TRUNCATED) {
+      lines.push(`${label}: present but too large to digest safely (bind refused)`);
+      continue;
+    }
+    lines.push(`${label}: will load if trusted — ${risk}`);
+    lines.push(`  fingerprint ${digest.slice(0, 12)}…`);
+  }
+  return lines;
+}
+
+export function workspaceTrustRiskBlurb(): string {
+  return (
+    "Folder trust is not git trust. Approving loads executable workspace config: " +
+    "hooks, skills, MCP and provider overrides run with your user account on this machine."
+  );
+}
+
+export type WorkspaceTrustGate = "no_surfaces" | "unlisted" | "unbound" | "stale" | "trusted";
+
+/** Coarse gate for UX prompts (Grok folder-trust adapt). */
+export function workspaceTrustGate(
+  workspace: string,
+  home: string,
+  trusted?: readonly string[],
+): WorkspaceTrustGate {
+  const currents = collectWorkspaceTrustDigests(workspace);
+  if (!Object.values(currents).some((d) => d !== null)) return "no_surfaces";
+  if (!workspaceHooksTrusted(workspace, trusted)) return "unlisted";
+  if (home === "") return "unbound";
+  const record = findRecord(loadTrustStore(home), workspace);
+  if (record === undefined) return "unbound";
+  const stale = trustSurfacesOutOfDate(record, currents);
+  if (stale.length > 0) return "stale";
+  return "trusted";
+}
+
+/** Actionable steps when the workspace is not fully trusted. */
+export function workspaceTrustNextSteps(gate: WorkspaceTrustGate, workspace: string, home: string): string[] {
+  const ws = path.resolve(workspace);
+  const cfgDir = home !== "" ? userConfigDir(home) : "~/.config/horizon";
+  const listHint = `Add "${ws}" to trustedWorkspaceHooks in ${cfgDir}/config.json (or your active user config).`;
+  switch (gate) {
+    case "no_surfaces":
+      return ["No trust-gated workspace surfaces detected on disk."];
+    case "unlisted":
+      return [
+        listHint,
+        "Restart hzcode or run /trust to confirm the folder is listed.",
+        "Send a message: the folder-trust approval card binds digests in trust.json.",
+      ];
+    case "unbound":
+      return [
+        "This folder is listed but not bound in trust.json yet.",
+        "Send a message to get the folder-trust approval card (inventory + fingerprints).",
+        "Run /trust to review on-disk surfaces before approving.",
+      ];
+    case "stale":
+      return [
+        "On-disk surfaces changed since the last bind — hooks/skills/MCP stay off until re-trust.",
+        "Send a message for a re-trust approval card comparing old and new fingerprints.",
+        "Run /trust to inspect which surfaces are stale.",
+      ];
+    case "trusted":
+      return ["Folder trust is current; listed surfaces match trust.json."];
+  }
+}
+
+/** One-line startup notice when trust-gated surfaces are present but ignored. */
+export function formatUntrustedWorkspaceStartupNotice(
+  workspace: string,
+  home: string,
+  trusted?: readonly string[],
+): string | undefined {
+  const gate = workspaceTrustGate(workspace, home, trusted);
+  if (gate === "no_surfaces" || gate === "trusted") return undefined;
+  const lines = [
+    "Workspace folder is not fully trusted — workspace hooks, skills, agents, MCP and providers stay ignored.",
+    ...workspaceTrustNextSteps(gate, workspace, home),
+  ];
+  return lines.join("\n");
+}
+
+/** Observability text for `/trust` and similar (folder-trust UX remainder). */
+export function renderWorkspaceTrustReport(workspace: string, home: string, trusted?: readonly string[]): string {
+  const ws = path.resolve(workspace);
+  const gate = workspaceTrustGate(workspace, home, trusted);
+  const listed = trusted !== undefined && trusted.some((t) => path.resolve(t) === ws);
+  const record = home !== "" ? findRecord(loadTrustStore(home), workspace) : undefined;
+  const lines = [workspaceTrustRiskBlurb(), `Workspace: ${ws}`, "", `Status: ${gate}`];
+  if (!listed) {
+    lines.push("trustedWorkspaceHooks: this folder is not listed in your user config.");
+  } else if (record === undefined) {
+    lines.push("trust.json: not bound yet — hooks/skills/agents/MCP/providers stay ignored until approval.");
+  } else {
+    lines.push(`trust.json: bound at ${record.decidedAt}`);
+    const stale = trustSurfacesOutOfDate(record, collectWorkspaceTrustDigests(workspace));
+    if (stale.length > 0) lines.push(`Stale surfaces (re-trust required): ${stale.join(", ")}`);
+  }
+  const inventory = workspaceTrustSurfaceSummary(workspace);
+  lines.push("");
+  lines.push(inventory.length > 0 ? "On disk:" : "On disk: (no trust-gated surfaces detected)");
+  for (const row of inventory) lines.push(`  ${row}`);
+  const steps = workspaceTrustNextSteps(gate, workspace, home);
+  lines.push("", "Next steps:");
+  for (const step of steps) lines.push(`  · ${step}`);
+  return lines.join("\n");
+}
+
+function formatTrustBindDetail(workspace: string): string {
+  const ws = path.resolve(workspace);
+  return [
+    workspaceTrustRiskBlurb(),
+    `Workspace: ${ws}`,
+    "",
+    "Surfaces present:",
+    ...workspaceTrustSurfaceSummary(workspace),
+    "",
+    "Until you approve, workspace hooks/skills/agents/MCP/providers stay ignored.",
+  ].join("\n");
+}
+
+function formatTrustRebindDetail(workspace: string, home: string, stale: string[]): string {
+  const currents = collectWorkspaceTrustDigests(workspace);
+  const record = findRecord(loadTrustStore(home), workspace);
+  const lines = [
+    workspaceTrustRiskBlurb(),
+    `Workspace: ${path.resolve(workspace)}`,
+    "",
+    `Changed since last trust: ${stale.join(", ")}`,
+    "",
+    "Review fingerprints before re-trusting:",
+  ];
+  for (const { key, field, label } of DIGEST_FIELDS) {
+    const current = currents[key];
+    if (current === null || current === TRUST_DIR_DIGEST_TRUNCATED) continue;
+    const stored = storedDigest(record, field);
+    lines.push(`- ${label}: was ${(stored ?? "none").slice(0, 12)}… → now ${current.slice(0, 12)}…`);
+  }
+  return lines.join("\n");
+}
+
 function storedDigest(record: WorkspaceTrustRecord | undefined, field: DigestField): string | undefined {
   if (record === undefined) return undefined;
   const value = record[field];
@@ -244,6 +408,8 @@ export function bindWorkspaceTrustRecord(home: string, workspace: string, curren
   };
   for (const { key, field } of DIGEST_FIELDS) {
     const current = currents[key];
+    // Truncated inventories must never bind — incomplete digests are not trust.
+    if (current === TRUST_DIR_DIGEST_TRUNCATED) continue;
     if (current !== null) next[field] = current;
     else if (prev?.[field] !== undefined) next[field] = prev[field];
   }
@@ -267,19 +433,6 @@ export function workspaceHooksTrusted(workspace: string, trusted: readonly strin
   return trusted.some((entry) => path.resolve(entry) === ws);
 }
 
-function autoBindIfNeeded(
-  home: string,
-  workspace: string,
-  record: WorkspaceTrustRecord | undefined,
-  currents: WorkspaceTrustDigests,
-): WorkspaceTrustRecord | undefined {
-  if (home === "") return record;
-  if (record !== undefined) return record;
-  if (!Object.values(currents).some((d) => d !== null)) return record;
-  bindWorkspaceTrustRecord(home, workspace, currents);
-  return findRecord(loadTrustStore(home), workspace);
-}
-
 function resolveSurfaceTrust(
   workspace: string,
   trusted: readonly string[] | undefined,
@@ -292,9 +445,20 @@ function resolveSurfaceTrust(
   const currents = collectWorkspaceTrustDigests(workspace);
   const current = currents[key];
   if (current === null) return true;
-  if (home === "") return true;
-  let record = findRecord(loadTrustStore(home), workspace);
-  record = autoBindIfNeeded(home, workspace, record, currents) ?? record;
+  if (current === TRUST_DIR_DIGEST_TRUNCATED) {
+    onNotice?.(`workspace ${label} ignored (directory too large to digest safely)`);
+    return false;
+  }
+  // No home config dir → cannot consult or persist trust.json; fail closed.
+  if (home === "") {
+    onNotice?.(`workspace ${label} ignored (no home config dir for trust.json)`);
+    return false;
+  }
+  const record = findRecord(loadTrustStore(home), workspace);
+  if (record === undefined) {
+    onNotice?.(`workspace ${label} ignored (not bound in trust.json): approve trust for this workspace`);
+    return false;
+  }
   const field = DIGEST_FIELDS.find((d) => d.key === key)!.field;
   const stored = storedDigest(record, field);
   if (stored !== current) {
@@ -306,7 +470,7 @@ function resolveSurfaceTrust(
 
 /**
  * Whether workspace hooks may load: listed in config and digest matches `trust.json`
- * (first load records the digest).
+ * (bind/rebind only via `ensureWorkspaceHookTrust` approval).
  */
 export function resolveWorkspaceHookTrust(
   workspace: string,
@@ -395,8 +559,9 @@ function receiptPayload(workspace: string, decision: "bind" | "rebind", currents
 }
 
 /**
- * Ensure workspace trust before a turn: first bind is automatic; a digest
- * change needs human approval (docs/15 H7 re-prompt) and may issue a receipt.
+ * Ensure workspace trust before a turn: first bind and digest changes both need
+ * human approval (docs/15 H7); may issue a receipt. Truncated directory digests
+ * never bind.
  */
 export async function ensureWorkspaceHookTrust(
   workspace: string,
@@ -407,35 +572,47 @@ export async function ensureWorkspaceHookTrust(
   onNotice?: (message: string) => void,
 ): Promise<boolean> {
   if (!workspaceHooksTrusted(workspace, trusted)) return false;
-  if (home === "") return true;
+  if (home === "") {
+    onNotice?.("workspace trust unavailable (no home config dir for trust.json)");
+    return false;
+  }
   const currents = collectWorkspaceTrustDigests(workspace);
   if (!Object.values(currents).some((d) => d !== null)) return true;
+  if (Object.values(currents).some((d) => d === TRUST_DIR_DIGEST_TRUNCATED)) {
+    onNotice?.("workspace trust refused (a surface directory is too large to digest safely)");
+    return false;
+  }
   const store = loadTrustStore(home);
-  let record = findRecord(store, workspace);
+  const record = findRecord(store, workspace);
   const ws = path.resolve(workspace);
   if (record === undefined) {
+    const detail = formatTrustBindDetail(workspace);
+    if (approve === undefined) {
+      onNotice?.("workspace trust not bound; approve to trust this workspace");
+      return false;
+    }
+    const ok = await approve({
+      title: "Trust this workspace folder?",
+      kind: "other",
+      detail,
+    });
+    if (!ok) {
+      onNotice?.("workspace trust not bound (not approved)");
+      return false;
+    }
     bindWorkspaceTrustRecord(home, workspace, currents);
     await onReceipt?.(receiptPayload(ws, "bind", currents));
     return true;
   }
   const stale = trustSurfacesOutOfDate(record, currents);
   if (stale.length === 0) return true;
-  const detail = [
-    "Trusted workspace content changed:",
-  ]
-    .concat(stale.map((s) => `- ${s}`))
-    .concat(DIGEST_FIELDS.filter((d) => currents[d.key] !== null).map((d) => {
-      const current = currents[d.key]!;
-      const stored = storedDigest(record, d.field);
-      return `${d.label}: recorded ${(stored ?? "none").slice(0, 12)}… → now ${current.slice(0, 12)}…`;
-    }))
-    .join("\n");
+  const detail = formatTrustRebindDetail(workspace, home, stale);
   if (approve === undefined) {
     onNotice?.(`workspace trust out of date (${stale.join(", ")}); approve to re-trust`);
     return false;
   }
   const ok = await approve({
-    title: "Re-trust workspace hooks/skills/agents after content changed?",
+    title: "Workspace trust changed — review and re-trust?",
     kind: "other",
     detail,
   });

@@ -2,12 +2,12 @@
  * OAuth PKCE login/logout (docs/33 §5.6 reduced form).
  */
 
-import { unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import type { ProviderOAuthEndpoints, ProviderRegistryEntry } from "../config";
 import { startOAuthCallbackListener } from "./callback-server";
 import { createPkcePair, newOAuthState } from "./pkce";
-import { oauthTokenPath, writeOAuthToken, type StoredOAuthToken } from "./store";
+import { appendOAuthClientAuth } from "./oauth-params";
+import { credentialsDbPath, deleteOAuthToken, writeOAuthToken, type StoredOAuthToken } from "./store";
 
 export function providerHasOAuth(entry: ProviderRegistryEntry): entry is ProviderRegistryEntry & { oauth: ProviderOAuthEndpoints } {
   return entry.oauth !== undefined && entry.oauth.clientId !== "" && entry.oauth.authorizeUrl !== "" && entry.oauth.tokenUrl !== "";
@@ -16,7 +16,9 @@ export function providerHasOAuth(entry: ProviderRegistryEntry): entry is Provide
 export async function runPkceLogin(
   entry: ProviderRegistryEntry & { oauth: ProviderOAuthEndpoints },
   home: string = homedir(),
+  opts: { fetcher?: typeof fetch } = {},
 ): Promise<void> {
+  const fetcher = opts.fetcher ?? fetch;
   const { verifier, challenge, method } = createPkcePair();
   const state = newOAuthState();
   const callbackPath = entry.oauth.callbackPath ?? "/callback";
@@ -44,7 +46,8 @@ export async function runPkceLogin(
     redirect_uri: listener.redirectUri,
     code_verifier: verifier,
   });
-  const tokenRes = await fetch(entry.oauth.tokenUrl, {
+  appendOAuthClientAuth(body, entry.oauth);
+  const tokenRes = await fetcher(entry.oauth.tokenUrl, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: body.toString(),
@@ -69,15 +72,12 @@ export async function runPkceLogin(
     stored.expiresAt = new Date(Date.now() + tok.expires_in * 1000).toISOString();
   }
   writeOAuthToken(stored, home);
-  process.stderr.write(`Stored oauth token for ${entry.id} (${oauthTokenPath(entry.id, home)})\n`);
+  process.stderr.write(`Stored oauth token for ${entry.id} (${credentialsDbPath(home)})\n`);
 }
 
 export function runOAuthLogout(provider: string, home: string = homedir()): void {
-  const file = oauthTokenPath(provider, home);
-  try {
-    unlinkSync(file);
-    process.stderr.write(`Removed ${file}\n`);
-  } catch {
-    throw new Error(`no oauth token file for ${provider}`);
+  if (!deleteOAuthToken(provider, home)) {
+    throw new Error(`no oauth token for ${provider}`);
   }
+  process.stderr.write(`Removed oauth token for ${provider} from ${credentialsDbPath(home)}\n`);
 }

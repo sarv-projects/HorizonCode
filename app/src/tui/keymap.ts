@@ -47,6 +47,12 @@ export const DEFAULT_ACTIONS: readonly ActionDef[] = [
     defaultChord: "ctrl+d",
     contexts: ["idle", "any"],
   },
+  {
+    id: "session.picker",
+    description: "Open the resume session picker (fullscreen-experimental; scrollback uses /sessions)",
+    defaultChord: "ctrl+r",
+    contexts: ["idle", "any"],
+  },
 ];
 
 /** Normalize a chord string to `ctrl+meta+shift+name` (sorted modifiers). */

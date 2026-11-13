@@ -1,46 +1,94 @@
 /**
  * loop-detection.ts — identical-tool-call loop detection (NF-safety rail 1).
  *
- * A self-contained port of cline's loop-detection safety rail
- * (packages/core/src/runtime/safety/loop-detection.ts): it counts consecutive
- * identical tool calls (same name AND same canonicalized arguments) and raises
- * a soft warning at the soft threshold, a hard escalation at the hard one. The
- * loop (loop.ts) owns the instance and calls `inspect()` once per tool call
- * BEFORE dispatch; nothing here imports the loop.
+ * Grok-style tiered thresholds (IdenticalToolCallRun in grok-build turn.rs):
+ * read/plan-style tools use a tight tier; other tools use the default tier.
+ * Identity is a whole sampling step: the sorted multiset of (tool, canonical args)
+ * in one provider turn (parallel calls reordering does not reset the streak).
  *
- * The signature canonicalization uses `Array.prototype.sort()` default (UTF-16
- * code-unit) ordering, deliberately NOT the contracts.ts `canonicalJson`
- * UTF-8-byte ordering: this rail only compares a call against the immediately
- * preceding call, never hashes for interop, so matching cline's behavior
- * verbatim is what matters.
+ * The loop owns the instance and calls `inspectStep()` once per tool batch BEFORE
+ * dispatch; nothing here imports the loop.
+ *
+ * Signature canonicalization uses `Array.prototype.sort()` default (UTF-16 code-unit)
+ * ordering, deliberately NOT the contracts.ts `canonicalJson` UTF-8-byte ordering.
  */
 
-/** The two thresholds a tracker enforces. */
-export interface LoopDetectionConfig {
-  /** Consecutive identical count that raises a soft warning (exact `===`). */
+/** Grok-aligned nudge / hard-stop thresholds per tier. */
+export const NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS = 4;
+export const NUDGE_AFTER_IDENTICAL_TOOL_CALLS = 8;
+export const MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS = 8;
+export const MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS = 12;
+
+/** Tools whose identical repeats are rarely productive (Grok Read + Plan kinds). */
+export const PROBLEMATIC_LOOP_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "glob",
+  "ls",
+  "list",
+  "todo",
+  "repo_map",
+]);
+
+const STEP_PART_SEP = "\u001e";
+const NAME_ARGS_SEP = "\u001f";
+
+/** Whether one tool name belongs in the tight doom-loop tier. */
+export function isProblematicallyRepeatingTool(toolName: string): boolean {
+  return PROBLEMATIC_LOOP_TOOLS.has(toolName);
+}
+
+/**
+ * A whole provider step is tight-tier only when every call in it is problematic
+ * (Grok `step_is_problematically_repeating`).
+ */
+export function stepIsProblematicallyRepeating(calls: LoopDetectionCall[]): boolean {
+  return calls.length > 0 && calls.every((call) => isProblematicallyRepeatingTool(call.name));
+}
+
+/** The two thresholds a tracker enforces for one tier. */
+export interface LoopDetectionTierThresholds {
   softThreshold: number;
-  /** Consecutive identical count that raises a hard escalation (`>=`). */
+  hardThreshold: number;
+}
+
+export function tierThresholds(problematic: boolean): LoopDetectionTierThresholds {
+  return problematic
+    ? {
+        softThreshold: NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
+        hardThreshold: MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
+      }
+    : {
+        softThreshold: NUDGE_AFTER_IDENTICAL_TOOL_CALLS,
+        hardThreshold: MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS,
+      };
+}
+
+/** @deprecated Use tier thresholds; kept for tests that inject custom rails. */
+export interface LoopDetectionConfig {
+  softThreshold: number;
   hardThreshold: number;
 }
 
 /** The mutable per-run state the pure helpers advance. */
 export interface LoopDetectionState {
-  lastToolName: string;
-  lastToolSignature: string;
+  lastStepSignature: string;
+  /** Human label in nudge/stop messages (first tool or `a+b` for parallel steps). */
+  lastToolLabel: string;
   consecutiveIdenticalCount: number;
 }
 
 export function createLoopDetectionState(): LoopDetectionState {
   return {
-    lastToolName: "",
-    lastToolSignature: "",
+    lastStepSignature: "",
+    lastToolLabel: "",
     consecutiveIdenticalCount: 0,
   };
 }
 
 export function resetLoopDetectionState(state: LoopDetectionState): void {
-  state.lastToolName = "";
-  state.lastToolSignature = "";
+  state.lastStepSignature = "";
+  state.lastToolLabel = "";
   state.consecutiveIdenticalCount = 0;
 }
 
@@ -77,40 +125,51 @@ export function toolCallSignature(input: unknown): string {
   }
 }
 
-/** The two-boolean verdict a single `checkRepeatedToolCall` returns. */
+/** Sorted multiset signature for one provider sampling step (Grok `step_signature`). */
+export function stepSignature(calls: LoopDetectionCall[]): string {
+  const parts = calls.map((call) => `${call.name}${NAME_ARGS_SEP}${toolCallSignature(call.input)}`);
+  parts.sort();
+  return parts.join(STEP_PART_SEP);
+}
+
+function stepToolLabel(calls: LoopDetectionCall[]): string {
+  if (calls.length === 0) return "";
+  if (calls.length === 1) return calls[0]?.name ?? "";
+  return calls.map((call) => call.name).join("+");
+}
+
+/** The two-boolean verdict a single step check returns. */
 export interface LoopCheckResult {
   softWarning: boolean;
   hardEscalation: boolean;
 }
 
 /**
- * Advance `state` for one call and report whether it crossed either threshold.
- * A matching name+signature increments the streak; anything else resets it to
- * 1. `softWarning` fires on the exact soft threshold; `hardEscalation` fires at
- * or above the hard one.
+ * Advance `state` for one identical step and report threshold crossings.
+ * `softWarning` fires on the exact soft threshold; `hardEscalation` at or above hard.
  */
-export function checkRepeatedToolCall(
+export function checkRepeatedToolStep(
   state: LoopDetectionState,
-  toolName: string,
   signature: string,
-  config: LoopDetectionConfig,
+  toolLabel: string,
+  thresholds: LoopDetectionTierThresholds,
 ): LoopCheckResult {
-  if (toolName === state.lastToolName && signature === state.lastToolSignature) {
+  if (signature !== "" && signature === state.lastStepSignature) {
     state.consecutiveIdenticalCount += 1;
   } else {
     state.consecutiveIdenticalCount = 1;
   }
-  state.lastToolName = toolName;
-  state.lastToolSignature = signature;
+  state.lastStepSignature = signature;
+  state.lastToolLabel = toolLabel;
 
   return {
-    softWarning: state.consecutiveIdenticalCount === config.softThreshold,
-    hardEscalation: state.consecutiveIdenticalCount >= config.hardThreshold,
+    softWarning: state.consecutiveIdenticalCount === thresholds.softThreshold,
+    hardEscalation: state.consecutiveIdenticalCount >= thresholds.hardThreshold,
   };
 }
 
 /**
- * The verdict `LoopDetectionTracker.inspect` returns.
+ * The verdict `LoopDetectionTracker.inspect` / `inspectStep` returns.
  *
  *  - `"ok"`   no repeated-call threshold reached.
  *  - `"soft"` soft-warning threshold reached; the loop may nudge but must not
@@ -121,6 +180,8 @@ export function checkRepeatedToolCall(
 export interface LoopDetectionVerdict {
   kind: "ok" | "soft" | "hard";
   message?: string;
+  toolLabel?: string;
+  consecutiveCount?: number;
 }
 
 /** The minimal call shape the tracker inspects: a name and its parsed input. */
@@ -129,43 +190,61 @@ export interface LoopDetectionCall {
   input: unknown;
 }
 
-const DEFAULT_CONFIG: LoopDetectionConfig = {
+const LEGACY_DEFAULT_CONFIG: LoopDetectionConfig = {
   softThreshold: 3,
   hardThreshold: 5,
 };
 
 /**
  * Per-run identical-tool-call detector. The loop constructs one instance per
- * run (alongside the budget ledger) and calls `inspect()` once per tool call
- * before dispatching the batch.
+ * run (alongside the budget ledger) and calls `inspectStep()` once per provider
+ * tool batch before dispatching it.
  */
 export class LoopDetectionTracker {
-  private readonly config: LoopDetectionConfig;
+  private readonly legacyConfig: LoopDetectionConfig | undefined;
   private readonly state: LoopDetectionState = createLoopDetectionState();
 
+  /** Pass `config` only in tests that pin the legacy cline 3/5 rail. */
   constructor(config?: Partial<LoopDetectionConfig>) {
-    this.config = {
-      softThreshold: config?.softThreshold ?? DEFAULT_CONFIG.softThreshold,
-      hardThreshold: config?.hardThreshold ?? DEFAULT_CONFIG.hardThreshold,
-    };
+    if (config !== undefined) {
+      this.legacyConfig = {
+        softThreshold: config.softThreshold ?? LEGACY_DEFAULT_CONFIG.softThreshold,
+        hardThreshold: config.hardThreshold ?? LEGACY_DEFAULT_CONFIG.hardThreshold,
+      };
+    }
   }
 
-  inspect(call: LoopDetectionCall): LoopDetectionVerdict {
-    const signature = toolCallSignature(call.input);
-    const result = checkRepeatedToolCall(this.state, call.name, signature, this.config);
+  inspectStep(calls: LoopDetectionCall[]): LoopDetectionVerdict {
+    if (calls.length === 0) return { kind: "ok" };
+    const thresholds =
+      this.legacyConfig !== undefined
+        ? { softThreshold: this.legacyConfig.softThreshold, hardThreshold: this.legacyConfig.hardThreshold }
+        : tierThresholds(stepIsProblematicallyRepeating(calls));
+    const signature = stepSignature(calls);
+    const label = stepToolLabel(calls);
+    const result = checkRepeatedToolStep(this.state, signature, label, thresholds);
     if (result.hardEscalation) {
       return {
         kind: "hard",
-        message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`; stopping to avoid a loop.`,
+        message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${label}\`; stopping to avoid a loop.`,
+        toolLabel: label,
+        consecutiveCount: this.state.consecutiveIdenticalCount,
       };
     }
     if (result.softWarning) {
       return {
         kind: "soft",
-        message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`; consider trying a different approach.`,
+        message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${label}\`; consider trying a different approach.`,
+        toolLabel: label,
+        consecutiveCount: this.state.consecutiveIdenticalCount,
       };
     }
     return { kind: "ok" };
+  }
+
+  /** Single-call convenience (same as a one-call `inspectStep`). */
+  inspect(call: LoopDetectionCall): LoopDetectionVerdict {
+    return this.inspectStep([call]);
   }
 
   reset(): void {

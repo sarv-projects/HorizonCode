@@ -101,6 +101,13 @@ pub fn sha256_hex(s: &str) -> String {
     hex_lower(&hasher.finalize())
 }
 
+/// sha256 of raw bytes, hex lowercase (file observation digests).
+pub fn sha256_bytes(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex_lower(&hasher.finalize())
+}
+
 /// HMAC-SHA256 (RFC 2104) of `message` under `key`, hex lowercase.
 ///
 /// Built on the sha2 crate the chain hashes already use, so keyed anchors add

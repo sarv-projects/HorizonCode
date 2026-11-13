@@ -3,12 +3,19 @@
  *
  * Call wire format matches Hermes (`<tool_call>` + nested JSON arguments).
  * Prompt text follows Qwen3's `# Tools` / `<tools>` template (no FunctionCall
- * pydantic schema line). Result history folding differs from Hermes but is
- * owned by the loop's native tool-result path until history rewrite lands.
+ * pydantic schema line). History folding uses the shared Hermes-shaped blocks
+ * via `rewriteHistoryForTextToolconv` (wrap-shared).
  */
 
 import type { ToolSpec } from "../../../contracts";
-import { parseHermesToolCalls, type ParsedHermesToolCall } from "./hermes";
+import {
+  drainCompleteHermesToolCalls,
+  parseHermesToolCalls,
+  type ParsedHermesToolCall,
+} from "./hermes";
+
+/** Qwen3 shares the Hermes `<tool_call>` wire; reuse the Hermes stream scanner. */
+export const drainCompleteQwen3ToolCalls = drainCompleteHermesToolCalls;
 
 export type ParsedQwen3ToolCall = ParsedHermesToolCall;
 

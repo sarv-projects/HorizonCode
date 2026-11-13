@@ -11,7 +11,7 @@
           "type": "number"
         },
         "profile": {
-          "description": "Optional preset: explore, plan, code or review (a user preset may be listed below). A preset picks a subset of the parent's tools (never agent); the guard still decides every effect. Omit for the generic subagent.",
+          "description": "Optional preset: never, explore, plan, code or review (a user preset may be listed below). `never` is grep/glob-only with read-only isolation. A preset picks a subset of the parent's tools (never agent); the guard still decides every effect. Omit for the generic subagent.",
           "type": "string"
         },
         "task": {
@@ -276,6 +276,122 @@
   },
   {
     "concurrencyClass": "shared",
+    "description": "Store a session handoff under the workspace (.hz/state/handoffs.db). Summary required; optional tried/next/blockers/decisions/files/context. No todos section — use todo tool instead.",
+    "exposure": "deferred",
+    "name": "handoff_create",
+    "parameters": {
+      "properties": {
+        "blockers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "branch": {
+          "description": "Override branch scope (optional).",
+          "type": "string"
+        },
+        "context": {
+          "description": "Extra narrative context.",
+          "type": "string"
+        },
+        "continues_from": {
+          "description": "Prior handoff id to chain from (optional).",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "files": {
+          "description": "Relevant file paths or notes.",
+          "type": "string"
+        },
+        "next": {
+          "description": "Suggested next steps (not durable todos).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "Short session summary (required).",
+          "type": "string"
+        },
+        "tried": {
+          "description": "What was attempted this session.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Resume from the latest handoff on the current branch (or detached workspace scope). Walks continues_from chain (max 5). Optional BM25 query ranks sections.",
+    "exposure": "deferred",
+    "name": "handoff_resume",
+    "parameters": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "handoff_id": {
+          "description": "Start from a specific handoff id.",
+          "type": "string"
+        },
+        "max_sections": {
+          "type": "number"
+        },
+        "query": {
+          "description": "Terms to rank matching sections.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "BM25 search across handoff section text for the current branch scope.",
+    "exposure": "deferred",
+    "name": "handoff_search",
+    "parameters": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "number"
+        },
+        "query": {
+          "description": "Search terms.",
+          "type": "string"
+        },
+        "section_filter": {
+          "description": "Limit to section names (e.g. tried, blockers).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
     "description": "Language-server diagnostics for a file. op:'diagnostics' (path required) syncs the file to any configured language server and reports only fresh diagnostics; a no-op when no server is configured for the file type.",
     "exposure": "direct",
     "name": "lsp",
@@ -302,13 +418,36 @@
   },
   {
     "concurrencyClass": "shared",
-    "description": "Search user-curated workspace memory (FTS index under .hz/memory.db, seeded from MEMORY.md). Read-only recall.",
+    "description": "Search user-curated memory (FTS BM25). Default bank is project (MEMORY.md under .hz/). Use scope shared_recall to search project, user, and shared banks with bank labels on hits.",
     "exposure": "deferred",
     "name": "memory_search",
     "parameters": {
       "properties": {
+        "banks": {
+          "description": "Optional explicit bank list (overrides scope when set).",
+          "items": {
+            "enum": [
+              "project",
+              "user",
+              "shared"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
         "query": {
           "description": "Terms to search for in remembered facts.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Search scope: project (default), user, shared, or shared_recall / all (cross-bank recall with bank id on each hit).",
+          "enum": [
+            "project",
+            "user",
+            "shared",
+            "shared_recall",
+            "all"
+          ],
           "type": "string"
         }
       },
@@ -394,6 +533,10 @@
     "name": "repo_map",
     "parameters": {
       "properties": {
+        "fileCursor": {
+          "description": "Ranked-file offset for paging; use nextFileCursor from a prior truncated map.",
+          "type": "number"
+        },
         "focus": {
           "description": "Files to personalise the ranking toward, e.g. the files under discussion.",
           "items": {
