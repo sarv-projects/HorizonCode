@@ -61,8 +61,9 @@ rather than silently granting new permission after a trusted child was lost.
   a legitimate parent `makeLease` must yield a session-owned one-use lease usable
   by Rust `effect.execute`, and authenticated `issueReceipt` remains available.
   The secret is not enumerable nor exported via an environment variable.
-- Same file: an actual malformed inherited fd3 boot fails with process exit 2 and
-  the expected precondition error, rather than serving an open authorization channel.
+- Same file: both malformed fd3 contents and a missing fd3 boot fail with process
+  exit 2 and the expected precondition errors, rather than aborting or serving
+  an open authorization channel.
   Separate real kernel fault-after-executing test asserts the formerly trusted client
   cannot locally mint a lease or grant after the Rust transport died.
 - `app/tests/core/fallback.test.ts`: invalid/non-executable kernel binary still
@@ -115,9 +116,9 @@ git -c core.whitespace=cr-at-eol diff --check
 ```
 
 **Verified in this iteration:** TypeScript `bun run typecheck` PASS;
-Rust integration **78 PASS / 0 FAIL**; Rust kernel unit **117 PASS /
+Rust integration **78 PASS / 0 FAIL**; Rust kernel unit **118 PASS /
 0 FAIL** with the existing 20,000-chain stress case filtered; final
-wider focused Bun regression **315 PASS / 0 FAIL** across 39 files,
+wider focused Bun regression **317 PASS / 0 FAIL** across 39 files,
 including the `fallback.test.ts` **17 PASS / 0 FAIL** suite and
 the Rust-backed parent-control cases. An additional isolated
 `effect-owner-kernel.test.ts` run after the full suite was also green.
@@ -136,7 +137,10 @@ persist; the three additional ones were two code-mode abort/output
 cases and one missing-fd boot test. The missing-fd boot test passed
 when rerun in isolation, so the full-suite failure may be concurrency/
 process instability rather than deterministic breakage. The other
-two were not independently proven environmental. The project-wide
+two were not independently proven environmental. The complete suite was
+NOT rerun after the final additive raw-receipt gate and closed-fd boot
+fix. Those are verified by Rust integration, unit tests and targeted Bun,
+not by a green end-to-end product run. The project-wide
 `cargo fmt --check` still has older unrelated formatting drift; no
 blanket format or green release claim.
 

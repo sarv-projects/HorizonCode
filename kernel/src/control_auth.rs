@@ -103,6 +103,16 @@ mod tests {
         assert!(authorize_mint(None, None).is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_closed_control_descriptor_returns_an_error_not_a_rust_io_safety_abort() {
+        let error = read_from_fd(u32::MAX).unwrap_err();
+        assert!(
+            error.contains("private kernel control pipe unavailable"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn only_lowercase_256_bit_hex_is_accepted_at_boot() {
         assert!(validate_secret(&"f".repeat(64)).is_ok());

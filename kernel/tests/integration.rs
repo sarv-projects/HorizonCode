@@ -188,6 +188,12 @@ fn bound_kernel_workspace_cannot_be_widened_by_raw_sandbox_root_argument() {
         "kind": "shell.exec", "pattern": "echo forged", "ttlMs": 60000
     }));
     assert!(no_control.contains("private parent control channel"), "{no_control}");
+    let no_receipt = kernel.err("receipt.issue", json!({
+        "action": "tool.execute", "tool": "shell",
+        "argsDigest": "0".repeat(64), "resultDigest": "1".repeat(64),
+    }));
+    assert!(no_receipt.contains("private parent control channel"), "{no_receipt}");
+    assert_eq!(kernel.ok("receipt.verify", json!({}))["count"], 0);
     let denied = kernel.err("effect.execute", json!({
         "effectId": "root-widen", "sandboxRoot": outside.path(),
         "dispatch": {"kind": "fs.write", "spec": {"path": "outside.txt", "text": "NO"}}

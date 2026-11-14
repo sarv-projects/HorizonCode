@@ -18,10 +18,10 @@
 
 ## Batch 9 — private parent authorization channel (ruling **352**, still partial P0-1)
 
-- **Authenticated parent identity only:** Bun sends a fresh 256-bit secret through a private inherited fd 3 to the Rust kernel; the kernel requires it for `guard.lease`, `guard.grant`, and `guard.allowlist.amend` on product-launched processes. Forged/raw mint requests, malformed pipe boot, and workspace-bound permission mint without the channel refuse. The JS key is hard-private, not in argv/env/log.
+- **Authenticated parent identity only:** Bun sends a fresh 256-bit secret through a private inherited fd 3 to the Rust kernel; the kernel requires it for `guard.lease`, `guard.grant`, `guard.allowlist.amend` and external `receipt.issue` on product-launched processes. Forged/raw mint requests, malformed pipe boot, and workspace-bound permission mint without the channel refuse. The JS key is hard-private, not in argv/env/log.
 - **Strict transport behavior:** a lost trusted kernel cannot return to local permission minting; non-executable/old binaries do not raise an unhandled spawn/pipe error after correcting Bun EACCES handling. The previous OwnerLog UNKNOWN refusal remains.
 - **Residual:** this proves control of the Bun parent, **not a trusted human approval principal**; public runtime mint APIs, caller-supplied sessions, unbound standalone kernels and native Windows portability remain gaps. Universal effect ownership, Rust/Bun/SQLite atomic admission, historical replay, production netns, full RC-18/R172, patch parity remain OPEN.
-- **Evidence:** [ruling 352 audit](audit/p0-parent-control-auth-2026-11-14.md), Rust control-auth tests, Rust-backed Bun raw-request/boot/fault tests, isolated fallback suite. The full Bun gate remains red; see audit.
+- **Evidence:** [ruling 352 audit](audit/p0-parent-control-auth-2026-11-14.md); Rust integration **78 PASS**, Rust kernel unit **118 PASS** (one long test excluded), focused Bun **50 PASS**, wider Bun **317 PASS** across 39 files, typecheck PASS. Full Bun remains red (latest recorded rerun **2,747 PASS / 46 FAIL / 3 SKIP**, before final receipt/closed-fd hardening); see audit.
 
 ## Batch 8 — direct kernel Guard authority and bound workspace (ruling **351**, partial P0-1/R170)
 
