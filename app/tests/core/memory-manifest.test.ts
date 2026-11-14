@@ -56,4 +56,17 @@ describe("MEMORY.md manifest", () => {
     expect(findRelevantMemoryTopics(workspace, "how do we deploy to prod")).toEqual(["deploy.md"]);
     expect(memoryPromptSection(workspace, "deploy prod")).toContain("Query-relevant topics");
   });
+
+  test("topic picker ranks body text when filename is generic", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-mem-body-"));
+    const dir = stateRoot(workspace);
+    mkdirSync(path.join(dir, "memory"), { recursive: true });
+    writeFileSync(path.join(dir, "MEMORY.md"), "- misc notes\n");
+    writeFileSync(path.join(dir, "memory", "notes.md"), "Landlock egress proxy must stay ask-gated.");
+    writeFileSync(path.join(dir, "memory", "deploy.md"), "unrelated");
+    expect(findRelevantMemoryTopics(workspace, "Landlock egress proxy")).toEqual(["notes.md"]);
+    const section = memoryPromptSection(workspace, "Landlock egress");
+    expect(section).toContain("<memory-topic-excerpts>");
+    expect(section).toContain("ask-gated");
+  });
 });
