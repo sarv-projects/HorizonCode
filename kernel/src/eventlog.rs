@@ -108,7 +108,8 @@ pub fn truthy_env(name: &str) -> bool {
 pub fn record_preimage(kind: ChainKind, record: &Value) -> Value {
     match kind {
         ChainKind::Event => crate::canon::envelope_preimage(record),
-        ChainKind::Receipt => crate::canon::receipt_preimage(record),
+        ChainKind::Receipt => crate::receipt_schema::preimage(record)
+            .unwrap_or_else(|_| json!({"invalidReceiptSchema": true})),
     }
 }
 
@@ -346,7 +347,8 @@ pub fn verify_chain(
     let mut last_record: Option<Value> = None;
     let hash_of = |obj: &Value| match kind {
         ChainKind::Event => crate::canon::hash_envelope(obj),
-        ChainKind::Receipt => crate::canon::hash_receipt(obj),
+        ChainKind::Receipt => crate::receipt_schema::hash(obj)
+            .unwrap_or_else(|_| "invalid_receipt_schema".to_string()),
     };
 
     for line in lines {

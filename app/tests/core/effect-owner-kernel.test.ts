@@ -1,14 +1,18 @@
 /** Trusted-kernel OwnerLog: cross-process R170 partial and TS transport fail-close. */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { KernelClient } from "../../src/core/kernel";
 import { KERNEL_METHODS } from "../../src/contracts";
-import { tryKernelWriteRoute, tryKernelShellRoute } from "../../src/core/effect-kernel-mutation-route";
-import { hasRustKernel, restoreEnv, rustKernelPath, setEnv, snapshotEnv } from "./helpers";
+import { tryKernelWriteRoute, tryKernelShellRoute, tryKernelApplyPatchRoute, tryKernelAstEditRoute } from "../../src/core/effect-kernel-mutation-route";
+import { hasRustKernel, repoRoot, restoreEnv, rustKernelPath, setEnv, snapshotEnv } from "./helpers";
+
+// Crash fault-injection hooks use #[cfg(debug_assertions)]: a release build
+// deliberately ignores them. Target the debug kernel, never a release binary.
+const faultKernelPath = path.join(repoRoot, "kernel", "target", "debug", "hz-kernel");
 
 describe("kernel-owned OwnerLog admission (R170 partial)", () => {
   test("all OwnerLog operations are listed in the additive kernel RPC method catalogue", () => {
@@ -178,6 +182,65 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     }
   });
 
+  test.skipIf(!hasRustKernel)("two exact Unicode/CRLF hunks settle as ONE kernel-owned file effect", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_KERNEL: "require" });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-atomic-hunks-"));
+    const original = "αlpha\r\nmiddle\r\nβeta\r\n";
+    writeFileSync(path.join(root, "src.txt"), original, "utf8");
+    const client = new KernelClient({ workspace: root, stateDir: path.join(root, ".hzcode", "kernel") });
+    const patch = `*** Begin Patch
+*** Update File: src.txt
+@@
+-αlpha
++ALPHA
+@@
+-βeta
++BETA
+*** End Patch`;
+    try {
+      expect(await client.start()).toBe("trusted");
+      const out = await tryKernelApplyPatchRoute(client, root, "s-hunks", "effect-hunks", { input: patch });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("one atomic kernel fs.write");
+      expect(out?.kernelObserve.postimageObservationStable).toBe(true);
+      expect(readFileSync(path.join(root, "src.txt"), "utf8")).toBe("ALPHA\r\nmiddle\r\nBETA\r\n");
+      const owner = await client.ownerStatus();
+      expect(owner.events).toBe(3); // one prepare, one executing, one settled
+      expect(owner.unresolved).toBe(0);
+      expect((await client.ownerVerify()).receiptsVerified).toBe(1);
+      expect((await client.ownerPostimageVerify()).ok).toBe(true);
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("multi-match AST edit settles once with independently verified whole-file postimage", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_EFFECT_HOST_KERNEL: "require" });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-atomic-ast-sites-"));
+    writeFileSync(path.join(root, "source.ts"), "const a = 0;\nconst b = 0;\n", "utf8");
+    const client = new KernelClient({ workspace: root, stateDir: path.join(root, ".hzcode", "kernel") });
+    try {
+      expect(await client.start()).toBe("trusted");
+      const out = await tryKernelAstEditRoute(client, root, "s-ast-multi", "ast-one-effect", {
+        path: "source.ts", pat: "const $NAME = 0;", out: "let $NAME = 1;",
+      });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("2 structural matches committed via one atomic kernel fs.write");
+      expect(readFileSync(path.join(root, "source.ts"), "utf8")).toBe("let a = 1;\nlet b = 1;\n");
+      expect((await client.ownerStatus()).events).toBe(3);
+      expect((await client.ownerVerify()).receiptsVerified).toBe(1);
+      expect((await client.ownerPostimageVerify()).ok).toBe(true);
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
   test.skipIf(!hasRustKernel)("trusted kernel workspace binding rejects raw sandboxRoot widening before OwnerLog prepare", async () => {
     const snapshot = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath });
@@ -201,6 +264,41 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     } finally {
       await client.close();
       rmSync(elsewhere, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("kernel historical postimage archive verifies superseded bytes and refuses corrupted archive", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-history-archive-ts-"));
+    const state = path.join(root, ".hzcode", "kernel");
+    const client = new KernelClient({ workspace: root, stateDir: state });
+    try {
+      expect(await client.start()).toBe("trusted");
+      for (const [id, text] of [["history-1", "first"], ["history-2", "second"]]) {
+        const output = await client.executeEffect({
+          effectId: id, sandboxRoot: root,
+          dispatch: { kind: "fs.write", spec: { path: "record.txt", text } },
+        });
+        expect(output.ownerLogSettled).toBe(true);
+      }
+      const audit = await client.ownerPostimageVerify();
+      expect(audit.ok).toBe(true);
+      expect(audit.history?.checked).toBe(2);
+      expect(audit.history?.scope).toBe("archived_kernel_owned_file_postimages_only");
+      const digest = (await import("../../src/core/canon")).sha256Hex("first");
+      const archive = path.join(state, "owner-postimages", digest.slice(0, 2), digest + ".blob");
+      expect(readFileSync(archive, "utf8")).toBe("first");
+      expect(readFileSync(path.join(root, "record.txt"), "utf8")).toBe("second");
+      writeFileSync(archive, "tampered", "utf8");
+      const broken = await client.ownerPostimageVerify();
+      expect(broken.history?.ok).toBe(false);
+      expect(broken.history?.failures[0]?.effectId).toBe("history-1");
+      await expect(client.ownerVerify()).rejects.toThrow(/historical postimage archive verification failed/);
+    } finally {
+      await client.close();
       rmSync(root, { recursive: true, force: true });
       restoreEnv(snapshot);
     }
@@ -248,7 +346,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       rmSync(root, { recursive: true, force: true });
       restoreEnv(snapshot);
     }
-  });
+  }, 20_000); // Two independent kernel clients and durable UNKNOWN inspections on WSL/NTFS.
 
   test.skipIf(!hasRustKernel)("concurrent separate kernels serialise distinct admitted mutations", async () => {
     const snapshot = snapshotEnv();
@@ -278,7 +376,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       rmSync(root, { recursive: true, force: true });
       restoreEnv(snapshot);
     }
-  });
+  }, 20_000); // Two real kernels + OwnerLog flock + archived fsync on WSL/NTFS.
 
   test.skipIf(!hasRustKernel)("an authoritative Rust refusal never becomes ambient Bun fallback under default", async () => {
     const snapshot = snapshotEnv();
@@ -311,10 +409,10 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     }
   });
 
-  test.skipIf(!hasRustKernel)("lost kernel response after executing never replays in LocalKernel", async () => {
+  test.skipIf(!existsSync(faultKernelPath))("lost kernel response after executing never replays in LocalKernel", async () => {
     const snapshot = snapshotEnv();
     setEnv({
-      HZ_KERNEL_BIN: rustKernelPath,
+      HZ_KERNEL_BIN: faultKernelPath,
       HZ_EFFECT_HOST_KERNEL: "default",
       HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING: "1",
     });

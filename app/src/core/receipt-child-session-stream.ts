@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { sessionEventsPath } from "./session-kernel-reconcile";
+import { verifySessionEventAnchorSync, type ChainAnchorVerdict } from "./chain-anchor-verify";
 
 /** Canonical capability for the `agent` delegate tool (docs/_conventions.md registry). */
 export const AGENT_SPAWN_CAPABILITY_ID = "agent.spawn";
@@ -58,7 +59,11 @@ export function subagentBoundariesFromParentEvents(
   for (const ev of events) {
     const type = ev.type;
     if (type !== "subagent.start" && type !== "subagent.end") continue;
-    const agentId = typeof ev.agentId === "string" ? ev.agentId : "";
+    // A real kernel EventEnvelope carries details in payload. The historical
+    // reduced stream test used flat rows; support both without inventing facts.
+    const payload = ev.payload && typeof ev.payload === "object" && !Array.isArray(ev.payload)
+      ? ev.payload as Record<string, unknown> : ev;
+    const agentId = typeof payload.agentId === "string" ? payload.agentId : "";
     if (agentId === "") continue;
     let row = byAgent.get(agentId);
     if (!row) {
@@ -70,14 +75,14 @@ export function subagentBoundariesFromParentEvents(
       byAgent.set(agentId, row);
     }
     if (type === "subagent.start") {
-      if (typeof ev.task === "string" && ev.task !== "") {
-        row.taskHead = ev.task.length > 72 ? `${ev.task.slice(0, 69)}…` : ev.task;
+      if (typeof payload.task === "string" && payload.task !== "") {
+        row.taskHead = payload.task.length > 72 ? `${payload.task.slice(0, 69)}…` : payload.task;
       }
     }
     if (type === "subagent.end") {
-      if (typeof ev.status === "string") row.status = ev.status;
-      if (typeof ev.durationMs === "number") row.durationMs = ev.durationMs;
-      if (typeof ev.tools === "number") row.tools = ev.tools;
+      if (typeof payload.status === "string") row.status = payload.status;
+      if (typeof payload.durationMs === "number") row.durationMs = payload.durationMs;
+      if (typeof payload.tools === "number") row.tools = payload.tools;
     }
   }
   return [...byAgent.values()];
@@ -95,6 +100,19 @@ export function summarizeChildSessionStream(workspace: string, childSessionId: s
   return { streamPath, eventLines: countLines(streamPath) };
 }
 
+/** Chain integrity is required for an asserted nested-stream observation.
+ * Legacy streams without anchors have a verified hash walk but are visibly
+ * marked unanchored, and a missing chain is NEVER silently considered clean. */
+export function formatNestedStreamIntegrity(verdict: ChainAnchorVerdict): string {
+  if (verdict.skipped) return "MISSING (no child stream evidence)";
+  if (!verdict.ok) {
+    return verdict.refusal ? `UNVERIFIED: ${verdict.refusal}`
+      : `INVALID chain at seq ${verdict.brokenAt ?? "unknown"}`;
+  }
+  if (verdict.anchorAbsent) return `hash-walk OK (${verdict.count}), anchor absent (legacy/unanchored)`;
+  return `VERIFIED hash chain + head (${verdict.count})`;
+}
+
 /** Inspector lines for child session streams linked from an `agent` parent receipt. */
 export function formatChildSessionStreamLines(
   workspace: string | undefined,
@@ -103,6 +121,15 @@ export function formatChildSessionStreamLines(
 ): string[] {
   if (!workspace || !parentSessionId) {
     return ["(child session streams need workspace + parent sessionId)"];
+  }
+  const parentIntegrity = verifySessionEventAnchorSync(workspace, parentSessionId);
+  if (!parentIntegrity.ok) {
+    return [
+      `capability ${AGENT_SPAWN_CAPABILITY_ID}`,
+      `child effects linked on receipt: ${childEffectCount}`,
+      `parent stream ${formatNestedStreamIntegrity(parentIntegrity)}`,
+      "(untrusted parent stream: refusing child names and claimed outcomes)",
+    ];
   }
   const parentEvents = readParentSessionEvents(workspace, parentSessionId);
   const boundaries = subagentBoundariesFromParentEvents(parentEvents);
@@ -126,7 +153,9 @@ export function formatChildSessionStreamLines(
     if (row.taskHead) bits.push(`task "${row.taskHead}"`);
     lines.push(`  · ${bits.join(" · ")}`);
     const child = summarizeChildSessionStream(workspace, row.childSessionId);
+    const integrity = verifySessionEventAnchorSync(workspace, row.childSessionId);
     lines.push(`    stream ${child.eventLines} event line(s) — \`${child.streamPath}\``);
+    lines.push(`    integrity ${formatNestedStreamIntegrity(integrity)}`);
   }
   lines.push("(full nested stream replay / verify: residual — not R174)");
   return lines;

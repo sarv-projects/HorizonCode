@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
-use crate::canon::hash_receipt;
+use crate::receipt_schema;
 use crate::eventlog::{
     anchor_digest, ensure_anchor_matches, read_head, tail_of, verify_chain, AnchorConfig,
     ChainKind, LockFile, VerifyReport,
@@ -72,6 +72,7 @@ impl Receipts {
             ),
             _ => None,
         };
+        let v2 = receipt_schema::issue_v2(&Value::Object(input.clone()))?;
         let effect_id = match input.get("effectId") {
             Some(v) if !v.is_null() => Some(
                 v.as_str()
@@ -113,12 +114,23 @@ impl Receipts {
                 None => Value::Null,
             },
         );
+        // v2 binds every declared effect/postimage/child sidecar INTO the
+        // receipt hash. Legacy v1 rows retain byte-identical hashes.
+        if v2 {
+            receipt.insert("schemaVersion".to_string(), json!(2));
+            if let Some(d) = &postimage_digest { receipt.insert("postimageDigest".to_string(), json!(d)); }
+            if let Some(p) = &postimage_path { receipt.insert("postimagePath".to_string(), json!(p)); }
+            if let Some(e) = &effect_id { receipt.insert("effectId".to_string(), json!(e)); }
+            if let Some(children) = input.get("childEffectIds") {
+                receipt.insert("childEffectIds".to_string(), children.clone());
+            }
+        }
         let receipt = Value::Object(receipt);
-        let hash = hash_receipt(&receipt);
+        let hash = receipt_schema::hash(&receipt)?;
         let mut receipt = receipt;
         if let Value::Object(map) = &mut receipt {
             map.insert("hash".to_string(), json!(hash));
-            // Additive observation sidecars — not in RECEIPT_FIELDS / hash.
+            // Sidecars are historical v1 additions; v2 already hashes them.
             if let Some(d) = &postimage_digest {
                 map.insert("postimageDigest".to_string(), json!(d));
             }

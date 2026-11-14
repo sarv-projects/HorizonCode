@@ -14,6 +14,7 @@ import { PENDING_TODOS_EVENT, UNVERIFIED_COMPLETION_EVENT } from "./loop";
 /** Event type strings the runtime may append to the kernel log (2026-11-10). */
 export const SHIPPED_EVENT_CATALOGUE: readonly string[] = [
   EventTypes.sessionStart,
+  EventTypes.sessionPromptAdmitted,
   EventTypes.sessionEnd,
   EventTypes.sessionFork,
   EventTypes.messageStart,
@@ -112,7 +113,8 @@ export interface ShippedToHzMapEntry {
  * not yet promoted into the closed 44 (hooks / pending-todos / unverified).
  */
 export const SHIPPED_TO_HZ_MAP: readonly ShippedToHzMapEntry[] = [
-  { shipped: EventTypes.sessionStart, hz: ["hz.session.created"], relation: "subset", note: "session.start omits claim/busy/prompt.admitted fan-out" },
+  { shipped: EventTypes.sessionStart, hz: ["hz.session.created"], relation: "subset", note: "session.start omits claim/busy events" },
+  { shipped: EventTypes.sessionPromptAdmitted, hz: ["hz.session.prompt.admitted"], relation: "equivalent", note: "literal canonical event emitted after durable FIFO begin; audit append required before provider dispatch" },
   { shipped: EventTypes.sessionEnd, hz: ["hz.session.busy.left"], relation: "subset", note: "closest durable end-of-run signal; claim.release not separate" },
   { shipped: EventTypes.sessionFork, hz: ["hz.session.forked"], relation: "equivalent", note: "first event of forked child stream" },
   { shipped: EventTypes.messageStart, hz: ["hz.step.started", "hz.step.llm.requested"], relation: "subset", note: "folds step+llm request; no separate part stream" },
@@ -142,6 +144,46 @@ export function unimplementedHzEvents(): string[] {
   const covered = new Set<string>();
   for (const row of SHIPPED_TO_HZ_MAP) for (const h of row.hz) covered.add(h);
   return HZ_CANONICAL_EVENTS.filter((h) => !covered.has(h));
+}
+
+/** Evidence-aware RC-18 counts. The 23 *shipped* names are NOT 23
+ * canonical events. A subset mapping is not an actual canonical emitter,
+ * and even an equivalent alias is not a literal hz.* log entry. These
+ * buckets deliberately cannot be merged into one misleading fraction. */
+export interface HzEventCoverageReport {
+  canonicalTotal: number;
+  shippedTypes: number;
+  literalCanonicalEmitted: string[];
+  mappedCanonicalNames: string[];
+  equivalentCanonicalNames: string[];
+  subsetOnlyCanonicalNames: string[];
+  unmappedCanonicalNames: string[];
+}
+
+export function hzEventCoverageReport(): HzEventCoverageReport {
+  const shipped = new Set(SHIPPED_EVENT_CATALOGUE);
+  const mapped = new Set<string>();
+  const equivalent = new Set<string>();
+  for (const row of SHIPPED_TO_HZ_MAP) {
+    for (const canonical of row.hz) {
+      if (!HZ_CANONICAL_EVENTS.includes(canonical)) {
+        throw new Error(`RC-18 mapping names unknown canonical event ${canonical}`);
+      }
+      mapped.add(canonical);
+      if (row.relation === "equivalent") equivalent.add(canonical);
+    }
+  }
+  const literalCanonicalEmitted = HZ_CANONICAL_EVENTS.filter((name) => shipped.has(name));
+  const mappedCanonicalNames = HZ_CANONICAL_EVENTS.filter((name) => mapped.has(name));
+  return {
+    canonicalTotal: HZ_CANONICAL_EVENTS.length,
+    shippedTypes: SHIPPED_EVENT_CATALOGUE.length,
+    literalCanonicalEmitted,
+    mappedCanonicalNames,
+    equivalentCanonicalNames: HZ_CANONICAL_EVENTS.filter((name) => equivalent.has(name)),
+    subsetOnlyCanonicalNames: mappedCanonicalNames.filter((name) => !equivalent.has(name)),
+    unmappedCanonicalNames: HZ_CANONICAL_EVENTS.filter((name) => !mapped.has(name)),
+  };
 }
 
 /** Lookup helper for tooling / doctor. */

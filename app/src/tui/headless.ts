@@ -19,6 +19,8 @@ export interface HeadlessOptions {
   runtime: Runtime;
   /** a message typed on the command line, sent before stdin is read */
   initialMessage?: string;
+  /** Optional finite input stream for embedding and hermetic tests; CLI uses stdin. */
+  input?: NodeJS.ReadableStream;
 }
 
 /**
@@ -35,7 +37,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
   setColorEnabled(false);
   const renderer = createRenderer({ wrap: false });
 
-  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
+  const rl = readline.createInterface({ input: opts.input ?? process.stdin, crlfDelay: Infinity, terminal: false });
 
   const pending: string[] = [];
   let closed = false;

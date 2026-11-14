@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { Readable } from "node:stream";
 import type { Runtime } from "../../src/contracts";
 import { runHeadless } from "../../src/tui/headless";
 
@@ -30,7 +31,7 @@ describe("headless turn.diff", () => {
     (process.stdout as unknown as { write: unknown }).write = (c: string) => (out.push(String(c)), true);
     (process.stderr as unknown as { write: unknown }).write = (c: string) => (err.push(String(c)), true);
     try {
-      await runHeadless({ runtime, initialMessage: "hi" });
+      await runHeadless({ runtime, initialMessage: "hi", input: Readable.from([]) });
     } finally {
       process.stdout.write = ow;
       process.stderr.write = ew;

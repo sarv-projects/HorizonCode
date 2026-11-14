@@ -57,6 +57,8 @@ export const ENV_KEYS = [
   "HZ_EFFECT_HOST_KERNEL",
   "HZ_EFFECT_HOST_EDIT_REPAIR",
   "HZ_EFFECT_RECONCILE_BLOCK",
+  "HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING",
+  "HZ_EFFECT_OWNER_FAULT_AFTER_PREPARE",
   // Sandbox wiring tests toggle these globally; missing restoration previously
   // caused later hook, MCP, LSP and child-spawn suites to inherit confinement.
   "HZ_SANDBOX_EXEC",
