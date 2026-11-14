@@ -25,6 +25,8 @@ pub struct Kernel {
     events: EventLog,
     receipts: Receipts,
     guard: Guard,
+    /// Private launch-scoped control credential; never exposed on the wire.
+    control_secret: Option<String>,
     /// Bound at process launch, not from a caller's effect.execute params.
     /// A raw RPC may narrow to this workspace, never widen it. Standalone
     /// kernels started without the variable remain explicitly unbound.
@@ -35,10 +37,19 @@ pub struct Kernel {
 
 impl Kernel {
     pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig) -> Self {
+        Self::new_with_control(state_dir, anchor, None)
+    }
+
+    pub fn new_with_control(
+        state_dir: &Path,
+        anchor: AnchorConfig,
+        control_secret: Option<String>,
+    ) -> Self {
         Kernel {
             events: EventLog::new_with_anchor(state_dir, anchor.clone()),
             receipts: Receipts::new_with_anchor(state_dir, anchor),
             guard: Guard::new(state_dir),
+            control_secret,
             workspace_root: std::env::var_os("HZ_KERNEL_WORKSPACE_ROOT")
                 .filter(|s| !s.is_empty())
                 .map(std::path::PathBuf::from),
@@ -66,6 +77,23 @@ impl Kernel {
         }
     }
 
+    /// A workspace-bound kernel must not become an unauthenticated approval
+    /// mint merely because its launcher omitted the control pipe. Independent
+    /// standalone kernels without a product workspace retain the documented
+    /// legacy compatibility mode; product instances require the parent pipe.
+    fn authorize_parent_control(&self, params: &Value) -> Result<(), String> {
+        if self.workspace_root.is_some() && self.control_secret.is_none() {
+            return Err(
+                "HZ_PRECONDITION_FAILED: workspace-bound kernel lacks private parent control channel; permission mint refused"
+                    .into(),
+            );
+        }
+        crate::control_auth::authorize_mint(
+            self.control_secret.as_deref(),
+            params.get("approvalProof").and_then(Value::as_str),
+        )
+    }
+
     fn dispatch(&self, method: &str, params: &Value) -> Result<Value, String> {
         match method {
             "ping" => Ok(json!({ "version": VERSION })),
@@ -75,7 +103,9 @@ impl Kernel {
                 // The owner stream is exclusively kernel-generated. Letting
                 // caller log.append forge a settlement defeats R170.
                 if stream.starts_with("owner:") {
-                    return Err("HZ_PRECONDITION_FAILED: owner event streams are kernel-only".into());
+                    return Err(
+                        "HZ_PRECONDITION_FAILED: owner event streams are kernel-only".into(),
+                    );
                 }
                 let event = params
                     .get("event")
@@ -98,7 +128,14 @@ impl Kernel {
                 Ok(self.events.verify(&stream)?.to_json())
             }
 
-            "receipt.issue" => self.receipts.issue(params),
+            "receipt.issue" => {
+                // The OwnerLog issues its own independently observed receipts.
+                // A raw NDJSON client must not mint a plausible signed receipt
+                // for an effect it never executed. Product parent callers still
+                // use the existing additive input contract and control proof.
+                self.authorize_parent_control(params)?;
+                self.receipts.issue(params)
+            },
 
             "receipt.verify" => Ok(self.receipts.verify()?.to_json()),
 
@@ -111,7 +148,9 @@ impl Kernel {
                     .get("kind")
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "guard.check.action.kind must be a non-empty string".to_string())?
+                    .ok_or_else(|| {
+                        "guard.check.action.kind must be a non-empty string".to_string()
+                    })?
                     .to_string();
                 // Fail closed before evaluation: an unknown kind (a raw
                 // client's "fs.edit") must never reach the policy as an
@@ -147,6 +186,7 @@ impl Kernel {
             }
 
             "guard.lease" => {
+                self.authorize_parent_control(params)?;
                 let kind = string_param(params, "kind")?;
                 // The same vocabulary rule as guard.check: a lease for a kind
                 // the guard does not know could never be consulted, so minting
@@ -171,6 +211,7 @@ impl Kernel {
             // would be `ask`, and each matching check mints a fresh one-use
             // lease bound to that exact effect (the receipt cites that lease).
             "guard.grant" => {
+                self.authorize_parent_control(params)?;
                 let kind = string_param(params, "kind")?;
                 if !guard::known_kind(&kind) {
                     return Err(guard::unknown_kind_refusal(&kind));
@@ -190,6 +231,7 @@ impl Kernel {
             // guard.lease refuses an unknown action kind. Returns
             // {changed, fingerprint}.
             "guard.allowlist.amend" => {
+                self.authorize_parent_control(params)?;
                 let rule = params
                     .get("rule")
                     .filter(|v| v.is_object())
@@ -251,7 +293,10 @@ impl Kernel {
                             "sandbox.report.sandboxPermissions must be a string".to_string()
                         })?;
                         Some(sandbox::SandboxMode::parse(s).ok_or_else(|| {
-                            format!("sandbox.report.sandboxPermissions {:?} is not a known mode", s)
+                            format!(
+                                "sandbox.report.sandboxPermissions {:?} is not a known mode",
+                                s
+                            )
                         })?)
                     }
                 };
@@ -280,8 +325,12 @@ impl Kernel {
                 let demand_full = mode.requires_fs_confinement() && !allow_partial;
 
                 let caps = sandbox::capabilities();
-                let outcome =
-                    sandbox::enforce(mode, caps, &sandbox::kernel_applied_mechanisms(), demand_full);
+                let outcome = sandbox::enforce(
+                    mode,
+                    caps,
+                    &sandbox::kernel_applied_mechanisms(),
+                    demand_full,
+                );
                 Ok(outcome.to_json())
             }
 
@@ -293,17 +342,24 @@ impl Kernel {
             "effect.execute" => {
                 if effect_owner::is_mutating(params) {
                     if let Some(bound) = &self.workspace_root {
-                        let supplied = params.get("sandboxRoot")
+                        let supplied = params
+                            .get("sandboxRoot")
                             .and_then(Value::as_str)
                             .filter(|s| !s.is_empty())
-                            .ok_or_else(|| "HZ_PRECONDITION_FAILED: bound effect.execute requires sandboxRoot".to_string())?;
+                            .ok_or_else(|| {
+                                "HZ_PRECONDITION_FAILED: bound effect.execute requires sandboxRoot"
+                                    .to_string()
+                            })?;
                         let bound_resolved = guard::lexical_resolve(bound).ok_or_else(|| {
-                            "HZ_PRECONDITION_FAILED: kernel workspace binding could not resolve".to_string()
+                            "HZ_PRECONDITION_FAILED: kernel workspace binding could not resolve"
+                                .to_string()
                         })?;
                         let requested_resolved = guard::lexical_resolve(Path::new(supplied)).ok_or_else(|| {
                             "HZ_PRECONDITION_FAILED: effect.execute sandboxRoot could not resolve".to_string()
                         })?;
-                        if !Path::new(supplied).is_absolute() || requested_resolved != bound_resolved {
+                        if !Path::new(supplied).is_absolute()
+                            || requested_resolved != bound_resolved
+                        {
                             return Err("HZ_PRECONDITION_FAILED: effect.execute sandboxRoot does not equal kernel-bound workspace root".into());
                         }
                     }
@@ -325,18 +381,27 @@ impl Kernel {
             // Read-only inspection/verification. A malformed/tampered chain
             // fails closed, never turns into an empty clean status.
             "effect.owner.status" => effect_owner::status(&self.events, self.guard.state_dir()),
-            "effect.owner.verify" => effect_owner::verify(&self.events, &self.receipts, self.guard.state_dir()),
+            "effect.owner.verify" => {
+                effect_owner::verify(&self.events, &self.receipts, self.guard.state_dir())
+            }
             // Independent latest settled file postimage replay (not a
             // historical snapshot and not shell/network-effect proof).
             "effect.owner.postimage.verify" => effect_owner::verify_latest_postimages(
-                &self.events, &self.receipts, self.guard.state_dir(),
+                &self.events,
+                &self.receipts,
+                self.guard.state_dir(),
             ),
             // V2 OwnerLog: a PREPARE-only interrupted effect has a durable
             // no-execute proof; anything past owner.executing stays UNKNOWN.
             "effect.owner.recover" => {
                 let effect_id = string_param(params, "effectId")?;
-                effect_owner::recover(&self.events, &self.receipts, self.guard.state_dir(), &effect_id)
-            },
+                effect_owner::recover(
+                    &self.events,
+                    &self.receipts,
+                    self.guard.state_dir(),
+                    &effect_id,
+                )
+            }
 
             // §5.2 reduced: loopback CONNECT listener (advisory; not shell-net enforced).
             "egress.connect.listen" => {
@@ -392,9 +457,12 @@ fn sandbox_mode_param(params: &Value, key: &str) -> Result<sandbox::SandboxMode,
 
 fn number_param(params: &Value, key: &str) -> Option<u64> {
     let value = params.get(key)?;
-    value
-        .as_u64()
-        .or_else(|| value.as_f64().filter(|f| f.is_finite() && *f >= 0.0).map(|f| f as u64))
+    value.as_u64().or_else(|| {
+        value
+            .as_f64()
+            .filter(|f| f.is_finite() && *f >= 0.0)
+            .map(|f| f as u64)
+    })
 }
 
 /// The optional `sessionId` an owner-scoped method may carry; absent, null or

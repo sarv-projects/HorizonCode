@@ -4,7 +4,7 @@
 >
 > **Next agent:** [`../AGENTS.md`](../AGENTS.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). **LICENSE deferred** — [`LICENSE-STATUS.md`](LICENSE-STATUS.md).
 >
-> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **351**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`.
+> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **352**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`.
 
 ## Wave summary (honest)
 
@@ -15,6 +15,13 @@
 | **E** | TUI scrollback + alt-screen slices | **PARTIAL — TESTED** | Scrollback polish (**177**, **236** D9/D11/D15/D17); reduced fullscreen (**193**, **221**); mouse opt-in (**225**); fullscreen palette (**232**); in-loop slash dispatch (**240**); composer ↑/↓ history (**240** D18); fullscreen `/copy` (**236**); fullscreen bracketed paste + shared idle status (**247**); tool-card + approval-card effect linkage + `/theme` persist/load (**250**, **254** D8/D10); plan multi-file hunk labels/apply + screen-reader effect/approval lines (**255** D7/D11); fullscreen rich approval card (**258**); UNKNOWN R169 actions reduced (**282**: inspect/reconcile/export); R172 pane inspector + fullscreen Tab completion stub + inset scrollback hit region (**284**); scrollback Ctrl+I + `hz://receipt/<id>` + palette rank (**290**); inset pane buffer paint + `encodeFullscreenFrameDiff` stub (**299** reduced); live inset pane wire (**300**: Ctrl+B, UNKNOWN/buried transcript); inset wheel scroll independence (**305** reduced); inset keyboard scroll (**306** reduced: Alt+↑/↓, PgUp/PgDn); live main-loop differential R8 paint (**308** reduced: consecutive frames); reconcile-block inset banner when latched (**309** reduced); overlay same-kind differential paint + scrollback BLOCK notice/paths (**310** reduced); main↔overlay soft-transition paint (**316** reduced); overlay↔overlay soft-transition paint (**317** reduced); live modal overlay mouse hit-test when picker/palette/inspector/completion open (**312** reduced); modal backdrop click dismiss (**313** reduced). Grok R1–R12 parity **open** (R2/R4/R9–R12). |
 | **G–J** | docs/30 §7 + docs/12 §11 backlog reductions | **PARTIAL — TESTED** (rulings **266**, **268**–**271**, **273**) | §12: F11 worktree pool + F9 mount (**266**); F4 `.hzs` export (**268**); F5 migration stub + F6 admission/FIFO (**269**); F1 snapshot refuse (**270**); F7 blob CAS (**271**); F8 session FTS recency tie-break (**273**); F3 `permission_mode` row + fork meet reduced (**273**). docs/30 §7: many rows reduced; Wave F **SKIP** only (**252**). |
 | **I/J** | B-4 cache | **PARTIAL — TESTED** (rulings **200**, **222**, **223**, **246**, **276**, **277**, **282**) | System marker + breakpoint planner + Anthropic wire (default largest-prefix when breakpoints on) + `cacheableMessagesPrefix` + keep-alive stub with **local** prefix byte/message measure on tick (**282**); doctor `provider.cache`. Residual: live Anthropic cache-hit measure (API keys). |
+
+## Batch 9 — private parent authorization channel (ruling **352**, still partial P0-1)
+
+- **Authenticated parent identity only:** Bun sends a fresh 256-bit secret through a private inherited fd 3 to the Rust kernel; the kernel requires it for `guard.lease`, `guard.grant`, and `guard.allowlist.amend` on product-launched processes. Forged/raw mint requests, malformed pipe boot, and workspace-bound permission mint without the channel refuse. The JS key is hard-private, not in argv/env/log.
+- **Strict transport behavior:** a lost trusted kernel cannot return to local permission minting; non-executable/old binaries do not raise an unhandled spawn/pipe error after correcting Bun EACCES handling. The previous OwnerLog UNKNOWN refusal remains.
+- **Residual:** this proves control of the Bun parent, **not a trusted human approval principal**; public runtime mint APIs, caller-supplied sessions, unbound standalone kernels and native Windows portability remain gaps. Universal effect ownership, Rust/Bun/SQLite atomic admission, historical replay, production netns, full RC-18/R172, patch parity remain OPEN.
+- **Evidence:** [ruling 352 audit](audit/p0-parent-control-auth-2026-11-14.md), Rust control-auth tests, Rust-backed Bun raw-request/boot/fault tests, isolated fallback suite. The full Bun gate remains red; see audit.
 
 ## Batch 8 — direct kernel Guard authority and bound workspace (ruling **351**, partial P0-1/R170)
 

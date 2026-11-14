@@ -566,6 +566,8 @@ The client's `required` entry is satisfied, `acp.sessionModes` is reported unava
 
 ### 4.2 (b) The kernel ABI (`hzk`)
 
+> **Implementation clarification (ruling 352, 2026-11-14):** The 11-method count in the older note below is historical, NOT the current shipped method inventory. See `app/src/contracts.ts` `KERNEL_METHODS` and `KernelRequestMap` for the live additive NDJSON ABI. For product-launched Rust kernels, Bun now supplies a fresh 256-bit parent-control credential over an inherited **private fd 3**, never via argv/env; the process must read it before NDJSON service. `guard.lease`, `guard.grant`, and `guard.allowlist.amend` accept an INTERNAL additive `approvalProof` field and refuse missing/forged proof in product-bound mode. The Rust policy also refuses mint RPCs in a workspace-bound kernel lacking that private channel. Existing unbound standalone mode preserves documented legacy behavior. This is **not** independent authenticated human consent, nonce/intent-bound approval, native-Windows fd3 support, or universal Rust EffectHost ownership (P0-1 OPEN).
+>
 > **DESIGN ONLY: NOT IMPLEMENTED as written.** The shipped kernel protocol is NDJSON `{id, method, params}` with 11 methods (`ping`, `log.append`, `log.read`, `log.verify`, `receipt.issue`, `receipt.verify`, `guard.check`, `guard.lease`, `guard.grant`, `guard.allowlist.amend`, `sandbox.report`), no frame types, no `HZ_ABI`, errors as `{message}`. Deferral notes K7 and K10.
 
 The kernel is a separate process (ADR-003) with its own versioned protocol. It is not a JSON surface (C13): frames are canonical MessagePack, shown below as JSON **for readability only**. Types are inherited from the ancestor (`HzKernelRpcV1`).
