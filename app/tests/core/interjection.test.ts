@@ -6,6 +6,8 @@ import {
   drainFormatted,
   formatInterjection,
   formatInterrupt,
+  formatStrandedInterjections,
+  INTERRUPT_NOTE,
 } from "../../src/core/interjection";
 import { drainInterjectionsAtSafePoint, RunFaults, type LoopDeps } from "../../src/core/loop";
 import type { RuntimeCallbacks } from "../../src/contracts";
@@ -22,6 +24,15 @@ describe("interjection format", () => {
     const out = formatInterrupt("do the other thing");
     expect(out).toContain("The user interrupted the previous turn:");
     expect(out).toContain("do the other thing");
+  });
+
+  test("formatStrandedInterjections picks envelope from interrupted flag", () => {
+    const stranded = [{ text: "pivot to tests" }];
+    const mid = formatStrandedInterjections(stranded, false)[0]!;
+    const cut = formatStrandedInterjections(stranded, true)[0]!;
+    expect(mid.modelText).toContain(INTERJECTION_NOTE);
+    expect(cut.modelText).toContain(INTERRUPT_NOTE);
+    expect(mid.displayText).toBe("pivot to tests");
   });
 
   test("drainFormatted preserves FIFO and never merges", () => {

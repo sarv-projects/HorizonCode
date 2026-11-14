@@ -111,6 +111,21 @@ export function formatInterrupt(text: string): string {
  * Drain the buffer into model-ready rows (FIFO, one message per entry).
  * `sanitize` may strip host-specific artifacts from raw text before framing.
  */
+/**
+ * Stranded mid-turn steer that never reached a step boundary (e.g. abort).
+ * `interrupted` selects the Grok interrupt envelope vs the mid-turn steer envelope.
+ */
+export function formatStrandedInterjections(
+  entries: readonly PendingInterjection[],
+  interrupted: boolean,
+): DrainedInterjection[] {
+  const fmt = interrupted ? formatInterrupt : formatInterjection;
+  return entries.map((entry) => ({
+    displayText: entry.text,
+    modelText: fmt(entry.text),
+  }));
+}
+
 export function drainFormatted(
   buffer: InterjectionBuffer,
   sanitize: (raw: string) => string = (raw) => raw,

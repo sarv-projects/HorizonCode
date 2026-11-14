@@ -18,6 +18,7 @@ For each doc or backlog row: state the claim, the code/test evidence, verdict (`
 | §8 #3 “no todos section” | `handoff.ts` todos column + `todos_snapshot`; tool still refuses `todos` args | **MATCH** partial (**366**); **OPEN**: auto-link, hook capture, live todo rehydrate |
 | §8 #4 “no remember/forget tools” | `memory-write.ts` + `store.ts` | **MATCH** partial (**367**); **OPEN**: embeddings, MEMORY.md sync |
 | §8 #10 filename-only topic rank | `manifest.ts` `scoreMemoryTopics` + excerpts | **MATCH** partial (**368**); **OPEN**: embeddings, memdir prefetch |
+| §8 #8 interrupt on abort | `formatStrandedInterjections` + `Runtime` flush (**369**) | **PARTIAL** — interrupt envelope on stranded; **OPEN**: mid-stream provider cancel |
 | Full backlog / goal complete | `FULL-BACKLOG-2026-11-13.md` §C (47 OPEN), `GOAL-PROGRESS.md` | **OPEN** — goal **NOT DONE** |
 
 ## Corpus sweep (started — not complete)

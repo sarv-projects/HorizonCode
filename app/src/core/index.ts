@@ -37,7 +37,13 @@ import type {
 } from "../contracts";
 import { EventTypes, newId, nowIso } from "../contracts";
 import { AdmissionQueue } from "./admission";
-import { acceptInterjection, InterjectionBuffer } from "./interjection";
+import {
+  acceptInterjection,
+  formatStrandedInterjections,
+  INTERJECTION_BUFFER_CAP,
+  InterjectionBuffer,
+  type DrainedInterjection,
+} from "./interjection";
 import { resolveThinkingEffort } from "./thinking-effort";
 import { augmentConfigWithTrustedWorkspace, defaultConfigPath, loadConfig, readConfigFile, type HzConfig, type McpConfig } from "./config";
 import { applySandboxChildNetFromConfig } from "./sandbox-child-net";
@@ -242,6 +248,8 @@ class HzRuntimeImpl implements HzRuntime {
   /** Per-turn mid-turn steer buffer; set for the duration of `runSend`. */
   private turnInterjection?: InterjectionBuffer;
   private readonly queued: string[] = [];
+  /** Steer text recovered after abort or undrained buffer; flushed before the next `send()`. */
+  private readonly pendingSteeredUserRows: DrainedInterjection[] = [];
   private sendQueue: Promise<unknown> = Promise.resolve();
   private closed = false;
   /** The newest `context.usage` this runtime saw (the `/context` report). */
@@ -353,6 +361,20 @@ class HzRuntimeImpl implements HzRuntime {
   note(message: string): void {
     if (this.active) emit(this.active, { type: "notice", message });
     else if (this.queued.length < 8) this.queued.push(message);
+  }
+
+  /** Append recovered steer rows to the transcript before the next model turn. */
+  private flushPendingSteeredUserMessages(cb: RuntimeCallbacks): void {
+    while (this.pendingSteeredUserRows.length > 0) {
+      const row = this.pendingSteeredUserRows.shift();
+      if (row === undefined) break;
+      try {
+        this.store.appendMessage(this.session.id, { role: "user", content: row.modelText });
+        emit(cb, { type: "interjection.admitted", text: row.displayText });
+      } catch (err) {
+        this.note(`could not record a steered user message: ${errorMessage(err)}`);
+      }
+    }
   }
 
   setApprovalHandler(fn: ApprovalHandler): void {
@@ -1211,6 +1233,7 @@ class HzRuntimeImpl implements HzRuntime {
           message: `thinking effort: ${thinking.effort} (${thinking.source})`,
         });
       }
+      this.flushPendingSteeredUserMessages(cb);
       const outcome = await runTurn(
         {
           workspace: this.workspace,
@@ -1285,9 +1308,15 @@ class HzRuntimeImpl implements HzRuntime {
       };
     } finally {
       const stranded = interjection.drainAll();
-      for (const entry of stranded) {
-        if (this.queued.length < 32) this.queued.push(entry.text);
-        else this.note("mid-turn steer: a buffered message was dropped (queue full)");
+      if (stranded.length > 0) {
+        const rows = formatStrandedInterjections(stranded, controller.signal.aborted);
+        for (const row of rows) {
+          if (this.pendingSteeredUserRows.length >= INTERJECTION_BUFFER_CAP) {
+            this.note("mid-turn steer: a buffered message was dropped (queue full)");
+            break;
+          }
+          this.pendingSteeredUserRows.push(row);
+        }
       }
       if (this.controller === controller) this.controller = undefined;
       if (this.active === cb) this.active = undefined;
