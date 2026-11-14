@@ -18,7 +18,8 @@
  */
 
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import type { Writable } from "node:stream";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { appendJsonl } from "./jsonl-append";
@@ -1254,6 +1255,8 @@ export class KernelClient {
   private everTrusted = false;
   private lostTrustedKernel = false;
   private binaryPath?: string;
+  /** Launch-only parent control credential; NEVER stored in process.env/argv. */
+  #controlSecret?: string;
   private reason = "local fallback";
   private startPromise?: Promise<KernelMode>;
   private exitHook?: () => void;
@@ -1314,9 +1317,14 @@ export class KernelClient {
       return this.modeValue;
     }
     try {
-      const child = spawn(binary, ["--state-dir", this.stateDir], {
+      // The only controlling parent knows this key. A raw NDJSON caller can
+      // invoke guard.check, but cannot mint a lease/grant or amend the
+      // allowlist without proving control of this launch-private pipe.
+      // The key is NOT passed in argv/environment or serialized in a result.
+      const controlSecret = randomBytes(32).toString("hex");
+      const child = spawn(binary, ["--state-dir", this.stateDir, "--control-fd", "3"], {
         cwd: this.workspace,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
         // Explicit env snapshot at spawn: a runtime mutation of process.env
         // (HZ_ANCHOR_KEY set just before start) must reach the child, and the
         // child must never inherit anything else implicitly. Relying on the
@@ -1329,7 +1337,24 @@ export class KernelClient {
         env: { ...process.env, HZ_KERNEL_WORKSPACE_ROOT: this.workspace },
       });
       this.child = child;
+      // Bun emits child "error" asynchronously for EACCES/ENOEXEC after
+      // spawn() returned. Attach the listener BEFORE touching child.stdio[3]:
+      // failed spawns have null streams, and would otherwise raise an
+      // unhandled error even though startBinary's try/catch ran.
+      child.on("error", (err: Error) => this.fallBack(`kernel process error: ${err.message}`));
+      const controlPipe = child.stdio[3] as Writable | null;
+      if (!child.stdin || !child.stdout || !child.stderr ||
+          !controlPipe || typeof controlPipe.end !== "function") {
+        throw new Error("private kernel control pipe unavailable");
+      }
+      this.#controlSecret = controlSecret;
+      // A failed/old child can close fd 3 before the parent writes. Absorb
+      // EPIPE as a kernel-start failure, not an unhandled process exception.
+      controlPipe.on("error", (error: Error) =>
+        this.capture(`private kernel control pipe: ${error.message}`),
+      );
       this.wire(child);
+      controlPipe.end(`${controlSecret}\n`);
       const pong = await this.callRemote<"ping">("ping", {}, this.timeoutMs);
       this.binaryPath = binary;
       this.setMode("trusted", `kernel ${pong?.version ?? "unknown"} (${binary})`);
@@ -1347,7 +1372,8 @@ export class KernelClient {
     child.stdout.on("data", (chunk: string | Buffer) => this.onStdout(String(chunk)));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string | Buffer) => this.capture(String(chunk)));
-    child.on("error", (err: Error) => this.fallBack(`kernel process error: ${err.message}`));
+    // The spawn error handler was attached before validating the private
+    // control pipe, so invalid executable errors never escape as unhandled.
     child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       if (this.closed) return;
       const how = signal ? `signal ${signal}` : `code ${code === null ? "null" : code}`;
@@ -1435,6 +1461,7 @@ export class KernelClient {
   private async killChild(): Promise<void> {
     const child = this.child;
     this.child = undefined;
+    this.#controlSecret = undefined;
     this.stdoutBuffer = "";
     if (this.exitHook) {
       process.removeListener("exit", this.exitHook);
@@ -2026,9 +2053,20 @@ export class KernelClient {
 
   /** Trusted transport when possible, local fallback otherwise. */
   private async rpc<M extends KernelMethod>(method: M, params: KernelRequestMap[M]["params"]): Promise<KernelRequestMap[M]["result"]> {
+    // The parent may issue client-observed receipts. The Rust OwnerLog issues
+    // independently observed effect receipts internally; raw NDJSON callers
+    // cannot forge either class on the product-bound transport.
+    const authMethod = method === "guard.lease" || method === "guard.grant" ||
+      method === "guard.allowlist.amend" || method === "receipt.issue";
     if (this.modeValue === "trusted" && this.child && !this.closed) {
       try {
-        return await this.callRemote(method, params);
+        if (authMethod && !this.#controlSecret) {
+          throw new KernelRefusal("HZ_PRECONDITION_FAILED: trusted kernel parent credential unavailable");
+        }
+        const remoteParams = authMethod
+          ? ({ ...params, approvalProof: this.#controlSecret } as KernelRequestMap[M]["params"])
+          : params;
+        return await this.callRemote(method, remoteParams);
       } catch (err) {
         // A refusal is an answer, not a transport failure: surface it and leave
         // the mode alone. Everything else may fall back to the local kernel.
@@ -2042,6 +2080,26 @@ export class KernelClient {
             "HZ_PRECONDITION_FAILED: effect.execute transport lost after dispatch; outcome UNKNOWN, local replay refused",
           );
         }
+        if (authMethod) {
+          throw new KernelRefusal(
+            "HZ_PRECONDITION_FAILED: trusted kernel authorization channel lost; local permission or receipt mint refused",
+          );
+        }
+      }
+    }
+    if (authMethod) {
+      if (this.lostTrustedKernel) {
+        throw new KernelRefusal(
+          "HZ_PRECONDITION_FAILED: trusted kernel authorization channel unavailable; local permission or receipt mint refused",
+        );
+      }
+      if (
+        this.modeValue !== "trusted" &&
+        process.env.HZ_EFFECT_HOST_KERNEL?.trim().toLowerCase() === "require"
+      ) {
+        throw new KernelRefusal(
+          "HZ_PRECONDITION_FAILED: HZ_EFFECT_HOST_KERNEL=require forbids local permission or receipt mint without trusted Rust kernel",
+        );
       }
     }
     return this.callLocal(method, params);

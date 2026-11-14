@@ -182,6 +182,12 @@ fn bound_kernel_workspace_cannot_be_widened_by_raw_sandbox_root_argument() {
     let mut kernel = Kernel::start_with_env(state.path(), &[(
         "HZ_KERNEL_WORKSPACE_ROOT", workspace.path().to_str().unwrap(),
     )]);
+    // A workspace binding without the private parent fd is NOT a grant-minting
+    // authority, even in the standalone compatibility transport.
+    let no_control = kernel.err("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "echo forged", "ttlMs": 60000
+    }));
+    assert!(no_control.contains("private parent control channel"), "{no_control}");
     let denied = kernel.err("effect.execute", json!({
         "effectId": "root-widen", "sandboxRoot": outside.path(),
         "dispatch": {"kind": "fs.write", "spec": {"path": "outside.txt", "text": "NO"}}

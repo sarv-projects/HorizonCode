@@ -8,23 +8,24 @@
 //! State dir defaults to $HZ_STATE_DIR, then ~/.hzcode/kernel.
 
 mod canon;
+mod control_auth;
+mod edit_unicode_fold;
 mod effect_evidence;
 mod effect_host;
-mod effect_owner;
-mod edit_unicode_fold;
 mod effect_host_edit_repair;
+mod effect_owner;
 mod egress;
 mod egress_connect;
 mod egress_tls_intercept;
 mod egress_tls_peek;
 mod egress_tls_terminate;
-mod receipt_postimage;
 mod eventlog;
 mod execpolicy;
 mod guard;
 mod jsonl_append;
 mod permm;
 mod protocol;
+mod receipt_postimage;
 mod receipts;
 mod sandbox;
 mod sandbox_atomic_write;
@@ -45,6 +46,7 @@ fn main() {
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut state_dir: Option<PathBuf> = None;
+    let mut control_fd: Option<u32> = None;
     let mut selftest = false;
 
     let mut i = 0;
@@ -60,6 +62,16 @@ fn run() -> i32 {
                 return 0;
             }
             "--selftest" => selftest = true,
+            "--control-fd" => {
+                i += 1;
+                control_fd = match args.get(i).and_then(|raw| raw.parse::<u32>().ok()) {
+                    Some(3) => Some(3),
+                    _ => {
+                        eprintln!("error: --control-fd requires the private inherited fd 3");
+                        return 2;
+                    }
+                };
+            }
             "--state-dir" => {
                 i += 1;
                 match args.get(i) {
@@ -108,9 +120,23 @@ fn run() -> i32 {
     };
 
     if selftest {
+        if control_fd.is_some() {
+            eprintln!("error: --selftest cannot inherit parent approval credentials");
+            return 2;
+        }
         return selftest_run(&dir, &anchor);
     }
-    serve(&dir, anchor)
+    let control_secret = match control_fd {
+        Some(fd) => match control_auth::read_from_fd(fd) {
+            Ok(secret) => Some(secret),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 2;
+            }
+        },
+        None => None,
+    };
+    serve(&dir, anchor, control_secret)
 }
 
 fn default_state_dir() -> PathBuf {
@@ -127,14 +153,14 @@ fn default_state_dir() -> PathBuf {
 
 fn print_help() {
     println!("hz-kernel {} — HorizonCode trust kernel", VERSION);
-    println!("usage: hz-kernel [--state-dir <path>] [--selftest] [--version]");
+    println!("usage: hz-kernel [--state-dir <path>] [--control-fd 3] [--selftest] [--version]");
     println!("env:   HZ_ANCHOR_KEY=<hex>             keyed HMAC-SHA256 chain anchors");
     println!("       HZ_ACCEPT_LEGACY_ANCHORS=1      accept legacy anchors while keyed");
 }
 
 /// NDJSON loop: one response line per request, flushed immediately.
-fn serve(dir: &Path, anchor: eventlog::AnchorConfig) -> i32 {
-    let kernel = Kernel::new_with_anchor(dir, anchor);
+fn serve(dir: &Path, anchor: eventlog::AnchorConfig, control_secret: Option<String>) -> i32 {
+    let kernel = Kernel::new_with_control(dir, anchor, control_secret);
     let stdin = std::io::stdin();
     let mut out = BufWriter::new(std::io::stdout().lock());
 
@@ -235,9 +261,14 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             "actor": { "kind": "system", "id": "selftest" },
             "payload": { "index": i, "ok": true },
         });
-        match call(&kernel, "log.append", json!({ "stream": stream, "event": seed })) {
+        match call(
+            &kernel,
+            "log.append",
+            json!({ "stream": stream, "event": seed }),
+        ) {
             Ok(envelope) => {
-                let seq_ok = envelope.get("seq").and_then(|v| v.as_u64()) == Some(appended.len() as u64 + 1);
+                let seq_ok =
+                    envelope.get("seq").and_then(|v| v.as_u64()) == Some(appended.len() as u64 + 1);
                 let hash_ok = envelope
                     .get("hash")
                     .and_then(|v| v.as_str())
@@ -277,7 +308,11 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     }
 
     // 4. read back from seq 2
-    match call(&kernel, "log.read", json!({ "stream": stream, "fromSeq": 2, "limit": 2 })) {
+    match call(
+        &kernel,
+        "log.read",
+        json!({ "stream": stream, "fromSeq": 2, "limit": 2 }),
+    ) {
         Ok(result) => {
             let events = result.get("events").and_then(|v| v.as_array());
             let ok = events
@@ -455,7 +490,8 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     ) {
         Ok(v) => {
             let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
-            let digest = v.get("contentDigest").and_then(|x| x.as_str()) == Some(expected_digest.as_str());
+            let digest =
+                v.get("contentDigest").and_then(|x| x.as_str()) == Some(expected_digest.as_str());
             checks.check("effect.execute fs.read sandbox digest", settled && digest);
         }
         Err(e) => {
@@ -494,7 +530,8 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     ) {
         Ok(v) => {
             let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
-            let digest = v.get("contentDigest").and_then(|x| x.as_str()) == Some(write_expected.as_str());
+            let digest =
+                v.get("contentDigest").and_then(|x| x.as_str()) == Some(write_expected.as_str());
             checks.check("effect.execute fs.write sandbox digest", settled && digest);
         }
         Err(e) => {
@@ -505,7 +542,8 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     // An admitted but failed effect is UNKNOWN and must latch its OwnerLog.
     // Run this intentional negative write against an isolated state dir; a
     // later positive test may not bypass that real R170 barrier.
-    let negative_kernel = Kernel::new_with_anchor(&scratch.join("negative-write-owner"), anchor.clone());
+    let negative_kernel =
+        Kernel::new_with_anchor(&scratch.join("negative-write-owner"), anchor.clone());
     match call(
         &negative_kernel,
         "effect.execute",
@@ -541,7 +579,8 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     ) {
         Ok(v) => {
             let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
-            let digest = v.get("contentDigest").and_then(|x| x.as_str()) == Some(edit_expected.as_str());
+            let digest =
+                v.get("contentDigest").and_then(|x| x.as_str()) == Some(edit_expected.as_str());
             checks.check("effect.execute fs.edit sandbox digest", settled && digest);
         }
         Err(e) => {
@@ -553,9 +592,13 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     let shell_stdout_expected = canon::sha256_bytes(b"hz-selftest-shell\n");
     // Shell policy is ASK by default: mint a kernel-owned single-use lease
     // rather than treating a caller's sandboxRoot as authorization.
-    let _ = call(&kernel, "guard.lease", json!({
-        "kind": "shell.exec", "pattern": "echo hz-selftest-shell", "ttlMs": 60_000
-    }));
+    let _ = call(
+        &kernel,
+        "guard.lease",
+        json!({
+            "kind": "shell.exec", "pattern": "echo hz-selftest-shell", "ttlMs": 60_000
+        }),
+    );
     match call(
         &kernel,
         "effect.execute",
@@ -568,9 +611,13 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         Ok(v) => {
             let settled = v.get("verdict").and_then(|x| x.as_str()) == Some("settled");
             let code = v.get("exitCode").and_then(|x| x.as_i64()) == Some(0);
-            let digest = v.get("stdoutDigest").and_then(|x| x.as_str()) == Some(shell_stdout_expected.as_str());
+            let digest = v.get("stdoutDigest").and_then(|x| x.as_str())
+                == Some(shell_stdout_expected.as_str());
             let stable = v.get("resultDigestStable").and_then(|x| x.as_bool()) == Some(true);
-            checks.check("effect.execute shell.exec sandbox digest", settled && code && digest && stable);
+            checks.check(
+                "effect.execute shell.exec sandbox digest",
+                settled && code && digest && stable,
+            );
         }
         Err(e) => {
             checks.check("effect.execute shell.exec sandbox digest", false);
@@ -600,7 +647,10 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         Ok(report) => {
             let ok = report.get("ok").and_then(|v| v.as_bool()) == Some(true);
             let count = report.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-            checks.check(&format!("receipt.verify ok count={}", count), ok && count >= 2);
+            checks.check(
+                &format!("receipt.verify ok count={}", count),
+                ok && count >= 2,
+            );
         }
         Err(e) => {
             checks.check("receipt.verify", false);
@@ -702,7 +752,10 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
     let unknown = kernel.handle(&json!({ "id": 7, "method": "nope", "params": {} }));
     checks.check(
         "unknown method -> error",
-        unknown.get("error").and_then(|e| e.get("message")).is_some()
+        unknown
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .is_some()
             && unknown.get("id").and_then(|v| v.as_u64()) == Some(7),
     );
     let malformed = kernel.handle(&json!("not a request"));
@@ -742,8 +795,8 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
 
             // Rewrite the anchor into the legacy (unkeyed) shape: fail closed.
             let head_path = keyed_dir.join("events/session__selftest-keyed.jsonl.head");
-            let legacy_body = serde_json::to_string(&json!({ "hash": event_hash, "seq": 1 }))
-                .unwrap_or_default();
+            let legacy_body =
+                serde_json::to_string(&json!({ "hash": event_hash, "seq": 1 })).unwrap_or_default();
             let wrote = std::fs::write(&head_path, format!("{}\n", legacy_body)).is_ok();
             let refused = matches!(
                 call(&keyed, "log.verify", json!({ "stream": keyed_stream })),
@@ -840,7 +893,11 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         );
 
         // danger-full-access reports NO enforced dimension (S4).
-        let danger = call(&kernel, "sandbox.report", json!({ "mode": "danger-full-access" }));
+        let danger = call(
+            &kernel,
+            "sandbox.report",
+            json!({ "mode": "danger-full-access" }),
+        );
         checks.check(
             "sandbox.report danger-full-access -> no enforced dimension (S4)",
             matches!(&danger, Ok(d)
@@ -868,7 +925,10 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         println!("SELFTEST OK ({} checks)", checks.total);
         0
     } else {
-        println!("SELFTEST FAILED ({} of {} checks)", checks.failures, checks.total);
+        println!(
+            "SELFTEST FAILED ({} of {} checks)",
+            checks.failures, checks.total
+        );
         1
     }
 }

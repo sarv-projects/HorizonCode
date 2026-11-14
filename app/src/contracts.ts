@@ -819,9 +819,22 @@ export interface KernelRequestMap {
   };
   "receipt.issue": { params: ReceiptInput; result: Receipt };
   "receipt.verify": { params: Record<string, never>; result: { ok: boolean; count: number; brokenAt?: number } };
-  "guard.check": { params: { action: GuardAction; scope?: PolicyScope; leases?: Lease[] }; result: GuardDecision };
-  "guard.lease": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
-  "guard.grant": { params: { kind: GuardKind; pattern: string; ttlMs: number }; result: Lease };
+  "guard.check": {
+    params: { action: GuardAction; scope?: PolicyScope; leases?: Lease[]; sessionId?: string };
+    result: GuardDecision;
+  };
+  // Ruling 352: approvalProof is an INTERNAL parent-control field. KernelClient
+  // injects it only for trusted Rust calls after the private fd3 handshake.
+  // User/tool callers must never supply or cache it, and it is not human
+  // consent attestation. Standalone unbound legacy kernels may omit it.
+  "guard.lease": {
+    params: { kind: GuardKind; pattern: string; ttlMs: number; sessionId?: string; approvalProof?: string };
+    result: Lease;
+  };
+  "guard.grant": {
+    params: { kind: GuardKind; pattern: string; ttlMs: number; sessionId?: string; approvalProof?: string };
+    result: Lease;
+  };
   // FEAT-002 (additive): append a rule to the runtime command allowlist at
   // <state-dir>/allowlist.json, file-locked append-dedup; consulted for
   // shell.exec BEFORE the policy rules (an allowlist deny wins, docs/11 R1).
@@ -829,7 +842,12 @@ export interface KernelRequestMap {
   // rule. The NDJSON envelope is unchanged. Mirrors kernel/src/protocol.rs
   // "guard.allowlist.amend" byte-for-byte in semantics.
   "guard.allowlist.amend": {
-    params: { kind?: AllowlistRuleKind; rule: AllowlistPrefixRule | AllowlistNetworkRule };
+    params: {
+      kind?: AllowlistRuleKind;
+      rule: AllowlistPrefixRule | AllowlistNetworkRule;
+      /** Internal parent-control proof in a product-bound kernel (ruling 352). */
+      approvalProof?: string;
+    };
     result: { changed: boolean; fingerprint: string };
   };
   // FEAT-004 (additive): report the fail-closed enforcement posture of a
