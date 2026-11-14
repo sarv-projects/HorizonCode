@@ -66,6 +66,8 @@ export type EventSeed = Pick<EventEnvelope, "id" | "ts" | "stream" | "type" | "a
 
 export const EventTypes = {
   sessionStart: "session.start",
+  /** RC-18 literal event on successful per-session FIFO admission (ruling 359). */
+  sessionPromptAdmitted: "hz.session.prompt.admitted",
   sessionEnd: "session.end",
   // Additive (session fork): the FIRST event of a forked session's own stream;
   // payload is a SessionForkPayload naming the parent stream and its seq.
@@ -380,6 +382,8 @@ export const DEFAULT_POLICY: PolicyRule[] = [
 /* ------------------------------ Receipts ------------------------------ */
 
 export interface ReceiptInput {
+  /** Additive v2 receipt: sidecars are covered by hash; absent = frozen v1. */
+  schemaVersion?: 2;
   action: string; // e.g. "tool.execute"
   tool: string; // tool name
   argsDigest: string; // sha256 hex of canonical JSON of args
@@ -395,12 +399,12 @@ export interface ReceiptInput {
   postimagePath?: string;
   /**
    * Additive (EffectHost precursor): correlates this receipt with the in-run
-   * allow→execute→observe ledger. Not part of `hashReceipt`.
+   * allow→execute→observe ledger. Unhashed in historical v1, bound in v2.
    */
   effectId?: string;
   /**
    * Additive (R172): child spawn/subagent effect ids observed for this parent receipt.
-   * Not part of `hashReceipt`.
+   * Unhashed in historical v1; bound into a v2 receipt hash.
    */
   childEffectIds?: string[];
 }
@@ -901,6 +905,20 @@ export interface KernelRequestMap {
       unsupportedEffects: number;
       unresolved: number;
       scope: "latest_settled_file_postimage_only";
+      /** New kernel-owned file effects only: archived historical bytes are
+       * verified without consulting current workspace state. Absent paths are
+       * signed evidence facts, NOT reconstructable bytes. Legacy/shell effects
+       * remain explicitly unverifiable. */
+      history?: {
+        ok: boolean;
+        checked: number;
+        historicalAbsenceFacts: number;
+        legacyUnverifiable: number;
+        unsupportedEffects: number;
+        unresolved: number;
+        failures: Array<{ effectId: string; path?: string; reason: string }>;
+        scope: "archived_kernel_owned_file_postimages_only";
+      };
       mismatches: Array<{
         effectId: string;
         path: string;
@@ -915,7 +933,7 @@ export interface KernelRequestMap {
   /** Verify owner EventLog plus receipt chain; refusal if either is unreadable. */
   "effect.owner.verify": {
     params: Record<string, never>;
-    result: { ok: boolean; events: number; blocked: boolean; unresolved: number; receiptsVerified: number };
+    result: { ok: boolean; events: number; blocked: boolean; unresolved: number; receiptsVerified: number; historicalArchivedChecked?: number; historicalLegacyUnverifiable?: number };
   };
   /** EffectHost settle mirror — phases + receipt facts → settled|unknown. */
   "effect.reconcile": {

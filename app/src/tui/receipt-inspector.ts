@@ -184,7 +184,29 @@ function childReceiptsPane(
     if (link.tool) bits.push(`tool ${link.tool}`);
     if (link.receiptId) bits.push(`receipt ${link.receiptId}`);
     if (link.receiptSeq !== undefined) bits.push(`r#${link.receiptSeq}`);
-    if (!link.receiptId) bits.push("(receipt not in workspace chain)");
+    switch (link.chainEvidence) {
+      case "hash_and_anchor_valid":
+        bits.push("receipt chain hash/head valid (not signer attestation)");
+        break;
+      case "hash_walk_unanchored":
+        bits.push("receipt v2 hash walk valid; anchor absent (legacy/unanchored)");
+        break;
+      case "legacy_unbound_effect_id":
+        bits.push("UNBOUND legacy receipt v1 effectId — no authenticated child linkage");
+        break;
+      case "duplicate_effect_id":
+        bits.push("AMBIGUOUS child effectId in receipts — no trusted link");
+        break;
+      case "broken_chain":
+        bits.push("INVALID receipt chain — child link refused");
+        break;
+      case "missing_receipt":
+        bits.push("receipt not in workspace chain");
+        break;
+      case "workspace_unavailable":
+        bits.push("workspace absent — child receipt unverified");
+        break;
+    }
     return `  · ${bits.join(" · ")}`;
   });
   if (links.length > 0 && opts?.workspace && opts.parentSessionId) {

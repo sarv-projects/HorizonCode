@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { EventTypes } from "../../src/contracts";
 import {
   HZ_CANONICAL_EVENTS,
+  hzEventCoverageReport,
   RESERVED_UNEMITTED_EVENT_TYPES,
   SHIPPED_EVENT_CATALOGUE,
   SHIPPED_TO_HZ_MAP,
@@ -46,9 +47,9 @@ function collectEmittedTypes(sources: string[]): Set<string> {
 }
 
 describe("shipped event catalogue", () => {
-  test("catalogue matches the handoff list (23 types)", () => {
-    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(23);
-    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(23);
+  test("catalogue includes the admitted-prompt canonical event (24 shipped types)", () => {
+    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(24);
+    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(24);
   });
 
   test("reserved message.delta is not in the shipped catalogue", () => {
@@ -87,6 +88,26 @@ describe("RC-18 shipped → hz.* mapping", () => {
       for (const h of row.hz) if (!allowed.has(h)) bad.push(h);
     }
     expect(bad).toEqual([]);
+  });
+
+  test("separates shipped event names, canonical mappings, equivalence, and literal hz.* emission", () => {
+    const coverage = hzEventCoverageReport();
+    expect(coverage.canonicalTotal).toBe(44);
+    expect(coverage.shippedTypes).toBe(24);
+    expect(coverage.mappedCanonicalNames).toHaveLength(21);
+    expect(coverage.unmappedCanonicalNames).toHaveLength(23);
+    expect(coverage.equivalentCanonicalNames).toHaveLength(10);
+    expect(coverage.literalCanonicalEmitted).toEqual([
+      "hz.session.prompt.admitted",
+      "hz.effect.settled", "hz.effect.unknown", "hz.effect.reconciled",
+    ]);
+    expect(coverage.mappedCanonicalNames.length + coverage.unmappedCanonicalNames.length).toBe(44);
+    expect(coverage.mappedCanonicalNames.length).toBeGreaterThan(coverage.literalCanonicalEmitted.length);
+    expect(coverage.equivalentCanonicalNames.length + coverage.subsetOnlyCanonicalNames.length)
+      .toBe(coverage.mappedCanonicalNames.length);
+    expect(coverage.unmappedCanonicalNames).toEqual(unimplementedHzEvents());
+    // A mapped legacy alias is not claimed as a directly emitted hz.* row.
+    expect(coverage.literalCanonicalEmitted).not.toContain("hz.step.started");
   });
 
   test("unimplementedHzEvents excludes covered names", () => {

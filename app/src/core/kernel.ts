@@ -49,7 +49,8 @@ import type {
   Receipt,
   ReceiptInput,
 } from "../contracts";
-import { DEFAULT_POLICY, hashEnvelope, hashReceipt, newId, nowIso } from "../contracts";
+import { DEFAULT_POLICY, hashEnvelope, newId, nowIso } from "../contracts";
+import { createReceiptForHash, hashReceiptVersioned, receiptPreimageVersioned } from "./receipt-schema";
 import { canonicalJson, sha256Hex } from "./canon";
 import { withFileLock } from "./file-lock";
 import { kernelStateDir } from "./paths";
@@ -165,10 +166,7 @@ function eventPreimageOf(record: unknown): Record<string, unknown> {
 }
 
 function receiptPreimageOf(record: unknown): Record<string, unknown> {
-  const out = preimageOf(record, RECEIPT_PREIMAGE_FIELDS);
-  const leaseId = (record as Record<string, unknown> | null | undefined)?.leaseId;
-  if (leaseId !== undefined && leaseId !== null) out.leaseId = leaseId;
-  return out;
+  return receiptPreimageVersioned((record ?? {}) as Record<string, unknown>);
 }
 
 /**
@@ -918,16 +916,11 @@ export class LocalKernel {
         leaseId: input?.leaseId,
         prevHash: tail ? tail.hash : null,
       };
-      // Hash the chain-stable fields only; postimage* are additive observation
-      // sidecars (EffectHost precursor) and must not diverge TS/Rust hashes.
-      const hash = hashReceipt(base);
-      const receipt: Receipt = {
-        ...base,
-        ...(input?.postimageDigest ? { postimageDigest: input.postimageDigest } : {}),
-        ...(input?.postimagePath ? { postimagePath: input.postimagePath } : {}),
-        ...(input?.effectId ? { effectId: input.effectId } : {}),
-        hash,
-      };
+      // v1 keeps the frozen base-only digest; when observation/child data
+      // is present, v2 binds ALL declared sidecars to the chain/hash/anchor.
+      const prehash = createReceiptForHash(input, base);
+      const hash = hashReceiptVersioned(prehash as unknown as Record<string, unknown>);
+      const receipt: Receipt = { ...prehash, hash };
       await appendChain(file, canonicalJson(receipt) + "\n");
       await privateFile(file);
       await this.writeHead(file, receipt.seq, this.anchorDigest("receipt", receipt));
@@ -961,16 +954,17 @@ export class LocalKernel {
       }
       if (receipt.seq !== expected) return { ok: false, count, brokenAt: receipt.seq > 0 ? receipt.seq : expected };
       if (receipt.prevHash !== prevHash) return { ok: false, count, brokenAt: receipt.seq };
-      // Additive observation sidecars (effectId / postimage*) are not hashed at
-      // issue time — strip them before recompute so verify matches Rust RECEIPT_FIELDS.
-      const { hash, effectId: _effectId, postimageDigest: _pd, postimagePath: _pp, ...rest } = receipt as Receipt & {
-        effectId?: string;
-        postimageDigest?: string;
-        postimagePath?: string;
-      };
-      if (hashReceipt(rest) !== hash) return { ok: false, count, brokenAt: receipt.seq };
-      prevHash = hash;
-      lastRecord = { hash, record: receipt as unknown as Record<string, unknown> };
+      // Historical v1 sidecars are deliberately unbound; v2 hashes them
+      // and rejects unknown schemas or malformed child IDs.
+      let computed: string;
+      try {
+        computed = hashReceiptVersioned(receipt as unknown as Record<string, unknown>);
+      } catch {
+        return { ok: false, count, brokenAt: receipt.seq };
+      }
+      if (computed !== receipt.hash) return { ok: false, count, brokenAt: receipt.seq };
+      prevHash = receipt.hash;
+      lastRecord = { hash: receipt.hash, record: receipt as unknown as Record<string, unknown> };
       count = expected;
     }
     const check = this.checkAnchor(await this.readHead(file), count, lastRecord, "receipt", file);

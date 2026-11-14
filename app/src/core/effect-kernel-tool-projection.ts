@@ -1,5 +1,7 @@
 /**
- * Project `apply_patch` / `ast_edit` into kernel fs.write / fs.edit (rulings **287**, **293**).
+ * Project `apply_patch` / `ast_edit` into kernel fs.write / fs.edit (rulings **287**, **293**, **353**).
+ * Multi-site structural rewrites are one original-preimage-pinned atomic
+ * whole-file write; cross-file transactions are still unavailable.
  */
 
 import * as path from "node:path";
@@ -304,7 +306,13 @@ export async function astEditKernelProjection(
   let before: string;
   try {
     const { readFile } = await import("node:fs/promises");
-    before = (await readFile(resolved)).toString("utf8");
+    const raw = await readFile(resolved);
+    // Do not plan text edits from a lossy UTF-8 decode or NUL-bearing file.
+    // Rust rejects unsupported source encodings; projection must do the same
+    // before constructing a supposedly exact old/new match.
+    if (raw.includes(0)) return undefined;
+    before = raw.toString("utf8");
+    if (!Buffer.from(before, "utf8").equals(raw)) return undefined;
   } catch {
     return undefined;
   }
@@ -317,11 +325,45 @@ export async function astEditKernelProjection(
   return { kind: "edit", path: rawPath, old: change.before, new: change.after };
 }
 
+/** Complete multi-site AST rewrite as one preimage-pinned kernel file write.
+ * Unlike the unique-site fs.edit projection, this never applies one match
+ * before observing the rest. Any partial, ambiguous lexical or lossy source
+ * rewrite is refused. The raw source is retained to pin the preimage digest.
+ */
+export async function astEditKernelAtomicMultiProjection(
+  workspace: string,
+  args: Record<string, unknown>,
+): Promise<{ path: string; before: string; after: string; count: number } | undefined> {
+  if (!astEditArgsEligibleForKernelRoute(args)) return undefined;
+  const rawPath = String(args.path);
+  const resolved = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(workspace, rawPath);
+  const root = path.resolve(workspace);
+  if (resolved === root || !resolved.startsWith(root + path.sep)) return undefined;
+  let raw: Buffer;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    raw = await readFile(resolved);
+  } catch {
+    return undefined;
+  }
+  if (raw.includes(0)) return undefined;
+  const before = raw.toString("utf8");
+  if (!Buffer.from(before, "utf8").equals(raw)) return undefined;
+  const lang = typeof args.lang === "string" && args.lang !== "" ? args.lang : langFromPath(resolved);
+  const rewrite = rewriteMatches(before, String(args.pat), String(args.out), { lang });
+  if (rewrite.skipped !== null || rewrite.truncated || rewrite.lexIssues > 0) return undefined;
+  if (rewrite.count < 2 || rewrite.changes.length !== rewrite.count || rewrite.text === before) {
+    return undefined;
+  }
+  return { path: rawPath, before, after: rewrite.text, count: rewrite.count };
+}
+
 /** Fail-closed reason when kernel `fs.edit` projection cannot run (ruling **322** require honesty). */
 export type AstEditProjectionMissReason =
   | "shape_ineligible"
   | "path_escape"
   | "read_fail"
+  | "invalid_encoding"
   | "multi_match"
   | "zero_match"
   | "lexer"
@@ -341,7 +383,10 @@ export async function classifyAstEditKernelProjectionMiss(
   let before: string;
   try {
     const { readFile } = await import("node:fs/promises");
-    before = (await readFile(resolved)).toString("utf8");
+    const raw = await readFile(resolved);
+    if (raw.includes(0)) return "invalid_encoding";
+    before = raw.toString("utf8");
+    if (!Buffer.from(before, "utf8").equals(raw)) return "invalid_encoding";
   } catch {
     return "read_fail";
   }
@@ -373,6 +418,8 @@ export function astEditProjectionMissRequireDetail(reason: AstEditProjectionMiss
       return "ast_edit rewrite is a no-op";
     case "read_fail":
       return "ast_edit target file unreadable";
+    case "invalid_encoding":
+      return "ast_edit target contains NUL or invalid UTF-8; kernel text projection refused";
     case "path_escape":
       return "ast_edit path outside workspace";
     case "shape_ineligible":

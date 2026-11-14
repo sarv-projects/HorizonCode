@@ -965,7 +965,7 @@ class HzRuntimeImpl implements HzRuntime {
     }
   }
 
-  private async append(stream: string, type: string, payload: unknown): Promise<void> {
+  private async append(stream: string, type: string, payload: unknown, required = false): Promise<void> {
     try {
       await this.kernel.appendEvent(stream, {
         id: newId(),
@@ -975,8 +975,11 @@ class HzRuntimeImpl implements HzRuntime {
         actor: { kind: "system", id: "hzcode" },
         payload,
       });
-    } catch {
-      /* the log is an audit trail; failing to append must not stop the chat */
+    } catch (error) {
+      // Session prompt admission has a mandatory audit marker. On a failed
+      // append we halt the turn (catch in runSend settles UNKNOWN); best-effort
+      // legacy observation events keep their historical behavior.
+      if (required) throw error;
     }
   }
 
@@ -1153,6 +1156,17 @@ class HzRuntimeImpl implements HzRuntime {
       return { text: "", aborted: false, exit: { terminal: "failed", detail: "internal_error" } };
     }
     try {
+      // RC-18 literal canonical fact: only emit after SQLite admitted AND
+      // began the turn. No plaintext prompt is duplicated in the kernel log.
+      // Failure here stops before provider or tools can cause an effect. This
+      // is NOT a Bun/SQLite/kernel atomic transaction (R170 remains OPEN).
+      await this.append(streamFor(this.session.id), EventTypes.sessionPromptAdmitted, {
+        sessionId: this.session.id,
+        admissionId,
+        inputDigest: sha256Hex(text),
+        inputBytes: Buffer.byteLength(text, "utf8"),
+        source: "runtime.send",
+      }, true);
       const home = homedir();
       await this.ensureHookTrust();
       // Skills: list what is available, and when the human opens a message with

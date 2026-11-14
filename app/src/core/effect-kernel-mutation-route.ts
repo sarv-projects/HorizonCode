@@ -3,16 +3,19 @@
  *
  * When `HZ_EFFECT_HOST_KERNEL=1` or `=default`, eligible `write` / `edit` / simple `shell` calls
  * may execute via kernel `effect.execute` (sandboxRoot = workspace) after guard
- * approval in `loop.ts`. Only one-step eligible Add/exact-Update/Delete/Move
- * `apply_patch` and unique-projectable `ast_edit` may route into a kernel
- * effect. Ineligible or disabled routes may use Bun in non-strict mode; a
+ * approval in `loop.ts`. One-step Add/exact-Update/Delete/Move,
+ * same-file exact multi-hunk Update collapsed into one whole-file write,
+ * and structural `ast_edit` one/multiple complete matches may kernel-route.
+ * Multi-file/fuzzy/ambiguous operations remain unsupported. Ineligible or disabled routes may use Bun in non-strict mode; a
  * Rust refusal or uncertain kernel transport result NEVER falls back to Bun.
  * Kernel still owns the routed write bytes; TS
  * records the change journal after settled write/edit (**281**); kernel owns
  * temp+rename atomic write under sandboxRoot (**283**). Since ruling **349**,
  * explicit Rust refusals and lost effect.execute replies NEVER fall back to Bun,
- * and multi-operation apply_patch refuses BEFORE any write without atomic
- * fs.batch ownership. Kernel checks additive caller-pinned preimage digests.
+ * and unsupported multi-operation apply_patch refuses BEFORE any write
+ * without atomic fs.batch ownership. Rule 353 adds a safe subset: whole-file
+ * atomic writes for same-file exact multi-hunks and complete multi-site AST
+ * rewrites with Rust-verified original preimage digests.
  * Full edit.ts repair ladder stays on Bun; kernel path has optional reduced
  * repair via `HZ_EFFECT_HOST_EDIT_REPAIR`.
  */
@@ -27,8 +30,13 @@ import { analyzeShellCompound } from "./shell-split";
 import { bindJournalWorkspace, recordChange } from "../tools/change-journal";
 import { parse } from "../tools/apply-patch-parser";
 import {
+  classifyApplyPatchChunkKernelFuzz,
+  resolveKernelApplyPatchChunkEdit,
+} from "../tools/apply-patch-kernel-fuzz";
+import {
   applyPatchKernelProjections,
   astEditKernelProjection,
+  astEditKernelAtomicMultiProjection,
   refreshApplyPatchFileCache,
   resolveApplyPatchEditProjectionStep,
   type KernelToolProjection,
@@ -310,6 +318,20 @@ export async function tryKernelWriteRoute(
     : path.resolve(workspace, String(args.path));
   try {
     const preimage = await readUtf8Preimage(resolved);
+    // Multi-hunk projection may carry an *earlier* file digest. Never pin
+    // only the second pre-read: a change between projection and dispatch
+    // would otherwise turn a stale plan into an authorized overwrite.
+    const plannedDigest = args.expectedPreimageDigest;
+    if (plannedDigest !== undefined &&
+      (typeof plannedDigest !== "string" || !/^[a-f0-9]{64}$/.test(plannedDigest) ||
+        preimage.before === null || sha256Hex(preimage.before) !== plannedDigest)) {
+      const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: stale or unreadable expected preimage; write refused before kernel execution`;
+      return {
+        journalSkipped: false,
+        kernelObserve: {},
+        result: { ok: false, output: message, error: message },
+      };
+    }
     const result = await kernel.executeEffect({
       effectId,
       sandboxRoot: workspace,
@@ -320,11 +342,13 @@ export async function tryKernelWriteRoute(
           text: String(args.content),
           // Kernel checks the caller's pre-read bytes independently under
           // the OwnerLog lock; null asserts this is a new (missing) file.
-          ...(preimage.before !== null
-            ? { expectedPreimageDigest: sha256Hex(preimage.before) }
-            : !existsSync(resolved)
-              ? { expectedPreimageDigest: null }
-              : {}),
+          ...(typeof plannedDigest === "string"
+            ? { expectedPreimageDigest: plannedDigest }
+            : preimage.before !== null
+              ? { expectedPreimageDigest: sha256Hex(preimage.before) }
+              : !existsSync(resolved)
+                ? { expectedPreimageDigest: null }
+                : {}),
         },
       },
     });
@@ -635,6 +659,58 @@ export async function tryKernelDeleteRoute(
   }
 }
 
+/** One-file, multiple exact hunks can be one *atomic file* mutation.
+ * Compute the entire postimage WITHOUT writing. Every hunk must resolve to a
+ * unique exact line window in the evolving in-memory copy. This deliberately
+ * excludes fuzzy/tied/cross-file/move operations, not claiming fs.batch parity.
+ * The original SHA-256 is pinned through to Rust's independent OwnerLog CAS.
+ */
+async function projectSingleFileAtomicPatch(
+  workspace: string,
+  args: Record<string, unknown>,
+  projections: KernelToolProjection[],
+): Promise<{ path: string; content: string; expectedPreimageDigest: string } | undefined> {
+  if (projections.length < 2 || !projections.every((p) => p.kind === "edit")) return undefined;
+  const patchText = typeof args.input === "string" && args.input !== ""
+    ? args.input
+    : typeof args.patch === "string" && args.patch !== "" ? args.patch : undefined;
+  if (!patchText) return undefined;
+  const parsed = parse(patchText);
+  if (!parsed.ok || parsed.patch.ops.length !== 1) return undefined;
+  const op = parsed.patch.ops[0]!;
+  if (op.kind !== "update" || op.movePath !== undefined || op.chunks.length !== projections.length) {
+    return undefined;
+  }
+  const rel = specPathInWorkspace(workspace, op.path);
+  if (!rel || rel === ".") return undefined;
+  if (projections.some((p) =>
+    p.kind !== "edit" || specPathInWorkspace(workspace, p.path) !== rel)) return undefined;
+  const absolute = path.resolve(workspace, rel);
+  let beforeBuffer: Buffer;
+  try {
+    beforeBuffer = await readFile(absolute);
+  } catch {
+    return undefined;
+  }
+  // Encoding loss in a planned rewrite is never an acceptable fuzzy edit.
+  if (beforeBuffer.includes(0)) return undefined;
+  const original = beforeBuffer.toString("utf8");
+  if (!Buffer.from(original, "utf8").equals(beforeBuffer)) return undefined;
+
+  let current = original;
+  for (const chunk of op.chunks) {
+    if (chunk.oldLines.length === 0 ||
+      classifyApplyPatchChunkKernelFuzz(current, chunk) !== "exact") return undefined;
+    const exact = resolveKernelApplyPatchChunkEdit(current, chunk);
+    if (!exact || exact.old.length === 0) return undefined;
+    const position = current.indexOf(exact.old);
+    if (position < 0 || current.indexOf(exact.old, position + 1) !== -1) return undefined;
+    current = current.slice(0, position) + exact.new + current.slice(position + exact.old.length);
+  }
+  if (current === original) return undefined;
+  return { path: rel, content: current, expectedPreimageDigest: sha256Hex(original) };
+}
+
 export async function tryKernelApplyPatchRoute(
   kernel: KernelClient,
   workspace: string,
@@ -644,14 +720,29 @@ export async function tryKernelApplyPatchRoute(
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const projections = applyPatchKernelProjections(args);
   if (!projections || projections.length === 0) return undefined;
-  // A multi-operation patch is NOT one kernel transaction today. Executing
-  // its first step then failing on a reused effectId or an ambiguous later
-  // hunk leaves an unrecoverable partial patch. Never claim atomic patch
-  // parity; refuse before any mutation until kernel fs.batch owns the plan.
+  // An exact same-file multi-hunk Update is reducible to ONE kernel-owned
+  // atomic fs.write: validate every hunk on a private in-memory copy, then
+  // pin the original bytes' SHA-256 all the way through Rust OwnerLog.
+  // This is not general fs.batch: all cross-file/rename/fuzzy multi-op plans
+  // still refuse BEFORE the first mutation (no partial patch).
   if (projections.length > 1) {
+    const atomic = await projectSingleFileAtomicPatch(workspace, args, projections);
+    if (atomic) {
+      const outcome = await tryKernelWriteRoute(kernel, workspace, sessionId, effectId, atomic);
+      if (outcome?.result.ok) {
+        return {
+          ...outcome,
+          result: {
+            ok: true,
+            output: `${KERNEL_ROUTE_TAG} apply_patch ${projections.length} exact hunks committed via one atomic kernel fs.write (${atomic.path})`,
+          },
+        };
+      }
+      return outcome;
+    }
     const message =
       `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: multi-operation apply_patch requires an atomic kernel batch; ` +
-      "refused before executing any operation";
+      "unsupported, stale, fuzzy or ambiguous plan refused before executing any operation";
     return {
       journalSkipped: false,
       kernelObserve: {},
@@ -733,12 +824,32 @@ export async function tryKernelAstEditRoute(
   args: Record<string, unknown>,
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const proj = await astEditKernelProjection(workspace, args);
-  if (!proj || proj.kind !== "edit") return undefined;
-  return tryKernelEditRoute(kernel, workspace, sessionId, effectId, {
-    path: proj.path,
-    old: proj.old,
-    new: proj.new,
+  if (proj?.kind === "edit") {
+    return tryKernelEditRoute(kernel, workspace, sessionId, effectId, {
+      path: proj.path,
+      old: proj.old,
+      new: proj.new,
+    });
+  }
+  // A single-file many-site structural rewrite is one atomic fs.write, not
+  // N independent fs.edit effects. Rust verifies the SHA-256 of the original
+  // complete source before durable OwnerLog prepare and immediately before
+  // write; a stale or truncated structural plan never partially executes.
+  const multi = await astEditKernelAtomicMultiProjection(workspace, args);
+  if (!multi) return undefined;
+  const outcome = await tryKernelWriteRoute(kernel, workspace, sessionId, effectId, {
+    path: multi.path,
+    content: multi.after,
+    expectedPreimageDigest: sha256Hex(multi.before),
   });
+  if (!outcome?.result.ok) return outcome;
+  return {
+    ...outcome,
+    result: {
+      ok: true,
+      output: `${KERNEL_ROUTE_TAG} ast_edit ${multi.count} structural matches committed via one atomic kernel fs.write (${multi.path})`,
+    },
+  };
 }
 
 export async function tryKernelShellRoute(

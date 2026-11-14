@@ -8,7 +8,8 @@
 import { createHmac } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { EventEnvelope, Receipt } from "../contracts";
-import { hashEnvelope, hashReceipt } from "../contracts";
+import { hashEnvelope } from "../contracts";
+import { hashReceiptVersioned, receiptPreimageVersioned } from "./receipt-schema";
 import { canonicalJson, sha256Hex } from "./canon";
 import { acceptLegacyAnchorsFromEnv, anchorKeyFromEnv } from "./kernel";
 import {
@@ -52,10 +53,7 @@ function preimageOf(record: unknown, fields: readonly string[]): Record<string, 
 }
 
 function receiptPreimageOf(record: unknown): Record<string, unknown> {
-  const out = preimageOf(record, RECEIPT_PREIMAGE_FIELDS);
-  const leaseId = (record as Record<string, unknown> | null | undefined)?.leaseId;
-  if (leaseId !== undefined && leaseId !== null) out.leaseId = leaseId;
-  return out;
+  return receiptPreimageVersioned((record ?? {}) as Record<string, unknown>);
 }
 
 function anchorDigest(
@@ -179,12 +177,15 @@ function verifyReceiptHashWalk(
       return { ok: false, count, brokenAt: receipt.seq > 0 ? receipt.seq : expected };
     }
     if (receipt.prevHash !== prevHash) return { ok: false, count, brokenAt: receipt.seq };
-    const { hash, effectId: _e, postimageDigest: _pd, postimagePath: _pp, childEffectIds: _c, ...rest } = receipt as Receipt & {
-      childEffectIds?: string[];
-    };
-    if (hashReceipt(rest) !== hash) return { ok: false, count, brokenAt: receipt.seq };
-    prevHash = hash;
-    last = { hash, record: receipt as unknown as Record<string, unknown> };
+    let computed: string;
+    try {
+      computed = hashReceiptVersioned(receipt as unknown as Record<string, unknown>);
+    } catch {
+      return { ok: false, count, brokenAt: receipt.seq };
+    }
+    if (computed !== receipt.hash) return { ok: false, count, brokenAt: receipt.seq };
+    prevHash = receipt.hash;
+    last = { hash: receipt.hash, record: receipt as unknown as Record<string, unknown> };
     count = expected;
   }
   return { ok: true, count, last };

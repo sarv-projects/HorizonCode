@@ -445,7 +445,7 @@ fn tampered_owner_chain_refuses_inspection_and_mutation() {
 }
 
 #[test]
-fn owner_verification_cross_checks_receipt_identity_sidecar_even_when_receipt_chain_is_valid() {
+fn owner_verification_rejects_v2_receipt_identity_sidecar_tamper_at_receipt_chain() {
     let state = TempDir::new("owner-receipt-link");
     let sandbox = TempDir::new("owner-receipt-link-workspace");
     let mut a = Kernel::start(state.path());
@@ -453,22 +453,23 @@ fn owner_verification_cross_checks_receipt_identity_sidecar_even_when_receipt_ch
         "effectId": "receipt-linked", "sandboxRoot": sandbox.path(),
         "dispatch": {"kind": "fs.write", "spec": {"path": "a.txt", "text": "ORIGINAL"}}
     }));
-    // Receipt.effectId is an additive sidecar outside RECEIPT_FIELDS/hash.
-    // A valid receipt hash chain alone cannot prove the owner settlement points
-    // to the right effect; bind the two ledgers independently as well.
+    // New direct kernel-owned receipts use schema v2. EffectId is now a
+    // hashed/anchored preimage field, so changing the sidecar breaks the
+    // receipt chain BEFORE the owner/receipt cross-link check. Legacy v1
+    // receipts still need the separate OwnerLog linkage verifier.
     let file = state.path().join("receipts.jsonl");
     let original = fs::read_to_string(&file).unwrap();
     assert!(original.contains("receipt-linked"));
     fs::write(&file, original.replace("receipt-linked", "receipt-forged")).unwrap();
     let mut b = Kernel::start(state.path());
-    assert_eq!(b.ok("receipt.verify", json!({}))["ok"], true);
+    assert_eq!(b.ok("receipt.verify", json!({}))["ok"], false);
     let message = b.err("effect.owner.verify", json!({}));
-    assert!(message.contains("owner receipt linkage"), "{message}");
+    assert!(message.contains("receipt") || message.contains("verification failed"), "{message}");
     let blocked = b.err("effect.execute", json!({
         "effectId": "after-receipt-tamper", "sandboxRoot": sandbox.path(),
         "dispatch": {"kind": "fs.write", "spec": {"path": "a.txt", "text": "WRONG"}}
     }));
-    assert!(blocked.contains("owner receipt linkage"), "{blocked}");
+    assert!(blocked.contains("receipt") || blocked.contains("verification failed"), "{blocked}");
     assert_eq!(fs::read(sandbox.path().join("a.txt")).unwrap(), b"ORIGINAL");
 }
 
@@ -655,6 +656,41 @@ fn owner_postimage_replay_detects_external_mutation_without_rewriting_receipt_ch
         stale["mismatches"][0]["observedDigest"]
     );
     assert_eq!(fs::read(&file).unwrap(), b"external tamper");
+}
+
+#[test]
+fn owner_history_archive_recovers_superseded_bytes_and_detects_tampering() {
+    let state = TempDir::new("owner-archive-history");
+    let ws = TempDir::new("owner-archive-history-ws");
+    let mut writer = Kernel::start(state.path());
+    let mut reader = Kernel::start(state.path());
+    for (id, text) in [("history-1", "first version"), ("history-2", "second version")] {
+        let result = writer.ok("effect.execute", json!({
+            "effectId": id, "sandboxRoot": ws.path(),
+            "dispatch": {"kind": "fs.write", "spec": {"path": "versioned.txt", "text": text}}
+        }));
+        assert_eq!(result["ownerLogSettled"], true, "{result}");
+    }
+    let history = reader.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(history["ok"], true, "{history}");
+    assert_eq!(history["checked"], 1);
+    assert_eq!(history["history"]["ok"], true, "{history}");
+    assert_eq!(history["history"]["checked"], 2);
+    assert_eq!(history["history"]["scope"], "archived_kernel_owned_file_postimages_only");
+    let digest = sha256_bytes(b"first version");
+    let archived = state.path().join("owner-postimages").join(&digest[..2])
+        .join(format!("{digest}.blob"));
+    assert_eq!(fs::read(&archived).unwrap(), b"first version");
+    // The original bytes survive a second kernel write and today's file can
+    // no longer be used to verify the first version.
+    assert_eq!(fs::read(ws.path().join("versioned.txt")).unwrap(), b"second version");
+    fs::write(&archived, b"corrupted").unwrap();
+    let tampered = reader.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(tampered["history"]["ok"], false, "{tampered}");
+    assert_eq!(tampered["ok"], false);
+    assert_eq!(tampered["history"]["failures"][0]["effectId"], "history-1");
+    let denied = reader.err("effect.owner.verify", json!({}));
+    assert!(denied.contains("historical postimage archive verification failed"), "{denied}");
 }
 
 #[test]

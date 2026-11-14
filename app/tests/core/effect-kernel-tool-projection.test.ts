@@ -9,6 +9,8 @@ import {
   applyPatchProjectionMissRequireDetail,
   astEditArgsEligibleForKernelRoute,
   astEditKernelProjection,
+  astEditKernelAtomicMultiProjection,
+  classifyAstEditKernelProjectionMiss,
   classifyApplyPatchKernelProjectionMiss,
 } from "../../src/core/effect-kernel-tool-projection";
 
@@ -211,6 +213,20 @@ describe("astEditKernelProjection", () => {
     expect(
       await astEditKernelProjection(workspace, { path: "f.ts", pat: "foo($$$A)", out: "baz($$$A)" }),
     ).toBeUndefined();
+  });
+
+  test("kernel AST projections refuse binary and malformed UTF-8 before a text rewrite", async () => {
+    const file = path.join(workspace, "f.ts");
+    const args = { path: "f.ts", pat: "const", out: "let" };
+    for (const bytes of [
+      Buffer.from("const a = 1;\u0000\n", "utf8"),
+      Buffer.from([0xff, ...Buffer.from("const a = 1;\n", "utf8")]),
+    ]) {
+      writeFileSync(file, bytes);
+      expect(await astEditKernelProjection(workspace, args)).toBeUndefined();
+      expect(await astEditKernelAtomicMultiProjection(workspace, args)).toBeUndefined();
+      expect(await classifyAstEditKernelProjectionMiss(workspace, args)).toBe("invalid_encoding");
+    }
   });
 
   test("classifyAstEditKernelProjectionMiss names multi_match (ruling 322)", async () => {

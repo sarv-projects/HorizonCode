@@ -23,6 +23,7 @@ import {
 } from "../../src/core/effect-kernel-mutation-route";
 import { computeReceiptPostimageFromKernel, receiptPostimageFields } from "../../src/core/receipt-postimage";
 import { KernelClient } from "../../src/core/kernel";
+import { sha256Hex } from "../../src/contracts";
 import { __resetJournalForTests, lastChangeFor } from "../../src/tools/change-journal";
 import { restoreEnv, setEnv, snapshotEnv, type EnvSnapshot } from "./helpers";
 
@@ -188,6 +189,82 @@ describe("kernel apply_patch / ast_edit route", () => {
     }
   });
 
+  test("same-file exact multi-hunk patch is one atomic file write", async () => {
+    const initial = "alpha\nmiddle\nbeta\n";
+    writeFileSync(path.join(workspace, "one.txt"), initial, "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Update File: one.txt
+@@
+-alpha
++ALPHA
+@@
+-beta
++BETA
+*** End Patch`;
+    try {
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-atomic", "eff-atomic", { input: patch });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("one atomic kernel fs.write");
+      expect(readFileSync(path.join(workspace, "one.txt"), "utf8")).toBe("ALPHA\nmiddle\nBETA\n");
+      expect(lastChangeFor("s-atomic", path.join(workspace, "one.txt"))?.before).toBe(initial);
+      expect(out?.kernelObserve.resultDigestStable).toBe(true);
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("same-file second ambiguous hunk refuses before changing the first hunk", async () => {
+    const original = "alpha\nrepeat\nmiddle\nrepeat\n";
+    writeFileSync(path.join(workspace, "ambiguous.txt"), original, "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Update File: ambiguous.txt
+@@
+-alpha
++ALPHA
+@@
+-repeat
++REPLACED
+*** End Patch`;
+    try {
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-amb", "eff-amb", { input: patch });
+      expect(out?.result.ok).toBe(false);
+      expect(out?.result.error).toContain("atomic kernel batch");
+      expect(readFileSync(path.join(workspace, "ambiguous.txt"), "utf8")).toBe(original);
+      expect(lastChangeFor("s-amb", path.join(workspace, "ambiguous.txt"))).toBeUndefined();
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("planned preimage digest blocks a stale write before any effect", async () => {
+    writeFileSync(path.join(workspace, "stale.txt"), "changed", "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    try {
+      const out = await tryKernelWriteRoute(kernel, workspace, "s-stale", "eff-stale", {
+        path: "stale.txt",
+        content: "overwrite",
+        expectedPreimageDigest: sha256Hex("old"),
+      });
+      expect(out?.result.ok).toBe(false);
+      expect(out?.result.error).toContain("stale or unreadable expected preimage");
+      expect(readFileSync(path.join(workspace, "stale.txt"), "utf8")).toBe("changed");
+      expect(lastChangeFor("s-stale", path.join(workspace, "stale.txt"))).toBeUndefined();
+    } finally {
+      await kernel.close();
+    }
+  });
+
   test("multi-op apply_patch fails closed on first kernel edit miss", async () => {
     writeFileSync(path.join(workspace, "ok.txt"), "keep\n", "utf8");
     const kernel = new KernelClient({
@@ -245,6 +322,29 @@ describe("kernel apply_patch / ast_edit route", () => {
       });
       expect(out?.result.ok).toBe(true);
       expect(readFileSync(path.join(workspace, "lit.ts"), "utf8")).toContain("let v");
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("ast_edit multi-match updates a single file atomically with one digest", async () => {
+    const original = "const a = 0;\nconst b = 0;\n";
+    writeFileSync(path.join(workspace, "many.ts"), original, "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    try {
+      const out = await tryKernelAstEditRoute(kernel, workspace, "s-ast-multi", "eff-ast-multi", {
+        path: "many.ts",
+        pat: "const $NAME = 0;",
+        out: "let $NAME = 1;",
+      });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("2 structural matches committed via one atomic kernel fs.write");
+      expect(readFileSync(path.join(workspace, "many.ts"), "utf8")).toBe("let a = 1;\nlet b = 1;\n");
+      expect(lastChangeFor("s-ast-multi", path.join(workspace, "many.ts"))?.before).toBe(original);
+      expect(out?.kernelObserve.resultDigestStable).toBe(true);
     } finally {
       await kernel.close();
     }

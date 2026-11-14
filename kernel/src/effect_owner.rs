@@ -400,10 +400,12 @@ pub fn verify_latest_postimages(
     let _lock = OwnerLock::acquire(state_dir)?;
     let state = rebuild(events)?;
     verify_settlement_receipt_links(events, receipts)?;
+    let owner_events = events.read(STREAM, None, None)?;
+    let history = crate::effect_history::verify_history(state_dir, &owner_events, state.unresolved.len());
     let mut latest: BTreeMap<String, (String, String, Option<String>)> = BTreeMap::new();
     let mut legacy_unverifiable = 0usize;
     let mut unsupported_effects = 0usize;
-    for event in events.read(STREAM, None, None)? {
+    for event in owner_events {
         if event["type"] != "owner.settled" {
             continue;
         }
@@ -498,8 +500,9 @@ pub fn verify_latest_postimages(
         }
     }
     Ok(json!({
-        "ok": mismatches.is_empty() && legacy_unverifiable == 0 && unsupported_effects == 0 && state.unresolved.is_empty(),
+        "ok": mismatches.is_empty() && legacy_unverifiable == 0 && unsupported_effects == 0 && state.unresolved.is_empty() && history["ok"] == true,
         "checked": latest.len(),
+        "history": history,
         "legacyUnverifiable": legacy_unverifiable,
         "unsupportedEffects": unsupported_effects,
         "unresolved": state.unresolved.len(),
@@ -582,8 +585,16 @@ pub fn verify(events: &EventLog, receipts: &Receipts, state_dir: &Path) -> Resul
         return Err("HZ_PRECONDITION_FAILED: owner cannot verify broken receipt chain".into());
     }
     verify_settlement_receipt_links(events, receipts)?;
+    let history = crate::effect_history::verify_history(
+        state_dir, &events.read(STREAM, None, None)?, state.unresolved.len()
+    );
+    if history["failures"].as_array().is_some_and(|rows| !rows.is_empty()) {
+        return Err("HZ_PRECONDITION_FAILED: historical postimage archive verification failed".into());
+    }
     Ok(json!({
         "ok": true,
+        "historicalArchivedChecked": history["checked"],
+        "historicalLegacyUnverifiable": history["legacyUnverifiable"],
         "events": state.count,
         "unresolved": state.unresolved.len(),
         "blocked": !state.unresolved.is_empty(),
@@ -953,6 +964,17 @@ pub fn execute(
                             "cause": "postimage_evidence_unstable", "detail": error, "terminal": "unknown",
                         }),
                     )?;
+                    return Err(error);
+                }
+            };
+            // Persist the independently re-read bytes as immutable history
+            // BEFORE issuing a settled receipt. Failure is UNKNOWN, never a
+            // superficially successful effect with missing audit evidence.
+            let postimages = match crate::effect_history::archive_postimages(state_dir, &postimages) {
+                Ok(archive) => archive,
+                Err(error) => {
+                    record(events, "owner.unknown", id,
+                        json!({"cause": "historical_postimage_archive_failed", "detail": error, "terminal": "unknown"}))?;
                     return Err(error);
                 }
             };
