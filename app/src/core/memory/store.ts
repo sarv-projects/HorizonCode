@@ -34,8 +34,14 @@ export type MemorySearchOptions = {
   diversify?: boolean;
 };
 
+export const MEMORY_FACT_MAX_CHARS = 5000;
+
 export function memoryDbPath(workspace: string): string {
   return path.join(stateRoot(workspace), "memory.db");
+}
+
+export function memoryDbPathForBank(workspace: string, bank: MemoryBankId, home?: string): string {
+  return bankStorageKind(bank) === "workspace" ? memoryDbPath(workspace) : userMemoryDbPath(home);
 }
 
 function escapeFtsToken(token: string): string {
@@ -231,6 +237,80 @@ export function sharedMemorySearch(
     { limit, banks: SHARED_RECALL_BANKS, diversify: true },
     home,
   );
+}
+
+export type RememberMemoryResult =
+  | { ok: true; bank: MemoryBankId }
+  | { ok: false; reason: "empty" | "too_long" | "duplicate" };
+
+/** Append one fact to a bank's FTS partition (does not edit MEMORY.md). */
+export function rememberMemoryFact(
+  workspace: string,
+  content: string,
+  bank: MemoryBankId = PROJECT_BANK,
+  home?: string,
+): RememberMemoryResult {
+  const text = content.trim();
+  if (text === "") return { ok: false, reason: "empty" };
+  if ([...text].length > MEMORY_FACT_MAX_CHARS) return { ok: false, reason: "too_long" };
+  const db = dbForBank(workspace, bank, home);
+  try {
+    const dupe = db
+      .prepare(`SELECT 1 AS n FROM ${TABLE} WHERE bank=? AND content=? LIMIT 1`)
+      .get(bank, text) as { n: number } | null;
+    if (dupe !== null) return { ok: false, reason: "duplicate" };
+    db.prepare(`INSERT INTO ${TABLE}(content, bank) VALUES (?, ?)`).run(text, bank);
+    return { ok: true, bank };
+  } finally {
+    db.close();
+  }
+}
+
+export type ForgetMemoryResult = { deleted: number; removed: string[] };
+
+/** Remove facts by exact content and/or BM25 query (default limit 8 per call). */
+export function forgetMemoryFacts(
+  workspace: string,
+  opts: { bank?: MemoryBankId; query?: string; content?: string; limit?: number },
+  home?: string,
+): ForgetMemoryResult {
+  const bank = opts.bank ?? PROJECT_BANK;
+  const limit = opts.limit ?? 8;
+  const exact = opts.content?.trim() ?? "";
+  const q = opts.query?.trim() ?? "";
+  if (exact === "" && q === "") return { deleted: 0, removed: [] };
+
+  const toDelete = new Set<string>();
+  if (exact !== "") toDelete.add(exact);
+  if (q !== "") {
+    const match = ftsQuery(q);
+    if (match !== undefined) {
+      for (const row of searchOneBankScored(workspace, bank, match, limit, home)) {
+        toDelete.add(row.content);
+      }
+    }
+  }
+  if (toDelete.size === 0) return { deleted: 0, removed: [] };
+
+  const db = dbForBank(workspace, bank, home);
+  try {
+    const del = db.prepare(`DELETE FROM ${TABLE} WHERE bank=? AND content=?`);
+    const removed: string[] = [];
+    let deleted = 0;
+    const tx = db.transaction((contents: string[]) => {
+      for (const c of contents) {
+        const r = del.run(bank, c);
+        if (r.changes > 0) {
+          deleted += r.changes;
+          removed.push(c);
+        }
+      }
+    });
+    tx([...toDelete]);
+    return { deleted, removed };
+  } finally {
+    db.close();
+  }
 }
 
 /** Paths that must be readable for a given search scope (guard helper). */

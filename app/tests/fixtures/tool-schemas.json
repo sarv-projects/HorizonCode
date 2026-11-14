@@ -436,6 +436,64 @@
   },
   {
     "concurrencyClass": "shared",
+    "description": "Remove facts from a memory bank. Provide exact content and/or a BM25 query (same token rules as memory_search). At least one of content or query is required.",
+    "exposure": "deferred",
+    "name": "memory_forget",
+    "parameters": {
+      "properties": {
+        "bank": {
+          "enum": [
+            "project",
+            "user",
+            "shared"
+          ],
+          "type": "string"
+        },
+        "content": {
+          "description": "Exact fact text to delete.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max rows removed when using query (default 8).",
+          "type": "number"
+        },
+        "query": {
+          "description": "Search terms; deletes up to limit matching facts.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Store a fact in a memory bank (FTS index). Default bank is project (.hz/state/memory.db). user and shared banks live in the user config dir. Does not edit MEMORY.md. Max 5000 chars.",
+    "exposure": "deferred",
+    "name": "memory_remember",
+    "parameters": {
+      "properties": {
+        "bank": {
+          "description": "Target bank (default project).",
+          "enum": [
+            "project",
+            "user",
+            "shared"
+          ],
+          "type": "string"
+        },
+        "content": {
+          "description": "Fact text to retain for later recall.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
     "description": "Search user-curated memory (FTS BM25). Default bank is project (MEMORY.md under .hz/). Use scope shared_recall to search project, user, and shared banks with bank labels on hits.",
     "exposure": "deferred",
     "name": "memory_search",

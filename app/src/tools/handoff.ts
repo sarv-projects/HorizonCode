@@ -9,6 +9,7 @@ import {
   resumeHandoff,
   searchHandoffs,
 } from "../core/memory/handoff";
+import { openTodos } from "./todo";
 
 function fail(message: string): ToolResult {
   return { ok: false, output: message, error: message };
@@ -75,10 +76,12 @@ export const handoffCreateTool: Tool = {
     const continuesArg = args.continues_from;
     const continues_from =
       continuesArg === null ? null : typeof continuesArg === "string" ? continuesArg.trim() || null : undefined;
+    const todos_snapshot = openTodos(ctx.sessionId).map((t) => `[${t.id}] ${t.text}`);
     const result = createHandoff(ctx.workspace, normalized, {
       branch: branchOverride,
       continues_from,
       auto_continue: continues_from === undefined,
+      todos_snapshot,
     });
     return { ok: true, output: formatCreate(result) };
   },

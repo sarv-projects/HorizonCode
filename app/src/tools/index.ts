@@ -17,6 +17,7 @@ import { interactiveExecTool } from "./interactive-exec";
 import { lintTool } from "./lint";
 import { lspTool } from "./lsp";
 import { handoffCreateTool, handoffResumeTool, handoffSearchTool } from "./handoff";
+import { memoryForgetTool, memoryRememberTool } from "./memory-write";
 import { memorySearchTool } from "./memory-search";
 import { presentTool } from "./present";
 import { previewTool } from "./preview";
@@ -48,6 +49,8 @@ export const tools: Tool[] = [
   lintTool,
   debugTool,
   memorySearchTool,
+  memoryRememberTool,
+  memoryForgetTool,
   handoffCreateTool,
   handoffResumeTool,
   handoffSearchTool,

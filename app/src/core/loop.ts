@@ -53,7 +53,7 @@ import {
   parseMemoryBankId,
   type MemoryBankId,
 } from "./memory/banks";
-import { memoryDbPath, memorySearchReadTargets } from "./memory/store";
+import { memoryDbPath, memoryDbPathForBank, memorySearchReadTargets } from "./memory/store";
 import { previewQuirks } from "./providers/quirks";
 import { enrichUsageCost } from "./usage-cost";
 import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
@@ -497,6 +497,12 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       }
       const targets = memorySearchReadTargets(workspace, banks);
       return { kind: "fs.read", target: targets[0] ?? memoryDbPath(workspace) };
+    }
+    case "memory_remember":
+    case "memory_forget": {
+      const bank =
+        typeof args.bank === "string" ? parseMemoryBankId(args.bank.trim()) ?? PROJECT_BANK : PROJECT_BANK;
+      return { kind: "fs.write", target: memoryDbPathForBank(workspace, bank) };
     }
     case "handoff_create": {
       return { kind: "fs.write", target: handoffDbPath(workspace) };

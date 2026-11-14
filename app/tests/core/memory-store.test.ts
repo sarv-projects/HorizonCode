@@ -4,7 +4,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { memorySearch, memorySearchHits, replaceMemoryIndex } from "../../src/core/memory/store";
+import {
+  forgetMemoryFacts,
+  memorySearch,
+  memorySearchHits,
+  rememberMemoryFact,
+  replaceMemoryIndex,
+} from "../../src/core/memory/store";
 import { MEMORY_FILE } from "../../src/core/memory/manifest";
 import { stateRoot } from "../../src/core/paths";
 
@@ -42,6 +48,18 @@ describe("memory FTS store", () => {
     const plain = memorySearchHits(workspace, "deploy staging", { limit: 3, diversify: false });
     const diverse = memorySearchHits(workspace, "deploy staging", { limit: 3, diversify: true });
     expect(diverse).toEqual(plain);
+  });
+
+  test("remember and forget round-trip", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-memrw-"));
+    const ins = rememberMemoryFact(workspace, "pin Node 20 for CI");
+    expect(ins.ok).toBe(true);
+    expect(memorySearch(workspace, "Node 20").length).toBeGreaterThan(0);
+    const dup = rememberMemoryFact(workspace, "pin Node 20 for CI");
+    expect(dup.ok).toBe(false);
+    const forgot = forgetMemoryFacts(workspace, { content: "pin Node 20 for CI" });
+    expect(forgot.removed.length).toBe(1);
+    expect(memorySearch(workspace, "Node 20").length).toBe(0);
   });
 
   test("seeds topic file bodies into FTS when db is empty", () => {

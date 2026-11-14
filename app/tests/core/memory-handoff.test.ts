@@ -90,6 +90,21 @@ describe("handoff core", () => {
     expect(existsSync(handoffDbPath(workspace))).toBe(true);
   });
 
+  test("todos_snapshot is indexed and returned on resume", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hndtodos-"));
+    resetHandoffsForTests(workspace);
+    createHandoff(
+      workspace,
+      { summary: "plan carry-over" },
+      { continues_from: null, todos_snapshot: ["[t1] fix lint", "[t2] ship handoff"] },
+    );
+    const resumed = resumeHandoff(workspace);
+    const todosSection = resumed.top_sections.find((s) => s.section_name === "todos");
+    expect(todosSection?.section_text).toContain("fix lint");
+    const { matches } = searchHandoffs(workspace, "ship handoff", { section_filter: ["todos"] });
+    expect(matches.length).toBeGreaterThan(0);
+  });
+
   test("resume query ranks matching sections", () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-hndq-"));
     resetHandoffsForTests(workspace);

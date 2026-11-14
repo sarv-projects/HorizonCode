@@ -126,7 +126,8 @@ CREATE TABLE IF NOT EXISTS ${HANDOFFS} (
   blockers TEXT NOT NULL DEFAULT '[]',
   decisions TEXT NOT NULL DEFAULT '[]',
   files TEXT NOT NULL DEFAULT '',
-  context TEXT NOT NULL DEFAULT ''
+  context TEXT NOT NULL DEFAULT '',
+  todos TEXT NOT NULL DEFAULT '[]'
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS} USING fts5(
   handoff_id UNINDEXED,
@@ -136,8 +137,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS} USING fts5(
   tokenize='porter'
 );
 `);
+    migrateHandoffTodosColumn(db);
   }
   return db;
+}
+
+function migrateHandoffTodosColumn(db: Database): void {
+  const cols = db.query("PRAGMA table_info(handoffs)").all() as { name: string }[];
+  if (cols.some((c) => c.name === "todos")) return;
+  db.run("ALTER TABLE handoffs ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'");
 }
 
 function parseJsonArray(raw: string): string[] {
@@ -162,6 +170,8 @@ type StoredHandoff = {
   decisions: string[];
   files: string;
   context: string;
+  /** Open session todos snapshotted at create time (not accepted via tool `todos` args). */
+  todos: string[];
 };
 
 function rowToHandoff(row: Record<string, unknown>): StoredHandoff {
@@ -177,6 +187,7 @@ function rowToHandoff(row: Record<string, unknown>): StoredHandoff {
     decisions: parseJsonArray(String(row.decisions)),
     files: String(row.files ?? ""),
     context: String(row.context ?? ""),
+    todos: parseJsonArray(String(row.todos ?? "[]")),
   };
 }
 
@@ -189,6 +200,7 @@ function listSectionTexts(h: StoredHandoff): Array<{ name: string; text: string 
   if (h.next_steps.length > 0) out.push({ name: "next", text: h.next_steps.join("\n") });
   if (h.files.trim() !== "") out.push({ name: "files", text: h.files });
   if (h.context.trim() !== "") out.push({ name: "context", text: h.context });
+  if (h.todos.length > 0) out.push({ name: "todos", text: h.todos.join("\n") });
   return out;
 }
 
@@ -238,6 +250,7 @@ function normalizeForWarnings(sections: HandoffInputSections): StoredHandoff {
     decisions: sections.decisions ?? [],
     files: sections.files ?? "",
     context: sections.context ?? "",
+    todos: [],
   };
 }
 
@@ -313,7 +326,12 @@ export function resetHandoffsForTests(workspace: string): void {
 export function createHandoff(
   workspace: string,
   sections: HandoffInputSections,
-  opts?: { branch?: string; continues_from?: string | null; auto_continue?: boolean },
+  opts?: {
+    branch?: string;
+    continues_from?: string | null;
+    auto_continue?: boolean;
+    todos_snapshot?: string[];
+  },
 ): HandoffCreateResult {
   const { branch } = resolveHandoffBranch(workspace, opts?.branch);
   const warnings = collectSectionWarnings(sections);
@@ -325,6 +343,7 @@ export function createHandoff(
   const decisions = sections.decisions ?? [];
   const files = sections.files ?? "";
   const context = sections.context ?? "";
+  const todos = (opts?.todos_snapshot ?? []).map((t) => t.trim()).filter((t) => t.length > 0);
 
   const db = openDb(workspace);
   try {
@@ -340,8 +359,8 @@ export function createHandoff(
     db.transaction(() => {
       db.run(
         `INSERT INTO ${HANDOFFS}
-         (id, branch, created_at, continues_from, summary, tried, next_steps, blockers, decisions, files, context)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, branch, created_at, continues_from, summary, tried, next_steps, blockers, decisions, files, context, todos)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           branch,
@@ -354,6 +373,7 @@ export function createHandoff(
           JSON.stringify(decisions),
           files,
           context,
+          JSON.stringify(todos),
         ],
       );
       indexHandoffSections(
@@ -372,6 +392,7 @@ export function createHandoff(
           decisions: JSON.stringify(decisions),
           files,
           context,
+          todos: JSON.stringify(todos),
         }),
       );
     })();
