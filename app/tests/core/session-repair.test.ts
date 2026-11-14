@@ -21,7 +21,7 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChatMsg } from "../../src/contracts";
-import { SessionStore, interruptedToolResult } from "../../src/core/session";
+import { SessionStore, interruptedToolResult, unpairedToolCallTail } from "../../src/core/session";
 import { cleanupTemps, tempDir } from "./helpers";
 
 let workspace = "";
@@ -270,5 +270,31 @@ describe("mid-turn repair — a killed run must not brick the session", () => {
     const session = store.createSession("empty");
     expect(store.repairDanglingToolCalls(session.id).repaired).toBe(0);
     expect(rawRows(session.id).length).toBe(0);
+  });
+});
+
+describe("unpairedToolCallTail (C-8)", () => {
+  test("returns only unanswered calls on the last assistant message", () => {
+    const messages: ChatMsg[] = [
+      user("u1"),
+      assistantWithCalls("", [{ id: "old", name: "read" }]),
+      { role: "tool", content: "ok", toolCallId: "old", toolName: "read" },
+      user("u2"),
+      assistantWithCalls("", [
+        { id: "c1", name: "shell" },
+        { id: "c2", name: "grep" },
+      ]),
+      { role: "tool", content: "done", toolCallId: "c1", toolName: "shell" },
+    ];
+    const tail = unpairedToolCallTail(messages);
+    expect(tail.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  test("returns empty when the tail is fully answered", () => {
+    const messages: ChatMsg[] = [
+      assistantWithCalls("", [{ id: "c1", name: "read" }]),
+      { role: "tool", content: "x", toolCallId: "c1", toolName: "read" },
+    ];
+    expect(unpairedToolCallTail(messages)).toEqual([]);
   });
 });

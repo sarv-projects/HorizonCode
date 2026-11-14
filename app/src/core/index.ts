@@ -1386,7 +1386,8 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   // run, closes that finding — a resumed server session (FEAT-003) reuses this
   // same entry point. Both run for a resumed session and a fresh one alike (a
   // fresh session has no rows, so each is a no-op). Both are idempotent.
-  const repaired = store.repairDanglingToolCalls(session.id);
+  const reexecTail = process.env.HZ_REEXECUTE_UNPAIRED_TOOL_TAIL === "1";
+  const repaired = reexecTail ? { repaired: 0, calls: [] as string[] } : store.repairDanglingToolCalls(session.id);
   const interrupted = new AdmissionQueue(store).recoverInterrupted(session.id);
 
   let impl: HzRuntimeImpl | null = null;

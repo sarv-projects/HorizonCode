@@ -223,6 +223,28 @@ export function interruptedToolResult(toolName: string): string {
 }
 
 /**
+ * C-8 reduced: unanswered tool calls on the **last** assistant message — the
+ * tail that must be executed or repaired before the next provider dispatch.
+ */
+export function unpairedToolCallTail(messages: readonly ChatMsg[]): ToolCall[] {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg === undefined || msg.role !== "assistant") continue;
+    const calls = msg.toolCalls ?? [];
+    if (calls.length === 0) continue;
+    const answered = new Set<string>();
+    for (let j = i + 1; j < messages.length; j += 1) {
+      const follow = messages[j];
+      if (follow === undefined || follow.role !== "tool") break;
+      const id = follow.toolCallId;
+      if (typeof id === "string" && id !== "") answered.add(id);
+    }
+    return calls.filter((call) => !answered.has(call.id));
+  }
+  return [];
+}
+
+/**
  * The minimum a row needs for the boundary computation: its role and the tool
  * calls an assistant message declared (the only two facts the cut depends on).
  * `safeTruncationBoundary` takes this shape so it is a PURE function of the
