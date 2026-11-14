@@ -4,6 +4,8 @@
  */
 
 import { extname } from "node:path";
+import type { SandboxSpawnKernel } from "../contracts";
+import { spawnOwned } from "./owned-spawn";
 
 export interface LintCommandEntry {
   /** Dotless extensions, or `"*"` catch-all (lowest priority after specifics). */
@@ -103,16 +105,27 @@ export function parseLintOutputLines(text: string): { path: string; line: number
   return out;
 }
 
+export interface RunUserLintSpawnOptions {
+  cwd: string;
+  stateDir: string;
+  kernel?: SandboxSpawnKernel;
+}
+
+/** User lint runs through the single owned spawn path (NF-071). */
 export async function runUserLintCommand(
   command: string,
-  cwd: string,
-  signal?: AbortSignal,
+  opts: RunUserLintSpawnOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["/bin/sh", "-c", command], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    signal,
+  const { proc } = await spawnOwned(["/bin/sh", "-c", command], {
+    stateDir: opts.stateDir,
+    cwd: opts.cwd,
+    label: "lint-user",
+    detached: true,
+    longLived: false,
+    stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    sandboxWrap: "auto",
+    sandboxMode: "workspace-write",
+    kernel: opts.kernel,
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),

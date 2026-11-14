@@ -1215,6 +1215,7 @@ class HzRuntimeImpl implements HzRuntime {
         {
           workspace: this.workspace,
           sessionId: this.session.id,
+          admissionId,
           model: this.currentModel,
           provider: this.provider,
           providerBaseUrl: this.config.resolved?.baseUrl ?? this.config.baseUrl ?? "",

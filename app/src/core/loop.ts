@@ -35,6 +35,7 @@ import type {
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
+import { AdmissionQueue, admissionToolDispatchRefusal } from "./admission";
 import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
@@ -1268,6 +1269,8 @@ export interface LoopDeps {
   interjection?: InterjectionBuffer;
   /** EffectHost precursor ledger for this run (allow → execute → observe). */
   effectHost?: EffectHost;
+  /** NF-071 durable admission row for the current user turn (when set). */
+  admissionId?: string;
 }
 
 /** Drain pending interjections into the transcript at a safe step boundary. */
@@ -1856,6 +1859,17 @@ async function executeTool(
   const exposure = exposureOf(tool);
   if (exposure === "hidden" || (exposure === "deferred" && !isDiscovered(deps.sessionId, call.name)) || exposure === "code_mode_only") {
     return { result: { ok: false, output: `Unknown tool: ${call.name}`, error: `unknown tool "${call.name}"` } };
+  }
+
+  if (deps.admissionId !== undefined) {
+    const admissionRefusal = admissionToolDispatchRefusal(
+      new AdmissionQueue(deps.store),
+      deps.sessionId,
+      deps.admissionId,
+    );
+    if (admissionRefusal !== undefined) {
+      return { result: { ok: false, output: admissionRefusal, error: admissionRefusal }, expected: true };
+    }
   }
 
   // Plan mode: staging/refusals happen AFTER the tool resolves (an unknown name
