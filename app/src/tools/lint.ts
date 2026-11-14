@@ -13,6 +13,7 @@ import { DiagnosticsLedger } from "../core/diagnostics-ledger";
 import { workspaceDiagnostics } from "../core/lsp";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { defaultConfigPath, loadConfig, type LspConfig } from "../core/config";
+import { kernelStateDir } from "../core/owned-spawn";
 import {
   formatLintFindings,
   parseLintOutputLines,
@@ -106,7 +107,11 @@ export const lintTool: Tool = {
         if (!(await admitUserLintCommand(cmd, ctx))) {
           return fail("HZ_PRECONDITION_FAILED: user lint shell command was denied or declined");
         }
-        const ran = await runUserLintCommand(cmd, ctx.cwd, ctx.signal);
+        const ran = await runUserLintCommand(cmd, {
+          cwd: ctx.cwd,
+          stateDir: kernelStateDir(ctx.workspace),
+          kernel: ctx.kernel,
+        });
         const parsed = parseLintOutputLines(ran.stdout);
         const errors = parsed.filter((row) => /error/i.test(row.message) || ran.exitCode !== 0);
         const output = formatLintFindings(rel, errors.length > 0 ? errors : parsed);

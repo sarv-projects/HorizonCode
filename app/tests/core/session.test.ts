@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ToolCall } from "../../src/contracts";
-import { AdmissionIdCollisionError, AdmissionQueue } from "../../src/core/admission";
+import { AdmissionIdCollisionError, AdmissionQueue, admissionToolDispatchRefusal } from "../../src/core/admission";
 import { SESSION_DB_USER_VERSION, readSessionDbUserVersion } from "../../src/core/session-migrate";
 import { SessionStore, rowToChatMsg } from "../../src/core/session";
 import { cleanupTemps, tempDir } from "./helpers";
@@ -375,6 +375,27 @@ describe("admission ids are scoped to a session", () => {
       expect(after[0]?.state).toBe("queued");
     } finally {
       admissionStore.close();
+    }
+  });
+});
+
+describe("admissionToolDispatchRefusal", () => {
+  test("allows dispatch only while the turn admission row is running", () => {
+    const workspace = tempDir("hz-adm-dispatch-");
+    const store = new SessionStore(workspace);
+    try {
+      const queue = new AdmissionQueue(store);
+      const sessionId = "sess-1";
+      const a1 = queue.admit(sessionId, "first");
+      const a2 = queue.admit(sessionId, "second");
+      expect(queue.begin(a1)).toBe(true);
+      expect(admissionToolDispatchRefusal(queue, sessionId, a1)).toBeUndefined();
+      queue.settle(a1, "unknown", "simulated halt");
+      expect(admissionToolDispatchRefusal(queue, sessionId, a1)).toContain("unknown");
+      expect(queue.begin(a2)).toBe(false);
+      expect(admissionToolDispatchRefusal(queue, sessionId, a2)).toContain("halted");
+    } finally {
+      store.close();
     }
   });
 });

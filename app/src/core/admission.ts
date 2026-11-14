@@ -298,10 +298,40 @@ export class AdmissionQueue {
     return this.byId(id) ?? undefined;
   }
 
+  /** Lookup one row by id (null when absent). */
+  get(id: string): AdmissionRow | null {
+    return this.byId(id);
+  }
+
   private byId(id: string): AdmissionRow | null {
     const raw = this.db
       .query("SELECT id, session_id, input, state, created_at, updated_at, evidence FROM admissions WHERE id = ?")
       .get(id) as AdmissionDbRow | null | undefined;
     return raw ? toRow(raw) : null;
   }
+}
+
+/**
+ * Refuse loop tool dispatch when the current user-turn admission is not `running`
+ * or an earlier `unknown` row still halts the session FIFO (C-13).
+ */
+export function admissionToolDispatchRefusal(
+  queue: AdmissionQueue,
+  sessionId: string,
+  admissionId: string,
+): string | undefined {
+  const row = queue.get(admissionId);
+  if (!row || row.sessionId !== sessionId) {
+    return `HZ_PRECONDITION_FAILED: admission ${admissionId} is missing for this session; tool dispatch halted`;
+  }
+  if (row.state !== "running") {
+    return `HZ_PRECONDITION_FAILED: admission ${admissionId} is ${row.state}; tool dispatch halted`;
+  }
+  for (const earlier of queue.list(sessionId)) {
+    if (earlier.id === admissionId) break;
+    if (earlier.state === "unknown") {
+      return `HZ_PRECONDITION_FAILED: admission queue halted (blocked by ${earlier.id}); tool dispatch refused`;
+    }
+  }
+  return undefined;
 }
