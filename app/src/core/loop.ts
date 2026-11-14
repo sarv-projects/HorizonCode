@@ -36,6 +36,7 @@ import type {
 } from "../contracts";
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
 import { AdmissionQueue, admissionToolDispatchRefusal } from "./admission";
+import { unpairedToolCallTail } from "./session";
 import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
@@ -2769,6 +2770,19 @@ export async function runTurn(
     const mistakes = new MistakeTracker();
     const repeatTool = new RepeatToolGuard();
     repeatTool.clear();
+
+    if (process.env.HZ_REEXECUTE_UNPAIRED_TOOL_TAIL === "1") {
+      const tail = unpairedToolCallTail(deps.store.history(deps.sessionId));
+      if (tail.length > 0) {
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `re-executing ${tail.length} unpaired tool-call tail row(s) before provider dispatch (C-8)`,
+        });
+        for (const call of tail) {
+          await runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy);
+        }
+      }
+    }
 
     for (;;) {
       // The single sentinel: budgets are checked before every dispatch, under
