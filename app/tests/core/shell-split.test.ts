@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   analyzeShellCompound,
+  guardActionsForShellCommand,
   maxSegmentRisk,
   segmentRisk,
   shellCompoundPresentationLines,
@@ -43,6 +44,17 @@ describe("shell compound split", () => {
     expect(riskOf("shell.exec", "true && sudo reboot")).toBe("high");
     expect(maxSegmentRisk([{ text: "ls", risk: "medium" }, { text: "pwd", risk: "low" }])).toBe("medium");
     expect(segmentRisk("ls")).toBe("medium");
+  });
+
+  test("guardActionsForShellCommand yields one check per segment", () => {
+    const actions = guardActionsForShellCommand("echo ok && rm -rf build", {
+      kind: "shell.exec",
+      target: "echo ok && rm -rf build",
+    });
+    expect(actions.map((a) => a.target)).toEqual(["echo ok", "rm -rf build"]);
+    const single = guardActionsForShellCommand("ls", { kind: "shell.exec", target: "ls" });
+    expect(single).toHaveLength(1);
+    expect(single[0]?.target).toBe("ls");
   });
 
   test("permission presentation adds compound lines", () => {

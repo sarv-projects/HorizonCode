@@ -2,9 +2,12 @@
  * Reduced compound-shell splitter (ADAPT grok bash_command_splitting).
  *
  * Splits a line on top-level `&&`, `||`, `;`, and `|` outside quotes for
- * approval display and coarse per-segment risk. Anything we cannot parse
- * honestly (substitution, heredocs, subshells, unclosed quotes) is rejected.
+ * approval display, coarse per-segment risk, and per-segment guard checks.
+ * Anything we cannot parse honestly (substitution, heredocs, subshells,
+ * unclosed quotes) is rejected.
  */
+
+import type { GuardAction } from "../contracts";
 
 export type SegmentRisk = "low" | "medium" | "high";
 
@@ -175,4 +178,15 @@ export function shellCompoundRefusal(command: string): string | undefined {
   const analysis = analyzeShellCompound(command);
   if (analysis.ok !== false) return undefined;
   return `HZ_PRECONDITION_FAILED: shell command cannot be split safely (${analysis.reason}); refused before approval`;
+}
+
+/**
+ * Guard checks for compound shell: one `shell.exec` action per parsed segment
+ * (single segment or unparsed → one action on the full command).
+ */
+export function guardActionsForShellCommand(command: string, template: GuardAction): GuardAction[] {
+  if (template.kind !== "shell.exec") return [template];
+  const analysis = analyzeShellCompound(command);
+  if (analysis.ok === false || !analysis.compound) return [template];
+  return analysis.segments.map((seg) => ({ ...template, target: seg.text }));
 }

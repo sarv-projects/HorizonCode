@@ -198,7 +198,7 @@ import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import type { PermissionMode } from "./permission-mode";
 import { modeAutoApproves, modeRefusal } from "./permission-mode";
 import { planModeShellRefusal } from "./command-guard";
-import { shellCompoundRefusal } from "./shell-split";
+import { guardActionsForShellCommand, shellCompoundRefusal } from "./shell-split";
 import { invisibleUnicodeError } from "../tools/helpers";
 import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
 import { blobSpillEnabled } from "./blobs";
@@ -1961,7 +1961,11 @@ async function executeTool(
   if (admission.kind === "guard") {
     const primary = withCallIntent(admission.action, parsed.args, deps.workspace);
     const extras = (admission.also ?? []).map((a) => withCallIntent(a, parsed.args, deps.workspace));
-    const toAdmit = [primary, ...extras];
+    const primaryChecks =
+      primary.kind === "shell.exec"
+        ? guardActionsForShellCommand(primary.target, primary)
+        : [primary];
+    const toAdmit = [...primaryChecks, ...extras];
     admitted = primary;
     for (const action of toAdmit) {
       const decision = await gate.check(action);
