@@ -227,6 +227,13 @@ const SURFACE_RISK: Record<DigestKey, string> = {
   providers: "providers.json can redirect API traffic and credentials",
 };
 
+/** True when an approval request is a workspace folder-trust bind/rebind card. */
+export function isWorkspaceTrustApprovalTitle(title?: string): boolean {
+  const t = (title ?? "").trim();
+  if (t === "") return false;
+  return /trust this workspace|workspace trust|re-trust|folder trust/i.test(t);
+}
+
 /** Human-readable inventory for trust prompts (Grok folder-trust UX adapt). */
 export function workspaceTrustSurfaceSummary(workspace: string): string[] {
   const currents = collectWorkspaceTrustDigests(workspace);

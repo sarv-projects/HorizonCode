@@ -698,7 +698,7 @@ The capability matrix in section 3.1 is a **design target for eight surfaces**. 
 | TUI | the scrollback chat of [`13-tui.md`](13-tui.md) | fullscreen mode, palette, keymap (docs/13 D1 to D18) |
 | print | `-p` with `text`, `json`, `stream-json`; exit codes; fail-closed approvals | `exec` subcommand, `ExecResultV1`, `--on-client-gone` (G12, G13) |
 | headless pipe | one turn per stdin line, plain text out | machine-readable output on this path (use `-p`), parity spec (G12) |
-| server | `hzcode serve`: stdio, single-attach, 7 methods, resume by id, fork, rewind, crash recovery on attach | other transports, discovery, auth, multi-client, approvals, permission mode (G1 to G4, G11) |
+| server | `hzcode serve`: stdio, single-attach, 8 methods (`session.interject` included), resume by id, fork, rewind, crash recovery on attach | other transports, discovery, auth, multi-client, approvals, permission mode (G1 to G4, G11) |
 | web, desktop, IDE/ACP, MCP server, SDKs, mobile, sharing | nothing | G5 to G9 |
 
 Every cell of the section 3.1 matrix outside the four rows above is a **claim about a future surface**, including the printed commands such as `session diff --json`, `receipt show`, `session verify`, `policy list`, `parity check --json`, `session tree --json` and `share create`. None of those subcommands exists in `app/src/main.ts`; the subcommands that exist are `serve`, `doctor`, `config check` and `commit`, and `run <name>` for custom commands.
@@ -800,7 +800,7 @@ Each note gives: what is deferred, why, the upstream reference, whether to adopt
 - **Why.** `gate:wire-parity` is a declared gap precisely because no generator exists. Generating is only worth it once there is more than one consumer.
 - **Upstream reference.** [`codex-rs/app-server-protocol`](https://github.com/openai/codex/tree/8703d32bd0ea5cf26768859a3dd476df906ba053/codex-rs/app-server-protocol)<br>[`packages/sdk`](https://github.com/sst/opencode/tree/12a661ea40cd5863b271a89bb06b8a3ddb7ab5a0/packages/sdk)<br>[`docs/sdk.md`](https://github.com/can1357/oh-my-pi/blob/21f1188cf88b2f534c092181968cd5a4d1a9c296/docs/sdk.md)
 - **Adopt as is or adapt.** ADAPT the idea (one schema, generated TypeScript types and JSON schema, a checked-in snapshot test). Do not adopt codex's Rust `ts-rs` pipeline.
-- **Suggested design.** Write `app/scripts/gen-protocol-schema.ts` that derives a JSON schema from the exported contract types (a small hand-written table is acceptable for 7 methods), commit the output under `app/schema/`, and add a test that fails when `contracts.ts` changes without regenerating. Keep `contracts.ts` additive-only.
+- **Suggested design.** Write `app/scripts/gen-protocol-schema.ts` that derives a JSON schema from the exported contract types (a small hand-written table is acceptable for 8 v1 methods), commit the output under `app/schema/`, and add a test that fails when `contracts.ts` changes without regenerating. Keep `contracts.ts` additive-only.
 - **Files to touch.** `app/src/contracts.ts` (comments only), new `app/scripts/gen-protocol-schema.ts`, `app/schema/*.json`, `app/tests/contracts/schema-snapshot.test.ts`.
 
 #### G8. Web app and desktop app (S51 to S72)

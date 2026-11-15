@@ -36,6 +36,62 @@ describe("RC-18 canonical prompt admission (ruling 359)", () => {
     }
   });
 
+  test("send brackets a turn with claim then busy then release (439/440)", async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-busy-bracket-"));
+    const runtime = await createRuntime({ workspace: ws, mock: true });
+    try {
+      await runtime.send("busy bracket please", { onEvent() {} });
+      const file = sessionEventsPath(ws, runtime.sessionId);
+      const rows = loadRows(file);
+      const acquired = rows.filter((row) => row.type === EventTypes.sessionClaimAcquired);
+      const entered = rows.filter((row) => row.type === EventTypes.sessionBusyEntered);
+      const left = rows.filter((row) => row.type === EventTypes.sessionBusyLeft);
+      const released = rows.filter((row) => row.type === EventTypes.sessionClaimReleased);
+      expect(acquired).toHaveLength(1);
+      expect(entered).toHaveLength(1);
+      expect(left).toHaveLength(1);
+      expect(released).toHaveLength(1);
+      const claimId = acquired[0]?.payload?.claimId;
+      expect(typeof claimId).toBe("string");
+      expect(entered[0]?.payload?.claimId).toBe(claimId);
+      expect(left[0]?.payload?.claimId).toBe(claimId);
+      expect(released[0]?.payload?.claimId).toBe(claimId);
+      expect(left[0]?.payload?.terminal).toBe("succeeded");
+      expect(released[0]?.payload?.reason).toBe("succeeded");
+      const order = [
+        EventTypes.sessionClaimAcquired,
+        EventTypes.sessionBusyEntered,
+        EventTypes.sessionBusyLeft,
+        EventTypes.sessionClaimReleased,
+      ].map((t) => rows.findIndex((row) => row.type === t));
+      expect(order.every((i) => i >= 0)).toBe(true);
+      expect(order[0]!).toBeLessThan(order[1]!);
+      expect(order[1]!).toBeLessThan(order[2]!);
+      expect(order[2]!).toBeLessThan(order[3]!);
+      expect(verifySessionEventAnchorSync(ws, runtime.sessionId).ok).toBe(true);
+    } finally {
+      await runtime.close();
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("slash skill activation appends hz.skill.invoked", async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-skill-invoked-"));
+    const runtime = await createRuntime({ workspace: ws, mock: true });
+    try {
+      await runtime.send("/execute-plan run phase one", { onEvent() {} });
+      const file = sessionEventsPath(ws, runtime.sessionId);
+      const invoked = loadRows(file).filter((row) => row.type === EventTypes.skillInvoked);
+      expect(invoked).toHaveLength(1);
+      expect(invoked[0]?.payload?.skill).toBe("execute-plan");
+      expect(invoked[0]?.payload?.sessionId).toBe(runtime.sessionId);
+      expect(invoked[0]?.payload?.actionBytes).toBe(Buffer.byteLength("run phase one", "utf8"));
+    } finally {
+      await runtime.close();
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("a broken event anchor halts before provider dispatch rather than silently dropping audit admission", async () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-prompt-audit-break-"));
     const runtime = await createRuntime({ workspace: ws, mock: true });

@@ -12,6 +12,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { stateRoot } from "../paths";
+import { mmrLiteSelect, type ScoredMemoryCandidate } from "./mmr-lite";
 
 export const SECTION_SOFT_CAP_CHARS = 5000;
 export const SECTION_ITEM_SOFT_CAP_CHARS = 1000;
@@ -20,6 +21,7 @@ export const DEFAULT_RESUME_SECTION_CHARS = 1500;
 
 const HANDOFFS = "handoffs";
 const FTS = "handoff_section_fts";
+export const DURABLE_TODOS = "durable_todos";
 
 export type HandoffListSections = {
   tried?: string[];
@@ -41,6 +43,8 @@ export type HandoffCreateResult = {
   id: string;
   branch: string;
   continues_from: string | null;
+  /** Session that created this handoff (Engram session link). */
+  session_id: string | null;
   warnings: string[];
 };
 
@@ -58,6 +62,10 @@ export type HandoffResumeResult = {
   chain: string[];
   top_sections: HandoffSectionMatch[];
   open_blockers: string[];
+  /** Open session todos snapshotted when the latest handoff was created (informational; not live todos). */
+  snapshotted_todos: string[];
+  /** Session that authored the resumed handoff row, when recorded. */
+  source_session_id: string | null;
   message: string | null;
 };
 
@@ -127,7 +135,8 @@ CREATE TABLE IF NOT EXISTS ${HANDOFFS} (
   decisions TEXT NOT NULL DEFAULT '[]',
   files TEXT NOT NULL DEFAULT '',
   context TEXT NOT NULL DEFAULT '',
-  todos TEXT NOT NULL DEFAULT '[]'
+  todos TEXT NOT NULL DEFAULT '[]',
+  session_id TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS} USING fts5(
   handoff_id UNINDEXED,
@@ -136,16 +145,47 @@ CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS} USING fts5(
   section_text,
   tokenize='porter'
 );
+CREATE TABLE IF NOT EXISTS ${DURABLE_TODOS} (
+  branch TEXT NOT NULL,
+  todo_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  dropped INTEGER NOT NULL DEFAULT 0,
+  drop_reason TEXT,
+  PRIMARY KEY (branch, todo_id)
+);
 `);
     migrateHandoffTodosColumn(db);
+    migrateHandoffSessionColumn(db);
   }
   return db;
+}
+
+/** Run a callback against the workspace handoff DB (schema ensured on write). */
+export function withHandoffDb<T>(
+  workspace: string,
+  readonly: boolean,
+  fn: (db: Database) => T,
+): T | null {
+  const db = openDb(workspace, readonly);
+  if (!db) return null;
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
 }
 
 function migrateHandoffTodosColumn(db: Database): void {
   const cols = db.query("PRAGMA table_info(handoffs)").all() as { name: string }[];
   if (cols.some((c) => c.name === "todos")) return;
   db.run("ALTER TABLE handoffs ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'");
+}
+
+function migrateHandoffSessionColumn(db: Database): void {
+  const cols = db.query("PRAGMA table_info(handoffs)").all() as { name: string }[];
+  if (cols.some((c) => c.name === "session_id")) return;
+  db.run("ALTER TABLE handoffs ADD COLUMN session_id TEXT");
 }
 
 function parseJsonArray(raw: string): string[] {
@@ -172,6 +212,7 @@ type StoredHandoff = {
   context: string;
   /** Open session todos snapshotted at create time (not accepted via tool `todos` args). */
   todos: string[];
+  session_id: string | null;
 };
 
 function rowToHandoff(row: Record<string, unknown>): StoredHandoff {
@@ -180,6 +221,7 @@ function rowToHandoff(row: Record<string, unknown>): StoredHandoff {
     branch: String(row.branch),
     created_at: Number(row.created_at),
     continues_from: row.continues_from != null ? String(row.continues_from) : null,
+    session_id: typeof row.session_id === "string" && row.session_id !== "" ? row.session_id : null,
     summary: String(row.summary),
     tried: parseJsonArray(String(row.tried)),
     next_steps: parseJsonArray(String(row.next_steps)),
@@ -251,6 +293,7 @@ function normalizeForWarnings(sections: HandoffInputSections): StoredHandoff {
     files: sections.files ?? "",
     context: sections.context ?? "",
     todos: [],
+    session_id: null,
   };
 }
 
@@ -317,7 +360,7 @@ function latestHandoffIdOnBranch(db: Database, branch: string): string | null {
 export function resetHandoffsForTests(workspace: string): void {
   const db = openDb(workspace);
   try {
-    db.exec(`DELETE FROM ${FTS}; DELETE FROM ${HANDOFFS};`);
+    db.exec(`DELETE FROM ${FTS}; DELETE FROM ${HANDOFFS}; DELETE FROM ${DURABLE_TODOS};`);
   } finally {
     db.close();
   }
@@ -331,6 +374,7 @@ export function createHandoff(
     continues_from?: string | null;
     auto_continue?: boolean;
     todos_snapshot?: string[];
+    session_id?: string;
   },
 ): HandoffCreateResult {
   const { branch } = resolveHandoffBranch(workspace, opts?.branch);
@@ -344,6 +388,8 @@ export function createHandoff(
   const files = sections.files ?? "";
   const context = sections.context ?? "";
   const todos = (opts?.todos_snapshot ?? []).map((t) => t.trim()).filter((t) => t.length > 0);
+  const sessionId =
+    typeof opts?.session_id === "string" && opts.session_id.trim() !== "" ? opts.session_id.trim() : null;
 
   const db = openDb(workspace);
   try {
@@ -359,13 +405,14 @@ export function createHandoff(
     db.transaction(() => {
       db.run(
         `INSERT INTO ${HANDOFFS}
-         (id, branch, created_at, continues_from, summary, tried, next_steps, blockers, decisions, files, context, todos)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, branch, created_at, continues_from, session_id, summary, tried, next_steps, blockers, decisions, files, context, todos)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           branch,
           now,
           continues_from,
+          sessionId,
           sections.summary,
           JSON.stringify(tried),
           JSON.stringify(next_steps),
@@ -385,6 +432,7 @@ export function createHandoff(
           branch,
           created_at: now,
           continues_from,
+          session_id: sessionId,
           summary: sections.summary,
           tried: JSON.stringify(tried),
           next_steps: JSON.stringify(next_steps),
@@ -396,7 +444,7 @@ export function createHandoff(
         }),
       );
     })();
-    return { id, branch, continues_from, warnings };
+    return { id, branch, continues_from, session_id: sessionId, warnings };
   } finally {
     db.close();
   }
@@ -440,6 +488,17 @@ function truncateSectionText(text: string, maxChars: number): string {
   return `${head}${marker}`;
 }
 
+type HandoffMmrCandidate = ScoredMemoryCandidate & { match: HandoffSectionMatch };
+
+function diversifyHandoffSections(matches: HandoffSectionMatch[], limit: number): HandoffSectionMatch[] {
+  if (matches.length <= limit) return matches;
+  const picked = mmrLiteSelect<HandoffMmrCandidate>(
+    matches.map((m) => ({ content: m.section_text, rank: -m.score, match: m })),
+    limit,
+  );
+  return picked.map((p) => p.match);
+}
+
 function bm25SectionSearch(
   db: Database,
   query: string,
@@ -447,6 +506,7 @@ function bm25SectionSearch(
   handoffIds: readonly string[] | null,
   limit: number,
   sectionFilter?: readonly string[],
+  diversify = false,
 ): HandoffSectionMatch[] {
   const match = ftsQuery(query);
   if (match === undefined) return [];
@@ -484,6 +544,7 @@ WHERE ${FTS} MATCH ?`;
       });
     }
     scored.sort((a, b) => b.score - a.score);
+    if (diversify && scored.length > limit) return diversifyHandoffSections(scored, limit);
     return scored.slice(0, limit);
   } catch {
     return [];
@@ -498,6 +559,8 @@ export function resumeHandoff(
     query?: string;
     max_sections?: number;
     max_chars_per_section?: number;
+    /** Lexical MMR over BM25 candidates (default on when `query` is set). */
+    diversify?: boolean;
   },
 ): HandoffResumeResult {
   const { branch, detached } = resolveHandoffBranch(workspace, opts?.branch);
@@ -511,6 +574,8 @@ export function resumeHandoff(
       chain: [],
       top_sections: [],
       open_blockers: [],
+      snapshotted_todos: [],
+      source_session_id: null,
       message: detached
         ? "No git branch; using detached workspace scope. No handoffs found yet."
         : null,
@@ -528,6 +593,8 @@ export function resumeHandoff(
         chain: [],
         top_sections: [],
         open_blockers: [],
+        snapshotted_todos: [],
+        source_session_id: null,
         message: detached
           ? "No git branch; using detached workspace scope. No handoffs found yet."
           : null,
@@ -538,7 +605,8 @@ export function resumeHandoff(
     let top_sections: HandoffSectionMatch[] = [];
     const q = opts?.query?.trim() ?? "";
     if (q !== "") {
-      top_sections = bm25SectionSearch(db, q, branch, chain, maxSections);
+      const diversify = opts?.diversify !== false;
+      top_sections = bm25SectionSearch(db, q, branch, chain, maxSections, undefined, diversify);
     } else {
       const texts = listSectionTexts(start);
       top_sections = texts.slice(0, maxSections).map((s) => ({
@@ -560,6 +628,8 @@ export function resumeHandoff(
       chain,
       top_sections,
       open_blockers,
+      snapshotted_todos: start.todos,
+      source_session_id: start.session_id,
       message: detached ? "No git branch; using detached workspace scope." : null,
     };
   } finally {
@@ -567,17 +637,41 @@ export function resumeHandoff(
   }
 }
 
+export type HandoffStoreSummary = {
+  branch: string;
+  handoffRows: number;
+  ftsRows: number;
+  durableTodoRows: number;
+  durableTodoBranches: number;
+};
+
+/** Read-only counts for doctor / status (no side effects). */
+export function summarizeHandoffStore(workspace: string): HandoffStoreSummary | null {
+  const { branch } = resolveHandoffBranch(workspace);
+  const summary = withHandoffDb(workspace, true, (db) => {
+    const handoffRows = Number((db.query(`SELECT COUNT(*) AS c FROM ${HANDOFFS}`).get() as { c: number }).c);
+    const ftsRows = Number((db.query(`SELECT COUNT(*) AS c FROM ${FTS}`).get() as { c: number }).c);
+    const durableTodoRows = Number((db.query(`SELECT COUNT(*) AS c FROM ${DURABLE_TODOS}`).get() as { c: number }).c);
+    const durableTodoBranches = Number(
+      (db.query(`SELECT COUNT(DISTINCT branch) AS c FROM ${DURABLE_TODOS}`).get() as { c: number }).c,
+    );
+    return { branch, handoffRows, ftsRows, durableTodoRows, durableTodoBranches };
+  });
+  return summary ?? null;
+}
+
 export function searchHandoffs(
   workspace: string,
   query: string,
-  opts?: { branch?: string; limit?: number; section_filter?: string[] },
+  opts?: { branch?: string; limit?: number; section_filter?: string[]; diversify?: boolean },
 ): HandoffSearchResult {
   const { branch } = resolveHandoffBranch(workspace, opts?.branch);
   const limit = opts?.limit ?? 10;
+  const diversify = opts?.diversify !== false;
   const db = openDb(workspace, true);
   if (db === null) return { matches: [] };
   try {
-    const matches = bm25SectionSearch(db, query, branch, null, limit, opts?.section_filter);
+    const matches = bm25SectionSearch(db, query, branch, null, limit, opts?.section_filter, diversify);
     return { matches };
   } finally {
     db.close();

@@ -47,6 +47,53 @@ test("repo.license is honest when root LICENSE is absent", () => {
   expect(byId(checks, "repo.license").status).toBe("warn");
 });
 
+test("events.rc18 doctor line reports literal emission fraction", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "events.rc18");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toMatch(/16\/44 literal/);
+  expect(line.detail).toContain("unimplemented");
+});
+
+test("perm.saved_allows doctor line", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "perm.saved_allows");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toMatch(/saved[- ]allows|hzcode\.db/i);
+});
+
+test("workspace.trust doctor line", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "workspace.trust");
+  expect(["ok", "warn"]).toContain(line.status);
+  expect(line.detail).toMatch(/folder trust|no trust-gated/i);
+  if (line.status === "warn") expect(line.hint).toBeTruthy();
+});
+
+test("session.kernel doctor line reports tool.call ↔ receipt pairing", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "session.kernel");
+  expect(["ok", "warn"]).toContain(line.status);
+  expect(line.detail).toMatch(/session tool\.call|fresh or transcript-only/);
+});
+
+test("memory.banks doctor line reports FTS partitions", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "memory.banks");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toContain("project:");
+  expect(line.detail).toContain("user:");
+  expect(line.detail).toContain("shared:");
+  expect(line.detail).toContain("topics:");
+});
+
+test("handoff.store doctor line reports Engram db or missing file", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "handoff.store");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toMatch(/handoffs\.db|handoffs=/);
+});
+
 test("worktree.pool and workspace.mount doctor lines", () => {
   const checks = runDoctor(
     fakeEnv({
@@ -84,10 +131,18 @@ test("workspace.mount warns on nfs", () => {
   expect(byId(checks, "workspace.mount").detail).toContain("nfs4");
 });
 
+test("provider.failure_codes doctor line for non-mock providers", () => {
+  const checks = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_PROVIDER: "openai", HZ_MODEL: "gpt-4" } }));
+  const line = byId(checks, "provider.failure_codes");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toContain("13 closed codes");
+});
+
 test("state.durability documents JSONL fsync; HZ_JSONL_FSYNC=0 warns", () => {
   const checks = runDoctor(fakeEnv());
   expect(byId(checks, "state.durability").status).toBe("ok");
   expect(byId(checks, "state.durability").detail).toContain("fsync");
+  expect(byId(checks, "state.durability").detail).toContain("jsonl-fsync-contract-probe");
   const off = runDoctor(fakeEnv({ env: { HZ_JSONL_FSYNC: "0", HZ_PROVIDER: "mock" } }));
   expect(byId(off, "state.durability").status).toBe("warn");
 });
@@ -106,6 +161,9 @@ test("oauth token line when stored", () => {
   );
   const checks = runDoctor(fakeEnv({ env: { ...fakeEnv().env, HZ_PROVIDER: "myllm", HZ_MODEL: "m1", HOME: home } }));
   expect(byId(checks, "provider.oauth").status).toBe("ok");
+  expect(byId(checks, "auth.credentials_db").status).toBe("ok");
+  expect(byId(checks, "auth.credentials_db").detail).toContain("refresh.gen");
+  expect(byId(checks, "auth.oauth_refresh_gen").detail).toContain("refresh.gen generation");
 });
 
 test("hz-sandbox-exec doctor line", () => {

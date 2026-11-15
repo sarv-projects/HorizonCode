@@ -50,6 +50,16 @@ export const memorySearchTool: Tool = {
         items: { type: "string", enum: ["project", "user", "shared"] },
         description: "Optional explicit bank list (overrides scope when set).",
       },
+      limit: {
+        type: "integer",
+        description: "Max hits (default 8; shared_recall enables BM25 MMR-lite diversify by default).",
+        minimum: 1,
+        maximum: 32,
+      },
+      diversify: {
+        type: "boolean",
+        description: "When true, rerank BM25 hits with lexical MMR-lite (default true for shared_recall / all).",
+      },
     },
     required: ["query"],
   },
@@ -63,18 +73,41 @@ export const memorySearchTool: Tool = {
 
     const banksArg = parseBanksArg(args.banks);
     const scopeRaw = typeof args.scope === "string" ? args.scope.trim().toLowerCase() : "";
+    const limitRaw = args.limit;
+    const limit =
+      typeof limitRaw === "number" && Number.isFinite(limitRaw)
+        ? Math.min(32, Math.max(1, Math.floor(limitRaw)))
+        : undefined;
+    const diversifyArg = args.diversify;
+    const diversifyExplicit = typeof diversifyArg === "boolean" ? diversifyArg : undefined;
+
+    const sharedScope = banksArg === "shared_recall" || scopeRaw === "shared_recall" || scopeRaw === "all";
 
     let hits;
-    if (banksArg === "shared_recall" || scopeRaw === "shared_recall" || scopeRaw === "all") {
-      hits = sharedMemorySearch(ctx.workspace, query);
+    if (sharedScope) {
+      hits = sharedMemorySearch(ctx.workspace, query, limit ?? 8);
     } else if (Array.isArray(banksArg)) {
-      hits = memorySearchHits(ctx.workspace, query, { banks: banksArg });
+      const diversify =
+        diversifyExplicit ?? (banksArg.length > 1 ? true : false);
+      hits = memorySearchHits(ctx.workspace, query, {
+        banks: banksArg,
+        limit,
+        diversify,
+      });
     } else if (scopeRaw === "user" || scopeRaw === "shared") {
       const bank = parseMemoryBankId(scopeRaw);
       if (bank === undefined) return fail(`invalid scope: ${scopeRaw}`);
-      hits = memorySearchHits(ctx.workspace, query, { banks: [bank] });
+      hits = memorySearchHits(ctx.workspace, query, {
+        banks: [bank],
+        limit,
+        diversify: diversifyExplicit,
+      });
     } else {
-      hits = memorySearchHits(ctx.workspace, query, { banks: [PROJECT_BANK] });
+      hits = memorySearchHits(ctx.workspace, query, {
+        banks: [PROJECT_BANK],
+        limit,
+        diversify: diversifyExplicit,
+      });
     }
 
     if (hits.length === 0) return { ok: true, output: "no memory hits" };

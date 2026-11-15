@@ -455,6 +455,25 @@ function leaseVisibleTo(lease: Lease, sessionId: string | undefined): boolean {
   return typeof sessionId === "string" && sessionId !== "" && owner === sessionId;
 }
 
+/** Newest-first active session grant for an exact action (display / hydrate; does not consume). */
+export function findActiveSessionGrant(
+  grants: Map<string, OwnedLease>,
+  action: GuardAction,
+  sessionId: string | undefined,
+  now: number = Date.now(),
+): OwnedLease | undefined {
+  return [...grants.values()]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate &&
+        candidate.kind === action.kind &&
+        leaseActive(candidate, now) &&
+        leaseVisibleTo(candidate, sessionId) &&
+        patternMatches(candidate.pattern, action.target),
+    );
+}
+
 function ruleMatches(rule: PolicyRule, kind: GuardKind, scope: PolicyScope): boolean {
   const kindOk = rule.kind === "*" || rule.kind === kind;
   const scopeOk = rule.scope === "*" || rule.scope === scope;
@@ -1037,16 +1056,7 @@ export class LocalKernel {
       !matching.some((rule) => rule.decision === "allow");
     if (needsAsk) {
       // Newest grant first (the Rust kernel's `next_back` on insertion order).
-      const grant = [...this.grants.values()]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate &&
-            candidate.kind === action.kind &&
-            leaseActive(candidate, now) &&
-            leaseVisibleTo(candidate, sessionId) &&
-            patternMatches(candidate.pattern, action.target),
-        );
+      const grant = findActiveSessionGrant(this.grants, action, sessionId, now);
       if (grant) {
         const bound = this.mintBoundLease(action.kind, action.target, grant, now);
         return {
@@ -1136,6 +1146,30 @@ export class LocalKernel {
     if (typeof sessionId === "string" && sessionId !== "") grant.owner = sessionId;
     this.grants.set(grant.leaseId, grant);
     return grant;
+  }
+
+  /** Mirror a grant returned from the trusted kernel (display-only local index). */
+  adoptGrantMirror(grant: Lease): void {
+    if (grant === null || typeof grant !== "object") return;
+    const leaseId = typeof grant.leaseId === "string" ? grant.leaseId.trim() : "";
+    if (leaseId === "") return;
+    const row: OwnedLease = { ...grant };
+    this.grants.set(leaseId, row);
+  }
+
+  /** Active session grant in the local mirror (display-only). */
+  activeGrantForAction(action: GuardAction, sessionId?: string): OwnedLease | undefined {
+    return findActiveSessionGrant(this.grants, action, sessionId);
+  }
+
+  /** Expiry ISO for a covering session grant, when the local grant table knows it. */
+  activeGrantExpiryForAction(action: GuardAction, sessionId?: string): string | undefined {
+    return this.activeGrantForAction(action, sessionId)?.expiry;
+  }
+
+  /** Same lookup as the Rust `guard.grant.query` arm (local transport). */
+  queryGrantForAction(action: GuardAction, sessionId?: string): Lease | null {
+    return this.activeGrantForAction(action, sessionId) ?? null;
   }
 
   /**
@@ -1570,6 +1604,13 @@ export class KernelClient {
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      case "guard.grant.query":
+        return Promise.resolve({
+          grant: this.local.queryGrantForAction(
+            p.action as GuardAction,
+            typeof p.sessionId === "string" ? p.sessionId : undefined,
+          ),
+        }) as unknown as Promise<KernelRequestMap[M]["result"]>;
       case "effect.execute": {
         const effectId = String(p.effectId ?? "");
         if (!effectId) {
@@ -2198,10 +2239,44 @@ export class KernelClient {
    * transports accept the additive field.
    */
   async makeGrant(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
-    return this.rpc(
+    const grant = await this.rpc(
       "guard.grant",
       { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.grant"]["params"],
     );
+    this.local.adoptGrantMirror(grant);
+    return grant;
+  }
+
+  /**
+   * Display-only grant TTL from the mirrored local table (not an RPC query).
+   * Trusted-kernel-only grants unknown to the mirror return undefined — honest partial.
+   */
+  activeGrantExpiryForAction(action: GuardAction, sessionId?: string): string | undefined {
+    return this.local.activeGrantExpiryForAction(action, sessionId);
+  }
+
+  /**
+   * Grant covering an action: local mirror first, then `guard.grant.query` on the
+   * trusted kernel when the mirror missed (e.g. grant minted only in the child).
+   */
+  async queryActiveGrantForAction(action: GuardAction, sessionId?: string): Promise<Lease | undefined> {
+    const mirrored = this.local.activeGrantForAction(action, sessionId);
+    if (mirrored) return mirrored;
+    if (this.modeValue !== "trusted") return undefined;
+    try {
+      const res = await this.rpc("guard.grant.query", {
+        action,
+        sessionId,
+      } as KernelRequestMap["guard.grant.query"]["params"]);
+      const grant = res.grant;
+      if (grant) {
+        this.local.adoptGrantMirror(grant);
+        return grant;
+      }
+    } catch {
+      /* honest partial — approval still works without TTL tick */
+    }
+    return undefined;
   }
 
   async sandboxReport(

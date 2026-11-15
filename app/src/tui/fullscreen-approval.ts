@@ -6,7 +6,7 @@
  */
 
 import { keyChoice, type KeyAnswer } from "./approval-card";
-import { colorEnabled } from "./style";
+import { colorEnabled, strip } from "./style";
 
 export const APPROVAL_TYPE_AHEAD_MS = 250;
 
@@ -26,6 +26,32 @@ export function fullscreenRichApprovalEnabled(
 
 export function fullscreenApprovalStatusExtra(mode: "key" | "line"): string {
   return mode === "key" ? "approval: y/n/a/Esc" : "approval: y/n/a + Enter";
+}
+
+/** Status-line grant countdown while a key approval waits (from card footnote). */
+export function approvalGrantStatusFromCardLines(lines: readonly string[]): string | undefined {
+  for (const line of lines) {
+    const plain = strip(line);
+    const idx = plain.indexOf("session grant:");
+    if (idx >= 0) {
+      const tail = plain.slice(idx + "session grant:".length).trim();
+      return tail !== "" ? `grant: ${tail}` : undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Locate approval card lines already appended to the fullscreen transcript. */
+export function findApprovalCardTranscriptStart(transcript: readonly string[], lines: readonly string[]): number {
+  if (lines.length === 0) return transcript.length;
+  const needle = strip(lines[0] ?? "");
+  if (needle === "") return Math.max(0, transcript.length - lines.length);
+  const searchFrom = Math.max(0, transcript.length - lines.length - 6);
+  for (let i = transcript.length - 1; i >= searchFrom; i -= 1) {
+    const row = transcript[i] ?? "";
+    if (strip(row) === needle || row.includes(needle)) return i;
+  }
+  return Math.max(0, transcript.length - lines.length);
 }
 
 export type FullscreenApprovalKeyOutcome = KeyAnswer | "ignore" | "paste-block";

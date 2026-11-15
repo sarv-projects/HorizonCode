@@ -39,4 +39,17 @@ describe("receipt-run-terminal (ruling 298)", () => {
     expect(latest?.exit.terminal).toBe("succeeded");
     expect(latest?.terminalRunCapability.cols).toBe(80);
   });
+
+  test("run.complete retains providerFailureCode", () => {
+    const snap = captureTerminalRunCapabilitySnapshot({ cols: 80, rows: 24, shellSessionOpen: 0 });
+    const payload = buildRunCompletePayload(
+      { terminal: "failed", detail: "provider_error" },
+      snap,
+      { providerFailureCode: "OVERLOADED" },
+    );
+    const latest = latestRunCompleteFromEvents([{ type: RUN_COMPLETE_EVENT, payload }]);
+    expect(latest?.providerFailureCode).toBe("OVERLOADED");
+    const lines = formatRunTerminalCapabilityLines(snap, latest?.exit, latest?.providerFailureCode);
+    expect(lines.some((l) => l.includes("OVERLOADED"))).toBe(true);
+  });
 });

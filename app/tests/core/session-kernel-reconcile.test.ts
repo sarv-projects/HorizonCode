@@ -5,8 +5,10 @@ import * as path from "node:path";
 import { EventTypes } from "../../src/contracts";
 import {
   formatUnpairedSessionKernelNotice,
+  formatSessionKernelReconcileDoctorDetail,
   reconcileSessionKernel,
   sessionKernelReconcileNotice,
+  summarizeSessionKernelReconcileDoctor,
   receiptsPath,
   sessionEventsPath,
 } from "../../src/core/session-kernel-reconcile";
@@ -87,6 +89,32 @@ describe("session↔kernel reconcile", () => {
     expect(msg).toContain("unpaired");
     expect(msg).toContain("edit");
     expect(sessionKernelReconcileNotice("/nope", "missing")).toBeUndefined();
+  });
+
+  test("doctor summary aggregates session streams", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-rec-doc-"));
+    try {
+      expect(summarizeSessionKernelReconcileDoctor(ws).scanned).toBe(0);
+      const sid = "sess-doc";
+      const evFile = sessionEventsPath(ws, sid);
+      mkdirSync(path.dirname(evFile), { recursive: true });
+      writeFileSync(
+        evFile,
+        JSON.stringify({
+          id: "e1",
+          seq: 1,
+          type: EventTypes.toolCall,
+          payload: { id: "c1", name: "grep" },
+        }) + "\n",
+      );
+      const summary = summarizeSessionKernelReconcileDoctor(ws);
+      expect(summary.scanned).toBe(1);
+      expect(summary.toolCalls).toBe(1);
+      expect(summary.unpairedCalls).toBe(1);
+      expect(formatSessionKernelReconcileDoctorDetail(summary)).toContain("unpaired call");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
   });
 
   test("reports unpaired call when no receipt", () => {

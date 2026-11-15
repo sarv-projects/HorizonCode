@@ -224,6 +224,38 @@ impl Kernel {
                 serde_json::to_value(grant).map_err(|e| format!("cannot serialize grant: {}", e))
             }
 
+            // Read-only grant lookup for approval TTL hydrate (Wave C §8 #6).
+            // Same action/session validation as guard.check; no parent-control mint.
+            "guard.grant.query" => {
+                let action = params
+                    .get("action")
+                    .and_then(|a| a.as_object())
+                    .ok_or_else(|| "guard.grant.query.action must be an object".to_string())?;
+                let kind = action
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "guard.grant.query.action.kind must be a non-empty string".to_string())?
+                    .to_string();
+                if !guard::known_kind(&kind) {
+                    return Err(guard::unknown_kind_refusal(&kind));
+                }
+                let target = action
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "guard.grant.query.action.target must be a string".to_string())?
+                    .to_string();
+                let session_id = session_param(params);
+                let grant = self.guard.query_matching_grant(
+                    &guard::GuardAction { kind, target },
+                    session_id.as_deref(),
+                );
+                Ok(match grant {
+                    Some(g) => json!({ "grant": g }),
+                    None => json!({ "grant": Value::Null }),
+                })
+            }
+
             // FEAT-002: append a rule to the runtime command allowlist
             // (<state-dir>/allowlist.json), file-locked append-dedup. Additive,
             // mirrored in contracts.ts KERNEL_METHODS + KernelRequestMap; the

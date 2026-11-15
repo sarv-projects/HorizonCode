@@ -2,12 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { createRuntime } from "../../src/core";
+import { defaultConfigPath } from "../../src/core/config";
 import { hooksConfigFiles, loadHooks } from "../../src/core/hooks";
 import {
   bindWorkspaceHooksDigest,
   digestWorkspaceHooks,
   ensureWorkspaceHookTrust,
+  formatUntrustedWorkspaceStartupNotice,
   hooksLoadOptions,
+  isWorkspaceTrustApprovalTitle,
   loadTrustStore,
   resolveWorkspaceHookTrust,
   workspaceHooksTrusted,
@@ -138,6 +142,53 @@ describe("workspace hook trust", () => {
     wsHooks(JSON.stringify({ hooks: { sessionStart: [{ command: "false" }] } }));
     const ok = await ensureWorkspaceHookTrust(workspace, [resolved], home);
     expect(ok).toBe(false);
+  });
+
+  test("folder-trust startup notice when listed but unbound", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
+    home = mkdtempSync(path.join(tmpdir(), "hz-hook-home-"));
+    wsHooks();
+    const resolved = path.resolve(workspace);
+    const notice = formatUntrustedWorkspaceStartupNotice(resolved, home, [resolved]);
+    expect(notice).toContain("folder-trust");
+    expect(notice).toContain("/trust");
+  });
+
+  test("createRuntime flushes folder-trust startup notice on first send", async () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
+    home = mkdtempSync(path.join(tmpdir(), "hz-hook-home-"));
+    wsHooks();
+    const resolved = path.resolve(workspace);
+    const cfg = defaultConfigPath(home);
+    mkdirSync(path.dirname(cfg), { recursive: true });
+    writeFileSync(cfg, JSON.stringify({ provider: "mock", trustedWorkspaceHooks: [resolved] }, null, 2) + "\n");
+    const prevHome = process.env.HOME;
+    const prevUser = process.env.USERPROFILE;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    const notices: string[] = [];
+    const rt = await createRuntime({ workspace, mock: true });
+    try {
+      await rt.send("hi", {
+        onEvent: (e) => {
+          if (e.type === "notice") notices.push(e.message);
+        },
+      });
+      expect(notices.join("\n")).toContain("not fully trusted");
+      expect(notices.join("\n")).toContain("folder-trust");
+    } finally {
+      await rt.close();
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUser === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUser;
+    }
+  });
+
+  test("isWorkspaceTrustApprovalTitle matches bind/rebind cards only", () => {
+    expect(isWorkspaceTrustApprovalTitle("Trust this workspace folder?")).toBe(true);
+    expect(isWorkspaceTrustApprovalTitle("Workspace trust changed — review and re-trust?")).toBe(true);
+    expect(isWorkspaceTrustApprovalTitle("run hook")).toBe(false);
   });
 
   test("directory digest cap overflow fails closed", async () => {

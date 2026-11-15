@@ -3,7 +3,14 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
-import { todoTool } from "../../src/tools/todo";
+import {
+  importSnapshottedTodos,
+  openTodos,
+  parseSnapshottedTodoLine,
+  todoTool,
+  todoWriteTool,
+  todoUpdatedEventPayload,
+} from "../../src/tools/todo";
 import { mockToolContext, type MockToolContext } from "./helpers";
 
 /** A context with its own session id, so module-level todo state never leaks between tests. */
@@ -88,7 +95,7 @@ describe("todo tool", () => {
   test("rejects an unknown action", async () => {
     const r = await todoTool.execute({ action: "clear" }, sessionCtx());
     expect(r.ok).toBe(false);
-    expect(r.error).toBe("unknown action: clear (expected list, add or done)");
+    expect(r.error).toBe("unknown action: clear (expected list, add, done, drop or merge)");
   });
 
   test("requires text for add", async () => {
@@ -98,6 +105,25 @@ describe("todo tool", () => {
     expect((await list(ctx)).output).toBe("No todos.");
   });
 
+  test("imports snapshotted handoff todo lines", () => {
+    const sid = `import-${randomUUID()}`;
+    expect(parseSnapshottedTodoLine("[t1] fix lint")).toEqual({ id: "t1", text: "fix lint" });
+    expect(parseSnapshottedTodoLine("not a snapshot")).toBeNull();
+    const r = importSnapshottedTodos(sid, ["[t1] a", "[t2] b", "[t1] a"]);
+    expect(r).toEqual({ added: 2, skipped: 1 });
+    expect(openTodos(sid).map((t) => t.text)).toEqual(["a", "b"]);
+  });
+
+  test("drop requires reason and hides item from open todos", async () => {
+    const ctx = sessionCtx();
+    await add(ctx, "maybe later");
+    const dropped = await todoTool.execute({ action: "drop", text: "t1", reason: "out of scope" }, ctx);
+    expect(dropped.ok).toBe(true);
+    expect(dropped.output).toContain("(dropped: out of scope)");
+    expect(openTodos(ctx.sessionId)).toEqual([]);
+    expect((await list(ctx)).output).toContain("[~]");
+  });
+
   test("requires an id for done and rejects unknown ids", async () => {
     const ctx = sessionCtx();
     expect((await todoTool.execute({ action: "done" }, ctx)).error).toBe("text (item id) is required for done");
@@ -105,5 +131,57 @@ describe("todo tool", () => {
     await add(ctx, "kept pending");
     expect((await todoTool.execute({ action: "done", text: "t2" }, ctx)).error).toBe("todo not found: t2");
     expect((await list(ctx)).output).toBe("[ ] t1 kept pending");
+  });
+
+  test("add refuses duplicate open text", async () => {
+    const ctx = sessionCtx();
+    await add(ctx, "once");
+    const dup = await add(ctx, "once");
+    expect(dup.ok).toBe(false);
+    expect(dup.error).toBe("duplicate open todo: t1 (same text)");
+    expect((await list(ctx)).output).toBe("[ ] t1 once");
+  });
+
+  test("merge applies ordered batch ops", async () => {
+    const ctx = sessionCtx();
+    const r = await todoTool.execute(
+      {
+        action: "merge",
+        ops: [
+          { op: "add", text: "a" },
+          { op: "add", text: "b" },
+          { op: "done", id: "t1" },
+        ],
+      },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toBe("[x] t1 a\n[ ] t2 b");
+    const dupBatch = await todoTool.execute(
+      { action: "merge", ops: [{ op: "add", text: "b" }] },
+      ctx,
+    );
+    expect(dupBatch.error).toBe("ops[0]: duplicate open todo: t2 (same text)");
+  });
+
+  test("todo_write mirrors todo checklist behavior", async () => {
+    const ctx = sessionCtx();
+    expect((await todoWriteTool.execute({ action: "add", text: "ship alias" }, ctx)).ok).toBe(true);
+    expect((await todoWriteTool.execute({ action: "list" }, ctx)).output).toContain("ship alias");
+  });
+
+  test("todoUpdatedEventPayload maps statuses for hz.todo.updated", async () => {
+    const ctx = sessionCtx();
+    await add(ctx, "open");
+    let payload = todoUpdatedEventPayload(ctx.sessionId, "added");
+    expect(payload.revision).toBe(1);
+    expect(payload.todos).toEqual([{ id: "t1", text: "open", status: "pending" }]);
+    await todoTool.execute({ action: "done", text: "t1" }, ctx);
+    payload = todoUpdatedEventPayload(ctx.sessionId, "updated");
+    expect(payload.todos[0]?.status).toBe("completed");
+    await add(ctx, "later");
+    await todoTool.execute({ action: "drop", text: "t2", reason: "n/a" }, ctx);
+    payload = todoUpdatedEventPayload(ctx.sessionId, "updated");
+    expect(payload.todos.find((t) => t.id === "t2")?.status).toBe("cancelled");
   });
 });

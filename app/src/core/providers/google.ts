@@ -26,6 +26,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import { classifyProviderFailure } from "./failure-codes";
 import {
   DEFAULT_RETRY_ATTEMPTS,
   backoffDelay,
@@ -188,7 +189,7 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_GOOGLE_BASE_URL).replace(/\/+$/, "");
   const contents = toGoogleContents(req.messages ?? []);
   if (contents.length === 0) {
-    yield { type: "error", message: "google: nothing to send (no messages)" };
+    yield { type: "error", message: "google: nothing to send (no messages)", code: "UNKNOWN" };
     return;
   }
 
@@ -234,18 +235,23 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `google request failed: ${errorText(err)}` };
+    yield { type: "error", message: `google request failed: ${errorText(err)}`, code: "TRANSIENT" };
     return;
   }
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    yield { type: "error", message: `google HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
+    const code = classifyProviderFailure(response.status, detail);
+    yield {
+      type: "error",
+      message: `google HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}`,
+      code,
+    };
     return;
   }
   if (!response.body) {
-    yield { type: "error", message: "google returned an empty response body" };
+    yield { type: "error", message: "google returned an empty response body", code: "EMPTY_RESPONSE" };
     return;
   }
 
@@ -273,12 +279,12 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
       if (!event || typeof event !== "object") continue;
       if (event.error) {
         const text = typeof event.error.message === "string" ? event.error.message : "google stream error";
-        yield { type: "error", message: text };
+        yield { type: "error", message: text, code: classifyProviderFailure(0, text) };
         return;
       }
       const blocked = event.promptFeedback?.blockReason;
       if (typeof blocked === "string" && blocked !== "") {
-        yield { type: "error", message: `google blocked the prompt (${blocked})` };
+        yield { type: "error", message: `google blocked the prompt (${blocked})`, code: "AUTH" };
         return;
       }
       if (event.usageMetadata && typeof event.usageMetadata === "object") {
@@ -310,7 +316,7 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `google stream failed: ${errorText(err)}` };
+    yield { type: "error", message: `google stream failed: ${errorText(err)}`, code: "TRANSIENT" };
     return;
   }
 

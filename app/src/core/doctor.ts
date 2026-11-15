@@ -18,10 +18,23 @@ import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import { catalogModel, loadCatalog } from "./catalog/catalog";
 import { parseModelsPollIntervalMs } from "./catalog/catalog-poll";
+import { summarizeHandoffStore } from "./memory/handoff";
+import { summarizeProviderFailureCodes } from "./providers/failure-codes";
 import { docs30SkipBacklogCount } from "./docs30-skip-backlog";
+import { oauthCredentialsDbPath } from "./auth/credential-db";
+import { readOAuthRefreshGeneration } from "./auth/oauth-refresh-notify";
 import { readOAuthToken } from "./auth/store";
 import { defaultConfigPath, loadConfig, missingKey, readConfigFile, type EnvLike } from "./config";
 import { resolveKernelBinary, resolveSandboxExecBinary } from "./kernel";
+import { hzEventCoverageReport } from "./event-catalogue";
+import { summarizeMemoryTopics } from "./memory/manifest";
+import { summarizeMemoryBanks } from "./memory/store";
+import { savedAllowsPath, summarizeSavedAllows } from "./saved-allows";
+import { workspaceTrustGate, workspaceTrustNextSteps } from "./trust";
+import {
+  formatSessionKernelReconcileDoctorDetail,
+  summarizeSessionKernelReconcileDoctor,
+} from "./session-kernel-reconcile";
 import { kernelStateDir } from "./paths";
 import { tuiFullscreenBlocksLabel } from "../tui/escape-writer";
 import { resolveTuiScreenMode } from "../tui/screen-mode";
@@ -291,10 +304,10 @@ function checkCatalogPoll(d: DoctorEnv): DoctorCheck {
     return ok(
       "catalog.poll",
       "models.dev background poll",
-      "off by default (HZ_MODELS_POLL_MS ≥60000 enables; wired on createRuntime, stops on close — ruling 180)",
+      "off by default (HZ_MODELS_POLL_MS ≥60000 enables; kernel net.fetch on poll — rulings 180, 421)",
     );
   }
-  return ok("catalog.poll", "models.dev background poll", `enabled every ${ms}ms (HZ_MODELS_POLL_MS; ruling 180)`);
+  return ok("catalog.poll", "models.dev background poll", `enabled every ${ms}ms (HZ_MODELS_POLL_MS; kernel net.fetch — rulings 180, 421)`);
 }
 
 function checkDocs30SkipBacklog(): DoctorCheck {
@@ -331,6 +344,15 @@ function checkProvider(d: DoctorEnv): DoctorCheck[] {
   }
   const oauth = checkOAuthToken(d, config);
   if (oauth !== undefined) out.push(oauth);
+  const credStore = checkOAuthCredentialStore(d, config);
+  if (credStore !== undefined) out.push(credStore);
+  const refreshGen = checkOAuthRefreshGen(d, config);
+  if (refreshGen !== undefined) out.push(refreshGen);
+  if (config.provider !== "mock") {
+    out.push(
+      ok("provider.failure_codes", "provider failure codes", summarizeProviderFailureCodes()),
+    );
+  }
   // Model resolution against the catalog.
   const catalog = loadCatalog(d.env);
   if (config.provider === "mock") {
@@ -1160,6 +1182,37 @@ function checkOuterEgressFirewall(d: DoctorEnv): DoctorCheck {
   );
 }
 
+function checkOAuthCredentialStore(d: DoctorEnv, config: ReturnType<typeof loadConfig>): DoctorCheck | undefined {
+  if (config.provider === "mock" || config.provider === "ollama") return undefined;
+  const usesOAuth = config.resolved?.credential.kind === "oauth";
+  const tok = readOAuthToken(config.provider, d.home);
+  if (!usesOAuth && tok === undefined) return undefined;
+  const dbPath = oauthCredentialsDbPath(d.home);
+  if (!existsSync(dbPath)) {
+    return warn(
+      "auth.credentials_db",
+      "oauth credential store",
+      "credentials.db not present yet (legacy json migrates on first read)",
+      "run `hzcode login` to populate credentials.db; refresh uses credentials.db.lock + per-provider refresh.gen broadcast",
+    );
+  }
+  return ok("auth.credentials_db", "oauth credential store", "credentials.db present (OAuth refresh flock + refresh.gen wired)");
+}
+
+function checkOAuthRefreshGen(d: DoctorEnv, config: ReturnType<typeof loadConfig>): DoctorCheck | undefined {
+  const id = config.provider;
+  if (id === "mock" || id === "ollama") return undefined;
+  const usesOAuth = config.resolved?.credential.kind === "oauth";
+  const tok = readOAuthToken(id, d.home);
+  if (!usesOAuth && tok === undefined) return undefined;
+  const gen = readOAuthRefreshGeneration(id, d.home);
+  return ok(
+    "auth.oauth_refresh_gen",
+    "oauth refresh notify",
+    `provider ${id}: refresh.gen generation ${gen} (cross-process reload signal after SQLite refresh; not inotify)`,
+  );
+}
+
 function checkOAuthToken(d: DoctorEnv, config: ReturnType<typeof loadConfig>): DoctorCheck | undefined {
   const id = config.provider;
   if (id === "mock" || id === "ollama") return undefined;
@@ -1176,7 +1229,12 @@ function checkOAuthToken(d: DoctorEnv, config: ReturnType<typeof loadConfig>): D
   }
   const exp = tok.expiresAt ? Date.parse(tok.expiresAt) : Number.NaN;
   if (!Number.isNaN(exp) && exp < Date.now()) {
-    return warn("provider.oauth", "oauth token", "stored token is expired", "refresh or re-login when token refresh is wired");
+    return warn(
+      "provider.oauth",
+      "oauth token",
+      "stored token is expired",
+      "the next provider request runs refreshOAuthAccessToken under credentials.db.lock (or run hzcode login)",
+    );
   }
   const detail = tok.expiresAt ? `present (expires ${tok.expiresAt}; value not shown)` : "present (value not shown)";
   return ok("provider.oauth", "oauth token", detail);
@@ -1309,6 +1367,91 @@ export function checkRepoLicense(repoRoot: string = REPO_ROOT): DoctorCheck {
   );
 }
 
+function checkSavedAllows(d: DoctorEnv): DoctorCheck {
+  const summary = summarizeSavedAllows(d.workspace);
+  if (!existsSync(savedAllowsPath(d.workspace))) {
+    return ok(
+      "perm.saved_allows",
+      "saved allows",
+      `${summary}; approve with [a]lways to persist exact targets for future sessions`,
+    );
+  }
+  return ok("perm.saved_allows", "saved allows", summary);
+}
+
+function checkWorkspaceFolderTrust(d: DoctorEnv): DoctorCheck {
+  const config = loadConfig(d.env, defaultConfigPath(d.home));
+  const gate = workspaceTrustGate(d.workspace, d.home, config.trustedWorkspaceHooks);
+  const steps = workspaceTrustNextSteps(gate, d.workspace, d.home);
+  const hint = steps[0] ?? "run /trust in hzcode for fingerprints and next steps";
+  if (gate === "no_surfaces") {
+    return ok("workspace.trust", "folder trust", "no trust-gated workspace surfaces on disk");
+  }
+  if (gate === "trusted") {
+    return ok("workspace.trust", "folder trust", "folder trust current — hooks/skills/agents/MCP/providers match trust.json");
+  }
+  return warn(
+    "workspace.trust",
+    "folder trust",
+    `status=${gate}; workspace hooks/skills/agents/MCP/providers stay ignored until trust binds (see /trust)`,
+    hint,
+  );
+}
+
+function checkMemoryBanks(d: DoctorEnv): DoctorCheck {
+  const summary = summarizeMemoryBanks(d.workspace, d.home);
+  const topics = summarizeMemoryTopics(d.workspace);
+  return ok(
+    "memory.banks",
+    "memory FTS banks",
+    `${summary}; topics: ${topics} (memory_remember / memory_search)`,
+  );
+}
+
+function checkHandoffStore(d: DoctorEnv): DoctorCheck {
+  const env = d.env as NodeJS.ProcessEnv;
+  const store = summarizeHandoffStore(d.workspace);
+  if (store === null) {
+    return ok(
+      "handoff.store",
+      "Engram handoffs",
+      "no handoffs.db yet (handoff_create on first write; BM25 + optional MMR diversify)",
+    );
+  }
+  const dur =
+    env.HZ_TODO_DURABLE === "1"
+      ? `; durable_todos=${store.durableTodoRows} across ${store.durableTodoBranches} branch(es) (HZ_TODO_DURABLE=1; handoff_resume merge_durable_branch)`
+      : "";
+  return ok(
+    "handoff.store",
+    "Engram handoffs",
+    `branch=${store.branch}; handoffs=${store.handoffRows}; fts_sections=${store.ftsRows}; resume/search MMR default on${dur}`,
+  );
+}
+
+function checkSessionKernelReconcile(d: DoctorEnv): DoctorCheck {
+  const summary = summarizeSessionKernelReconcileDoctor(d.workspace);
+  const detail = formatSessionKernelReconcileDoctorDetail(summary);
+  if (summary.unpairedCalls > 0 || summary.unpairedReceipts > 0) {
+    return warn(
+      "session.kernel",
+      "session↔kernel tool ledger",
+      detail,
+      "inspect kernel events + receipts.jsonl; in-session notice after tool batches (ruling 235); full R170 barrier still open",
+    );
+  }
+  return ok("session.kernel", "session↔kernel tool ledger", detail);
+}
+
+function checkHzEventCoverage(_d: DoctorEnv): DoctorCheck {
+  const r = hzEventCoverageReport();
+  return ok(
+    "events.rc18",
+    "hz.* RC-18",
+    `${r.literalCanonicalEmitted.length}/${r.canonicalTotal} literal canonical emissions; ${r.mappedCanonicalNames.length} mapped; ${r.unmappedCanonicalNames.length} unimplemented — honesty via event-catalogue.ts (not a completion claim)`,
+  );
+}
+
 function checkStateDurability(d: DoctorEnv): DoctorCheck {
   const env = d.env as NodeJS.ProcessEnv;
   if (!jsonlFsyncEnabled(env)) {
@@ -1319,10 +1462,14 @@ function checkStateDurability(d: DoctorEnv): DoctorCheck {
       "unset HZ_JSONL_FSYNC for normal durability; SQLite synchronous=FULL is unchanged",
     );
   }
+  const todoParts: string[] = [];
+  if (env.HZ_TODO_DURABLE === "1") todoParts.push("HZ_TODO_DURABLE=1 → handoffs.db durable_todos");
+  if (env.HZ_TODO_DURABLE_AUTOMERGE === "1") todoParts.push("HZ_TODO_DURABLE_AUTOMERGE=1 → merge on branch change");
+  const todo = todoParts.length > 0 ? `; ${todoParts.join("; ")}` : "";
   return ok(
     "state.durability",
     "JSONL durability",
-    "SQLite synchronous=FULL; JSONL appends fsync file + best-effort parent directory (HZ_JSONL_FSYNC=0 disables); power-loss matrix not measured (docs/12 F10)",
+    `SQLite synchronous=FULL; JSONL appends fsync file + best-effort parent directory (HZ_JSONL_FSYNC=0 disables); F10 contract probe: ops/jsonl-fsync-contract-probe.sh (power-loss matrix not measured)${todo}`,
   );
 }
 
@@ -1356,6 +1503,12 @@ export function runDoctor(d: DoctorEnv): DoctorCheck[] {
         ...checkWorkspace(d),
         checkWorkspaceMount(d),
         checkWorkspaceSnapshot(d),
+        checkMemoryBanks(d),
+        checkHandoffStore(d),
+        checkSessionKernelReconcile(d),
+        checkSavedAllows(d),
+        checkWorkspaceFolderTrust(d),
+        checkHzEventCoverage(d),
         checkStateDurability(d),
         checkEffectReconcileProbe(d),
         checkEffectPostimageReplay(d),

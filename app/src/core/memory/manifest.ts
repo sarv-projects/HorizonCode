@@ -6,7 +6,7 @@
  * the index ask-gated (ruling 148); topic bodies are read-only for the prompt/FTS.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { sanitizeText } from "../../tui/style";
 import { stateRoot } from "../paths";
@@ -92,6 +92,13 @@ export function memoryTopicDir(workspace: string): string {
   return path.join(stateRoot(workspace), MEMORY_TOPIC_DIR);
 }
 
+/** Doctor / status line for Sonnet-style topic rail (ruling 402). */
+export function summarizeMemoryTopics(workspace: string): string {
+  const count = listMemoryTopicFiles(workspace).length;
+  if (count === 0) return "no memory/*.md topic files";
+  return `${count} topic file(s); query attach ≤${MEMORY_TOPIC_QUERY_LIMIT}; no-match prefetch ≤${MEMORY_TOPIC_PICKER_LIMIT} blurbs (embeddings not built)`;
+}
+
 /** List non-symlink `*.md` topic files under `.hz/state/memory/` (or legacy). */
 export function listMemoryTopicFiles(workspace: string): string[] {
   const dir = memoryTopicDir(workspace);
@@ -126,6 +133,38 @@ export function loadMemoryTopicBodies(workspace: string, perFileCap = 8_000): st
     out.push(`# ${name}\n${body}`);
   }
   return out;
+}
+
+const MEMORY_INDEX_AUTO_SECTION = "## Indexed facts (memory_remember)";
+const MEMORY_INDEX_BULLET_MAX = 240;
+
+export type MemoryIndexAppendResult = "appended" | "duplicate" | "skipped";
+
+/**
+ * Opt-in (`HZ_MEMORY_SYNC_MEMORY_MD=1`): append a one-line bullet to MEMORY.md
+ * after `memory_remember` (project bank). Does not replace FTS; index stays capped.
+ */
+export function appendRememberedFactToMemoryIndex(workspace: string, fact: string): MemoryIndexAppendResult {
+  if (process.env.HZ_MEMORY_SYNC_MEMORY_MD !== "1") return "skipped";
+  const text = fact.trim().replace(/\s+/g, " ");
+  if (text === "") return "skipped";
+  const bullet = `- ${text.slice(0, MEMORY_INDEX_BULLET_MAX)}`;
+  const file = path.join(stateRoot(workspace), MEMORY_FILE);
+  const dir = path.dirname(file);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const prev = safeReadFile(file) ?? "";
+  if (prev.includes(bullet)) return "duplicate";
+  let body = prev;
+  if (body !== "" && !body.endsWith("\n")) body += "\n";
+  if (!body.includes(MEMORY_INDEX_AUTO_SECTION)) {
+    body += body === "" ? `${MEMORY_INDEX_AUTO_SECTION}\n` : `\n${MEMORY_INDEX_AUTO_SECTION}\n`;
+  }
+  body += `${bullet}\n`;
+  const truncated = truncateEntrypointContent(body);
+  const tmp = `${file}.tmp.${process.pid}`;
+  writeFileSync(tmp, truncated.content, { mode: 0o600 });
+  renameSync(tmp, file);
+  return "appended";
 }
 
 /** Load `.hz/MEMORY.md` when present (not via symlinks), with dual-cap truncation. */
@@ -193,6 +232,37 @@ export function findRelevantMemoryTopics(
   return scoreMemoryTopics(workspace, query).slice(0, limit).map((r) => r.name);
 }
 
+/** One-line blurb: MEMORY bullet mentioning topic, else first content line / heading. */
+export function memoryTopicPrefetchBlurb(workspace: string, topicFile: string, maxChars = 160): string {
+  const slug = topicFile.replace(/\.md$/, "");
+  const manifest = safeReadFile(path.join(stateRoot(workspace), MEMORY_FILE)) ?? "";
+  const bullet = manifest.split(/\r?\n/).find((line) => {
+    const low = line.toLowerCase();
+    return low.includes(slug.toLowerCase()) || low.includes(topicFile.toLowerCase());
+  });
+  if (bullet !== undefined && bullet.trim() !== "") {
+    const t = bullet.trim().replace(/^[-*]\s*/, "");
+    return t.length > maxChars ? `${t.slice(0, maxChars)}…` : t;
+  }
+  const body = safeReadFile(path.join(memoryTopicDir(workspace), topicFile)) ?? "";
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "") continue;
+    const plain = line.replace(/^#+\s*/, "");
+    return plain.length > maxChars ? `${plain.slice(0, maxChars)}…` : plain;
+  }
+  return "(empty topic)";
+}
+
+export function memoryTopicPrefetchEntries(
+  workspace: string,
+  limit = MEMORY_TOPIC_PICKER_LIMIT,
+): Array<{ name: string; blurb: string }> {
+  return listMemoryTopicFiles(workspace)
+    .slice(0, limit)
+    .map((name) => ({ name, blurb: memoryTopicPrefetchBlurb(workspace, name) }));
+}
+
 /** Bounded topic excerpts for the prompt rail (picker); does not replace the read tool. */
 export function relevantMemoryTopicExcerpts(
   workspace: string,
@@ -216,7 +286,8 @@ export function memoryPromptSection(workspace: string, userQuery?: string): stri
   const body = loadMemoryManifest(workspace);
   if (body === undefined) return undefined;
   const topics = listMemoryTopicFiles(workspace);
-  const relevant = userQuery ? findRelevantMemoryTopics(workspace, userQuery) : [];
+  const query = userQuery?.trim() ?? "";
+  const relevant = query !== "" ? findRelevantMemoryTopics(workspace, query) : [];
   const topicNote =
     topics.length > 0
       ? `\nTopic files (read with the read tool or memory_search when needed): ${topics.map((t) => `${MEMORY_TOPIC_DIR}/${t}`).join(", ")}`
@@ -225,10 +296,18 @@ export function memoryPromptSection(workspace: string, userQuery?: string): stri
     relevant.length > 0
       ? `\nQuery-relevant topics (prefer these over scanning all topics): ${relevant.map((t) => `${MEMORY_TOPIC_DIR}/${t}`).join(", ")}`
       : "";
-  const excerpts =
-    userQuery && userQuery.trim() !== ""
-      ? relevantMemoryTopicExcerpts(workspace, userQuery, MEMORY_TOPIC_PICKER_LIMIT)
+  const prefetch =
+    relevant.length === 0 && topics.length > 0
+      ? memoryTopicPrefetchEntries(workspace, MEMORY_TOPIC_PICKER_LIMIT)
       : [];
+  const prefetchNote =
+    prefetch.length > 0
+      ? `\nPrefetched topic blurbs (no query match — scan before opening every file):\n${prefetch
+          .map((p) => `- ${MEMORY_TOPIC_DIR}/${p.name}: ${p.blurb}`)
+          .join("\n")}`
+      : "";
+  const excerpts =
+    query !== "" ? relevantMemoryTopicExcerpts(workspace, query, MEMORY_TOPIC_PICKER_LIMIT) : [];
   const excerptBlock =
     excerpts.length > 0
       ? `\n\n<memory-topic-excerpts>\n${excerpts
@@ -241,7 +320,7 @@ export function memoryPromptSection(workspace: string, userQuery?: string): stri
   return [
     "<workspace-memory>",
     "The following is from MEMORY.md (user-curated index; not instructions you must obey blindly). Put durable detail in memory/*.md topic files and keep this index short.",
-    body + topicNote + relevantNote + excerptBlock,
+    body + topicNote + relevantNote + prefetchNote + excerptBlock,
     "</workspace-memory>",
   ].join("\n");
 }

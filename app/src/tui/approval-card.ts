@@ -8,6 +8,7 @@
  */
 
 import { analyzeShellCompound, maxSegmentRisk } from "../core/shell-split";
+import { formatGrantRemainingForApproval } from "./grant-ttl";
 import { formatToolEffectLinkage } from "./cards";
 import { bold, dim, paint, sanitizeText, truncate, visibleWidth } from "./style";
 
@@ -35,6 +36,12 @@ export interface ApprovalCardInput {
   unicode?: boolean;
   /** Whether an "always" answer can be remembered (a target exists). */
   canAlways?: boolean;
+  /** Session grant TTL in minutes (approval card footnote). */
+  grantTtlMinutes?: number;
+  /** When a grant already covers this target, minutes left (display at prompt time). */
+  grantActiveRemainingMinutes?: number;
+  /** Prefer over `grantActiveRemainingMinutes` for live ticking countdown copy. */
+  grantActiveRemainingMs?: number;
 }
 
 /** Coarse risk of a guard kind; shell and unknown authority is highest. */
@@ -70,9 +77,12 @@ export function formatApprovalLinkage(input: {
 }
 
 /** The key legend: keys bold, labels dim. */
-export function keyLegend(canAlways = true): string {
+export function keyLegend(canAlways = true, grantTtlMinutes = 15): string {
   const parts = [bold("y") + dim(" yes"), bold("n") + dim(" no")];
-  if (canAlways) parts.push(bold("a") + dim(" always this session"));
+  if (canAlways) {
+    const label = grantTtlMinutes > 0 ? ` always this session (${grantTtlMinutes}m grant)` : " always this session";
+    parts.push(bold("a") + dim(label));
+  }
   parts.push(bold("Esc") + dim(" deny"));
   return parts.map((p, i) => (i === 0 ? "" : dim("  ")) + p).join("");
 }
@@ -103,7 +113,32 @@ export function approvalCard(input: ApprovalCardInput): string[] {
   });
   if (linkage !== "") rows.push(dim(truncate(linkage, inner)));
   if (input.guardian) rows.push(dim(truncate(input.guardian, inner)));
-  rows.push(keyLegend(input.canAlways !== false));
+  const ttlMin = input.grantTtlMinutes ?? 15;
+  const grantRemMs = input.grantActiveRemainingMs;
+  const grantRemMin = input.grantActiveRemainingMinutes;
+  if (grantRemMs !== undefined && grantRemMs > 0) {
+    rows.push(
+      dim(
+        truncate(
+          `session grant: ${formatGrantRemainingForApproval(grantRemMs)} remaining on this exact target`,
+          inner,
+        ),
+      ),
+    );
+  } else if (grantRemMin !== undefined) {
+    const rem = grantRemMin;
+    rows.push(
+      dim(
+        truncate(
+          `session grant: ~${rem === 1 ? "1 minute" : `${rem} minutes`} remaining on this exact target`,
+          inner,
+        ),
+      ),
+    );
+  } else if (input.canAlways !== false) {
+    rows.push(dim(truncate(`grant: exact target only, expires after ${ttlMin === 1 ? "1 minute" : `${ttlMin} minutes`}`, inner)));
+  }
+  rows.push(keyLegend(input.canAlways !== false, ttlMin));
 
   const head = ` ${u ? "\u26a0" : "!"} Approve ${truncate(input.title, Math.max(8, inner - 14))}? `;
   const top = paint("warn", tl + h) + paint("warn", bold(head)) + paint("warn", h.repeat(Math.max(0, width - 3 - visibleWidth(head))) + tr);

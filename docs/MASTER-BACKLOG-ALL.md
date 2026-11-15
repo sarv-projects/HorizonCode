@@ -54,7 +54,7 @@
 
 | Item | Status | Open / residual |
 |---|---|---|
-| RC-18 `SHIPPED_TO_HZ_MAP` | **PARTIAL — TESTED** (**174b**) | **23 shipped** event types; not full **44-map** per design corpus |
+| RC-18 `SHIPPED_TO_HZ_MAP` | **PARTIAL — TESTED** (**174b**, **418**, **439**–**440**) | **34 shipped** type names; **16/44** literal `hz.*`; **16** unmapped |
 | JSONL fsync default | **TESTED** (**174b**, **251**) | — |
 | DeepSeek child prompt sections | **TESTED** (**174b**) | — |
 | Full EffectHost + `hz.*` emission | **PARTIAL** (**220**, **348–350**) | Internal versioned `owner.*` transitions add direct Rust fencing/recovery proof only, NOT canonical `hz.*` additions or universal authority |

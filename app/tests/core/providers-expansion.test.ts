@@ -261,6 +261,7 @@ describe("google (Gemini) provider", () => {
     expect(events[events.length - 1]).toBe(errors[0]);
     expect(errors[0]!.message).toContain("google HTTP 429");
     expect(errors[0]!.message).toContain("rate limited");
+    expect(errors[0]!.code).toBe("RATE_LIMIT");
   });
 
   test("a malformed frame is skipped with a notice and the stream continues", async () => {
@@ -397,6 +398,7 @@ describe("ollama provider", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toContain("ollama HTTP 429");
     expect(errors[0]!.message).toContain("overloaded");
+    expect(errors[0]!.code).toBe("OVERLOADED");
   });
 
   test("a malformed line is skipped with a notice and the stream continues", async () => {
@@ -445,6 +447,7 @@ describe("ollama provider", () => {
     expect(error.message).toContain("ollama request failed");
     expect(error.message).toContain(OLLAMA_BASE);
     expect(error.message).toContain("is ollama running?");
+    expect(error.code).toBe("TRANSIENT");
   });
 
   test("a mid-stream drop is re-requested once, then the second drop fails typed", async () => {
@@ -464,6 +467,7 @@ describe("ollama provider", () => {
     const errors = errorsOf(events);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toContain("ollama stream failed");
+    expect(errors[0]!.code).toBe("TRANSIENT");
   });
 
   test("a dropped pass is re-requested and the successful pass completes (earlier text may repeat)", async () => {

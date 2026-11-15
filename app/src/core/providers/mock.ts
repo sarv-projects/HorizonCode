@@ -19,6 +19,8 @@ export const MOCK_TOOL_CALL_ID = "mock-1";
 
 /** The one request the mock can act on: /list files|what.*here|ls\b/i */
 export const MOCK_FILE_REQUEST = /list files|what.*here|ls\b/i;
+/** Server interjection test: slow stream so `session.interject` can arrive mid-turn. */
+export const MOCK_INTERJECT_SERVER_TEST = "HZ_INTERJECT_SERVER_TEST";
 
 function lastMessage(messages: ChatMsg[]): ChatMsg | undefined {
   return messages.length > 0 ? messages[messages.length - 1] : undefined;
@@ -69,6 +71,17 @@ export function createMockProvider(): Provider {
 
       // A loop is impossible: a tool result always takes the branch above and ends
       // the turn, so the mock can call a tool only once per exchange.
+      if (latestUserText(messages).includes(MOCK_INTERJECT_SERVER_TEST)) {
+        yield { type: "text", text: "slow " };
+        for (let tick = 0; tick < 120; tick += 1) {
+          if (req.signal.aborted) break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          yield { type: "text", text: `${tick} ` };
+        }
+        yield { type: "done", stopReason: req.signal.aborted ? "abort" : "end" };
+        return;
+      }
+
       if (MOCK_FILE_REQUEST.test(latestUserText(messages))) {
         yield { type: "text", text: MOCK_LOOKING };
         yield { type: "tool_call", id: MOCK_TOOL_CALL_ID, name: "glob", arguments: JSON.stringify({ pattern: "*" }) };

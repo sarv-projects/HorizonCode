@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   analyzeShellCompound,
   guardActionsForShellCommand,
+  shellSavedGrantTargets,
   maxSegmentRisk,
   segmentRisk,
   shellCompoundPresentationLines,
@@ -55,6 +56,12 @@ describe("shell compound split", () => {
     const single = guardActionsForShellCommand("ls", { kind: "shell.exec", target: "ls" });
     expect(single).toHaveLength(1);
     expect(single[0]?.target).toBe("ls");
+  });
+
+  test("shellSavedGrantTargets expands compound rows", () => {
+    expect(shellSavedGrantTargets("shell.exec", "npm test")).toEqual(["npm test"]);
+    expect(shellSavedGrantTargets("shell.exec", "a && b")).toEqual(["a", "b"]);
+    expect(shellSavedGrantTargets("fs.read", "/x")).toEqual(["/x"]);
   });
 
   test("permission presentation adds compound lines", () => {

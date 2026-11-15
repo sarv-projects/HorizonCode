@@ -7,6 +7,33 @@
 
 import type { ProviderFailureCode } from "../../contracts";
 
+/** Closed union cardinality for doctor / status (docs/30 §8 #12). */
+export const PROVIDER_FAILURE_CODE_NAMES: readonly ProviderFailureCode[] = [
+  "NO_ADAPTER",
+  "MISSING_CREDENTIAL",
+  "INVALID_CREDENTIAL",
+  "AUTH",
+  "RATE_LIMIT",
+  "OVERLOADED",
+  "TRANSIENT",
+  "CONTEXT_WINDOW_EXCEEDED",
+  "QUOTA",
+  "ACCOUNT_QUOTA",
+  "EMPTY_RESPONSE",
+  "IMAGE_OFFLOAD_REQUIRED",
+  "UNKNOWN",
+];
+
+/** Prefix for stderr/TUI when a provider error carries a classified code. */
+export function formatProviderFailureMessage(message: string, code?: ProviderFailureCode): string {
+  if (code === undefined) return message;
+  return `[${code}] ${message}`;
+}
+
+export function summarizeProviderFailureCodes(): string {
+  return `${PROVIDER_FAILURE_CODE_NAMES.length} closed codes; classifyProviderFailure + retryAttemptsForFailureCode (openai-compat + anthropic + ollama + google HTTP/SSE)`;
+}
+
 const CTX_WINDOW =
   /context.?window|maximum.?context|prompt.?too.?long|input.?too.?long|too.?many.?tokens|max(?:imum)?_?(?:prompt|context)_?tokens/i;
 const QUOTA = /quota.?exceeded|insufficient.?quota|billing|credit.?balance|usage.?limit/i;

@@ -28,6 +28,10 @@ export const PROBLEMATIC_LOOP_TOOLS: ReadonlySet<string> = new Set([
   "list",
   "todo",
   "repo_map",
+  "tool_search",
+  "memory_search",
+  "handoff_search",
+  "ast_search",
 ]);
 
 const STEP_PART_SEP = "\u001e";
@@ -249,5 +253,100 @@ export class LoopDetectionTracker {
 
   reset(): void {
     resetLoopDetectionState(this.state);
+  }
+}
+
+/** Grok-style true-noop rail: identical call step AND identical model-facing outputs. */
+export const NUDGE_AFTER_IDENTICAL_ACTION_STATIONARITY = 3;
+export const MAX_CONSECUTIVE_IDENTICAL_ACTION_STATIONARITY = 5;
+
+export interface ActionOutcomePart {
+  name: string;
+  /** Digest of the model-facing tool result text for this call in the step. */
+  fingerprint: string;
+}
+
+/** Sorted multiset digest for one provider step's tool outcomes (parallel-safe). */
+export function stepOutcomeSignature(parts: ActionOutcomePart[]): string {
+  if (parts.length === 0) return "";
+  const lines = parts.map((part) => `${part.name}${NAME_ARGS_SEP}${part.fingerprint}`).sort();
+  return lines.join(STEP_PART_SEP);
+}
+
+/** Pair call-step and outcome-step signatures (action stationarity key). */
+export function actionStationaritySignature(callStep: string, outcomeStep: string): string {
+  if (callStep === "" || outcomeStep === "") return "";
+  return `${callStep}\u001d${outcomeStep}`;
+}
+
+export interface ActionStationarityState {
+  lastSignature: string;
+  consecutiveIdentical: number;
+}
+
+export function createActionStationarityState(): ActionStationarityState {
+  return { lastSignature: "", consecutiveIdentical: 0 };
+}
+
+export function resetActionStationarityState(state: ActionStationarityState): void {
+  state.lastSignature = "";
+  state.consecutiveIdentical = 0;
+}
+
+/**
+ * Advance stationarity state when the full action (calls + outcomes) repeats.
+ * Soft at `NUDGE_AFTER_IDENTICAL_ACTION_STATIONARITY`; hard at max.
+ */
+export function checkActionStationarity(
+  state: ActionStationarityState,
+  signature: string,
+): LoopCheckResult {
+  if (signature === "") {
+    state.lastSignature = "";
+    state.consecutiveIdentical = 0;
+    return { softWarning: false, hardEscalation: false };
+  }
+  if (signature === state.lastSignature) state.consecutiveIdentical += 1;
+  else {
+    state.consecutiveIdentical = 1;
+    state.lastSignature = signature;
+  }
+  return {
+    softWarning: state.consecutiveIdentical === NUDGE_AFTER_IDENTICAL_ACTION_STATIONARITY,
+    hardEscalation: state.consecutiveIdentical >= MAX_CONSECUTIVE_IDENTICAL_ACTION_STATIONARITY,
+  };
+}
+
+export class ActionStationarityTracker {
+  private readonly state: ActionStationarityState = createActionStationarityState();
+
+  inspect(callStep: string, outcomes: ActionOutcomePart[]): LoopDetectionVerdict {
+    const outcomeStep = stepOutcomeSignature(outcomes);
+    const signature = actionStationaritySignature(callStep, outcomeStep);
+    const result = checkActionStationarity(this.state, signature);
+    const label = outcomes.length === 1 ? (outcomes[0]?.name ?? "tool") : outcomes.map((o) => o.name).join("+");
+    if (result.hardEscalation) {
+      return {
+        kind: "hard",
+        message:
+          `Detected ${this.state.consecutiveIdentical} consecutive identical tool actions (same calls and same results) for \`${label}\`; stopping to avoid a noop loop.`,
+        toolLabel: label,
+        consecutiveCount: this.state.consecutiveIdentical,
+      };
+    }
+    if (result.softWarning) {
+      return {
+        kind: "soft",
+        message:
+          `Detected ${this.state.consecutiveIdentical} consecutive identical tool actions (same calls and same results) for \`${label}\`; change strategy or arguments.`,
+        toolLabel: label,
+        consecutiveCount: this.state.consecutiveIdentical,
+      };
+    }
+    return { kind: "ok" };
+  }
+
+  reset(): void {
+    resetActionStationarityState(this.state);
   }
 }

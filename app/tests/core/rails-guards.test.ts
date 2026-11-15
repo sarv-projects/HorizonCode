@@ -88,6 +88,8 @@ describe("loop-detection hard stop (rail 1)", () => {
   test("eight identical read steps exit with detail 'tool_loop'", async () => {
     // Repeated successful reads keep the mistake tracker at zero, so tiered
     // loop-detection (hard at 8 for read) fires, not the mistake tracker.
+    const prevStationarity = process.env.HZ_ACTION_STATIONARITY;
+    process.env.HZ_ACTION_STATIONARITY = "0";
     writeFileSync(path.join(workspace, "a.txt"), "hello");
     const events: Array<{ type: string; message?: string }> = [];
     const { provider, calls } = repeatingProvider([
@@ -108,14 +110,60 @@ describe("loop-detection hard stop (rail 1)", () => {
         events.some((e) => e.type === "notice" && (e.message ?? "").includes("consider trying a different approach")),
       ).toBe(true);
     } finally {
+      if (prevStationarity === undefined) delete process.env.HZ_ACTION_STATIONARITY;
+      else process.env.HZ_ACTION_STATIONARITY = prevStationarity;
       await kernel.close();
       store.close();
     }
   });
 });
 
-describe("max_tokens fail-all-tools (Pi pattern)", () => {
-  test("truncated turn fails every tool call without executing", async () => {
+describe("action stationarity hard stop (rail 1b)", () => {
+  test("partial batch failure resets stationarity instead of noop hard stop", async () => {
+    writeFileSync(path.join(workspace, "a.txt"), "same bytes");
+    const events: Array<{ type: string; message?: string }> = [];
+    const step: ProviderEvent[] = [
+      toolCall("read", { path: "a.txt" }, "c1"),
+      toolCall("read", { path: "missing-every-time.txt" }, "c2"),
+      { type: "done", stopReason: "tool_use" },
+    ];
+    const { provider, calls } = repeatingProvider(step);
+    const { deps, kernel, store } = depsFor(provider, events, { budget: { maxSteps: 100 } });
+    try {
+      const result = await runTurn(deps, "mixed batch noop attempt");
+      expect(result.exit.detail).not.toBe("action_stationarity");
+      expect(calls()).toBeGreaterThanOrEqual(3);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+
+  test("five identical successful reads with same output exit action_stationarity", async () => {
+    writeFileSync(path.join(workspace, "a.txt"), "same bytes every time");
+    const events: Array<{ type: string; message?: string }> = [];
+    const { provider, calls } = repeatingProvider([
+      toolCall("read", { path: "a.txt" }),
+      { type: "done", stopReason: "tool_use" },
+    ]);
+    const { deps, kernel, store } = depsFor(provider, events, { budget: { maxSteps: 100 } });
+    try {
+      const result = await runTurn(deps, "keep reading");
+      expect(result.exit.terminal).toBe("failed");
+      expect(result.exit.detail).toBe("action_stationarity");
+      expect(calls()).toBe(5);
+      expect(
+        events.some((e) => e.type === "error" && (e.message ?? "").includes("noop loop")),
+      ).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+});
+
+describe("max_tokens tool batch (Pi pattern, ruling 417)", () => {
+  test("complete wire args still execute despite max_tokens stop", async () => {
     writeFileSync(path.join(workspace, "a.txt"), "hello");
     const events: Array<{ type: string; message?: string }> = [];
     const { provider, calls } = scriptedProvider([
@@ -129,9 +177,30 @@ describe("max_tokens fail-all-tools (Pi pattern)", () => {
       expect(calls()).toBe(2);
       const toolMessages = store.history(deps.sessionId).filter((m) => m.role === "tool");
       expect(toolMessages).toHaveLength(1);
-      expect(toolMessages[0]?.content).toContain("output token limit");
-      expect(toolMessages[0]?.content).toContain("not executed");
+      expect(toolMessages[0]?.content).toContain("hello");
       expect(events.some((e) => e.type === "notice" && (e.message ?? "").includes("output limit"))).toBe(true);
+      expect(events.some((e) => e.type === "notice" && (e.message ?? "").includes("executing 1 tool call"))).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+
+  test("incomplete wire JSON on max_tokens fails without execute", async () => {
+    const events: Array<{ type: string; message?: string }> = [];
+    const { provider, calls } = scriptedProvider([
+      [toolCall("write", '{"path": "a.txt", "content": "', "c1"), { type: "done", stopReason: "max_tokens" }],
+      DONE,
+    ]);
+    const { deps, kernel, store } = depsFor(provider, events);
+    try {
+      const result = await runTurn(deps, "write truncated args");
+      expect(result.exit.terminal).toBe("succeeded");
+      expect(calls()).toBe(2);
+      const toolMessages = store.history(deps.sessionId).filter((m) => m.role === "tool");
+      expect(toolMessages).toHaveLength(1);
+      expect(toolMessages[0]?.content).toContain("not executed");
+      expect(events.some((e) => e.type === "notice" && (e.message ?? "").includes("failed without dispatch"))).toBe(true);
     } finally {
       await kernel.close();
       store.close();

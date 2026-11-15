@@ -4,9 +4,12 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  ActionStationarityTracker,
   LoopDetectionTracker,
+  MAX_CONSECUTIVE_IDENTICAL_ACTION_STATIONARITY,
   MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
   MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS,
+  NUDGE_AFTER_IDENTICAL_ACTION_STATIONARITY,
   NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
   NUDGE_AFTER_IDENTICAL_TOOL_CALLS,
   sortKeys,
@@ -57,6 +60,18 @@ describe("step signature", () => {
       ]),
     ).toBe(false);
     expect(stepIsProblematicallyRepeating([{ name: "read", input: {} }, { name: "grep", input: {} }])).toBe(true);
+  });
+});
+
+describe("LoopDetectionTracker — tight tier (memory_search)", () => {
+  test("memory_search uses the problematic tier (Grok read/plan family)", () => {
+    expect(stepIsProblematicallyRepeating([{ name: "memory_search", input: { query: "x" } }])).toBe(true);
+    const tracker = new LoopDetectionTracker();
+    const step = [{ name: "memory_search", input: { query: "auth" } }];
+    for (let i = 0; i < NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS - 1; i += 1) {
+      expect(tracker.inspectStep(step).kind).toBe("ok");
+    }
+    expect(tracker.inspectStep(step).kind).toBe("soft");
   });
 });
 
@@ -118,5 +133,37 @@ describe("LoopDetectionTracker — default tier (shell)", () => {
     tracker.inspectStep(step);
     tracker.reset();
     expect(tracker.inspectStep(step).kind).toBe("ok");
+  });
+});
+
+describe("ActionStationarityTracker — true noop", () => {
+  test("soft nudge at third identical action", () => {
+    const tracker = new ActionStationarityTracker();
+    const callStep = stepSignature([{ name: "read", input: { path: "a.txt" } }]);
+    const outcomes = [{ name: "read", fingerprint: "abc" }];
+    for (let i = 0; i < NUDGE_AFTER_IDENTICAL_ACTION_STATIONARITY - 1; i += 1) {
+      expect(tracker.inspect(callStep, outcomes).kind).toBe("ok");
+    }
+    expect(tracker.inspect(callStep, outcomes).kind).toBe("soft");
+  });
+
+  test("hard stop at fifth identical action", () => {
+    const tracker = new ActionStationarityTracker();
+    const callStep = stepSignature([{ name: "read", input: { path: "a.txt" } }]);
+    const outcomes = [{ name: "read", fingerprint: "abc" }];
+    for (let i = 0; i < MAX_CONSECUTIVE_IDENTICAL_ACTION_STATIONARITY - 1; i += 1) {
+      tracker.inspect(callStep, outcomes);
+    }
+    const verdict = tracker.inspect(callStep, outcomes);
+    expect(verdict.kind).toBe("hard");
+    expect(verdict.message).toContain("same calls and same results");
+  });
+
+  test("different outcome digest resets streak", () => {
+    const tracker = new ActionStationarityTracker();
+    const callStep = stepSignature([{ name: "read", input: { path: "a.txt" } }]);
+    tracker.inspect(callStep, [{ name: "read", fingerprint: "one" }]);
+    tracker.inspect(callStep, [{ name: "read", fingerprint: "one" }]);
+    expect(tracker.inspect(callStep, [{ name: "read", fingerprint: "two" }]).kind).toBe("ok");
   });
 });

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   APPROVAL_TYPE_AHEAD_MS,
+  approvalGrantStatusFromCardLines,
   consumeFullscreenApprovalKey,
+  findApprovalCardTranscriptStart,
   fullscreenApprovalStatusExtra,
   fullscreenRichApprovalEnabled,
 } from "../../src/tui/fullscreen-approval";
@@ -23,6 +25,17 @@ describe("fullscreen approval", () => {
   test("status extras distinguish single-key vs line prompt", () => {
     expect(fullscreenApprovalStatusExtra("key")).toBe("approval: y/n/a/Esc");
     expect(fullscreenApprovalStatusExtra("line")).toBe("approval: y/n/a + Enter");
+  });
+
+  test("grant status extracts session grant footnote", () => {
+    const lines = ["x", "session grant: ~42s remaining on this exact target", "y"];
+    expect(approvalGrantStatusFromCardLines(lines)).toBe("grant: ~42s remaining on this exact target");
+    expect(approvalGrantStatusFromCardLines(["no grant"])).toBeUndefined();
+  });
+
+  test("findApprovalCardTranscriptStart locates card head", () => {
+    const transcript = ["chat", "warn", "tool shell.exec", "line1", "line2"];
+    expect(findApprovalCardTranscriptStart(transcript, ["line1", "line2"])).toBe(3);
   });
 
   test("consumeFullscreenApprovalKey type-ahead, paste, and keys", () => {

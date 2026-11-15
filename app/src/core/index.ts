@@ -44,6 +44,9 @@ import {
   InterjectionBuffer,
   type DrainedInterjection,
 } from "./interjection";
+import { hydrateSavedGrants } from "./saved-allows";
+import { durableAutoMergeEnabled, durableTodosEnabled, maybeAutoMergeDurableOnBranchChange } from "./durable-todos";
+import { hydrateTodosFromDurable } from "../tools/todo";
 import { resolveThinkingEffort } from "./thinking-effort";
 import { augmentConfigWithTrustedWorkspace, defaultConfigPath, loadConfig, readConfigFile, type HzConfig, type McpConfig } from "./config";
 import { applySandboxChildNetFromConfig } from "./sandbox-child-net";
@@ -53,7 +56,11 @@ import {
 } from "./effect-host-runtime";
 import { kernelEnforcesProcessSandbox } from "./sandbox-spawn";
 import { catalogWindow, loadCatalog } from "./catalog/catalog";
-import { startModelsCatalogPoll, type ModelsPollStop } from "./catalog/catalog-poll";
+import {
+  makeModelsCatalogPollNetGuard,
+  startModelsCatalogPoll,
+  type ModelsPollStop,
+} from "./catalog/catalog-poll";
 import {
   startAnthropicCacheKeepalive,
   type AnthropicCacheKeepaliveStop,
@@ -79,7 +86,7 @@ import { makeProvider } from "./providers";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): the runtime seam emits session.start/
 // session.end as OBSERVATION points (H4) alongside the existing event appends.
 import { loadHooks, runLifecycleHooks } from "./hooks";
-import { ensureWorkspaceHookTrust, hooksLoadOptions } from "./trust";
+import { ensureWorkspaceHookTrust, formatUntrustedWorkspaceStartupNotice, hooksLoadOptions } from "./trust";
 import { SessionStore, type SessionInfo } from "./session";
 import { reindexSessionSearch, searchSessions as ftsSearchSessions } from "./session-search";
 import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
@@ -271,6 +278,19 @@ class HzRuntimeImpl implements HzRuntime {
 
   beginModelsCatalogPoll(stop: ModelsPollStop): void {
     this.modelsCatalogPollStop = stop;
+  }
+
+  /** Background models.dev poll with kernel `net.fetch` admission (docs/33 §5.8). */
+  wireDefaultModelsCatalogPoll(): void {
+    this.beginModelsCatalogPoll(
+      startModelsCatalogPoll({
+        home: homedir(),
+        onNotice: (message) => this.note(message),
+        assertNetFetch: makeModelsCatalogPollNetGuard((url) =>
+          this.kernel.checkGuard({ kind: "net.fetch", target: url }, undefined, this.leases, this.session.id),
+        ),
+      }),
+    );
   }
 
   beginAnthropicCacheKeepalive(stop: AnthropicCacheKeepaliveStop): void {
@@ -1189,6 +1209,24 @@ class HzRuntimeImpl implements HzRuntime {
         inputBytes: Buffer.byteLength(text, "utf8"),
         source: "runtime.send",
       }, true);
+      await this.append(
+        streamFor(this.session.id),
+        EventTypes.sessionClaimAcquired,
+        {
+          sessionId: this.session.id,
+          claimId: admissionId,
+          admissionId,
+          resumed: false,
+          source: "runtime.send",
+        },
+        true,
+      );
+      await this.append(
+        streamFor(this.session.id),
+        EventTypes.sessionBusyEntered,
+        { sessionId: this.session.id, claimId: admissionId, admissionId, source: "runtime.send" },
+        true,
+      );
       const home = homedir();
       await this.ensureHookTrust();
       // Skills: list what is available, and when the human opens a message with
@@ -1207,6 +1245,14 @@ class HzRuntimeImpl implements HzRuntime {
         skillSections.push(activeSkillSection(activated.skill));
         userContent = activated.action !== "" ? activated.action : `Apply the ${activated.skill.name} skill.`;
         emit(cb, { type: "notice", message: `skill active: ${activated.skill.name}` });
+        await this.append(streamFor(this.session.id), EventTypes.skillInvoked, {
+          sessionId: this.session.id,
+          skill: activated.skill.name,
+          source: "runtime.send",
+          ...(activated.action !== ""
+            ? { actionBytes: Buffer.byteLength(activated.action, "utf8") }
+            : {}),
+        });
       }
       // NF-073: one ledger per turn tree — the main turn and every subagent it
       // spawns share this ceiling; a fresh one starts with each send().
@@ -1234,7 +1280,8 @@ class HzRuntimeImpl implements HzRuntime {
         });
       }
       this.flushPendingSteeredUserMessages(cb);
-      const outcome = await runTurn(
+      let outcome: Awaited<ReturnType<typeof runTurn>> | undefined;
+      outcome = await runTurn(
         {
           workspace: this.workspace,
           sessionId: this.session.id,
@@ -1261,6 +1308,7 @@ class HzRuntimeImpl implements HzRuntime {
           trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
           delegate: (task, maxSteps, profile) =>
             runNested({
+              parentSessionId: this.session.id,
               workspace: this.workspace,
               task,
               maxSteps,
@@ -1291,9 +1339,61 @@ class HzRuntimeImpl implements HzRuntime {
           : outcome.exit.terminal === "interrupted" || outcome.exit.terminal === "unknown" || outcome.aborted
             ? "unknown"
             : "failed";
+      await this.append(
+        streamFor(this.session.id),
+        EventTypes.sessionBusyLeft,
+        {
+          sessionId: this.session.id,
+          claimId: admissionId,
+          admissionId,
+          terminal: outcome.exit.terminal,
+          ...(outcome.exit.detail !== undefined ? { detail: outcome.exit.detail } : {}),
+        },
+        true,
+      );
+      await this.append(
+        streamFor(this.session.id),
+        EventTypes.sessionClaimReleased,
+        {
+          sessionId: this.session.id,
+          claimId: admissionId,
+          admissionId,
+          reason: outcome.exit.terminal,
+          ...(outcome.exit.detail !== undefined ? { detail: outcome.exit.detail } : {}),
+        },
+        true,
+      );
       queue.settle(admissionId, settlement, outcome.exit.detail ?? outcome.exit.terminal);
       return outcome;
     } catch (err) {
+      try {
+        await this.append(
+          streamFor(this.session.id),
+          EventTypes.sessionBusyLeft,
+          {
+            sessionId: this.session.id,
+            claimId: admissionId,
+            admissionId,
+            terminal: "failed",
+            detail: "internal_error",
+          },
+          true,
+        );
+        await this.append(
+          streamFor(this.session.id),
+          EventTypes.sessionClaimReleased,
+          {
+            sessionId: this.session.id,
+            claimId: admissionId,
+            admissionId,
+            reason: "failed",
+            detail: "internal_error",
+          },
+          true,
+        );
+      } catch {
+        /* audit chain already broken */
+      }
       queue.settle(admissionId, "unknown", errorMessage(err));
       emit(cb, { type: "error", message: `runtime error: ${errorMessage(err)}` });
       emit(cb, { type: "turn.done" });
@@ -1368,9 +1468,12 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   applySandboxChildNetFromConfig(userConfigFile, process.env);
   const effectHostFromConfig = applyEffectHostKernelFromUserConfig(userConfigFile, process.env);
   if (effectHostFromConfig.notice) startupNotices.push(effectHostFromConfig.notice);
-  const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, undefined, workspace), workspace, process.env, homedir(), (message) =>
+  const home = homedir();
+  const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, undefined, workspace), workspace, process.env, home, (message) =>
     startupNotices.push(message),
   );
+  const trustStartup = formatUntrustedWorkspaceStartupNotice(workspace, home, config.trustedWorkspaceHooks);
+  if (trustStartup !== undefined) startupNotices.push(trustStartup);
   if (config.theme !== undefined) setThemeMode(config.theme);
   const model = opts?.model && opts.model.trim() !== "" ? opts.model.trim() : config.model;
   const provider = makeProvider(config, { mockFlag: opts?.mock === true });
@@ -1493,12 +1596,7 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   // MCP servers: user-config only, spawned via the spawn-kind admission, and
   // reaped by close(). Starting them never fails the session.
   await impl.startMcp(config.mcp);
-  impl.beginModelsCatalogPoll(
-    startModelsCatalogPoll({
-      home: homedir(),
-      onNotice: (message) => impl.note(message),
-    }),
-  );
+  impl.wireDefaultModelsCatalogPoll();
   impl.beginAnthropicCacheKeepalive(
     startAnthropicCacheKeepalive({
       onNotice: (message) => impl!.note(message),
@@ -1510,6 +1608,26 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
       },
     }),
   );
+  const savedGrants = await hydrateSavedGrants(kernel, workspace, session.id, SESSION_LEASE_TTL_MS);
+  if (savedGrants > 0) {
+    impl.note(
+      `restored ${savedGrants} saved allow(s) from saved-allows.json as session grants (exact targets; ${Math.max(1, Math.round(SESSION_LEASE_TTL_MS / 60_000))}m TTL each)`,
+    );
+  }
+  if (durableTodosEnabled(process.env)) {
+    if (durableAutoMergeEnabled(process.env)) {
+      const auto = maybeAutoMergeDurableOnBranchChange(workspace);
+      if (auto.merged > 0 && auto.fromBranch !== undefined) {
+        impl.note(
+          `merged ${auto.merged} durable todo(s) from branch ${auto.fromBranch} after branch change (HZ_TODO_DURABLE_AUTOMERGE=1)`,
+        );
+      }
+    }
+    const open = hydrateTodosFromDurable(workspace, session.id);
+    if (open > 0) {
+      impl.note(`restored ${open} open todo(s) from handoffs.db for this branch (HZ_TODO_DURABLE=1)`);
+    }
+  }
   return impl;
 }
 

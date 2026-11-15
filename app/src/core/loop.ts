@@ -40,7 +40,7 @@ import { unpairedToolCallTail } from "./session";
 import { parseToolArguments, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
-import { openTodos, todoVersion } from "../tools/todo";
+import { openTodos, todoUpdatedEventPayload, todoVersion } from "../tools/todo";
 import { presetCatalog } from "./agent-profiles";
 import { dapSpawnAction } from "./dap/client";
 import { resolveAdapter, selectAdapterForProgram } from "./dap/config";
@@ -162,8 +162,12 @@ import { buildRunCompletePayload, RUN_COMPLETE_EVENT } from "./receipt-run-termi
 // minimally — loop-detection before dispatch, repeat-tool after execute, and
 // the mistake tracker on error. The modules are pure; the loop imports them,
 // never the reverse.
-import { consecutiveMistakesInterruptNudge, loopDetectionInterruptNudge } from "./guards/guard-prompt";
-import { LoopDetectionTracker } from "./guards/loop-detection";
+import {
+  actionStationarityInterruptNudge,
+  consecutiveMistakesInterruptNudge,
+  loopDetectionInterruptNudge,
+} from "./guards/guard-prompt";
+import { ActionStationarityTracker, LoopDetectionTracker, stepSignature } from "./guards/loop-detection";
 import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
 import { truncatedToolCallMessage } from "./guards/truncated-tool-batch";
@@ -205,6 +209,7 @@ import { blobSpillEnabled } from "./blobs";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
 import { drainFormatted, type InterjectionBuffer } from "./interjection";
+import { recordHookAuditLine } from "./hook-handoff-capture";
 
 // The symlink-aware resolution moved to paths.ts (the single state-path
 // resolver); re-exported so every existing `from "./loop"` import keeps working.
@@ -579,7 +584,7 @@ export function taskHead(text: string, max = 120): string {
  * `write`/`close` are mapped here and `write` guards each typed input line as
  * shell.exec inside the tool (a start approval never covers later input).
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "present", "preview", "undo", "shell_session", "tool_search"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "todo_write", "present", "preview", "undo", "shell_session", "tool_search"] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission =
@@ -696,6 +701,35 @@ function displayTarget(target: string, workspace: string): string {
   return resolved !== root && !escapes(root, resolved) ? path.relative(root, resolved) : target;
 }
 
+async function logEffectGuardDecision(
+  deps: LoopDeps,
+  faults: RunFaults,
+  input: {
+    effectId: string;
+    callId: string;
+    tool: string;
+    action: GuardAction;
+    decision: GuardDecision["decision"];
+    reason?: string;
+  },
+): Promise<void> {
+  await logEvent(
+    deps,
+    faults,
+    EventTypes.effectDecisionMade,
+    {
+      effectId: input.effectId,
+      callId: input.callId,
+      tool: input.tool,
+      kind: input.action.kind,
+      target: input.action.target,
+      decision: input.decision,
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    },
+    { kind: "system", id: "hz-guard" },
+  );
+}
+
 function approvalRequestFor(name: string, action: GuardAction, workspace: string): ApprovalRequest {
   const shown = displayTarget(action.target, workspace);
   switch (action.kind) {
@@ -738,6 +772,21 @@ function toolMessageContent(result: ToolResult, text: string): string {
  * the turn (truncated args are unsafe) and append synthetic tool results so the
  * model can re-issue them on the next step.
  */
+/** Split calls the wire admitted from args truncated mid-stream (interjection residual). */
+export function partitionWireCompleteToolCalls(calls: readonly ToolCall[]): {
+  ready: ToolCall[];
+  incomplete: ToolCall[];
+} {
+  const ready: ToolCall[] = [];
+  const incomplete: ToolCall[] = [];
+  for (const call of calls) {
+    const parsed = parseCall(call);
+    if (parsed.truncated === true) incomplete.push(call);
+    else ready.push(call);
+  }
+  return { ready, incomplete };
+}
+
 async function failTruncatedToolBatch(
   deps: LoopDeps,
   faults: RunFaults,
@@ -1557,6 +1606,7 @@ async function logEvent(
   actor: ActorRef = { kind: "agent", id: "hzcode" },
 ): Promise<void> {
   try {
+    recordHookAuditLine(deps.sessionId, type, payload);
     const stream = streamFor(deps.sessionId);
     await deps.kernel.appendEvent(stream, { id: newId(), ts: nowIso(), stream, type, actor, payload });
   } catch (err) {
@@ -1580,6 +1630,27 @@ async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string):
   await logEvent(deps, faults, EventTypes.messageStart, { role: "user" }, { kind: "human", id: "user" });
   await logEvent(deps, faults, EventTypes.messageEnd, { role: "user", text: prompt }, { kind: "human", id: "user" });
   if (first) deps.store.touchSession(deps.sessionId, titleFromText(prompt));
+}
+
+/** Abort an in-flight provider stream when mid-turn steer arrives (C-9 reduced). */
+function providerStreamSignal(userSignal: AbortSignal, streamCut: AbortController): AbortSignal {
+  const anyFn = (AbortSignal as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyFn === "function") {
+    try {
+      return anyFn([userSignal, streamCut.signal]);
+    } catch {
+      /* fall through */
+    }
+  }
+  const merged = new AbortController();
+  const forward = (source: AbortSignal): void => {
+    if (source.aborted) merged.abort(source.reason);
+  };
+  forward(userSignal);
+  forward(streamCut.signal);
+  userSignal.addEventListener("abort", () => merged.abort(userSignal.reason), { once: true });
+  streamCut.signal.addEventListener("abort", () => merged.abort(streamCut.signal.reason), { once: true });
+  return merged.signal;
 }
 
 async function collectAssistant(
@@ -1675,13 +1746,14 @@ async function collectAssistant(
     messages: history.length,
     historyLimit: HISTORY_LIMIT,
   });
+  const streamCut = new AbortController();
   const request: ProviderRequest = {
     model: deps.model,
     system: basePrompt + extra + rail,
     maxTokens,
     messages: history,
     tools: specs,
-    signal: deps.signal,
+    signal: providerStreamSignal(deps.signal, streamCut),
     ...(deps.thinkingEffort !== undefined
       ? { reasoningEffort: toProviderReasoningEffort(deps.thinkingEffort) }
       : {}),
@@ -1714,6 +1786,27 @@ async function collectAssistant(
       } else if (event.type === "error") {
         turn.error = event.message;
         if (event.code !== undefined) turn.failureCode = event.code;
+        break;
+      }
+      if (deps.interjection !== undefined && !deps.interjection.isEmpty()) {
+        streamCut.abort();
+        // Steer wins over partially assembled tool calls: do not execute calls
+        // that completed on the wire before the cut (provider may still be
+        // streaming argument JSON for others).
+        if (turn.toolCalls.length > 0) {
+          const { incomplete } = partitionWireCompleteToolCalls(turn.toolCalls);
+          const dropped = turn.toolCalls.length;
+          turn.toolCalls = [];
+          const wireNote =
+            incomplete.length > 0
+              ? ` (${incomplete.length} had incomplete wire JSON)`
+              : "";
+          emit(deps.callbacks, {
+            type: "notice",
+            message: `interjection: dropped ${dropped} in-flight tool call${dropped === 1 ? "" : "s"} before dispatch${wireNote}`,
+          });
+        }
+        turn.stopReason = "end";
         break;
       }
       if (deps.signal.aborted) {
@@ -1976,6 +2069,14 @@ async function executeTool(
     for (const action of toAdmit) {
       const decision = await gate.check(action);
       leaseId = decision.leaseId ?? gate.leaseFor(action) ?? leaseId;
+      await logEffectGuardDecision(deps, faults, {
+        effectId,
+        callId: call.id,
+        tool: call.name,
+        action,
+        decision: decision.decision,
+        reason: decision.reason,
+      });
       if (decision.decision === "deny") {
         const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
         return { result: { ok: false, output: denied, error: denied }, expected: true };
@@ -2013,6 +2114,14 @@ async function executeTool(
           { callId: call.id, tool: call.name, kind: action.kind, decision: approved ? "approved" : "declined" },
           { kind: "human", id: "user" },
         );
+        await logEffectGuardDecision(deps, faults, {
+          effectId,
+          callId: call.id,
+          tool: call.name,
+          action,
+          decision: approved ? "allow" : "deny",
+          reason: approved ? "user_approved" : "user_declined",
+        });
         if (!approved) {
           return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" }, expected: true };
         }
@@ -2315,6 +2424,8 @@ interface ToolCallOutcome {
    * tool_search. Such a call neither counts as a mistake nor resets the tracker.
    */
   expected: boolean;
+  /** SHA-256 of model-facing tool result text (action-stationarity rail). */
+  fingerprint: string;
 }
 
 /** Tools whose success means the model has seen or changed a path (nested instruction trigger). */
@@ -2374,14 +2485,41 @@ async function runToolCall(
     { kind: "tool", id: call.name },
   );
 
+  const todoVerBefore = todoVersion(deps.sessionId);
   const executed = await executeTool(deps, gate, call, parsed, faults, hooks, effectId, true);
   const result = executed.result;
+  if (
+    result.ok &&
+    call.name !== "todo" &&
+    call.name !== "todo_write" &&
+    todoVersion(deps.sessionId) > todoVerBefore
+  ) {
+    await logEvent(
+      deps,
+      faults,
+      EventTypes.todoUpdated,
+      todoUpdatedEventPayload(deps.sessionId, "added"),
+      { kind: "tool", id: call.name },
+    );
+  }
   // Completion evidence: what this run changed, and whether anything checked it.
   // A staged (plan-mode) write changed nothing on disk, so it is not evidence.
   if (result.ok && executed.staged !== true) {
     if (call.name === "write" || call.name === "edit") evidence.noteMutation(parsed.args.path ?? parsed.args.file_path ?? parsed.args.file);
     else if (call.name === "shell") evidence.noteCommand(parsed.args.command);
-    else if (call.name === "todo") evidence.noteTodoCall(parsed.args.action);
+    else if (call.name === "todo" || call.name === "todo_write") {
+      evidence.noteTodoCall(parsed.args.action);
+      const todoAction = parsed.args.action;
+      if (todoAction === "add" || todoAction === "done" || todoAction === "drop" || todoAction === "merge") {
+        await logEvent(
+          deps,
+          faults,
+          EventTypes.todoUpdated,
+          todoUpdatedEventPayload(deps.sessionId, todoAction === "add" ? "added" : "updated"),
+          { kind: "tool", id: "todo" },
+        );
+      }
+    }
   }
   // NF-074(b): cap the model-facing result and spill the full text. The
   // receipt digest below stays the digest of the FULL output — the cap is a
@@ -2548,9 +2686,12 @@ async function runToolCall(
   // the outcome the mistake-tracker rail needs: a tool that returned ok:false
   // is a `tool_execution_failed` mistake, while a plan-mode staged call changed
   // nothing and is not a failure.
-  return { tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content), ok: result.ok,
+  return {
+    tokens: FRAMING_CHARGE_TOKENS + estimateTokens(content),
+    ok: result.ok,
     staged: executed.staged === true,
     expected,
+    fingerprint: sha256Hex(content),
   };
 }
 
@@ -2632,6 +2773,7 @@ export async function runTurn(
   let fatal = false;
   // NF-073: one terminal outcome per run, in the RC-7 vocabulary.
   let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
+  let lastProviderFailureCode: ProviderFailureCode | undefined;
   try {
     const prompt = typeof userText === "string" ? userText.trim() : "";
     // Model->tool routing (docs/28; research A.7): resolve the rule table ONCE
@@ -2777,6 +2919,7 @@ export async function runTurn(
     // the per-prompt clear the repeat-tool rail requires; clear() below is the
     // explicit statement of that, so the semantics do not depend on scope alone.
     const loopDetection = new LoopDetectionTracker();
+    const actionStationarity = new ActionStationarityTracker();
     const mistakes = new MistakeTracker();
     const repeatTool = new RepeatToolGuard();
     repeatTool.clear();
@@ -2872,7 +3015,7 @@ export async function runTurn(
           dropped: view.dropped,
           kept: view.kept,
           window: historyLimit,
-          summaryDigest: sha256Hex(view.summary),
+          summaryDigest: sha256Hex(view.summary ?? ""),
         });
       }
       const quirksPreview =
@@ -2911,6 +3054,19 @@ export async function runTurn(
           appendedTokens = FRAMING_CHARGE_TOKENS + estimateTokens(turn.text);
           for (const call of turn.toolCalls) appendedTokens += estimateTokens(call.arguments);
         }
+        await logEvent(deps, faults, EventTypes.usageRecorded, {
+          sessionId: deps.sessionId,
+          provider: deps.provider.name,
+          model: deps.model,
+          inputTokens: turn.usage.inputTokens ?? 0,
+          outputTokens: turn.usage.outputTokens ?? 0,
+          ...(turn.usage.cacheReadInputTokens !== undefined
+            ? { cacheReadInputTokens: turn.usage.cacheReadInputTokens }
+            : {}),
+          ...(turn.usage.cacheCreationInputTokens !== undefined
+            ? { cacheCreationInputTokens: turn.usage.cacheCreationInputTokens }
+            : {}),
+        });
         if ((turn.usage.cacheReadInputTokens ?? 0) > 0 || (turn.usage.cacheCreationInputTokens ?? 0) > 0) {
           const enriched = enrichUsageCost(turn.usage, deps.provider.name, deps.model);
           const total = enriched.cost?.totalUsd;
@@ -2924,6 +3080,17 @@ export async function runTurn(
       }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;
+      if (turn.toolCalls.length > 0) {
+        const wireSplit = partitionWireCompleteToolCalls(turn.toolCalls);
+        if (wireSplit.incomplete.length > 0) {
+          emit(deps.callbacks, {
+            type: "notice",
+            message: `refused ${wireSplit.incomplete.length} tool call${wireSplit.incomplete.length === 1 ? "" : "s"} with incomplete wire JSON (re-issue on the next step)`,
+          });
+          await failTruncatedToolBatch(deps, faults, wireSplit.incomplete);
+        }
+        turn.toolCalls = wireSplit.ready;
+      }
       if (turn.text !== "" || turn.toolCalls.length > 0) {
         deps.store.appendMessage(deps.sessionId, {
           role: "assistant",
@@ -2965,7 +3132,12 @@ export async function runTurn(
             continue;
           }
         }
-        emit(deps.callbacks, { type: "error", message: turn.error });
+        if (turn.failureCode !== undefined) lastProviderFailureCode = turn.failureCode;
+        emit(deps.callbacks, {
+          type: "error",
+          message: turn.error,
+          ...(turn.failureCode !== undefined ? { code: turn.failureCode } : {}),
+        });
         await logEvent(deps, faults, EventTypes.error, {
           message: turn.error,
           ...(turn.failureCode !== undefined ? { code: turn.failureCode } : {}),
@@ -2993,8 +3165,29 @@ export async function runTurn(
       if (turn.stopReason === "max_tokens") {
         emit(deps.callbacks, { type: "notice", message: "the model hit its output limit for this turn" });
         if (turn.toolCalls.length > 0) {
-          await failTruncatedToolBatch(deps, faults, turn.toolCalls);
-          continue;
+          const toFail: ToolCall[] = [];
+          const toRun: ToolCall[] = [];
+          for (const call of turn.toolCalls) {
+            const parsed = parseCall(call);
+            if (parsed.error !== undefined || parsed.truncated === true) toFail.push(call);
+            else toRun.push(call);
+          }
+          if (toFail.length > 0) {
+            emit(deps.callbacks, {
+              type: "notice",
+              message: `max_tokens: ${toFail.length} tool call${toFail.length === 1 ? "" : "s"} failed without dispatch (incomplete or unsafe args)`,
+            });
+            await failTruncatedToolBatch(deps, faults, toFail);
+          }
+          if (toRun.length === 0) {
+            continue;
+          }
+          emit(deps.callbacks, {
+            type: "notice",
+            message: `max_tokens: executing ${toRun.length} tool call${toRun.length === 1 ? "" : "s"} with complete wire arguments despite the output limit`,
+          });
+          turn.toolCalls = toRun;
+          turn.stopReason = "tool_use";
         }
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
@@ -3023,6 +3216,7 @@ export async function runTurn(
       // one step; tight tiers apply when every call is read/plan-style.
       loopNudge = undefined;
       const loopCalls = turn.toolCalls.map((call) => ({ name: call.name, input: parseCall(call).args }));
+      const callStepSignature = stepSignature(loopCalls);
       const loopVerdict = loopDetection.inspectStep(loopCalls);
       if (loopVerdict.kind === "hard") {
         emit(deps.callbacks, { type: "error", message: loopVerdict.message ?? "tool-call loop detected" });
@@ -3050,6 +3244,7 @@ export async function runTurn(
       // run AFTER the batch settles, iterating turn.toolCalls in order, so the
       // chain and the tracker stay deterministic regardless of concurrency.
       const toolOk = new Map<string, boolean>();
+      const stepOutcomeParts: { name: string; fingerprint: string }[] = [];
       const batchFifo = await runClassedToolBatchFifo(turn.toolCalls, {
         signal: deps.signal,
         runCall: async (call) => {
@@ -3058,6 +3253,9 @@ export async function runTurn(
             return formatError ? Math.min(mistakeLeft, MAX_CONSECUTIVE_FORMAT_ERRORS - consecutiveFormatErrors - 1) : mistakeLeft;
           });
           appendedTokens += outcome.tokens;
+          if (outcome.fingerprint !== "") {
+            stepOutcomeParts.push({ name: call.name, fingerprint: outcome.fingerprint });
+          }
           // A plan-mode staged call changed nothing: not a failure. A
           // call whose arguments did not parse is a FORMAT error, counted
           // by the format cap / `invalid_tool_call` axis below — not a
@@ -3082,6 +3280,35 @@ export async function runTurn(
       });
       if (batchFifo.aborted) aborted = true;
       if (batchFifo.fatal) fatal = true;
+      const batchHadToolFailure = turn.toolCalls.some((call) => toolOk.get(call.id) === false);
+      const batchOutcomesComplete = stepOutcomeParts.length === turn.toolCalls.length;
+      if (process.env.HZ_ACTION_STATIONARITY !== "0" && !aborted && !fatal) {
+        // NF-072 all-settled: a mixed ok/error batch is not a true-noop repeat.
+        if (batchHadToolFailure || !batchOutcomesComplete) {
+          actionStationarity.reset();
+        } else if (stepOutcomeParts.length > 0) {
+          const stationarity = actionStationarity.inspect(callStepSignature, stepOutcomeParts);
+          if (stationarity.kind === "hard") {
+            emit(deps.callbacks, { type: "error", message: stationarity.message ?? "noop tool loop detected" });
+            await logEvent(deps, faults, EventTypes.error, {
+              message: stationarity.message,
+              detail: "action_stationarity",
+            });
+            exit = { terminal: "failed", detail: "action_stationarity" };
+            break;
+          }
+          if (stationarity.kind === "soft" && stationarity.message !== undefined) {
+            const label = stationarity.toolLabel ?? "tool";
+            const count = stationarity.consecutiveCount ?? 0;
+            const stationarityNudge = actionStationarityInterruptNudge(label, count);
+            loopNudge =
+              loopNudge !== undefined && loopNudge !== ""
+                ? `${loopNudge}\n${stationarityNudge}`
+                : stationarityNudge;
+            emit(deps.callbacks, { type: "notice", message: stationarity.message });
+          }
+        }
+      }
       maybeEmitSessionKernelReconcile(deps);
       // FEAT-003: the entries recorded during THIS turn are those appended
       // since the boundary above. Aggregate them into one net diff per file and
@@ -3137,12 +3364,10 @@ export async function runTurn(
       // successful tool call resets the tracker. This axis is SEPARATE from the
       // format cap below (invalid-JSON batches never reach here with a tool
       // result). Recorded once per failing batch, in order.
-      let batchHadToolFailure = false;
       let batchHadToolSuccess = false;
       for (const call of turn.toolCalls) {
         const ok = toolOk.get(call.id);
-        if (ok === false) batchHadToolFailure = true;
-        else if (ok === true) batchHadToolSuccess = true;
+        if (ok === true) batchHadToolSuccess = true;
       }
       if (batchHadToolFailure) {
         const outcome = mistakes.record({ reason: "tool_execution_failed" });
@@ -3303,7 +3528,16 @@ export async function runTurn(
   }
   maybeEmitSessionKernelReconcile(deps);
   try {
-    await logEvent(deps, faults, RUN_COMPLETE_EVENT, buildRunCompletePayload(exit));
+    await logEvent(
+      deps,
+      faults,
+      RUN_COMPLETE_EVENT,
+      buildRunCompletePayload(exit, undefined, {
+        ...(lastProviderFailureCode !== undefined && exit.detail === "provider_error"
+          ? { providerFailureCode: lastProviderFailureCode }
+          : {}),
+      }),
+    );
   } catch {
     /* logEvent already accounts for faults */
   }

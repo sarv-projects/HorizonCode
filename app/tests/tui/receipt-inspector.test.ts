@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { EffectHost } from "../../src/core/effect-host";
+import {
+  RUN_COMPLETE_EVENT,
+  buildRunCompletePayload,
+  captureTerminalRunCapabilitySnapshot,
+} from "../../src/core/receipt-run-terminal";
+import { kernelStateDir } from "../../src/core/paths";
+import { sessionEventsPath } from "../../src/core/session-kernel-reconcile";
 import { buildReceiptInspectorModel, formatReceiptInspectorScrollbackLines } from "../../src/tui/receipt-inspector";
 
 describe("receipt inspector (ruling 284)", () => {
@@ -79,6 +89,32 @@ describe("receipt inspector (ruling 284)", () => {
     const pane = modelWs!.panes.find((p) => p.id === "children");
     expect(pane?.lines.some((l) => l.includes(child))).toBe(true);
     expect(pane?.lines.some((l) => l.includes("agent.spawn"))).toBe(true);
+  });
+
+  test("run terminal pane surfaces provider failure code from run.complete", () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-rcpt-fail-"));
+    const sessionId = "sess-provider-fail";
+    mkdirSync(path.join(kernelStateDir(workspace), "events"), { recursive: true });
+    const snap = captureTerminalRunCapabilitySnapshot({ cols: 80, rows: 24, shellSessionOpen: 0 });
+    const payload = buildRunCompletePayload(
+      { terminal: "failed", detail: "provider_error" },
+      snap,
+      { providerFailureCode: "RATE_LIMIT" },
+    );
+    writeFileSync(
+      sessionEventsPath(workspace, sessionId),
+      `${JSON.stringify({ type: RUN_COMPLETE_EVENT, payload })}\n`,
+      "utf8",
+    );
+    const record = {
+      effectId: "eff-read",
+      tool: "read",
+      callId: "c-read",
+      steps: [{ phase: "execute", at: "2026-01-01T00:00:00.000Z", ok: true }],
+    };
+    const model = buildReceiptInspectorModel({ record, workspace, sessionId });
+    const runTerm = model?.panes.find((p) => p.id === "run_terminal");
+    expect(runTerm?.lines.some((l) => l.includes("provider failure code RATE_LIMIT"))).toBe(true);
   });
 
   test("shell effect adds terminal pane with capability and exit", () => {

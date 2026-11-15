@@ -11,6 +11,7 @@ import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolCall, ToolS
 import { anthropicSystemField } from "./anthropic-cache";
 import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
+import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 
@@ -123,7 +124,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
   const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
   let messages = toAnthropicMessages(wire.messages ?? []);
   if (messages.length === 0) {
-    yield { type: "error", message: "anthropic: nothing to send (no messages after system)" };
+    yield { type: "error", message: "anthropic: nothing to send (no messages after system)", code: "UNKNOWN" };
     return;
   }
 
@@ -172,18 +173,23 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `anthropic request failed: ${errorText(err)}` };
+    yield { type: "error", message: `anthropic request failed: ${errorText(err)}`, code: "TRANSIENT" };
     return;
   }
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    yield { type: "error", message: `anthropic HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
+    const code = classifyProviderFailure(response.status, detail);
+    yield {
+      type: "error",
+      message: `anthropic HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}`,
+      code,
+    };
     return;
   }
   if (!response.body) {
-    yield { type: "error", message: "anthropic returned an empty response body" };
+    yield { type: "error", message: "anthropic returned an empty response body", code: "EMPTY_RESPONSE" };
     return;
   }
 
@@ -276,7 +282,8 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
           break;
         case "error": {
           const text = typeof event.error?.message === "string" ? event.error.message : "anthropic stream error";
-          yield { type: "error", message: text };
+          const code = classifyProviderFailure(0, text);
+          yield { type: "error", message: text, code };
           return;
         }
         default:
@@ -288,7 +295,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: `anthropic stream failed: ${errorText(err)}` };
+    yield { type: "error", message: `anthropic stream failed: ${errorText(err)}`, code: "TRANSIENT" };
     return;
   }
 

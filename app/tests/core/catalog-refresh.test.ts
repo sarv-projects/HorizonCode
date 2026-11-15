@@ -6,6 +6,7 @@ import {
   MINIMUM_PROVIDERS,
   decodeCatalog,
   fetchLiveCatalog,
+  getCatalogCacheRevision,
   loadCatalog,
   summarizeCatalogDiff,
   writeCatalogCache,
@@ -50,6 +51,13 @@ describe("catalog refresh", () => {
     expect(res.notModified).toBe(true);
   });
 
+  test("writeCatalogCache bumps catalogCacheRevision", () => {
+    home = mkdtempSync(path.join(tmpdir(), "hz-cat-rev-"));
+    const before = getCatalogCacheRevision();
+    writeCatalogCache(decodeCatalog(fixtureProviders(MINIMUM_PROVIDERS)), { fetchedAt: new Date().toISOString(), source: "test" }, home);
+    expect(getCatalogCacheRevision()).toBe(before + 1);
+  });
+
   test("loadCatalog prefers user cache over curated", () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-cat-home-"));
     const body = fixtureProviders(MINIMUM_PROVIDERS);
@@ -60,7 +68,7 @@ describe("catalog refresh", () => {
     expect(Object.keys(loaded.providers).length).toBe(MINIMUM_PROVIDERS);
   });
 
-  test("committed snapshot wins over user cache when present", () => {
+  test("user cache wins over committed snapshot when both exist", () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-cat-home-"));
     const dir = mkdtempSync(path.join(tmpdir(), "hz-cat-snap-"));
     const snapFile = path.join(dir, "models-dev.snapshot.json");
@@ -69,8 +77,20 @@ describe("catalog refresh", () => {
     writeCatalogCache(decodeCatalog(cacheBody), { fetchedAt: new Date().toISOString(), source: "test" }, home);
     writeFileSync(snapFile, JSON.stringify(snapBody), "utf8");
     const loaded = loadCatalog({ HZ_MODELS_COMMITTED_SNAPSHOT: snapFile, HZ_NO_COMMITTED_SNAPSHOT: "0" }, home);
+    expect(loaded.source).toBe("cache");
+    expect(Object.keys(loaded.providers).length).toBe(MINIMUM_PROVIDERS);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("committed snapshot is used when no user cache exists", () => {
+    home = mkdtempSync(path.join(tmpdir(), "hz-cat-home-"));
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-cat-snap-"));
+    const snapFile = path.join(dir, "models-dev.snapshot.json");
+    const snapBody = fixtureProviders(MINIMUM_PROVIDERS + 2);
+    writeFileSync(snapFile, JSON.stringify(snapBody), "utf8");
+    const loaded = loadCatalog({ HZ_MODELS_COMMITTED_SNAPSHOT: snapFile, HZ_NO_COMMITTED_SNAPSHOT: "0" }, home);
     expect(loaded.source).toBe("snapshot");
-    expect(Object.keys(loaded.providers).length).toBe(MINIMUM_PROVIDERS + 5);
+    expect(Object.keys(loaded.providers).length).toBe(MINIMUM_PROVIDERS + 2);
     rmSync(dir, { recursive: true, force: true });
   });
 

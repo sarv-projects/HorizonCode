@@ -14,7 +14,8 @@
  * caller gets back one thing: the subagent's final report, capped.
  */
 
-import type { ApprovalHandler, Lease, Provider, RuntimeEvent, ToolResult } from "../contracts";
+import { EventTypes, newId, nowIso, type ApprovalHandler, type Lease, type Provider, type RuntimeEvent, type ToolResult } from "../contracts";
+import { sha256Hex } from "./canon";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): subagent.start/subagent.stop mark the
 // child session boundary (session.start/end for the child), OBSERVATION-only
 // (H4 — a subagent boundary hook can never block the delegated run).
@@ -22,7 +23,7 @@ import { loadHooks, runLifecycleHooks } from "./hooks";
 import { hooksLoadOptions } from "./trust";
 import type { KernelClient } from "./kernel";
 import type { EffectHost } from "./effect-host";
-import { getApprovalHandler, runTurn, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
+import { getApprovalHandler, runTurn, streamFor, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
 import { buildChildPrompt, staticChildPrompt } from "./prompt";
@@ -55,6 +56,33 @@ function subagentTitle(task: string): string {
 export const SUBAGENT_EVENT_CAP = 40;
 /** Longest text field (summary, notice, child answer) a forwarded event keeps. */
 export const SUBAGENT_EVENT_TEXT_CAP = 300;
+
+type ParentHzAuditType =
+  | typeof EventTypes.agentSpawned
+  | typeof EventTypes.agentCompleted
+  | typeof EventTypes.agentMessageSent;
+
+async function appendParentHzAudit(
+  opts: NestedRunOptions,
+  type: ParentHzAuditType,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const parentId = typeof opts.parentSessionId === "string" ? opts.parentSessionId.trim() : "";
+  if (parentId === "") return;
+  try {
+    const stream = streamFor(parentId);
+    await opts.kernel.appendEvent(stream, {
+      id: newId(),
+      ts: nowIso(),
+      stream,
+      type,
+      actor: { kind: "agent", id: "hzcode" },
+      payload,
+    });
+  } catch {
+    /* audit append must not fail the delegated run */
+  }
+}
 
 function clip(text: unknown): string {
   const s = typeof text === "string" ? text : "";
@@ -98,6 +126,8 @@ export function boundChildEvent(ev: RuntimeEvent): RuntimeEvent | null {
 }
 
 export interface NestedRunOptions {
+  /** Parent session id — when set, `hz.agent.spawned` / `hz.agent.completed` append here (RC-18). */
+  parentSessionId?: string;
   /** Receives bounded child events wrapped as `subagent.event` (parent stream). */
   onEvent?: (ev: RuntimeEvent) => void;
   workspace: string;
@@ -161,6 +191,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   const requested = opts.maxSteps ?? preset?.maxSteps;
   const steps = clampSteps(preset?.maxSteps !== undefined && requested !== undefined ? Math.min(requested, preset.maxSteps) : requested);
   const title = subagentTitle(task);
+  const parentSessionId = typeof opts.parentSessionId === "string" ? opts.parentSessionId.trim() : "";
   const session = opts.store.createSession(title);
   let forwarded = 0;
   let childTools = 0;
@@ -252,6 +283,25 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     task: taskHead(task),
     ...profileField,
   });
+  await appendParentHzAudit(opts, EventTypes.agentSpawned, {
+    agentId: session.id,
+    childSessionId: session.id,
+    parentSessionId,
+    spawnKind: "task",
+    ...(preset !== undefined ? { profileId: preset.name } : {}),
+    taskHead: taskHead(task),
+  });
+  if (parentSessionId !== "") {
+    await appendParentHzAudit(opts, EventTypes.agentMessageSent, {
+      messageId: newId(),
+      fromAgentId: parentSessionId,
+      toAgentId: session.id,
+      targetSessionId: session.id,
+      kind: "instruction",
+      payloadDigest: sha256Hex(task),
+      delivery: "queue",
+    });
+  }
   if (preset?.name === "never") {
     emitBoundary({
       type: "notice",
@@ -263,17 +313,50 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   {
     const stopped = exit.terminal === "budget_exhausted" || exit.terminal === "timeout";
     const empty = text.trim() === "";
+    const uiStatus = aborted ? "cancelled" : stopped || empty ? "failed" : "completed";
     emitBoundary({
       type: "subagent.end",
       agentId: session.id,
       name: "agent",
       depth: 1,
-      status: aborted ? "cancelled" : stopped || empty ? "failed" : "completed",
+      status: uiStatus,
       durationMs: Math.max(0, Date.now() - startedAt),
       tools: childTools,
       ...(stopped ? { reason: String(exit.terminal) } : empty && !aborted ? { reason: "no output" } : {}),
       ...profileField,
     });
+    const hzStatus =
+      aborted
+        ? "cancelled"
+        : exit.terminal === "budget_exhausted"
+          ? "budget_exhausted"
+          : exit.terminal === "timeout"
+            ? "timeout"
+            : stopped || empty
+              ? "failed"
+              : "succeeded";
+    await appendParentHzAudit(opts, EventTypes.agentCompleted, {
+      agentId: session.id,
+      childSessionId: session.id,
+      parentSessionId,
+      status: hzStatus,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      toolCount: childTools,
+      terminal: exit.terminal,
+    });
+    if (parentSessionId !== "") {
+      const trimmedForDigest = text.trim();
+      await appendParentHzAudit(opts, EventTypes.agentMessageSent, {
+        messageId: newId(),
+        fromAgentId: session.id,
+        toAgentId: parentSessionId,
+        targetSessionId: parentSessionId,
+        kind: "result",
+        payloadDigest: trimmedForDigest !== "" ? sha256Hex(trimmedForDigest) : "",
+        delivery: "queue",
+        status: hzStatus,
+      });
+    }
   }
   await runLifecycleHooks(hooks, {
     point: "subagentStop",

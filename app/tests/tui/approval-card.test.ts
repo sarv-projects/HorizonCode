@@ -21,8 +21,30 @@ describe("approval card", () => {
     expect(plain.join("\n")).toContain("tool shell.exec");
     expect(plain.join("\n")).toContain("\u276f rm -rf build/");
     expect(plain.join("\n")).toContain("risk high");
-    expect(plain.join("\n")).toContain("y yes  n no  a always this session  Esc deny");
+    expect(plain.join("\n")).toContain("y yes  n no  a always this session (15m grant)  Esc deny");
+    expect(plain.join("\n")).toContain("grant: exact target only, expires after 15 minutes");
     for (const l of lines) expect(visibleWidth(l)).toBe(60);
+  });
+
+  test("shows sub-minute grant remaining from ms", () => {
+    const lines = approvalCard({
+      kind: "shell.exec",
+      title: "run",
+      width: 80,
+      grantActiveRemainingMs: 42_000,
+    });
+    expect(lines.map(strip).join("\n")).toContain("session grant: ~42s remaining");
+  });
+
+  test("shows active grant remaining when provided", () => {
+    const lines = approvalCard({
+      kind: "shell.exec",
+      title: "run",
+      detail: "npm test",
+      width: 70,
+      grantActiveRemainingMinutes: 9,
+    });
+    expect(lines.map(strip).join("\n")).toContain("session grant: ~9 minutes remaining");
   });
 
   test("effect, lease and tool linkage after risk when present", () => {

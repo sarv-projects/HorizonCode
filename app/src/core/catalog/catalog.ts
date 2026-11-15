@@ -15,14 +15,13 @@
  *  - TOLERANT decoding (mirrors opencode's `normalize()`): an unparseable model
  *    is SKIPPED and collected in `rejected`, never fatal. A whole catalog that
  *    is not even an object yields an empty catalog with one rejection line.
- *  - `loadCatalog()` with a three-way precedence seam:
- *      (1) an explicit snapshot file via `HZ_MODELS_SNAPSHOT` (env), if set and
- *          valid — an EXTERNALLY-sourced snapshot, so it is floor-validated;
- *      (2) the committed curated snapshot (`models-dev.curated.json`), the
- *          boot-time floor — small and OFFLINE, so NOT floor-validated;
- *      (3) a documented-but-NOT-default live-fetch extension point
- *          (`fetchLiveCatalog`) — disabled under INTEGRATIONS_ONLY and never
- *          called from tests. It is where a real models.dev fetch would land.
+ *  - `loadCatalog()` precedence (docs/33 §5.8):
+ *      (1) `HZ_MODELS_SNAPSHOT` env file when valid (floor-validated);
+ *      (2) user cache from `hzcode models refresh` / background poll;
+ *      (3) committed `models-dev.snapshot.json` when shipped;
+ *      (4) curated offline floor;
+ *      Live fetch (`fetchLiveCatalog`) is explicit-only (refresh/poll), never
+ *      implicit on boot.
  *  - `validateCatalog(catalog, { minProviders })`: throws below the floor.
  *
  * DELIBERATE DEFERRAL (documented in docs/28): the full ~8 MB models.dev
@@ -365,6 +364,13 @@ export function summarizeCatalogDiff(before: Catalog, after: Catalog): string {
   return parts.join("; ");
 }
 
+/** Bumped on every successful user-cache write (poll or `models refresh`). */
+let catalogCacheRevision = 0;
+
+export function getCatalogCacheRevision(): number {
+  return catalogCacheRevision;
+}
+
 /** Write the validated cache atomically (mode 0600). */
 export function writeCatalogCache(catalog: Catalog, meta: Omit<CatalogCacheMeta, "providerCount" | "modelCount">, home: string = homedir()): string {
   const file = catalogCachePath(home);
@@ -386,6 +392,7 @@ export function writeCatalogCache(catalog: Catalog, meta: Omit<CatalogCacheMeta,
   } catch {
     /* best effort */
   }
+  catalogCacheRevision += 1;
   return file;
 }
 
@@ -456,9 +463,9 @@ export type CatalogEnv = Record<string, string | undefined>;
 /**
  * Resolve the effective catalog (pure; the environment is injectable). Precedence:
  *   (1) `HZ_MODELS_SNAPSHOT` — a validated external snapshot file, if present;
- *   (2) the committed `models-dev.snapshot.json` when present (human refresh script);
- *   (3) the user cache from `hzcode models refresh`;
- *   (4) the committed curated snapshot (the offline floor).
+ *   (2) the user cache from `hzcode models refresh` or background poll;
+ *   (3) the committed `models-dev.snapshot.json` when present (human refresh script);
+ *   (4) the curated offline snapshot (the boot floor).
  * The live-fetch path stays an explicit extension point and is not consulted here.
  */
 export function loadCatalog(env: CatalogEnv = process.env, home: string = homedir()): LoadedCatalog {
@@ -467,10 +474,10 @@ export function loadCatalog(env: CatalogEnv = process.env, home: string = homedi
     const fromFile = loadSnapshotFile(override);
     if (fromFile) return { ...fromFile, source: "override" };
   }
-  const committed = loadCommittedCatalog(env);
-  if (committed) return { ...committed, source: "snapshot" };
   const cached = readCatalogCache(home);
   if (cached) return { ...cached.catalog, source: "cache" };
+  const committed = loadCommittedCatalog(env);
+  if (committed) return { ...committed, source: "snapshot" };
   return { ...curatedCatalog(), source: "curated" };
 }
 

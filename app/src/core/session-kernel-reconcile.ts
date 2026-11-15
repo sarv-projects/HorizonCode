@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { EventTypes } from "../contracts";
 import { kernelStateDir } from "./paths";
@@ -199,4 +199,59 @@ export function sessionKernelReconcileNotice(workspace: string, sessionId: strin
   } catch {
     return undefined;
   }
+}
+
+export interface SessionKernelDoctorSummary {
+  /** Session streams with a tool.call row in the log. */
+  scanned: number;
+  toolCalls: number;
+  paired: number;
+  effectIdPaired: number;
+  unpairedCalls: number;
+  unpairedReceipts: number;
+}
+
+/** Aggregate tool.call ↔ receipt pairing for doctor (read-only; ruling 416). */
+export function summarizeSessionKernelReconcileDoctor(workspace: string): SessionKernelDoctorSummary {
+  const empty: SessionKernelDoctorSummary = {
+    scanned: 0,
+    toolCalls: 0,
+    paired: 0,
+    effectIdPaired: 0,
+    unpairedCalls: 0,
+    unpairedReceipts: 0,
+  };
+  const eventsDir = path.join(kernelStateDir(workspace), "events");
+  if (!existsSync(eventsDir)) return empty;
+  const out = { ...empty };
+  for (const name of readdirSync(eventsDir)) {
+    if (!name.endsWith(".jsonl") || !name.startsWith("session__")) continue;
+    const sessionId = name.slice("session__".length, -".jsonl".length);
+    if (sessionId === "") continue;
+    let report: ReconcileReport;
+    try {
+      report = reconcileSessionKernel(workspace, sessionId);
+    } catch {
+      continue;
+    }
+    if (report.toolCalls === 0) continue;
+    out.scanned += 1;
+    out.toolCalls += report.toolCalls;
+    out.paired += report.paired;
+    out.effectIdPaired += report.effectIdPaired;
+    out.unpairedCalls += report.unpairedCalls.length;
+    out.unpairedReceipts += report.unpairedReceipts.length;
+  }
+  return out;
+}
+
+export function formatSessionKernelReconcileDoctorDetail(summary: SessionKernelDoctorSummary): string {
+  if (summary.scanned === 0) {
+    return "no session tool.call events in kernel state (fresh or transcript-only)";
+  }
+  return (
+    `${summary.scanned} session stream(s); ${summary.toolCalls} tool.call(s); ` +
+    `${summary.paired} paired (${summary.effectIdPaired} by effectId); ` +
+    `${summary.unpairedCalls} unpaired call(s); ${summary.unpairedReceipts} unpaired receipt(s) — reduced ledger scan, not EffectHost settle`
+  );
 }

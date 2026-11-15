@@ -1,0 +1,1 @@
+The last {count} tool steps repeated the same calls and returned the same results for `{tool}` (a true-noop loop). Change your approach: different paths, broader search, or explain what you are stuck on before repeating the same action.

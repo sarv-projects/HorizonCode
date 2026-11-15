@@ -21,7 +21,7 @@ function parseBankArg(raw: unknown): MemoryBankId | undefined {
 export const memoryRememberTool: Tool = {
   name: "memory_remember",
   description:
-    `Store a fact in a memory bank (FTS index). Default bank is project (.hz/state/memory.db). user and shared banks live in the user config dir. Does not edit MEMORY.md. Max ${MEMORY_FACT_MAX_CHARS} chars.`,
+    `Store a fact in a memory bank (FTS index). Default bank is project (.hz/state/memory.db). user and shared banks live in the user config dir. With HZ_MEMORY_SYNC_MEMORY_MD=1, project remembers also append a capped bullet to MEMORY.md. Max ${MEMORY_FACT_MAX_CHARS} chars.`,
   parameters: {
     type: "object",
     properties: {
@@ -44,7 +44,13 @@ export const memoryRememberTool: Tool = {
       if (result.reason === "too_long") return fail(`content exceeds ${MEMORY_FACT_MAX_CHARS} chars`);
       return { ok: true, output: `no change (duplicate fact in bank ${bank})` };
     }
-    return { ok: true, output: `remembered in bank ${result.bank}` };
+    const indexNote =
+      result.memoryIndex === "appended"
+        ? " (MEMORY.md index updated)"
+        : result.memoryIndex === "duplicate"
+          ? " (MEMORY.md already listed)"
+          : "";
+    return { ok: true, output: `remembered in bank ${result.bank}${indexNote}` };
   },
 };
 

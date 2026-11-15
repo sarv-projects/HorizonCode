@@ -9,6 +9,7 @@ import { EventTypes } from "../../src/contracts";
 import {
   HZ_CANONICAL_EVENTS,
   hzEventCoverageReport,
+  hzNamesForShipped,
   RESERVED_UNEMITTED_EVENT_TYPES,
   SHIPPED_EVENT_CATALOGUE,
   SHIPPED_TO_HZ_MAP,
@@ -23,6 +24,7 @@ const EMITTER_SOURCES = [
   "src/core/loop.ts",
   "src/core/index.ts",
   "src/core/hooks.ts",
+  "src/core/subagent.ts",
 ].map((rel) => path.join(APP_ROOT, rel));
 
 function collectEmittedTypes(sources: string[]): Set<string> {
@@ -38,6 +40,7 @@ function collectEmittedTypes(sources: string[]): Set<string> {
     for (const m of src.matchAll(/\blogEvent\(\s*[^,]+,\s*[^,]+,\s*EventTypes\.(\w+)/g)) addSymbol(m[1]!);
     for (const m of src.matchAll(/\blogEvent\(\s*[^,]+,\s*[^,]+,\s*(COMPACTION_EVENT|PENDING_TODOS_EVENT|UNVERIFIED_COMPLETION_EVENT)\b/g)) addSymbol(m[1]!);
     for (const m of src.matchAll(/\.append\([^,]+,\s*EventTypes\.(\w+)/g)) addSymbol(m[1]!);
+    for (const m of src.matchAll(/appendParentHzAudit\([^,]+,\s*EventTypes\.(\w+)/g)) addSymbol(m[1]!);
     for (const m of src.matchAll(/\.append\([^,]+,\s*"([^"]+)"/g)) found.add(m[1]!);
     for (const m of src.matchAll(/emitEvent\([^,]+,\s*"([^"]+)"/g)) found.add(m[1]!);
     // Hook listeners forward arbitrary types from hooks; only hook.* are catalogue-listed.
@@ -47,9 +50,9 @@ function collectEmittedTypes(sources: string[]): Set<string> {
 }
 
 describe("shipped event catalogue", () => {
-  test("catalogue includes the admitted-prompt canonical event (24 shipped types)", () => {
-    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(24);
-    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(24);
+  test("catalogue includes todo + agent + skill + effect decision + busy/claim bracket (34 shipped types)", () => {
+    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(34);
+    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(34);
   });
 
   test("reserved message.delta is not in the shipped catalogue", () => {
@@ -93,13 +96,27 @@ describe("RC-18 shipped → hz.* mapping", () => {
   test("separates shipped event names, canonical mappings, equivalence, and literal hz.* emission", () => {
     const coverage = hzEventCoverageReport();
     expect(coverage.canonicalTotal).toBe(44);
-    expect(coverage.shippedTypes).toBe(24);
-    expect(coverage.mappedCanonicalNames).toHaveLength(21);
-    expect(coverage.unmappedCanonicalNames).toHaveLength(23);
-    expect(coverage.equivalentCanonicalNames).toHaveLength(10);
+    expect(coverage.shippedTypes).toBe(34);
+    expect(coverage.mappedCanonicalNames).toHaveLength(28);
+    expect(coverage.unmappedCanonicalNames).toHaveLength(16);
+    expect(coverage.equivalentCanonicalNames).toHaveLength(20);
     expect(coverage.literalCanonicalEmitted).toEqual([
       "hz.session.prompt.admitted",
-      "hz.effect.settled", "hz.effect.unknown", "hz.effect.reconciled",
+      "hz.session.claim.acquired",
+      "hz.session.claim.released",
+      "hz.session.busy.entered",
+      "hz.session.busy.left",
+      "hz.todo.updated",
+      "hz.effect.decision.made",
+      "hz.effect.settled",
+      "hz.effect.unknown",
+      "hz.effect.reconciled",
+      "hz.agent.spawned",
+      "hz.agent.completed",
+      "hz.agent.message.sent",
+      "hz.skill.invoked",
+      "hz.permission.asked",
+      "hz.permission.answered",
     ]);
     expect(coverage.mappedCanonicalNames.length + coverage.unmappedCanonicalNames.length).toBe(44);
     expect(coverage.mappedCanonicalNames.length).toBeGreaterThan(coverage.literalCanonicalEmitted.length);
@@ -116,6 +133,12 @@ describe("RC-18 shipped → hz.* mapping", () => {
       for (const h of row.hz) expect(unimplemented.has(h)).toBe(false);
     }
     expect(unimplemented.size).toBeGreaterThan(0);
+  });
+
+  test("hook audit rows map to canonical hz subsets (433)", () => {
+    expect(hzNamesForShipped("hook.decision")).toEqual(["hz.permission.answered"]);
+    expect(hzNamesForShipped("hook.failure")).toEqual(["hz.error.raised"]);
+    expect(hzNamesForShipped(UNVERIFIED_COMPLETION_EVENT)).toEqual(["hz.effect.unknown"]);
   });
 });
 

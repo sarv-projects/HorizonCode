@@ -18,10 +18,17 @@ import type { ApprovalUi } from "./approval";
 import { type KeyAnswer } from "./approval-card";
 import {
   APPROVAL_TYPE_AHEAD_MS,
+  approvalGrantStatusFromCardLines,
   consumeFullscreenApprovalKey,
+  findApprovalCardTranscriptStart,
   fullscreenApprovalStatusExtra,
   fullscreenRichApprovalEnabled,
 } from "./fullscreen-approval";
+import {
+  APPROVAL_GRANT_TICK_MS,
+  normalizeApprovalKeyPrompt,
+  type ApprovalKeyPrompt,
+} from "./approval-key-prompt";
 import { fullscreenRichTranscriptEnabled, pushTranscriptChunks } from "./fullscreen-transcript";
 import { EscapeWriter, type TerminalHooks } from "./escape-writer";
 import {
@@ -201,6 +208,20 @@ export async function runFullscreenExperimentalChat(
   let approvalResolve: ((answer: string) => void) | null = null;
   let approvalKeyResolve: ((answer: KeyAnswer) => void) | null = null;
   let approvalKeyArmedAt = 0;
+  let approvalKeyTickTimer: ReturnType<typeof setInterval> | undefined;
+  let approvalGrantStatus: string | undefined;
+  let approvalKeyTranscriptFrom = 0;
+  let approvalKeyLineCount = 0;
+
+  const clearApprovalKeyTick = (): void => {
+    if (approvalKeyTickTimer !== undefined) {
+      clearInterval(approvalKeyTickTimer);
+      approvalKeyTickTimer = undefined;
+    }
+    approvalGrantStatus = undefined;
+    approvalKeyTranscriptFrom = 0;
+    approvalKeyLineCount = 0;
+  };
   let pickerActive = false;
   let paletteActive = false;
   let inspectorActive = false;
@@ -281,12 +302,29 @@ export async function runFullscreenExperimentalChat(
 
   if (richApproval) {
     ui.unicode = unicodeLocale();
-    ui.askKey = () =>
+    ui.askKey = (prompt: ApprovalKeyPrompt) =>
       new Promise<KeyAnswer>((resolve) => {
+        clearApprovalKeyTick();
         approvalKeyArmedAt = Date.now() + APPROVAL_TYPE_AHEAD_MS;
+        const { lines, onTick } = normalizeApprovalKeyPrompt(prompt);
+        approvalKeyTranscriptFrom = findApprovalCardTranscriptStart(transcript, lines);
+        approvalKeyLineCount = lines.length;
+        approvalGrantStatus = approvalGrantStatusFromCardLines(lines);
         approvalKeyResolve = resolve;
         editorText = "";
         pendingSubmitText = undefined;
+        if (onTick) {
+          approvalKeyTickTimer = setInterval(() => {
+            if (approvalKeyResolve === null) return;
+            const fresh = onTick();
+            if (approvalKeyLineCount > 0 && approvalKeyTranscriptFrom < transcript.length) {
+              transcript.splice(approvalKeyTranscriptFrom, approvalKeyLineCount, ...fresh);
+            }
+            approvalKeyLineCount = fresh.length;
+            approvalGrantStatus = approvalGrantStatusFromCardLines(fresh);
+            paint();
+          }, APPROVAL_GRANT_TICK_MS);
+        }
         paint();
       });
   }
@@ -670,7 +708,8 @@ export async function runFullscreenExperimentalChat(
           ? fullscreenApprovalStatusExtra("line")
           : "";
     const blockExtra = fullscreenReconcileBlockExtra(sessionStatus().reconcileBlock ?? { latched: false, mode: "off" });
-    const extraBits = [approvalExtra, blockExtra].filter((s) => s !== "");
+    const grantExtra = approvalGrantStatus ?? "";
+    const extraBits = [approvalExtra, grantExtra, blockExtra].filter((s) => s !== "");
     if (insetPaneOpen) extraBits.push("inset");
     const status = formatIdleStatusLine(sessionStatus(), cols, {
       plain: true,
@@ -913,6 +952,7 @@ export async function runFullscreenExperimentalChat(
     if (!pasted) return;
     if (approvalKeyResolve !== null && pasted.lines > 1) {
       const resolve = approvalKeyResolve;
+      clearApprovalKeyTick();
       approvalKeyResolve = null;
       approvalKeyArmedAt = 0;
       editorText = "";
@@ -949,6 +989,7 @@ export async function runFullscreenExperimentalChat(
       );
       if (outcome === "paste-block" || outcome === "ignore") return;
       const resolve = approvalKeyResolve;
+      clearApprovalKeyTick();
       approvalKeyResolve = null;
       approvalKeyArmedAt = 0;
       resolve(outcome);

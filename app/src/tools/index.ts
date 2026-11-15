@@ -24,7 +24,7 @@ import { previewTool } from "./preview";
 import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
 import { shellTool } from "./shell";
-import { todoTool } from "./todo";
+import { todoTool, todoWriteTool } from "./todo";
 import { toolSearchTool } from "./tool-search";
 import { undoTool } from "./undo";
 import { writeTool } from "./write";
@@ -40,6 +40,7 @@ export const tools: Tool[] = [
   presentTool,
   shellTool,
   todoTool,
+  todoWriteTool,
   agentTool,
   codemodeTool,
   previewTool,

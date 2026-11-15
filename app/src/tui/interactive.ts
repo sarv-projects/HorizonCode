@@ -82,6 +82,11 @@ import { complete, formatCompletionDropdown, ghostFor, type CompletionContext } 
 import { loadUserKeymap, resolveAction } from "./keymap";
 import { keyChoice, type KeyAnswer } from "./approval-card";
 import {
+  APPROVAL_GRANT_TICK_MS,
+  normalizeApprovalKeyPrompt,
+  refreshApprovalCardAboveCursor,
+} from "./approval-key-prompt";
+import {
   PASTE_OFF,
   PASTE_ON,
   PASTE_SINGLE_LINE_FLUSH_MS,
@@ -1142,10 +1147,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         /* nothing to wipe */
       }
     };
-    ui.askKey = () =>
+    ui.askKey = (prompt) =>
       new Promise<KeyAnswer>((resolve) => {
+        const { screenRows, onTick } = normalizeApprovalKeyPrompt(prompt);
         const armedAt = Date.now() + 250;
         let settled = false;
+        let tickTimer: ReturnType<typeof setInterval> | undefined;
+        const writeCard = (chunk: string): void => {
+          process.stdout.write(chunk);
+        };
         try {
           rl.pause();
         } catch {
@@ -1154,6 +1164,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const settle = (answer: KeyAnswer): void => {
           if (settled) return;
           settled = true;
+          if (tickTimer !== undefined) clearInterval(tickTimer);
           process.stdin.off("keypress", onKey);
           answerWaiter = null;
           wipeLine();
@@ -1174,6 +1185,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           if (choice !== undefined) settle(choice);
           else wipeLine();
         };
+        if (onTick) {
+          tickTimer = setInterval(() => {
+            if (settled) return;
+            try {
+              refreshApprovalCardAboveCursor(writeCard, screenRows, onTick());
+            } catch {
+              /* terminal went away */
+            }
+          }, APPROVAL_GRANT_TICK_MS);
+        }
         wipeLine();
         // The line path (Enter, abort) is a denial; only a recognised key can say yes.
         answerWaiter = () => settle("n");

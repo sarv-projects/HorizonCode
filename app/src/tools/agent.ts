@@ -22,7 +22,8 @@ function clampSteps(value: unknown): number {
 export const agentTool: Tool = {
   name: "agent",
   description:
-    "Delegate a focused task to a subagent that works in its own context and returns a final summary. " +
+    "Delegate a focused task to a nested subagent (child session, own transcript — not a background thread). " +
+    "The subagent returns one final summary; the parent conversation does not see its tool steps. " +
     "Must be used for self-contained research or multi-step sub-tasks.",
   parameters: {
     type: "object",

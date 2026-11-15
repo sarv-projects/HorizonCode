@@ -9,10 +9,11 @@ import * as path from "node:path";
 
 const PROMPT_DIR = path.join(import.meta.dir, "..", "prompts", "guards");
 
-export type GuardPromptId = "tool-call-loop" | "consecutive-mistakes";
+export type GuardPromptId = "tool-call-loop" | "action-stationarity" | "consecutive-mistakes";
 
 const PROMPT_FILES: Record<GuardPromptId, string> = {
   "tool-call-loop": "tool-call-loop.md",
+  "action-stationarity": "action-stationarity.md",
   "consecutive-mistakes": "consecutive-mistakes.md",
 };
 
@@ -35,6 +36,12 @@ export function loopDetectionInterruptNudge(toolLabel: string, count: number): s
   const template = loadGuardPrompt("tool-call-loop");
   const body = template.replaceAll("{tool}", toolLabel).replaceAll("{count}", String(count));
   return wrapSystemInterrupt("tool_call_loop", body);
+}
+
+export function actionStationarityInterruptNudge(toolLabel: string, count: number): string {
+  const template = loadGuardPrompt("action-stationarity");
+  const body = template.replaceAll("{tool}", toolLabel).replaceAll("{count}", String(count));
+  return wrapSystemInterrupt("action_stationarity", body);
 }
 
 export function consecutiveMistakesInterruptNudge(count: number, max: number): string {

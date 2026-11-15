@@ -468,7 +468,8 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
     } else if (inner.type === "notice") {
       line = dim("\u00b7 " + firstLine(inner.message, 200));
     } else if (inner.type === "error") {
-      line = red("\u26a0 " + firstLine(inner.message, 200));
+      const msg = inner.code !== undefined ? `[${inner.code}] ${inner.message}` : inner.message;
+      line = red("\u26a0 " + firstLine(msg, 200));
     } else {
       return;
     }
@@ -619,9 +620,11 @@ export function createRenderer(opts: RenderOptions = {}): Renderer {
       case "effect.reconciled":
         emit(dim(`\u00b7 effect reconciled (${sanitizeText(ev.effectId).slice(0, 8)})`), dim);
         break;
-      case "error":
-        emit(red("\u26a0 " + sanitizeText(ev.message)), red);
+      case "error": {
+        const msg = ev.code !== undefined ? `[${ev.code}] ${ev.message}` : ev.message;
+        emit(red("\u26a0 " + sanitizeText(msg)), red);
         break;
+      }
       case "turn.done":
         ensureLineStart();
         subs.length = 0;

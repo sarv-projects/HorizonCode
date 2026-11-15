@@ -14,7 +14,8 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import type { ChatMsg, ServerNotification, ServerResponse } from "../../src/contracts";
-import { HZ_PROTO, SESSION_EVENT_METHOD } from "../../src/contracts";
+import { HZ_PROTO, SERVER_METHODS, SESSION_EVENT_METHOD } from "../../src/contracts";
+import { MOCK_INTERJECT_SERVER_TEST } from "../../src/core/providers/mock";
 import { AdmissionQueue } from "../../src/core/admission";
 import { createServer } from "../../src/core/server";
 import { SessionStore } from "../../src/core/session";
@@ -165,6 +166,7 @@ describe("single-attach server (FEAT-002)", () => {
     expect(["trusted", "untrusted"]).toContain(hello.kernelMode as string);
     const caps = hello.capabilities as { methods: string[]; transports: string[]; singleAttach: boolean };
     expect(caps.methods).toContain("session.prompt");
+    expect(SERVER_METHODS).toContain("session.interject");
     expect(caps.transports).toEqual(["stdio"]);
     expect(caps.singleAttach).toBe(true);
 
@@ -429,6 +431,77 @@ describe("single-attach server (FEAT-002)", () => {
       store.close();
     }
   });
+
+  test("(f1) session.interject when idle is rejected with reason idle", async () => {
+    const workspace = tempDir("hz-server-interject-idle-");
+    const input = makeInput();
+    const out = makeOutput();
+    const server = createServer({ workspace, input: input.iterable, output: out.sink, mock: true });
+    const run = server.start();
+
+    input.push(JSON.stringify({ id: 1, method: "session.create" }));
+    const sessionId = resultOf(await out.waitFor(1)).sessionId as string;
+
+    input.push(JSON.stringify({ id: 2, method: "session.interject", params: { sessionId, text: "pivot" } }));
+    const interject = resultOf(await out.waitFor(2));
+    expect(interject.accepted).toBe(false);
+    expect(interject.reason).toBe("idle");
+
+    input.end();
+    await run;
+    await server.stop();
+  });
+
+  test("(f2) session.interject queues steer while session.prompt is in flight", async () => {
+    const workspace = tempDir("hz-server-interject-busy-");
+    const input = makeInput();
+    const out = makeOutput();
+    const server = createServer({ workspace, input: input.iterable, output: out.sink, mock: true });
+    const run = server.start();
+
+    input.push(JSON.stringify({ id: 1, method: "session.create" }));
+    const sessionId = resultOf(await out.waitFor(1)).sessionId as string;
+
+    input.push(
+      JSON.stringify({
+        id: 2,
+        method: "session.prompt",
+        params: { sessionId, text: `please run ${MOCK_INTERJECT_SERVER_TEST}` },
+      }),
+    );
+    const waitBusy = async (): Promise<void> => {
+      for (let i = 0; i < 200; i += 1) {
+        const types = sessionEvents(out, sessionId);
+        const deltas = types.filter((t) => t === "assistant.delta").length;
+        if (deltas >= 2 && !types.includes("turn.done")) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error("prompt did not stay in a long streaming phase");
+    };
+    await waitBusy();
+    expect(out.responses.some((r) => r.id === 2)).toBe(false);
+    input.push(
+      JSON.stringify({ id: 3, method: "session.interject", params: { sessionId, text: "steer from client" } }),
+    );
+
+    const interjectResp = await out.waitFor(3);
+    if ("error" in interjectResp) {
+      throw new Error(`interject RPC error: ${JSON.stringify(interjectResp.error)}`);
+    }
+    const interject = (interjectResp as { result: Record<string, unknown> }).result;
+    if (interject.accepted !== true) {
+      throw new Error(`interject not accepted: ${JSON.stringify(interject)}`);
+    }
+
+    await out.waitFor(2);
+    const types = sessionEvents(out, sessionId);
+    expect(types).toContain("interjection.queued");
+    expect(types).toContain("interjection.admitted");
+
+    input.end();
+    await run;
+    await server.stop();
+  }, 60000);
 
   test("(f) an unknown method returns a JSON-RPC error, never silently ignored", async () => {
     const workspace = tempDir("hz-server-unknown-");

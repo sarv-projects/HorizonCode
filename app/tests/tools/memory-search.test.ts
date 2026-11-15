@@ -24,6 +24,16 @@ describe("memory_search tool", () => {
     expect(result.output).toContain("bun test");
   });
 
+  test("honours limit parameter", async () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-memtool-limit-"));
+    replaceMemoryIndex(workspace, ["alpha bravo", "alpha charlie", "alpha delta"]);
+    const ctx = mockToolContext({ workspace, cwd: workspace, decision: "allow" });
+    const result = await memorySearchTool.execute({ query: "alpha", limit: 1 }, ctx);
+    expect(result.ok).toBe(true);
+    const lines = (result.output ?? "").split("\n").filter((l) => /^\d+\./.test(l));
+    expect(lines).toHaveLength(1);
+  });
+
   test("shared_recall scope labels banks on hits", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-memtool-sh-"));
     replaceMemoryIndex(workspace, ["run gates before nightly deploy"], PROJECT_BANK);

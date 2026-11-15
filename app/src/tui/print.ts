@@ -17,6 +17,7 @@
 
 import type { RunExit, Runtime, RuntimeEvent } from "../contracts";
 import { exitCodeFor } from "../core/loop";
+import { formatProviderFailureMessage } from "../core/providers/failure-codes";
 import { errorMessage, sanitizeText } from "./style";
 
 export type PrintFormat = "text" | "json" | "stream-json";
@@ -100,7 +101,9 @@ export async function runPrint(opts: PrintOptions): Promise<number> {
       for (const f of filesInDiff(ev.diff)) if (!changed.includes(f)) changed.push(f);
     } else if (ev.type === "context.usage") {
       usage = { model: ev.model, contextWindow: ev.window, estimatedInputTokens: ev.estimatedInput };
-    } else if (ev.type === "error") process.stderr.write(`hzcode: ${sanitizeText(ev.message)}\n`);
+    } else if (ev.type === "error") {
+      process.stderr.write(`hzcode: ${sanitizeText(formatProviderFailureMessage(ev.message, ev.code))}\n`);
+    }
     if (opts.format === "stream-json") write(JSON.stringify(ev) + "\n");
   };
 

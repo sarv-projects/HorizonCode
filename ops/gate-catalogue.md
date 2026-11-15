@@ -57,6 +57,12 @@ Measured 2026-11-09 on an 8-core x86_64 sandbox container, Bun 1.2.14, running a
 
 The ceilings are deliberately generous. A hosted CI runner is slower and noisier than this machine, and a gate that flakes gets ignored, so the margin is roughly 5x rather than the 3x a quiet machine would justify. The gate still trips on the regressions it exists for (an eager heavy import, a blocking kernel handshake, a synchronous scan at start), which cost far more than 5x on a 96 ms baseline only when they are large; a subtler slowdown is caught by tightening the defaults when new numbers justify it. Re-measure at release and update this table and the two defaults in `ops/gates.sh` together. These are single-machine numbers and exclude model latency.
 
+## 2.1 Advisory probes (not in `gates.sh`)
+
+| Script | What it proves | What it does *not* prove |
+|---|---|---|
+| `ops/jsonl-fsync-contract-probe.sh` | TS `jsonl-append` (+ optional Rust `jsonl_fsync` unit tests) match the fsync-on-append contract (**432**) | Power-loss durability; run manually or in extended CI, not fail-fast `gates.sh` |
+
 ## 3. Keeping this file honest
 
 - A row moves to `runnable` in the same change that makes it run, naming the `ops/gates.sh` step — never before, and never because a neighbouring check looks related.

@@ -8,6 +8,14 @@ function msg(role: ChatMsg["role"], content: string): ChatMsg {
 }
 
 describe("compaction hold-then-swap", () => {
+  test("without hold buffer uses fallback summariser (never undefined summary)", () => {
+    const elided = [msg("user", "old"), msg("assistant", "reply")];
+    const { summary, holdSwap } = summariseElidedWithHold(elided, 10, 8, undefined);
+    expect(typeof summary).toBe("string");
+    expect(summary.length).toBeGreaterThan(0);
+    expect(holdSwap).toBe(false);
+  });
+
   test("swaps injected summary when prefix key matches", () => {
     const elided = [msg("user", "old"), msg("assistant", "reply")];
     const hold = new CompactionHoldBuffer(() => "SHOULD_NOT_RUN");

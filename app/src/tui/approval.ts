@@ -12,15 +12,39 @@ import { SESSION_LEASE_TTL_MS } from "../core/loop";
 import type { KernelClient } from "../core/kernel";
 import { richDiff } from "./diff";
 import { formatApprovalAskAnnouncement, screenReaderMode } from "./a11y";
-import { approvalCard, type KeyAnswer } from "./approval-card";
-import { permissionAlwaysLines, permissionPresentationForRequest } from "./permission-presentation";
+import { approvalCard, type ApprovalCardInput, type KeyAnswer } from "./approval-card";
+import {
+  type ApprovalKeyPrompt,
+  approvalCardScreenRows,
+} from "./approval-key-prompt";
+import {
+  formatUnattendedApprovalDenial,
+  permissionAlwaysLines,
+  permissionPresentationForRequest,
+  savedAllowStaleFootnote,
+  sessionGrantTtlMinutes,
+} from "./permission-presentation";
+import { appendSavedAllow } from "../core/saved-allows";
+import {
+  hydrateSessionGrantFromKernel,
+  recordSessionGrantExpiry,
+  sessionGrantRemainingMs,
+} from "../core/session-grant-clock";
+import { grantRemainingMinutesFromMs } from "./grant-ttl";
 import { createRenderer, diffBlock, previewOf, type Renderer } from "./render";
 import { bold, cyan, dim, errorMessage, sanitizeText, terminalWidth, truncate, yellow } from "./style";
 
 type RuntimeWithExtras = Runtime & {
   /** Optional: remember an approval decision as a lease for this session. */
   grantLease?: (kind: string, pattern: string, ttlMs?: number) => unknown;
+  workspace?: string;
 };
+
+function workspaceFromUi(ui: ApprovalUi): string | undefined {
+  const runtime = ui.runtime as RuntimeWithExtras | undefined;
+  const ws = runtime?.workspace;
+  return typeof ws === "string" && ws !== "" ? ws : undefined;
+}
 
 export interface ApprovalUi {
   /** True when a human is attached and can answer. */
@@ -31,7 +55,7 @@ export interface ApprovalUi {
    * Optional single-key mode (rich TTY): shows the card lines and resolves on
    * one keypress without Enter. Absent => the line prompt below is used.
    */
-  askKey?: (cardLines: string[]) => Promise<KeyAnswer>;
+  askKey?: (prompt: ApprovalKeyPrompt) => Promise<KeyAnswer>;
   /** False selects ASCII card borders (non-UTF-8 locale). */
   unicode?: boolean;
   /** Where notices go; replaced by the running UI's renderer. */
@@ -51,10 +75,7 @@ export function createApprovalUi(interactive: boolean): ApprovalUi {
   };
 }
 
-/** How long an "always" answer lasts, in the same minutes the lease is minted for. */
-function leaseMinutes(): number {
-  return Math.max(1, Math.round(SESSION_LEASE_TTL_MS / 60_000));
-}
+const grantTtlMinutes = sessionGrantTtlMinutes(SESSION_LEASE_TTL_MS);
 
 /**
  * Remember an "always" for this session, scoped to the approved TARGET: an
@@ -94,13 +115,18 @@ async function rememberAlways(
       // Ruling 32: "always" mints a session GRANT — a bounded pre-authorisation
       // that mints a fresh one-use lease per effect it covers (a lease would be
       // spent by its first use, turning "always" into "once").
-      await ctx.kernel.makeGrant(kind as GuardKind, target, SESSION_LEASE_TTL_MS, ctx.sessionId);
+      const grant = await ctx.kernel.makeGrant(kind as GuardKind, target, SESSION_LEASE_TTL_MS, ctx.sessionId);
+      recordSessionGrantExpiry(ctx.sessionId, kind, target, grant.expiry);
+      const ws = workspaceFromUi(ui);
+      if (ws !== undefined) appendSavedAllow(ws, kind as GuardKind, target);
       return true;
     }
     const runtime = ui.runtime as RuntimeWithExtras | undefined;
     const grant = runtime?.grantLease;
     if (typeof grant !== "function") return false;
     await Promise.resolve(grant.call(runtime, kind, target));
+    const ws = workspaceFromUi(ui);
+    if (ws !== undefined) appendSavedAllow(ws, kind as GuardKind, target);
     return true;
   } catch (err) {
     r.notice(`could not remember that decision: ${errorMessage(err)}`);
@@ -141,11 +167,13 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     gateSessionId?: string,
   ): Promise<boolean> => {
     const kind = sanitizeText(req?.kind ?? "other") || "other";
-    const workspace =
-      ui.runtime !== undefined && "workspace" in ui.runtime && typeof (ui.runtime as { workspace?: string }).workspace === "string"
-        ? (ui.runtime as { workspace: string }).workspace
-        : undefined;
+    const workspace = workspaceFromUi(ui);
+    const tgtForFootnote = typeof action?.target === "string" ? action.target : "";
+    const kindForFootnote = typeof action?.kind === "string" ? action.kind : sanitizeText(req?.kind ?? "other") || "other";
+    const staleFootnote = savedAllowStaleFootnote(workspace, kindForFootnote, tgtForFootnote);
     const presentation = permissionPresentationForRequest(req, workspace);
+    const presentationLines =
+      staleFootnote !== undefined ? [...presentation.lines, staleFootnote] : [...presentation.lines];
     const title =
       escapeInvisible(sanitizeText(presentation.title || req?.title))
         .replace(/\s+/g, " ")
@@ -160,14 +188,13 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     const r = ui.renderer;
 
     if (!ui.interactive) {
-      const headlessTitle = escapeInvisible(sanitizeText(req?.title ?? "")).replace(/\s+/g, " ").trim() || title;
-      r.notice(`approval requested (${kind}): ${headlessTitle} \u2014 denied, no one is attached to say yes`);
+      r.notice(formatUnattendedApprovalDenial(presentation, kind, detail));
       return false;
     }
 
     r.ensureLineStart();
     const keyMode = typeof ui.askKey === "function";
-    const tgt = typeof action?.target === "string" ? action.target : "";
+    const tgt = tgtForFootnote;
     const canAlways = tgt !== "" && !tgt.endsWith("*") && kind !== "other";
     if (screenReaderMode()) {
       r.line(
@@ -185,6 +212,7 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
     if (!keyMode) {
       r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + (detail ? " " + detail : "") + "\n");
       if (guardianLine !== "") r.write(guardianLine + "\n");
+      if (staleFootnote !== undefined) r.write(dim(staleFootnote) + "\n");
     }
     // An optional preview rides the request when the caller can produce one (a
     // staged diff for a plan-mode write): shown before the ask, absent on old
@@ -194,25 +222,59 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
       r.write((keyMode ? richDiff(preview, { width: Math.min(terminalWidth(), 100), unicode: ui.unicode }).join("\n") : diffBlock(preview)) + "\n");
     }
 
+    const gateSessionForGrant =
+      typeof gateSessionId === "string" && gateSessionId !== ""
+        ? gateSessionId
+        : typeof ui.runtime?.sessionId === "string"
+          ? ui.runtime.sessionId
+          : "";
+    if (kernel && gateSessionForGrant !== "" && tgtForFootnote !== "") {
+      await hydrateSessionGrantFromKernel(kernel, gateSessionForGrant, kindForFootnote, tgtForFootnote);
+    }
+    const grantLookup =
+      gateSessionForGrant !== "" && tgtForFootnote !== ""
+        ? () => sessionGrantRemainingMs(gateSessionForGrant, kindForFootnote, tgtForFootnote)
+        : undefined;
+    const grantRemMs = grantLookup?.();
+    const grantActiveRemainingMinutes =
+      grantRemMs !== undefined ? grantRemainingMinutesFromMs(grantRemMs) : undefined;
+
+    const buildApprovalCard = (): string[] => {
+      const liveMs = grantLookup?.();
+      const card: ApprovalCardInput = {
+        kind,
+        title,
+        icon: presentation.icon,
+        presentationLines,
+        detail,
+        guardian: guardianLine,
+        effectId: req.effectId,
+        leaseId: req.leaseId,
+        tool: req.tool,
+        width: Math.min(terminalWidth(), 100),
+        unicode: ui.unicode,
+        canAlways,
+        grantTtlMinutes,
+        grantActiveRemainingMinutes: liveMs !== undefined ? grantRemainingMinutesFromMs(liveMs) : undefined,
+        grantActiveRemainingMs: liveMs,
+      };
+      return approvalCard(card);
+    };
+
     let answer = "";
     try {
       if (keyMode) {
-        const lines = approvalCard({
-          kind,
-          title,
-          icon: presentation.icon,
-          presentationLines: presentation.lines,
-          detail,
-          guardian: guardianLine,
-          effectId: req.effectId,
-          leaseId: req.leaseId,
-          tool: req.tool,
-          width: Math.min(terminalWidth(), 100),
-          unicode: ui.unicode,
-          canAlways,
-        });
+        const lines = buildApprovalCard();
         r.write("\n" + lines.join("\n") + "\n");
-        answer = await (ui.askKey as NonNullable<ApprovalUi["askKey"]>)(lines);
+        const keyPrompt: ApprovalKeyPrompt =
+          grantLookup !== undefined
+            ? {
+                lines,
+                screenRows: approvalCardScreenRows(lines.length),
+                onTick: buildApprovalCard,
+              }
+            : lines;
+        answer = await (ui.askKey as NonNullable<ApprovalUi["askKey"]>)(keyPrompt);
       } else {
         answer = await ui.ask(dim(" [y]es / [n]o / [a]lways ") + bold(cyan("\u276f ")));
       }
@@ -238,7 +300,7 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
       if (remembered) {
         const hint = permissionAlwaysLines(grantKind, target).join(" ");
         r.notice(
-          `approved (${hint}) Grant lasts ${leaseMinutes()} minutes for this session.`,
+          `approved (${hint})`,
         );
       } else {
         r.notice("approved (this time)");

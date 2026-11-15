@@ -7,7 +7,7 @@
  * unclosed quotes) is rejected.
  */
 
-import type { GuardAction } from "../contracts";
+import type { GuardAction, GuardKind } from "../contracts";
 
 export type SegmentRisk = "low" | "medium" | "high";
 
@@ -162,14 +162,18 @@ export function analyzeShellCompound(command: string): ShellCompoundAnalysis {
 }
 
 /** Human lines for the approval card (segment index, joiner, risk). */
-export function shellCompoundPresentationLines(analysis: ShellCompoundAnalysis): string[] {
+export function shellCompoundPresentationLines(
+  analysis: ShellCompoundAnalysis,
+  opts?: { savedShellTargets?: ReadonlySet<string> },
+): string[] {
   if (analysis.ok === false) return [`dynamic — cannot split (${analysis.reason})`];
   if (!analysis.compound) return [];
   const lines: string[] = ["compound command (per segment):"];
   for (let i = 0; i < analysis.segments.length; i++) {
     const seg = analysis.segments[i]!;
     const prefix = seg.joiner !== undefined ? `${seg.joiner} ` : "";
-    lines.push(`${i + 1}. [${seg.risk}] ${prefix}${seg.text}`);
+    const saved = opts?.savedShellTargets?.has(seg.text) ? " (saved allow)" : "";
+    lines.push(`${i + 1}. [${seg.risk}] ${prefix}${seg.text}${saved}`);
   }
   return lines;
 }
@@ -189,4 +193,17 @@ export function guardActionsForShellCommand(command: string, template: GuardActi
   const analysis = analyzeShellCompound(command);
   if (analysis.ok === false || !analysis.compound) return [template];
   return analysis.segments.map((seg) => ({ ...template, target: seg.text }));
+}
+
+/**
+ * Grant / saved-allow targets for a shell row: compound lines expand to one
+ * target per parsed segment so per-segment guard checks match hydration (396).
+ */
+export function shellSavedGrantTargets(kind: GuardKind, target: string): string[] {
+  const t = target.trim();
+  if (t === "" || t.endsWith("*")) return [];
+  if (kind !== "shell.exec") return [t];
+  const analysis = analyzeShellCompound(t);
+  if (analysis.ok !== true || !analysis.compound) return [t];
+  return analysis.segments.map((seg) => seg.text);
 }

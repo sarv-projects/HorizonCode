@@ -116,7 +116,11 @@ function runTerminalPane(
   return {
     id: "run_terminal",
     title: "Terminal (run / RC-7)",
-    lines: formatRunTerminalCapabilityLines(runComplete.terminalRunCapability, runComplete.exit),
+    lines: formatRunTerminalCapabilityLines(
+      runComplete.terminalRunCapability,
+      runComplete.exit,
+      runComplete.providerFailureCode,
+    ),
   };
 }
 

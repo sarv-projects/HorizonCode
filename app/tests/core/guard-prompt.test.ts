@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  actionStationarityInterruptNudge,
   consecutiveMistakesInterruptNudge,
   loopDetectionInterruptNudge,
   wrapSystemInterrupt,
@@ -22,5 +23,11 @@ describe("guard prompts", () => {
     expect(text).toContain('reason="consecutive_mistakes"');
     expect(text).toContain("2");
     expect(text).toContain("3");
+  });
+
+  test("actionStationarityInterruptNudge", () => {
+    const text = actionStationarityInterruptNudge("read", 3);
+    expect(text).toContain('reason="action_stationarity"');
+    expect(text).toContain("true-noop");
   });
 });

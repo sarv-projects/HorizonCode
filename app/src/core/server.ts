@@ -98,6 +98,22 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
+/** Parse method name for dispatch policy (interject may bypass prompt queue blocking). */
+function requestMethod(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed === "") return "";
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    return typeof parsed.method === "string" ? parsed.method : "";
+  } catch {
+    return "";
+  }
+}
+
+function interjectBypassesQueue(method: string): boolean {
+  return method === "session.interject";
+}
+
 class ServerError extends Error {
   readonly code: number;
   constructor(code: number, message: string) {
@@ -311,6 +327,20 @@ export function createServer(opts: ServerOptions): ServerHandle {
     return { sessionId: runtime.sessionId, summary };
   }
 
+  async function handleInterject(params: unknown): Promise<unknown> {
+    const sessionId = requireSessionId(params);
+    if (!isRecord(params) || typeof params.text !== "string") {
+      throw new ServerError(INVALID_PARAMS, "text (string) is required");
+    }
+    const runtime = await runtimeFor(sessionId);
+    if (typeof runtime.interject !== "function") {
+      throw new ServerError(INTERNAL_ERROR, "this build does not support interject");
+    }
+    const images = Array.isArray(params.images) ? params.images : undefined;
+    const outcome = runtime.interject(params.text, images !== undefined ? { images } : undefined);
+    return { sessionId: runtime.sessionId, ...outcome };
+  }
+
   async function handleFork(params: unknown): Promise<unknown> {
     const sessionId = requireSessionId(params);
     let at: number | undefined;
@@ -358,6 +388,8 @@ export function createServer(opts: ServerOptions): ServerHandle {
         return handleRewind(params);
       case "session.fork":
         return handleFork(params);
+      case "session.interject":
+        return handleInterject(params);
       default:
         // S89 spirit: an unknown method is a typed error, never ignored.
         throw new ServerError(METHOD_NOT_FOUND, `method not found: ${method}`);
@@ -412,6 +444,10 @@ export function createServer(opts: ServerOptions): ServerHandle {
       let chain: Promise<void> = Promise.resolve();
       await new Promise<void>((resolve) => {
         rl.on("line", (line: string) => {
+          if (interjectBypassesQueue(requestMethod(line))) {
+            void handleLine(line).catch(() => undefined);
+            return;
+          }
           chain = chain.then(() => handleLine(line)).catch(() => undefined);
         });
         rl.on("close", () => {
@@ -426,6 +462,7 @@ export function createServer(opts: ServerOptions): ServerHandle {
     // Async-iterable transport: chunks may be whole lines or arbitrary byte
     // slices, so buffer and split on newlines.
     let buf = "";
+    let chain = Promise.resolve();
     for await (const chunk of input as AsyncIterable<string | Uint8Array | Buffer>) {
       if (stopped) break;
       buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -433,11 +470,22 @@ export function createServer(opts: ServerOptions): ServerHandle {
       while (nl >= 0) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        await handleLine(line);
+        if (interjectBypassesQueue(requestMethod(line))) {
+          void handleLine(line).catch(() => undefined);
+        } else {
+          chain = chain.then(() => handleLine(line));
+        }
         nl = buf.indexOf("\n");
       }
     }
-    if (buf.trim() !== "") await handleLine(buf);
+    if (buf.trim() !== "") {
+      if (interjectBypassesQueue(requestMethod(buf))) {
+        void handleLine(buf).catch(() => undefined);
+      } else {
+        chain = chain.then(() => handleLine(buf));
+      }
+    }
+    await chain;
   }
 
   async function stop(): Promise<void> {

@@ -4,7 +4,7 @@
  * pane; NOT per-shell-effect process exit (**292**).
  */
 
-import type { RunExit, TerminalState } from "../contracts";
+import type { ProviderFailureCode, RunExit, TerminalState } from "../contracts";
 import { activeShellSessionCount } from "../tools/interactive-exec";
 
 export const RUN_COMPLETE_EVENT = "run.complete";
@@ -23,6 +23,8 @@ export interface TerminalRunCapabilitySnapshot {
 export interface RunCompletePayload {
   exit: RunExit;
   terminalRunCapability: TerminalRunCapabilitySnapshot;
+  /** Present when the run ended on `provider_error` and the adapter classified the failure. */
+  providerFailureCode?: ProviderFailureCode;
 }
 
 const RC7: ReadonlySet<string> = new Set([
@@ -65,10 +67,15 @@ export function captureTerminalRunCapabilitySnapshot(opts?: {
   };
 }
 
-export function buildRunCompletePayload(exit: RunExit, snap?: TerminalRunCapabilitySnapshot): RunCompletePayload {
+export function buildRunCompletePayload(
+  exit: RunExit,
+  snap?: TerminalRunCapabilitySnapshot,
+  opts?: { providerFailureCode?: ProviderFailureCode },
+): RunCompletePayload {
   return {
     exit,
     terminalRunCapability: snap ?? captureTerminalRunCapabilitySnapshot(),
+    ...(opts?.providerFailureCode !== undefined ? { providerFailureCode: opts.providerFailureCode } : {}),
   };
 }
 
@@ -110,7 +117,9 @@ export function latestRunCompleteFromEvents(
     const exit = parseRunExit(payload.exit);
     const terminalRunCapability = parseCapabilitySnapshot(payload.terminalRunCapability);
     if (!exit || !terminalRunCapability) continue;
-    found = { exit, terminalRunCapability };
+    const providerFailureCode =
+      typeof payload.providerFailureCode === "string" ? (payload.providerFailureCode as ProviderFailureCode) : undefined;
+    found = { exit, terminalRunCapability, ...(providerFailureCode !== undefined ? { providerFailureCode } : {}) };
   }
   return found;
 }
@@ -118,6 +127,7 @@ export function latestRunCompleteFromEvents(
 export function formatRunTerminalCapabilityLines(
   snap: TerminalRunCapabilitySnapshot,
   exit?: RunExit,
+  providerFailureCode?: ProviderFailureCode,
 ): string[] {
   const lines = [
     `capability ${snap.capabilityId}`,
@@ -127,6 +137,9 @@ export function formatRunTerminalCapabilityLines(
   ];
   if (exit) {
     lines.push(`RC-7 terminal ${exit.terminal}${exit.detail ? ` (${exit.detail})` : ""}`);
+    if (providerFailureCode !== undefined) {
+      lines.push(`provider failure code ${providerFailureCode}`);
+    }
   } else {
     lines.push("RC-7 terminal (no run.complete in session log — residual)");
   }

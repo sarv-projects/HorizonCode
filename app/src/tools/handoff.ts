@@ -3,29 +3,61 @@
  */
 
 import type { Tool, ToolContext, ToolResult } from "../contracts";
+import { hookAuditBlockForHandoff } from "../core/hook-handoff-capture";
 import {
   createHandoff,
   normalizeHandoffSections,
   resumeHandoff,
   searchHandoffs,
 } from "../core/memory/handoff";
-import { openTodos } from "./todo";
+import { durableTodosEnabled, mergeDurableBranchOpenTodos } from "../core/durable-todos";
+import { importSnapshottedTodos, openTodos } from "./todo";
 
 function fail(message: string): ToolResult {
   return { ok: false, output: message, error: message };
 }
 
-function formatCreate(r: Awaited<ReturnType<typeof createHandoff>>): string {
+function formatCreate(
+  r: Awaited<ReturnType<typeof createHandoff>>,
+  todosSnapshotted: number,
+  hookAuditLines: number,
+): string {
   const lines = [`id: ${r.id}`, `branch: ${r.branch}`, `continues_from: ${r.continues_from ?? "(none)"}`];
+  if (r.session_id) lines.push(`session_id: ${r.session_id}`);
+  if (todosSnapshotted > 0) lines.push(`snapshotted_open_todos: ${todosSnapshotted}`);
+  if (hookAuditLines > 0) lines.push(`hook_audit_lines: ${hookAuditLines} (in context section)`);
   if (r.warnings.length > 0) lines.push(`warnings:\n${r.warnings.map((w) => `- ${w}`).join("\n")}`);
   return lines.join("\n");
 }
 
-function formatResume(r: Awaited<ReturnType<typeof resumeHandoff>>): string {
+function formatResume(
+  r: Awaited<ReturnType<typeof resumeHandoff>>,
+  live: Array<{ id: string; text: string }>,
+  rehydrate?: { added: number; skipped: number },
+  durableMerge?: { merged: number; skipped: number; fromBranch: string },
+): string {
   const lines: string[] = [`branch: ${r.branch}`, `latest: ${r.latest_handoff_id ?? "(none)"}`, `chain: ${r.chain.join(" → ") || "(empty)"}`];
+  if (r.source_session_id) lines.push(`source_session_id: ${r.source_session_id}`);
   if (r.message) lines.push(`note: ${r.message}`);
+  if (durableMerge !== undefined && durableMerge.merged + durableMerge.skipped > 0) {
+    lines.push(
+      `merged_durable_todos: ${durableMerge.merged} from branch ${durableMerge.fromBranch} (${durableMerge.skipped} skipped duplicate text)`,
+    );
+  }
+  if (rehydrate !== undefined && rehydrate.added > 0) {
+    lines.push(`rehydrated_todos: ${rehydrate.added} imported (${rehydrate.skipped} skipped)`);
+  }
+  if (live.length > 0) {
+    lines.push("open_todos (live session list):\n" + live.map((t) => `- [${t.id}] ${t.text}`).join("\n"));
+  }
   if (r.open_blockers.length > 0) {
     lines.push(`blockers:\n${r.open_blockers.map((b) => `- ${b}`).join("\n")}`);
+  }
+  if (r.snapshotted_todos.length > 0) {
+    lines.push(
+      "snapshotted_open_todos (at handoff create; history only unless rehydrate_todos):\n" +
+        r.snapshotted_todos.map((t) => `- ${t}`).join("\n"),
+    );
   }
   if (r.top_sections.length > 0) {
     lines.push(
@@ -77,13 +109,23 @@ export const handoffCreateTool: Tool = {
     const continues_from =
       continuesArg === null ? null : typeof continuesArg === "string" ? continuesArg.trim() || null : undefined;
     const todos_snapshot = openTodos(ctx.sessionId).map((t) => `[${t.id}] ${t.text}`);
-    const result = createHandoff(ctx.workspace, normalized, {
+    const hookBlock = hookAuditBlockForHandoff(ctx.sessionId, ctx.workspace);
+    const baseContext = normalized.context ?? "";
+    const context =
+      hookBlock === ""
+        ? baseContext
+        : baseContext.trim() === ""
+          ? hookBlock
+          : `${baseContext.trim()}\n\n${hookBlock}`;
+    const result = createHandoff(ctx.workspace, { ...normalized, context }, {
       branch: branchOverride,
       continues_from,
       auto_continue: continues_from === undefined,
       todos_snapshot,
+      session_id: ctx.sessionId,
     });
-    return { ok: true, output: formatCreate(result) };
+    const hookAuditLines = hookBlock === "" ? 0 : hookBlock.split("\n").filter((l) => l.startsWith("- ")).length;
+    return { ok: true, output: formatCreate(result, todos_snapshot.length, hookAuditLines) };
   },
 };
 
@@ -98,6 +140,20 @@ export const handoffResumeTool: Tool = {
       handoff_id: { type: "string", description: "Start from a specific handoff id." },
       branch: { type: "string" },
       max_sections: { type: "number" },
+      diversify: {
+        type: "boolean",
+        description: "When query is set: lexical MMR over BM25 hits (default true).",
+      },
+      rehydrate_todos: {
+        type: "boolean",
+        description:
+          "When true, import snapshotted open todos from the resumed handoff into this session's live todo list (skips duplicate text).",
+      },
+      merge_durable_branch: {
+        type: "string",
+        description:
+          "When HZ_TODO_DURABLE=1: copy open todos from another git/handoff branch into this branch's durable store (dedupe by text).",
+      },
     },
   },
   concurrencyClass: "shared",
@@ -109,11 +165,39 @@ export const handoffResumeTool: Tool = {
     const handoff_id = typeof args.handoff_id === "string" ? args.handoff_id : undefined;
     const branch = typeof args.branch === "string" ? args.branch : undefined;
     const max_sections = typeof args.max_sections === "number" ? args.max_sections : undefined;
-    const result = resumeHandoff(ctx.workspace, { query, handoff_id, branch, max_sections });
-    if (result.latest_handoff_id === null) {
-      return { ok: true, output: `no handoff on branch ${result.branch}${result.message ? ` (${result.message})` : ""}` };
+    const diversify = args.diversify === false ? false : undefined;
+    const rehydrate_todos = args.rehydrate_todos === true;
+    const merge_durable_branch =
+      typeof args.merge_durable_branch === "string" ? args.merge_durable_branch.trim() : "";
+    let durableMerge: { merged: number; skipped: number; fromBranch: string } | undefined;
+    if (merge_durable_branch !== "" && durableTodosEnabled()) {
+      const stats = mergeDurableBranchOpenTodos(ctx.workspace, merge_durable_branch);
+      durableMerge = { ...stats, fromBranch: merge_durable_branch };
     }
-    return { ok: true, output: formatResume(result) };
+    const result = resumeHandoff(ctx.workspace, {
+      query,
+      handoff_id,
+      branch,
+      max_sections,
+      ...(diversify === false ? { diversify: false } : {}),
+    });
+    if (result.latest_handoff_id === null) {
+      const live = openTodos(ctx.sessionId);
+      const prefix =
+        live.length > 0
+          ? `open_todos (live):\n${live.map((t) => `- [${t.id}] ${t.text}`).join("\n")}\n\n`
+          : "";
+      return {
+        ok: true,
+        output: `${prefix}no handoff on branch ${result.branch}${result.message ? ` (${result.message})` : ""}`,
+      };
+    }
+    let rehydrate: { added: number; skipped: number } | undefined;
+    if (rehydrate_todos && result.snapshotted_todos.length > 0) {
+      rehydrate = importSnapshottedTodos(ctx.sessionId, result.snapshotted_todos, ctx.workspace);
+    }
+    const live = openTodos(ctx.sessionId);
+    return { ok: true, output: formatResume(result, live, rehydrate, durableMerge) };
   },
 };
 
@@ -131,6 +215,10 @@ export const handoffSearchTool: Tool = {
         items: { type: "string" },
         description: "Limit to section names (e.g. tried, blockers).",
       },
+      diversify: {
+        type: "boolean",
+        description: "Lexical MMR over BM25 hits (default true).",
+      },
     },
     required: ["query"],
   },
@@ -146,7 +234,8 @@ export const handoffSearchTool: Tool = {
     const section_filter = Array.isArray(args.section_filter)
       ? args.section_filter.filter((x): x is string => typeof x === "string")
       : undefined;
-    const { matches } = searchHandoffs(ctx.workspace, query, { branch, limit, section_filter });
+    const diversify = args.diversify === false ? false : true;
+    const { matches } = searchHandoffs(ctx.workspace, query, { branch, limit, section_filter, diversify });
     if (matches.length === 0) return { ok: true, output: "no handoff matches" };
     const body = matches
       .map(

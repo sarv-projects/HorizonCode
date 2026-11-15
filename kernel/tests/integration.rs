@@ -2953,6 +2953,38 @@ fn guard_grant_mints_one_fresh_lease_per_effect() {
     assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
 }
 
+/// Read-only grant lookup for approval-card TTL hydrate (Wave C §8 #6).
+#[test]
+fn guard_grant_query_returns_matching_grant() {
+    let dir = TempDir::new("guard-grant-query");
+    let mut kernel = Kernel::start(dir.path());
+
+    let miss = kernel.ok(
+        "guard.grant.query",
+        json!({ "action": { "kind": "shell.exec", "target": "npm test" }, "sessionId": "sq1" }),
+    );
+    assert!(miss["grant"].is_null(), "no grant yet: {}", miss);
+
+    let minted = kernel.ok(
+        "guard.grant",
+        json!({ "kind": "shell.exec", "pattern": "npm test", "ttlMs": 60_000, "sessionId": "sq1" }),
+    );
+    assert_eq!(minted["pattern"], json!("npm test"));
+
+    let hit = kernel.ok(
+        "guard.grant.query",
+        json!({ "action": { "kind": "shell.exec", "target": "npm test" }, "sessionId": "sq1" }),
+    );
+    assert_eq!(hit["grant"]["pattern"], json!("npm test"));
+    assert_eq!(hit["grant"]["owner"], json!("sq1"));
+
+    assert_eq!(
+        guard_decision_with_session(&mut kernel, "shell.exec", "npm test", Some("sq2")),
+        "ask",
+        "another session must not see the grant"
+    );
+}
+
 /// MEMORY.md next to `.hz/state/kernel` needs approval even when policy allows
 /// fs.write (docs/33 §5.4; ruling 148).
 #[test]

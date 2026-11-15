@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { parseModelsPollIntervalMs, startModelsCatalogPoll } from "../../src/core/catalog/catalog-poll";
+import { decodeCatalog, getCatalogCacheRevision, loadCatalog, MINIMUM_PROVIDERS } from "../../src/core/catalog/catalog";
+import {
+  makeModelsCatalogPollNetGuard,
+  modelsCatalogFetchUrl,
+  parseModelsPollIntervalMs,
+  runModelsCatalogPollOnce,
+  startModelsCatalogPoll,
+} from "../../src/core/catalog/catalog-poll";
 import { createRuntime } from "../../src/core/index";
 
 describe("models catalog poll", () => {
@@ -16,6 +23,62 @@ describe("models catalog poll", () => {
     const stop = startModelsCatalogPoll({ intervalMs: undefined });
     expect(typeof stop).toBe("function");
     stop();
+  });
+
+  test("makeModelsCatalogPollNetGuard fail-closed on deny and ask", async () => {
+    const url = modelsCatalogFetchUrl();
+    const denyGuard = makeModelsCatalogPollNetGuard(async () => ({ decision: "deny", reason: "test-deny" }));
+    await expect(denyGuard(url)).rejects.toThrow(/denied/);
+    const askGuard = makeModelsCatalogPollNetGuard(async () => ({ decision: "ask" }));
+    await expect(askGuard(url)).rejects.toThrow(/cannot prompt/);
+    const allowGuard = makeModelsCatalogPollNetGuard(async () => ({ decision: "allow" }));
+    await allowGuard(url);
+  });
+
+  test("runModelsCatalogPollOnce refuses fetch when assertNetFetch denies", async () => {
+    const notices: string[] = [];
+    let fetchCalled = false;
+    await runModelsCatalogPollOnce({
+      onNotice: (m) => notices.push(m),
+      assertNetFetch: async () => {
+        throw new Error("net.fetch denied — policy");
+      },
+      fetchLive: async () => {
+        fetchCalled = true;
+        return { catalog: { providers: {}, rejected: [] }, notModified: false };
+      },
+    });
+    expect(fetchCalled).toBe(false);
+    expect(notices.some((n) => n.includes("poll failed") && n.includes("denied"))).toBe(true);
+  });
+
+  test("runModelsCatalogPollOnce writes cache and loadCatalog reloads it", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-poll-cache-"));
+    const providers: Record<string, unknown> = {};
+    for (let i = 0; i < MINIMUM_PROVIDERS; i += 1) {
+      const id = `poll-p${i}`;
+      const mid = `poll-m${i}`;
+      providers[id] = { id, defaultModel: mid, models: { [mid]: { id: mid, provider: id, limit: { context: 128000 } } } };
+    }
+    const beforeRev = getCatalogCacheRevision();
+    let updated: { revision: number; providerCount: number } | undefined;
+    await runModelsCatalogPollOnce({
+      home,
+      onCacheUpdated: (info) => {
+        updated = info;
+      },
+      fetchLive: async () => ({
+        catalog: decodeCatalog({ providers }),
+        notModified: false,
+        etag: '"poll-test"',
+      }),
+    });
+    expect(getCatalogCacheRevision()).toBeGreaterThan(beforeRev);
+    expect(updated?.providerCount).toBe(MINIMUM_PROVIDERS);
+    const loaded = loadCatalog({ HZ_NO_COMMITTED_SNAPSHOT: "1" }, home);
+    expect(loaded.source).toBe("cache");
+    expect(Object.keys(loaded.providers).length).toBe(MINIMUM_PROVIDERS);
+    rmSync(home, { recursive: true, force: true });
   });
 });
 

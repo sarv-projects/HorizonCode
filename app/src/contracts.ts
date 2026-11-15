@@ -68,6 +68,12 @@ export const EventTypes = {
   sessionStart: "session.start",
   /** RC-18 literal event on successful per-session FIFO admission (ruling 359). */
   sessionPromptAdmitted: "hz.session.prompt.admitted",
+  /** RC-18 literal busy bracket around a turn (ruling 439). */
+  sessionBusyEntered: "hz.session.busy.entered",
+  sessionBusyLeft: "hz.session.busy.left",
+  /** RC-18 literal turn claim bracket (ruling 440; claimId = admissionId reduced). */
+  sessionClaimAcquired: "hz.session.claim.acquired",
+  sessionClaimReleased: "hz.session.claim.released",
   sessionEnd: "session.end",
   // Additive (session fork): the FIRST event of a forked session's own stream;
   // payload is a SessionForkPayload naming the parent stream and its seq.
@@ -77,13 +83,28 @@ export const EventTypes = {
   messageEnd: "message.end",
   toolCall: "tool.call",
   toolResult: "tool.result",
-  approvalRequest: "approval.request",
-  approvalDecision: "approval.decision",
+  /** RC-18 literal permission ask (ruling 393); replaces legacy `approval.request` wire name. */
+  approvalRequest: "hz.permission.asked",
+  /** RC-18 literal permission answer (ruling 393); replaces legacy `approval.decision`. */
+  approvalDecision: "hz.permission.answered",
   receiptIssued: "receipt.issued",
   /** Literal hz.* settle observation (EffectHost; docs/28). */
+  /** Guard / policy decision on an effect intent (Wave 0 RC-18 ruling 407). */
+  effectDecisionMade: "hz.effect.decision.made",
   effectSettled: "hz.effect.settled",
   effectUnknown: "hz.effect.unknown",
   effectReconciled: "hz.effect.reconciled",
+  /** Literal hz.* subagent boundary (parent stream; ruling 385). */
+  agentSpawned: "hz.agent.spawned",
+  agentCompleted: "hz.agent.completed",
+  /** Literal hz.* parent↔child message bus (reduced: digest only; ruling 413). */
+  agentMessageSent: "hz.agent.message.sent",
+  /** Literal hz.* todo list mutation (todo tool add/done/drop; ruling 386). */
+  todoUpdated: "hz.todo.updated",
+  /** Literal hz.* slash-skill activation on `Runtime.send` (ruling 399). */
+  skillInvoked: "hz.skill.invoked",
+  /** Literal hz.* per-step provider usage (ruling 441). */
+  usageRecorded: "hz.usage.recorded",
   error: "error",
 } as const;
 export type EventType = (typeof EventTypes)[keyof typeof EventTypes] | string;
@@ -666,7 +687,7 @@ export type RuntimeEvent =
   // synthetic envelope. Ignored by consumers that do not render interjections.
   | { type: "interjection.queued"; text: string }
   | { type: "interjection.admitted"; text: string }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; code?: ProviderFailureCode }
   | ({ type: "context.usage" } & ContextUsage)
   // ADDITIVE (FEAT-003): the per-turn aggregated file diff. This is a
   // harness-side UI/runtime facade event, exactly like `context.usage` and
@@ -800,6 +821,8 @@ export interface RunExit {
     // identical tool calls (app/src/core/guards/loop-detection.ts). Terminal
     // `failed`, so exitCodeFor's default arm already returns 1 — no change there.
     | "tool_loop"
+    // SAFETY-RAILS: identical call step AND identical tool results (action stationarity).
+    | "action_stationarity"
     // SAFETY-RAILS: the mistake-tracker stop at the consecutive-mistake limit
     // (app/src/core/guards/mistake-tracker.ts), a SEPARATE axis from the
     // `format_errors` cap. Terminal `failed`, so exitCodeFor returns 1 by default.
@@ -838,6 +861,11 @@ export interface KernelRequestMap {
   "guard.grant": {
     params: { kind: GuardKind; pattern: string; ttlMs: number; sessionId?: string; approvalProof?: string };
     result: Lease;
+  };
+  /** Read-only: active session grant covering an exact action (display hydrate). */
+  "guard.grant.query": {
+    params: { action: GuardAction; sessionId?: string };
+    result: { grant: Lease | null };
   };
   // FEAT-002 (additive): append a rule to the runtime command allowlist at
   // <state-dir>/allowlist.json, file-locked append-dedup; consulted for
@@ -1029,6 +1057,7 @@ export const KERNEL_METHODS: KernelMethod[] = [
   "guard.check",
   "guard.lease",
   "guard.grant",
+  "guard.grant.query",
   "guard.allowlist.amend",
   "sandbox.report",
   "effect.reconcile",
@@ -1054,9 +1083,8 @@ export const KERNEL_METHODS: KernelMethod[] = [
  *
  * v1 implements exactly the subset `SERVER_METHODS` names below:
  *   server.hello, session.create, session.list, session.prompt,
- *   session.rewind, session.subscribe, session.fork (additive: copies the
- *   transcript, in whole or up to a message index, into a NEW session with
- *   forkedFrom lineage; the parent is untouched).
+ *   session.rewind, session.subscribe, session.fork (fork copies transcript
+ *   into a new session), session.interject (mid-turn steer while prompt runs).
  * Every session is opened through `createRuntime`, so attach/resume runs BOTH
  * crash recoveries (repairDanglingToolCalls + recoverInterrupted) before the
  * next turn — the server's rollout-reconstruction seam.
@@ -1116,7 +1144,8 @@ export type ServerMethod =
   | "session.prompt"
   | "session.rewind"
   | "session.subscribe"
-  | "session.fork";
+  | "session.fork"
+  | "session.interject";
 
 export const SERVER_METHODS: ServerMethod[] = [
   "server.hello",
@@ -1126,6 +1155,7 @@ export const SERVER_METHODS: ServerMethod[] = [
   "session.rewind",
   "session.subscribe",
   "session.fork",
+  "session.interject",
 ];
 
 /**

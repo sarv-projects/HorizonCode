@@ -237,7 +237,7 @@ describe("anthropic tool use", () => {
       const result = await collect(providerFor(server));
       expect(result.events).toEqual([
         { type: "text", text: "partial answer" },
-        { type: "error", message: "Overloaded" },
+        { type: "error", message: "Overloaded", code: "OVERLOADED" },
       ]);
     });
   });
@@ -261,6 +261,7 @@ describe("anthropic failures and aborts", () => {
       expect(error.message).toContain("429");
       expect(error.message).toContain("rate_limit_error");
       expect(error.message).toContain("per-minute rate limit");
+      expect(error.code).toBe("RATE_LIMIT");
     });
   });
 
@@ -275,6 +276,7 @@ describe("anthropic failures and aborts", () => {
         const error = asError(errors[0]);
         expect(error.message).toContain("anthropic HTTP 500");
         expect(error.message).toContain("upstream exploded");
+        expect(error.code).toBe("TRANSIENT");
       },
     );
   });
@@ -405,7 +407,9 @@ describe("anthropic failures and aborts", () => {
   test("no messages after the system prompt yields one error event and sends nothing", async () => {
     await withServer(() => sseResponse(textTurn()), async (server) => {
       const result = await collect(providerFor(server), makeRequest({ system: "be brief", messages: [{ role: "system", content: "ignored" }] }));
-      expect(result.events).toEqual([{ type: "error", message: "anthropic: nothing to send (no messages after system)" }]);
+      expect(result.events).toEqual([
+        { type: "error", message: "anthropic: nothing to send (no messages after system)", code: "UNKNOWN" },
+      ]);
       expect(server.requests).toHaveLength(0);
     });
   });

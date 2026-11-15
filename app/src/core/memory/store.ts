@@ -7,13 +7,14 @@ import { existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { stateRoot } from "../paths";
 import {
+  MEMORY_BANKS,
   PROJECT_BANK,
   SHARED_RECALL_BANKS,
   type MemoryBankId,
   bankStorageKind,
   userMemoryDbPath,
 } from "./banks";
-import { loadMemoryManifest, loadMemoryTopicBodies } from "./manifest";
+import { appendRememberedFactToMemoryIndex, loadMemoryManifest, loadMemoryTopicBodies } from "./manifest";
 import { mmrLiteSelect } from "./mmr-lite";
 
 const TABLE = "memory_fts";
@@ -240,7 +241,7 @@ export function sharedMemorySearch(
 }
 
 export type RememberMemoryResult =
-  | { ok: true; bank: MemoryBankId }
+  | { ok: true; bank: MemoryBankId; memoryIndex?: "appended" | "duplicate" | "skipped" }
   | { ok: false; reason: "empty" | "too_long" | "duplicate" };
 
 /** Append one fact to a bank's FTS partition (does not edit MEMORY.md). */
@@ -260,7 +261,8 @@ export function rememberMemoryFact(
       .get(bank, text) as { n: number } | null;
     if (dupe !== null) return { ok: false, reason: "duplicate" };
     db.prepare(`INSERT INTO ${TABLE}(content, bank) VALUES (?, ?)`).run(text, bank);
-    return { ok: true, bank };
+    const memoryIndex = bank === PROJECT_BANK ? appendRememberedFactToMemoryIndex(workspace, text) : "skipped";
+    return { ok: true, bank, memoryIndex };
   } finally {
     db.close();
   }
@@ -328,4 +330,25 @@ export function memorySearchReadTargets(
     }
   }
   return [...targets];
+}
+
+/** Doctor / status: per-bank FTS row counts (mnemopi partitions). */
+export function summarizeMemoryBanks(workspace: string, home?: string): string {
+  const parts: string[] = [];
+  for (const bank of MEMORY_BANKS) {
+    const dbPath = memoryDbPathForBank(workspace, bank, home);
+    if (!existsSync(dbPath)) {
+      parts.push(`${bank}: (no db)`);
+      continue;
+    }
+    try {
+      const db = dbForBank(workspace, bank, home);
+      const row = db.query(`SELECT count(*) as n FROM ${TABLE} WHERE bank=?`).get(bank) as { n: number };
+      db.close();
+      parts.push(`${bank}: ${row.n} facts`);
+    } catch {
+      parts.push(`${bank}: unreadable`);
+    }
+  }
+  return parts.join("; ");
 }

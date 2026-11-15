@@ -22,9 +22,11 @@ import {
   PINNED_TASK_MAX_CHARS,
   pinnedTaskStatement,
   runTurn,
+  streamFor,
   trimHistory,
   type LoopDeps,
 } from "../../src/core/loop";
+import { latestRunCompleteFromEvents, RUN_COMPLETE_EVENT } from "../../src/core/receipt-run-terminal";
 import { SessionStore } from "../../src/core/session";
 
 let workspace: string;
@@ -87,6 +89,29 @@ function depsFor(
 }
 
 describe("budgets (NF-073)", () => {
+  test("provider failure code surfaces on runtime error and run.complete", async () => {
+    const events: Array<{ type: string; message?: string; code?: string }> = [];
+    const { provider } = recordingProvider([
+      [{ type: "error", message: "rate limited", code: "RATE_LIMIT" }],
+      DONE,
+    ]);
+    const { deps, kernel, store } = depsFor(provider, events);
+    try {
+      const result = await runTurn(deps, "fail with code");
+      expect(result.exit.detail).toBe("provider_error");
+      const errEv = events.find((e) => e.type === "error");
+      expect(errEv?.code).toBe("RATE_LIMIT");
+      const kernelEvents = await kernel.readEvents(streamFor(deps.sessionId));
+      const runComplete = latestRunCompleteFromEvents(kernelEvents);
+      expect(runComplete?.exit.detail).toBe("provider_error");
+      expect(runComplete?.providerFailureCode).toBe("RATE_LIMIT");
+      expect(kernelEvents.some((e) => e.type === RUN_COMPLETE_EVENT)).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+
   test("a failed turn is still charged, and the next dispatch is refused", async () => {
     const events: Array<{ type: string; message?: string }> = [];
     const { provider, calls } = recordingProvider([[{ type: "error", message: "boom" }], DONE]);
@@ -128,6 +153,11 @@ describe("budgets (NF-073)", () => {
       expect(result.exit.terminal).toBe("budget_exhausted");
       expect(result.exit.detail).toBe("tokens");
       expect(calls()).toBe(1);
+      const usage = (await kernel.readEvents(streamFor(deps.sessionId))).filter(
+        (e) => e.type === EventTypes.usageRecorded,
+      );
+      expect(usage).toHaveLength(1);
+      expect(usage[0]?.payload).toMatchObject({ inputTokens: 10, outputTokens: 20 });
     } finally {
       await kernel.close();
       store.close();

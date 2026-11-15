@@ -10,7 +10,7 @@
 import type { Database } from "bun:sqlite";
 
 /** Latest `PRAGMA user_version` after all migrations in this module run. */
-export const SESSION_DB_USER_VERSION = 1;
+export const SESSION_DB_USER_VERSION = 2;
 
 export function readSessionDbUserVersion(db: Database): number {
   const row = db.query("PRAGMA user_version").get() as { user_version: number } | null;
@@ -29,6 +29,18 @@ const MIGRATIONS: Record<number, MigrationFn> = {
         digest TEXT,
         PRIMARY KEY (projector, aggregate_id)
       );
+    `);
+  },
+  2: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS saved_allows (
+        kind TEXT NOT NULL,
+        target TEXT NOT NULL,
+        action TEXT,
+        saved_at TEXT NOT NULL,
+        PRIMARY KEY (kind, target)
+      );
+      CREATE INDEX IF NOT EXISTS idx_saved_allows_saved_at ON saved_allows(saved_at);
     `);
   },
 };

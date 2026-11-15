@@ -67,6 +67,26 @@ describe("handoff core", () => {
     expect(matches[0]!.section_text.toLowerCase()).toContain("landlock");
   });
 
+  test("handoff search diversify (MMR-lite) returns hits by default", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hndmmr-"));
+    resetHandoffsForTests(workspace);
+    createHandoff(workspace, {
+      summary: "deploy staging alpha",
+      tried: ["deploy staging cluster pipeline"],
+      blockers: ["unique landlock token for diversity"],
+    });
+    createHandoff(workspace, {
+      summary: "deploy staging beta",
+      tried: ["deploy staging cluster pipeline rollout"],
+    });
+    const diverse = searchHandoffs(workspace, "landlock", { limit: 3 }).matches;
+    const plain = searchHandoffs(workspace, "landlock", { limit: 3, diversify: false }).matches;
+    expect(diverse.length).toBeGreaterThan(0);
+    expect(plain.length).toBeGreaterThan(0);
+    const withQuery = resumeHandoff(workspace, { query: "landlock", max_sections: 2 });
+    expect(withQuery.top_sections.length).toBeGreaterThan(0);
+  });
+
   test("non-git workspace uses detached scope", () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-hnddet-"));
     mkdirSync(path.join(workspace, ".hz", "state"), { recursive: true });
@@ -99,10 +119,24 @@ describe("handoff core", () => {
       { continues_from: null, todos_snapshot: ["[t1] fix lint", "[t2] ship handoff"] },
     );
     const resumed = resumeHandoff(workspace);
+    expect(resumed.snapshotted_todos).toEqual(["[t1] fix lint", "[t2] ship handoff"]);
     const todosSection = resumed.top_sections.find((s) => s.section_name === "todos");
     expect(todosSection?.section_text).toContain("fix lint");
     const { matches } = searchHandoffs(workspace, "ship handoff", { section_filter: ["todos"] });
     expect(matches.length).toBeGreaterThan(0);
+  });
+
+  test("create records session_id for Engram session link", () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-hndsess-"));
+    resetHandoffsForTests(workspace);
+    const created = createHandoff(
+      workspace,
+      { summary: "linked session" },
+      { continues_from: null, session_id: "sess_abc123" },
+    );
+    expect(created.session_id).toBe("sess_abc123");
+    const resumed = resumeHandoff(workspace);
+    expect(resumed.source_session_id).toBe("sess_abc123");
   });
 
   test("resume query ranks matching sections", () => {

@@ -70,6 +70,6 @@ export function summariseElidedWithHold(
   fallback: ElidedSummariser = summariseElided,
 ): { summary: string; holdSwap: boolean } {
   const held = hold?.takeHeldSummary(elided);
-  if (held !== null) return { summary: held, holdSwap: true };
+  if (typeof held === "string") return { summary: held, holdSwap: true };
   return { summary: fallback(elided, total, limit), holdSwap: false };
 }

@@ -580,6 +580,16 @@ impl Guard {
         Some(held.remove(index))
     }
 
+    /// Read-only: the newest active grant covering `action` (display / hydrate).
+    /// Does not mint or consume authority.
+    pub fn query_matching_grant(
+        &self,
+        action: &GuardAction,
+        session_id: Option<&str>,
+    ) -> Option<Grant> {
+        self.matching_grant(action, session_id, now_millis())
+    }
+
     /// The newest active, visible, matching grant, if any. Grants are never
     /// removed by a check — they are pre-authorisations, not tokens.
     fn matching_grant(&self, action: &GuardAction, session_id: Option<&str>, now_ms: i64) -> Option<Grant> {

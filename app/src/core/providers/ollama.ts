@@ -30,6 +30,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../../contracts";
+import { classifyProviderFailure } from "./failure-codes";
 import {
   DEFAULT_RETRY_ATTEMPTS,
   backoffDelay,
@@ -218,7 +219,8 @@ async function* consumeOllamaStream(
     }
     if (!chunk || typeof chunk !== "object") continue;
     if (chunk.error) {
-      yield { type: "error", message: `ollama stream error: ${truncate(String(chunk.error), 400)}` };
+      const errText = truncate(String(chunk.error), 400);
+      yield { type: "error", message: `ollama stream error: ${errText}`, code: classifyProviderFailure(0, errText) };
       outcome.terminal = true;
       return;
     }
@@ -317,7 +319,7 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
   const messages = toOllamaMessages(req.messages ?? []);
   if (typeof req.system === "string" && req.system !== "") messages.unshift({ role: "system", content: req.system });
   if (messages.length === 0) {
-    yield { type: "error", message: "ollama: nothing to send (no messages)" };
+    yield { type: "error", message: "ollama: nothing to send (no messages)", code: "UNKNOWN" };
     return;
   }
 
@@ -344,18 +346,23 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
       yield { type: "done", stopReason: "abort" };
       return;
     }
-    yield { type: "error", message: unreachable(baseUrl, err) };
+    yield { type: "error", message: unreachable(baseUrl, err), code: "TRANSIENT" };
     return;
   }
   for (const message of retries) yield { type: "notice", message };
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    yield { type: "error", message: `ollama HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
+    const code = classifyProviderFailure(response.status, detail);
+    yield {
+      type: "error",
+      message: `ollama HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}`,
+      code,
+    };
     return;
   }
   if (!response.body) {
-    yield { type: "error", message: "ollama returned an empty response body" };
+    yield { type: "error", message: "ollama returned an empty response body", code: "EMPTY_RESPONSE" };
     return;
   }
 
@@ -388,7 +395,7 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
     }
     if (failure === undefined) failure = "ollama stream failed: the response ended before its final line";
     if (retried) {
-      yield { type: "error", message: failure };
+      yield { type: "error", message: failure, code: "TRANSIENT" };
       return;
     }
     retried = true;
@@ -400,16 +407,21 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
         yield { type: "done", stopReason: "abort" };
         return;
       }
-      yield { type: "error", message: unreachable(baseUrl, err) };
+      yield { type: "error", message: unreachable(baseUrl, err), code: "TRANSIENT" };
       return;
     }
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      yield { type: "error", message: `ollama HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}` };
+      const code = classifyProviderFailure(response.status, detail);
+      yield {
+        type: "error",
+        message: `ollama HTTP ${response.status}: ${truncate(detail.replace(/\s+/g, " ").trim(), 400)}`,
+        code,
+      };
       return;
     }
     if (!response.body) {
-      yield { type: "error", message: "ollama returned an empty response body" };
+      yield { type: "error", message: "ollama returned an empty response body", code: "EMPTY_RESPONSE" };
       return;
     }
   }
