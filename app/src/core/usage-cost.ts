@@ -67,6 +67,24 @@ export function usageCostEventFields(
   };
 }
 
+/**
+ * Worst-case USD estimate for one provider step, used by the workspace-wide
+ * SpendLedger reservation (backlog C-5). `inputTokens` is the prompt estimate
+ * and `outputTokens` the fitted output cap; the rate table is the same harness
+ * estimate the usage event publishes, never a billing claim.
+ */
+export function estimateStepCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  provider: string,
+  model: string,
+): number {
+  const rates = ratesForModel(provider, model);
+  const input = Number.isFinite(inputTokens) ? Math.max(0, inputTokens) : 0;
+  const output = Number.isFinite(outputTokens) ? Math.max(0, outputTokens) : 0;
+  return (input / 1_000_000) * rates.inputPerM + (output / 1_000_000) * rates.outputPerM;
+}
+
 export function enrichUsageCost(usage: Usage, provider: string, model: string): Usage & { cost?: UsageCostBreakdown } {
   const rates = ratesForModel(provider, model);
   const input = usage.inputTokens ?? 0;

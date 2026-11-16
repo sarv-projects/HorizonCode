@@ -6,7 +6,7 @@ A terminal coding agent that separates what the model proposes from what is allo
 
 The model can request an action; a Rust trust kernel decides whether it runs (`deny > lease > ask > allow`) and settles each admitted action into a receipt in a tamper-evident event log. The runtime is TypeScript on Bun with no runtime dependencies. The terminal UI is scrollback-native: finished output goes into your terminal's own history, and only the prompt and the running turn are redrawn.
 
-> **Status: pre-release.** Nothing is published or packaged; you build from source. The version is `0.1.0`. The kernel is primarily a decision/audit layer; Linux children can optionally be wrapped by `hz-sandbox-exec` (seccomp/rlimits/netns/Landlock when the host allows). There is no EffectHost and no MITM egress proxy. See [Status and limitations](#status-and-limitations).
+> **Status: pre-release / security remediation in progress.** Nothing is published or packaged; you build from source. The version is `0.1.0`. The kernel is primarily a decision/audit layer; Linux children can optionally be wrapped by `hz-sandbox-exec` (seccomp/rlimits/netns/Landlock when the host allows). If the kernel is absent or its digest is not verified, the runtime now runs **read-only** unless `--allow-untrusted` is passed explicitly. There is no full EffectHost and no MITM egress proxy. See [Status and limitations](#status-and-limitations).
 
 ## Contents
 
@@ -32,9 +32,9 @@ Every item below is in this tree (pull requests #1 to #28, all merged into `main
 
 **Safety and evidence**
 
-- **Kernel-admitted actions**: every file write, shell command and network request is authorised by the Rust kernel before it runs and settles into a receipt.
+- **Kernel-admitted actions**: every tool effect that crosses the authority path is authorised by the Rust kernel and settles into a receipt. The Bun tool path is still guarded and receipted, and an untrusted/unverified kernel forces read-only; this is not yet the HLD's kernel-owned execution plane for every effect.
 - **Tamper-evident log**: events and receipts are hash-chained, verifiable by `log.verify` and `receipt.verify`, and optionally anchored with an HMAC key (`HZ_ANCHOR_KEY`); without that key, someone who can write the files can rewrite the whole chain.
-- **Policy file**: `policy.json` rules, one-use leases, a structural deny on the kernel's own state directory, and fail-closed loading of malformed policy.
+- **Policy file**: `policy.json` rules, one-use leases on ask/grant paths, a structural deny on the kernel's own state directory, and fail-closed loading of malformed policy.
 - **Command allowlist and egress decider (admission only)**: a per-origin network decider and a command allowlist feed the same guard; nothing intercepts traffic or confines a process.
 - **Permission modes**: `default`, `plan`, `accept-edits` and `read-only` sit above the guard, a kernel deny always wins, and there is deliberately no bypass mode.
 - **Guardian line (advisory)**: approval prompts show a `guardian: flag` line for risky requests; it blocks only when `HORIZON_GUARDIAN=enforce` is set.
@@ -50,7 +50,7 @@ Every item below is in this tree (pull requests #1 to #28, all merged into `main
 - **Crash recovery**: sessions live in SQLite and survive restarts; resume with `--continue` or `--resume <id>`.
 - **Cross-process locking**: lockfiles with stale-owner reclaim guard sessions, checkpoints, the change journal and per-file writes.
 
-**Tools** (18 registered; `/files` lists them)
+**Tools** (28 registered; `/files` lists them)
 
 - **Edit ladder**: exact, relative-indent, unicode-fold, three-way and line-patch matching, each applied only when the match is unique and CRLF-safe.
 - **`apply_patch`**: the patch format GPT-style models emit, routed by model so each model sees one coherent edit tool set.
@@ -68,7 +68,7 @@ Every item below is in this tree (pull requests #1 to #28, all merged into `main
 
 **Interfaces**
 
-- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering, a single-key bordered approval card (`y`/`n`/`a`, Enter/Esc deny; paste and type-ahead can never approve), bracketed paste, diff gutters, collapsed reasoning (`/think`), Tab completion with ghost text for `/commands` and `@paths`, and `/theme`; there is no fullscreen mode.
+- **Scrollback-native TUI**: a chat bar with streaming output, tool cards, colour ladder, markdown rendering, a single-key bordered approval card (`y`/`n`/`a`, Enter/Esc deny; paste and type-ahead can never approve), bracketed paste, diff gutters, collapsed reasoning (`/think`), Tab completion with ghost text for `/commands` and `@paths`, and `/theme`; a reduced alt-screen fullscreen mode is available via `--fullscreen` / `--tui-mode fullscreen` (residuals remain).
 - **Install and config checks**: `hzcode doctor` (diagnose-only), `hzcode config check` (keys the loader ignores) and `hzcode commit` (a commit message drafted from the staged diff, committed through the guarded shell path).
 - **Headless mode**: `hzcode -p` prints one turn as `text`, `json` or `stream-json` with canonical exit codes; approvals fail closed.
 - **Server mode (single client)**: `hzcode serve` speaks NDJSON JSON-RPC on stdio with `session.create`, `list`, `subscribe`, `prompt`, `rewind` and `fork`.
@@ -122,7 +122,7 @@ cd HorizonCode
 ./bin/hzcode --version
 ```
 
-`bin/hzcode` is a launcher for `app/src/main.ts`. Put the `bin` directory on your `PATH` to run `hzcode` from anywhere. Without the kernel build the runtime starts in `untrusted` mode.
+`bin/hzcode` is a launcher for `app/src/main.ts` and passes Bun's `--no-env-file`, so a workspace `.env` cannot select the kernel, provider endpoint, anchor key or sandbox mode. Put the `bin` directory on your `PATH` to run `hzcode` from anywhere. Provider keys can be exported normally or placed in `~/.config/horizon/env` (0600). Without a verified kernel build the runtime starts **read-only**; `--allow-untrusted` is the explicit development opt-out.
 
 ## Quickstart
 
