@@ -47,6 +47,18 @@ running unsandboxed.
 
 ## Verification record (final tree)
 
+`bash ops/gates.sh` on the COMPLETE tree (`275a8e7`, all backlog waves landed,
+rulings 485–510) → **`COMPLETE_GATES_EXIT=0`, all 8 gates passed**:
+rust-kernel-suite 120 s, kernel-selftest 3242 ms, ts-typecheck 5598 ms,
+ts-suite 427 s, e2e-headless-smoke 3718 ms, e2e-budget-rail 3048 ms,
+e2e-usage-error 1418 ms, startup-latency 24 s. Full log:
+`/tmp/gates-complete-final.log`.
+
+The first wave-3 gate run (`a0288e8`) failed `ts-suite` on a single deterministic
+item: the committed tool-schema fixture lacked the new `read.summary` parameter
+added by ruling 499. Regenerated via the test's own `HZ_UPDATE_TOOL_SCHEMAS=1`
+path, reviewed (exactly 4 added lines), committed as `2314701`; rerun exit 0.
+
 `bash ops/gates.sh` on the G-1 tree (`af789fb`, ruling 488) → **`G1_GATES_EXIT=0`,
 all 8 gates passed**: rust-kernel-suite 214 s, kernel-selftest 7399 ms,
 ts-typecheck 9597 ms, ts-suite 637 s, e2e-headless-smoke 2741 ms,
