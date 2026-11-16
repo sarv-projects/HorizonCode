@@ -45,10 +45,31 @@ confined** and the UI/doctor say so. `HZ_SANDBOX_REQUIRE=1` refuses this posture
 `code_mode` requires network-off, so it refuses to run on this host rather than
 running unsandboxed.
 
+## Verification record (final tree)
+
+`bash ops/gates.sh` on the integrated tree (`1eb4504`, all subagent work landed)
+→ **`FINAL_GATES_EXIT=0`, all 8 gates passed**: rust-kernel-suite 210 s,
+kernel-selftest 4344 ms, ts-typecheck 8287 ms, ts-suite 470 s,
+e2e-headless-smoke 2151 ms, e2e-budget-rail 1792 ms, e2e-usage-error 956 ms,
+startup-latency 17 s. Full log: `/tmp/gates-final.log`.
+
+Earlier gate run on `42e75c9` had failed `ts-suite` (3 failures) only under
+parallel load on this WSL 9p checkout: a shell-session watchdog assertion
+measured 4819 ms against a 4000 ms ceiling (the session was killed correctly)
+and the status-line child's 500 ms production spawn budget expired. Standalone
+reruns passed 0 fail. The two load-sensitive test assertions were widened
+(10 s bound; bounded spawn retry) without changing either production budget;
+the third failure did not reproduce. The final gates run above is the evidence
+of record. Adversarial probes were re-run against the same build: kernel pin
+verified, Guard/classification fail-closed on symlink escapes, audit redaction
+and spend/session-owner invariants intact, `code_mode` refusing without
+confinement, network egress explicitly NOT confined.
+
 ## Still open / next
 
 - Full `bun test` result is recorded in `/tmp/hz-full-test.log`; triage any
-  failures before merging.
+  failures before merging. The integrated tree's ts-suite passed as part of the
+  final 8/8 gates run above.
 - **H9:** the 30 s window is a bound, not an incremental verifier. A true
   append-only/tail verifier remains.
 - **H-4:** default `allow` writes still carry no one-use lease. Either mint a
