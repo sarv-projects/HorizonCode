@@ -9,9 +9,8 @@
 
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
-import { stateRoot } from "./paths";
+import { chmodSqliteFiles, ensurePrivateDir, ensureWorkspaceStateDir, workspaceStateDir, workspaceStateFile } from "./paths";
 
 const FTS = "session_search_fts";
 const META = "session_search_meta";
@@ -32,8 +31,9 @@ export interface SessionSearchHit {
   snippet: string;
 }
 
+/** The FTS sidecar: `<workspace>/.hz/state/session_search.db` (legacy `.hz/` copied on open). */
 export function sessionSearchDbPath(workspace: string): string {
-  return path.join(stateRoot(workspace), "session_search.db");
+  return path.join(workspaceStateDir(workspace), "session_search.db");
 }
 
 function escapeFtsToken(token: string): string {
@@ -54,9 +54,11 @@ function contentHash(title: string, content: string): string {
 }
 
 function openDb(workspace: string): Database {
-  const dir = stateRoot(workspace);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const db = new Database(sessionSearchDbPath(workspace), { create: true });
+  ensureWorkspaceStateDir(workspace);
+  const dbPath = workspaceStateFile(workspace, "session_search.db");
+  ensurePrivateDir(path.dirname(dbPath));
+  const db = new Database(dbPath, { create: true });
+  chmodSqliteFiles(dbPath);
   db.exec(`
 CREATE TABLE IF NOT EXISTS ${META} (
   session_id TEXT PRIMARY KEY,
@@ -70,7 +72,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS} USING fts5(
   tokenize='porter'
 );
 `);
+  chmodSqliteFiles(dbPath);
   return db;
+}
+
+function closeDb(db: Database, dbPath: string): void {
+  try {
+    chmodSqliteFiles(dbPath);
+  } finally {
+    db.close();
+  }
 }
 
 /** Upsert one session document; no-op when title+content hash unchanged. */
@@ -97,7 +108,7 @@ export function upsertSessionSearch(workspace: string, doc: SessionSearchDoc): v
       );
     })();
   } finally {
-    db.close();
+    closeDb(db, sessionSearchDbPath(workspace));
   }
 }
 
@@ -109,7 +120,7 @@ export function removeSessionSearch(workspace: string, sessionId: string): void 
       db.run(`DELETE FROM ${META} WHERE session_id = ?`, [sessionId]);
     })();
   } finally {
-    db.close();
+    closeDb(db, sessionSearchDbPath(workspace));
   }
 }
 
@@ -177,7 +188,7 @@ export function searchSessions(workspace: string, query: string, limit = 20): Se
   } catch {
     return [];
   } finally {
-    db.close();
+    closeDb(db, sessionSearchDbPath(workspace));
   }
 }
 

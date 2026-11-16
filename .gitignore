@@ -14,8 +14,14 @@ target/
 *.tsbuildinfo
 
 # Local runtime state — a workspace's own log/state is never committed
-.hz/state/
+.hz/
 .hzcode/
+
+# Stray Bun test-runner binary produced by a mis-invoked runner
+/bun:test
+
+# PowerShell transcripts / scripts captured during debugging
+*.ps
 
 # Local verification logs and scratch toolchain artifacts (never commit)
 .scratch/

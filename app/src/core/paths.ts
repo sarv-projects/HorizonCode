@@ -32,7 +32,16 @@
  * nothing here moves bytes.
  */
 
-import { lstatSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 
@@ -206,4 +215,120 @@ export function userConfigDir(home: string = homedir()): string {
 /** User skills: `<user config dir>/skills` (`~/.hzcode/skills` legacy, in place). */
 export function userSkillsDir(home: string = homedir()): string {
   return path.join(userConfigDir(home), "skills");
+}
+
+/* ------------------------- owner-only state helpers ------------------------- */
+
+/** Owner-only modes required under `.hz/state` (docs/12 S-14, docs/03 D12). */
+const STATE_DIR_MODE = 0o700;
+const STATE_FILE_MODE = 0o600;
+
+const isUnix = process.platform !== "win32";
+
+/**
+ * Create `dir` (and missing parents) owner-only and tighten an existing
+ * directory to 0700. Best-effort on non-Unix, where POSIX modes do not exist.
+ */
+export function ensurePrivateDir(dir: string): string {
+  mkdirSync(dir, { recursive: true, mode: STATE_DIR_MODE });
+  if (isUnix) {
+    try {
+      chmodSync(dir, STATE_DIR_MODE);
+    } catch {
+      /* best effort: a vanished dir is recreated by the caller */
+    }
+  }
+  return dir;
+}
+
+/** Post-create chmod 0600 (umask-proof); a missing target is not an error. */
+export function chmodPrivateFile(file: string): void {
+  if (!isUnix) return;
+  try {
+    chmodSync(file, STATE_FILE_MODE);
+  } catch {
+    /* best effort, exactly like SessionStore's owner-only pass */
+  }
+}
+
+/** The SQLite database plus its WAL sidecars, owner-only when present. */
+export function chmodSqliteFiles(dbPath: string): void {
+  chmodPrivateFile(dbPath);
+  chmodPrivateFile(`${dbPath}-wal`);
+  chmodPrivateFile(`${dbPath}-shm`);
+}
+
+/**
+ * The workspace state directory, made owner-only. For a canonical workspace
+ * this is `<workspace>/.hz/state`; a shipped `<workspace>/.hzcode/` is used in
+ * place (paths.ts owns the rule) and is never split.
+ */
+export function ensureWorkspaceStateDir(workspace: string): string {
+  const dir = workspaceStateDir(workspace);
+  ensurePrivateDir(dir);
+  if (!isLegacyWorkspace(workspace)) ensureHarnessGitignore(workspace);
+  return dir;
+}
+
+/**
+ * The harness self-ignore: `<workspace>/.hz/.gitignore` containing `*`, so the
+ * whole config/state tree stays out of the user's repository. Idempotent and
+ * written 0600. Deliberately NOT called from index.ts (the integrator wires
+ * it); the state path initializers call it before their first write.
+ */
+export function ensureHarnessGitignore(workspace: string): string {
+  const dir = path.join(path.resolve(workspace), CANONICAL_WORKSPACE_DIR);
+  const file = path.join(dir, ".gitignore");
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: STATE_DIR_MODE });
+    let current: string | undefined;
+    try {
+      current = readFileSync(file, "utf8");
+    } catch {
+      /* absent or unreadable: (re)write below */
+    }
+    if (current !== "*\n") writeFileSync(file, "*\n", { mode: STATE_FILE_MODE });
+    chmodPrivateFile(file);
+  } catch {
+    /* best effort: a read-only config dir must not take the runtime down */
+  }
+  return file;
+}
+
+/**
+ * One runtime state file under the canonical tree. When the file is absent
+ * under `<workspace>/.hz/state/` but the pre-audit location
+ * `<workspace>/.hz/<name>` exists, copy it (and its SQLite sidecars) into the
+ * state tree first, owner-only. The legacy bytes are left in place for
+ * inspection; every later write goes to the returned state path.
+ */
+export function workspaceStateFile(workspace: string, name: string): string {
+  const target = path.join(workspaceStateDir(workspace), name);
+  const legacy = path.join(stateRoot(workspace), name);
+  if (target !== legacy) migrateLegacyFile(legacy, target);
+  return target;
+}
+
+/** A read-only resolution: the state copy when present, else the legacy file. */
+export function existingWorkspaceStateFile(workspace: string, name: string): string {
+  const target = workspaceStateFile(workspace, name);
+  if (existsSync(target)) return target;
+  const legacy = path.join(stateRoot(workspace), name);
+  return existsSync(legacy) ? legacy : target;
+}
+
+function migrateLegacyFile(legacy: string, target: string): void {
+  if (existsSync(target) || !existsSync(legacy)) return;
+  try {
+    ensurePrivateDir(path.dirname(target));
+    copyFileSync(legacy, target);
+    chmodPrivateFile(target);
+    for (const suffix of ["-wal", "-shm"]) {
+      if (!existsSync(`${legacy}${suffix}`)) continue;
+      copyFileSync(`${legacy}${suffix}`, `${target}${suffix}`);
+      chmodPrivateFile(`${target}${suffix}`);
+    }
+  } catch {
+    /* best effort: an unreadable legacy file leaves the caller on a fresh state file */
+  }
 }

@@ -8,10 +8,16 @@
 
 import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
-import { stateRoot } from "../paths";
+import {
+  chmodSqliteFiles,
+  ensurePrivateDir,
+  ensureWorkspaceStateDir,
+  workspaceStateDir,
+  workspaceStateFile,
+} from "../paths";
 import { mmrLiteSelect, type ScoredMemoryCandidate } from "./mmr-lite";
 
 export const SECTION_SOFT_CAP_CHARS = 5000;
@@ -73,8 +79,9 @@ export type HandoffSearchResult = {
   matches: HandoffSectionMatch[];
 };
 
+/** The handoff store: `<workspace>/.hz/state/handoffs.db` (legacy `.hz/` copied on open). */
 export function handoffDbPath(workspace: string): string {
-  return path.join(stateRoot(workspace), "handoffs.db");
+  return path.join(workspaceStateDir(workspace), "handoffs.db");
 }
 
 function escapeFtsToken(token: string): string {
@@ -116,11 +123,12 @@ export function resolveHandoffBranch(workspace: string, override?: string): { br
 }
 
 function openDb(workspace: string, readonly = false): Database | null {
-  const dbPath = handoffDbPath(workspace);
+  ensureWorkspaceStateDir(workspace);
+  const dbPath = workspaceStateFile(workspace, "handoffs.db");
   if (readonly && !existsSync(dbPath)) return null;
-  const dir = stateRoot(workspace);
-  if (!readonly && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+  ensurePrivateDir(path.dirname(dbPath));
   const db = new Database(dbPath, readonly ? { readonly: true } : { create: true });
+  chmodSqliteFiles(dbPath);
   if (!readonly) {
     db.exec(`
 CREATE TABLE IF NOT EXISTS ${HANDOFFS} (
@@ -157,8 +165,17 @@ CREATE TABLE IF NOT EXISTS ${DURABLE_TODOS} (
 `);
     migrateHandoffTodosColumn(db);
     migrateHandoffSessionColumn(db);
+    chmodSqliteFiles(dbPath);
   }
   return db;
+}
+
+function closeDb(db: Database, dbPath: string): void {
+  try {
+    chmodSqliteFiles(dbPath);
+  } finally {
+    db.close();
+  }
 }
 
 /** Run a callback against the workspace handoff DB (schema ensured on write). */
@@ -172,7 +189,7 @@ export function withHandoffDb<T>(
   try {
     return fn(db);
   } finally {
-    db.close();
+    closeDb(db, handoffDbPath(workspace));
   }
 }
 
@@ -362,7 +379,7 @@ export function resetHandoffsForTests(workspace: string): void {
   try {
     db.exec(`DELETE FROM ${FTS}; DELETE FROM ${HANDOFFS}; DELETE FROM ${DURABLE_TODOS};`);
   } finally {
-    db.close();
+    closeDb(db, handoffDbPath(workspace));
   }
 }
 
@@ -446,7 +463,7 @@ export function createHandoff(
     })();
     return { id, branch, continues_from, session_id: sessionId, warnings };
   } finally {
-    db.close();
+    closeDb(db, handoffDbPath(workspace));
   }
 }
 
@@ -633,7 +650,7 @@ export function resumeHandoff(
       message: detached ? "No git branch; using detached workspace scope." : null,
     };
   } finally {
-    db.close();
+    closeDb(db, handoffDbPath(workspace));
   }
 }
 
@@ -674,6 +691,6 @@ export function searchHandoffs(
     const matches = bm25SectionSearch(db, query, branch, null, limit, opts?.section_filter, diversify);
     return { matches };
   } finally {
-    db.close();
+    closeDb(db, handoffDbPath(workspace));
   }
 }

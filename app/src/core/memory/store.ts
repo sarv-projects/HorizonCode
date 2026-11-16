@@ -3,9 +3,16 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { stateRoot } from "../paths";
+import {
+  chmodSqliteFiles,
+  ensurePrivateDir,
+  ensureWorkspaceStateDir,
+  stateRoot,
+  workspaceStateDir,
+  workspaceStateFile,
+} from "../paths";
 import {
   MEMORY_BANKS,
   PROJECT_BANK,
@@ -37,8 +44,9 @@ export type MemorySearchOptions = {
 
 export const MEMORY_FACT_MAX_CHARS = 5000;
 
+/** The recall index: `<workspace>/.hz/state/memory.db` (legacy `.hz/` copied on open). */
 export function memoryDbPath(workspace: string): string {
-  return path.join(stateRoot(workspace), "memory.db");
+  return path.join(workspaceStateDir(workspace), "memory.db");
 }
 
 export function memoryDbPathForBank(workspace: string, bank: MemoryBankId, home?: string): string {
@@ -85,9 +93,9 @@ function migrateLegacyFtsIfNeeded(db: Database): void {
 }
 
 function openDbAt(dbPath: string): Database {
-  const dir = path.dirname(dbPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  ensurePrivateDir(path.dirname(dbPath));
   const db = new Database(dbPath, { create: true });
+  chmodSqliteFiles(dbPath);
   const exists = db
     .query(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
     .get(TABLE) as { name: string } | null;
@@ -98,11 +106,21 @@ function openDbAt(dbPath: string): Database {
   } else {
     migrateLegacyFtsIfNeeded(db);
   }
+  chmodSqliteFiles(dbPath);
   return db;
 }
 
+function closeDb(db: Database, dbPath: string): void {
+  try {
+    chmodSqliteFiles(dbPath);
+  } finally {
+    db.close();
+  }
+}
+
 function openWorkspaceDb(workspace: string): Database {
-  return openDbAt(memoryDbPath(workspace));
+  ensureWorkspaceStateDir(workspace);
+  return openDbAt(workspaceStateFile(workspace, "memory.db"));
 }
 
 function openUserDb(home?: string): Database {
@@ -120,6 +138,7 @@ export function replaceMemoryIndex(
   bank: MemoryBankId = PROJECT_BANK,
   home?: string,
 ): void {
+  const dbPath = memoryDbPathForBank(workspace, bank, home);
   const db = dbForBank(workspace, bank, home);
   db.prepare(`DELETE FROM ${TABLE} WHERE bank=?`).run(bank);
   const insert = db.prepare(`INSERT INTO ${TABLE}(content, bank) VALUES (?, ?)`);
@@ -130,7 +149,7 @@ export function replaceMemoryIndex(
     }
   });
   tx(facts);
-  db.close();
+  closeDb(db, dbPath);
 }
 
 function reindexProjectFromManifestIfEmpty(workspace: string, db: Database): void {
@@ -166,6 +185,7 @@ function searchOneBankScored(
   home?: string,
 ): ScoredRow[] {
   const db = dbForBank(workspace, bank, home);
+  const dbPath = memoryDbPathForBank(workspace, bank, home);
   try {
     if (bank === PROJECT_BANK) reindexProjectFromManifestIfEmpty(workspace, db);
     const rows = db
@@ -177,7 +197,7 @@ function searchOneBankScored(
   } catch {
     return [];
   } finally {
-    db.close();
+    closeDb(db, dbPath);
   }
 }
 
@@ -264,7 +284,7 @@ export function rememberMemoryFact(
     const memoryIndex = bank === PROJECT_BANK ? appendRememberedFactToMemoryIndex(workspace, text) : "skipped";
     return { ok: true, bank, memoryIndex };
   } finally {
-    db.close();
+    closeDb(db, memoryDbPathForBank(workspace, bank, home));
   }
 }
 
@@ -311,7 +331,7 @@ export function forgetMemoryFacts(
     tx([...toDelete]);
     return { deleted, removed };
   } finally {
-    db.close();
+    closeDb(db, memoryDbPathForBank(workspace, bank, home));
   }
 }
 
@@ -336,7 +356,10 @@ export function memorySearchReadTargets(
 export function summarizeMemoryBanks(workspace: string, home?: string): string {
   const parts: string[] = [];
   for (const bank of MEMORY_BANKS) {
-    const dbPath = memoryDbPathForBank(workspace, bank, home);
+    const dbPath =
+      bankStorageKind(bank) === "workspace"
+        ? workspaceStateFile(workspace, "memory.db")
+        : userMemoryDbPath(home);
     if (!existsSync(dbPath)) {
       parts.push(`${bank}: (no db)`);
       continue;
@@ -344,7 +367,7 @@ export function summarizeMemoryBanks(workspace: string, home?: string): string {
     try {
       const db = dbForBank(workspace, bank, home);
       const row = db.query(`SELECT count(*) as n FROM ${TABLE} WHERE bank=?`).get(bank) as { n: number };
-      db.close();
+      closeDb(db, dbPath);
       parts.push(`${bank}: ${row.n} facts`);
     } catch {
       parts.push(`${bank}: unreadable`);

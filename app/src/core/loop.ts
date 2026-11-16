@@ -107,7 +107,7 @@ import {
 // The window's compaction: one replacement for the silent slice, imported here
 // and nowhere else (compaction.ts holds the pinning, the summary and the
 // report; the loop only chooses the window size).
-import { COMPACTION_EVENT, compactHistory, elidedPrefixForCompaction, tokensIn } from "./compaction";
+import { COMPACTION_EVENT, compactHistory, elidedPrefixForCompaction, maskSecrets, tokensIn } from "./compaction";
 import { CompactionHoldBuffer, compactionHoldEnabled } from "./compaction-hold";
 import {
   CONTEXT_WINDOW_COMPACTION_NOTICE,
@@ -280,6 +280,177 @@ function firstLine(text: string, max = 80): string {
 function truncateForEvent(text: string, max: number): string {
   const value = typeof text === "string" ? text : "";
   return value.length <= max ? value : value.slice(0, max) + "\u2026";
+}
+
+/* --------------------------- event payload redaction --------------------------- */
+
+/**
+ * The event log is durable audit, not a second transcript: payloads are masked
+ * (`maskSecrets`) before they are appended, each string is capped, and a body
+ * over the whole-event cap is replaced by a digest/length/preview fallback.
+ * Message payloads carry digests + short masked previews instead of raw text.
+ */
+const EVENT_STRING_MAX_CHARS = 2000;
+const EVENT_PAYLOAD_MAX_BYTES = 64 * 1024;
+const EVENT_FALLBACK_PREVIEW_CHARS = 500;
+const USER_PROMPT_PREVIEW_CHARS = 200;
+const TOOL_RESULT_PREVIEW_CHARS = 500;
+
+/** Keys whose VALUES are masked entirely, independent of the value's shape. */
+const SENSITIVE_EVENT_KEY =
+  /^(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|auth|authorization|credential|credentials|private[_-]?key|secret[_-]?key|session[_-]?key|bearer)$/i;
+
+function redactEventValue(
+  value: unknown,
+  key: string | undefined,
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  if (typeof value === "string") {
+    if (key !== undefined && SENSITIVE_EVENT_KEY.test(key)) return "***";
+    return truncateForEvent(maskSecrets(value), EVENT_STRING_MAX_CHARS);
+  }
+  if (value === null || typeof value !== "object") return value;
+  if (depth >= 12) return "[depth-capped]";
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const values = value.slice(0, 200).map((item) => redactEventValue(item, undefined, seen, depth + 1));
+    if (value.length > 200) values.push(`[+${value.length - 200} more]`);
+    return values;
+  }
+  const record = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  const entries = Object.entries(record).slice(0, 200);
+  for (const [name, item] of entries) out[name] = redactEventValue(item, name, seen, depth + 1);
+  if (Object.keys(record).length > 200) out._truncatedKeys = Object.keys(record).length - 200;
+  return out;
+}
+
+/** Mask + cap one event payload; an oversized body keeps only digest/bytes/preview. */
+export function redactEventPayload(payload: unknown): unknown {
+  let redacted: unknown;
+  try {
+    redacted = redactEventValue(payload, undefined, new WeakSet(), 0);
+  } catch {
+    redacted = "[unserializable payload]";
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(redacted) ?? "null";
+  } catch {
+    serialized = JSON.stringify("[unserializable payload]");
+  }
+  // One pass over the serialized form catches secret shapes split across fields.
+  const masked = maskSecrets(serialized);
+  let safe: unknown = redacted;
+  if (masked !== serialized) {
+    try {
+      safe = JSON.parse(masked) as unknown;
+    } catch {
+      safe = redacted;
+    }
+  }
+  const bytes = Buffer.byteLength(masked, "utf8");
+  if (bytes > EVENT_PAYLOAD_MAX_BYTES) {
+    return {
+      eventPayloadTruncated: true,
+      eventPayloadDigest: sha256Hex(masked),
+      eventPayloadBytes: bytes,
+      preview: truncateForEvent(masked, EVENT_FALLBACK_PREVIEW_CHARS),
+    };
+  }
+  return safe;
+}
+
+/** Digest + UTF-8 size of the exact string a payload summarizes. */
+function textAuditFields(text: string): { digest: string; bytes: number } {
+  return { digest: sha256Hex(text), bytes: Buffer.byteLength(text, "utf8") };
+}
+
+/** Digest + size of admitted tool arguments (canonical, matching the receipt). */
+function argsAuditFields(args: Record<string, unknown>): { argsDigest: string; argsBytes: number } {
+  let text: string;
+  try {
+    text = canonicalJson(args);
+  } catch {
+    text = JSON.stringify(args) ?? "";
+  }
+  return { argsDigest: sha256Hex(text), argsBytes: Buffer.byteLength(text, "utf8") };
+}
+
+/** Argument keys whose (masked) value is kept for audit rather than summarized. */
+const AUDIT_ARG_KEYS: ReadonlySet<string> = new Set([
+  "path",
+  "file",
+  "file_path",
+  "target",
+  "cwd",
+  "old_path",
+  "new_path",
+  "url",
+  "glob",
+  "pattern",
+  "query",
+  "name",
+  "action",
+  "bank",
+  "command",
+]);
+const AUDIT_ARG_VALUE_CHARS = 500;
+const ARG_VALUE_PREVIEW_CHARS = 200;
+
+/** Masked args for the audit log: path/target kept, other string values summarized. */
+function summarizeToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      out[key] = truncateForEvent(
+        maskSecrets(value),
+        AUDIT_ARG_KEYS.has(key) ? AUDIT_ARG_VALUE_CHARS : ARG_VALUE_PREVIEW_CHARS,
+      );
+    } else if (Array.isArray(value)) {
+      out[key] = value
+        .slice(0, 20)
+        .map((item) => (typeof item === "string" ? truncateForEvent(maskSecrets(item), ARG_VALUE_PREVIEW_CHARS) : item));
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/** The audit shape every tool.result event carries (preview, never the raw body). */
+function toolResultEventPayload(input: {
+  callId: string;
+  name: string;
+  ok: boolean;
+  /** The tool's full output: only its digest and byte length are stored. */
+  outputText: string;
+  /** What the preview is cut from (defaults to `outputText`). */
+  previewText?: string;
+  error?: string;
+  ms: number;
+  leaseId?: string;
+  effectId?: string;
+  transcriptWriteFailed?: boolean;
+  truncatedOutput?: boolean;
+}): Record<string, unknown> {
+  const audit = textAuditFields(input.outputText);
+  return {
+    callId: input.callId,
+    name: input.name,
+    ok: input.ok,
+    output: truncateForEvent(maskSecrets(input.previewText ?? input.outputText), TOOL_RESULT_PREVIEW_CHARS),
+    resultDigest: audit.digest,
+    outputBytes: audit.bytes,
+    ...(input.error !== undefined ? { error: input.error } : {}),
+    ms: input.ms,
+    leaseId: input.leaseId,
+    ...(input.effectId !== undefined ? { effectId: input.effectId } : {}),
+    ...(input.transcriptWriteFailed === true ? { transcriptWriteFailed: true } : {}),
+    ...(input.truncatedOutput === true ? { truncatedOutput: true } : {}),
+  };
 }
 
 /** The session title is the first line of the first thing the human said. */
@@ -851,7 +1022,15 @@ async function failTruncatedToolBatch(
       deps,
       faults,
       EventTypes.toolResult,
-      { callId: call.id, name: call.name, ok: false, output: message, error: message, truncatedOutput: true },
+      toolResultEventPayload({
+        callId: call.id,
+        name: call.name,
+        ok: false,
+        outputText: message,
+        error: message,
+        ms: 0,
+        truncatedOutput: true,
+      }),
       { kind: "tool", id: call.name },
     );
     try {
@@ -1670,9 +1849,12 @@ async function logEvent(
   actor: ActorRef = { kind: "agent", id: "hzcode" },
 ): Promise<void> {
   try {
-    recordHookAuditLine(deps.sessionId, type, payload);
+    // Audit payloads are masked, capped and summarized before they reach disk:
+    // the event log must never become a copy of the raw prompt/args/output.
+    const safePayload = redactEventPayload(payload);
+    recordHookAuditLine(deps.sessionId, type, safePayload);
     const stream = streamFor(deps.sessionId);
-    await deps.kernel.appendEvent(stream, { id: newId(), ts: nowIso(), stream, type, actor, payload });
+    await deps.kernel.appendEvent(stream, { id: newId(), ts: nowIso(), stream, type, actor, payload: safePayload });
   } catch (err) {
     // SQLite holds the transcript; the hash-chained log is the audit trail. A
     // log failure must never take the chat down, but it must not pass silently
@@ -1692,7 +1874,23 @@ async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string):
   const first = deps.store.messageCount(deps.sessionId) === 0;
   deps.store.appendMessage(deps.sessionId, { role: "user", content: prompt });
   await logEvent(deps, faults, EventTypes.messageStart, { role: "user" }, { kind: "human", id: "user" });
-  await logEvent(deps, faults, EventTypes.messageEnd, { role: "user", text: prompt }, { kind: "human", id: "user" });
+  // The raw prompt lives in the transcript (authority); the audit log keeps a
+  // digest, its size, and a short masked preview.
+  const inputAudit = textAuditFields(prompt);
+  const inputPreview = truncateForEvent(maskSecrets(prompt), USER_PROMPT_PREVIEW_CHARS);
+  await logEvent(
+    deps,
+    faults,
+    EventTypes.messageEnd,
+    {
+      role: "user",
+      inputDigest: inputAudit.digest,
+      inputBytes: inputAudit.bytes,
+      inputPreview,
+      preview: inputPreview,
+    },
+    { kind: "human", id: "user" },
+  );
   if (first) deps.store.touchSession(deps.sessionId, titleFromText(prompt));
 }
 
@@ -2663,7 +2861,8 @@ async function runToolCall(
     {
       callId: call.id,
       name: call.name,
-      args: parsed.args,
+      args: summarizeToolArgs(parsed.args),
+      ...argsAuditFields(parsed.args),
       effectId,
       ...(parsed.repaired === true ? { repaired: true, repairs: parsed.repairs } : {}),
     },
@@ -2839,17 +3038,18 @@ async function runToolCall(
       deps,
       faults,
       EventTypes.toolResult,
-      {
+      toolResultEventPayload({
         callId: call.id,
         name: call.name,
         ok: result.ok,
-        output: truncateForEvent(plan.text, 4000),
+        outputText: fullOutput,
+        previewText: plan.text,
         error: result.error,
         ms: Date.now() - started,
         leaseId: executed.leaseId,
         effectId,
         transcriptWriteFailed: true,
-      },
+      }),
       { kind: "tool", id: call.name },
     );
     const receipt = await issueToolReceipt(
@@ -2880,16 +3080,17 @@ async function runToolCall(
     deps,
     faults,
     EventTypes.toolResult,
-    {
+    toolResultEventPayload({
       callId: call.id,
       name: call.name,
       ok: result.ok,
-      output: truncateForEvent(plan.text, 4000),
+      outputText: fullOutput,
+      previewText: plan.text,
       error: result.error,
       ms: Date.now() - started,
       leaseId: executed.leaseId,
       effectId,
-    },
+    }),
     { kind: "tool", id: call.name },
   );
 

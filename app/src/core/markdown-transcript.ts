@@ -3,17 +3,23 @@
  * chat transcript under state (`HZ_MARKDOWN_TRANSCRIPT=1`).
  *
  * After each completed turn the runtime appends new chat messages to
- * `<stateRoot>/transcripts/<sessionId>.md` (0600). Off by default. Secrets are
- * masked like `/export`. Parser + resume-from-transcript helpers restore
- * `ChatMsg[]` from that file (aider `split_chat_history_markdown` /
+ * `<workspace>/.hz/state/transcripts/<sessionId>.md` (0600). Off by default.
+ * Secrets are masked like `/export`. Parser + resume-from-transcript helpers
+ * restore `ChatMsg[]` from that file (aider `split_chat_history_markdown` /
  * `--restore-chat-history` spirit, adapted to HZ `## role` sections).
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg, ToolCall } from "../contracts";
 import { maskSecrets } from "./compaction";
-import { stateRoot } from "./paths";
+import {
+  chmodPrivateFile,
+  ensurePrivateDir,
+  ensureWorkspaceStateDir,
+  stateRoot,
+  workspaceStateDir,
+} from "./paths";
 
 /** In-process cursor: messages already mirrored for each session. */
 const cursors = new Map<string, number>();
@@ -53,9 +59,22 @@ export function safeTranscriptSessionId(sessionId: string): string {
   return safe === "" ? "session" : safe;
 }
 
-/** `<stateRoot>/transcripts/<sessionId>.md` — mirrors `/export` under state. */
+/** `<workspace>/.hz/state/transcripts/<sessionId>.md` — mirrors `/export` under state. */
 export function markdownTranscriptPath(workspace: string, sessionId: string): string {
+  return path.join(workspaceStateDir(workspace), "transcripts", `${safeTranscriptSessionId(sessionId)}.md`);
+}
+
+/** Pre-audit location (`<workspace>/.hz/transcripts/...`), read-only fallback. */
+function legacyMarkdownTranscriptPath(workspace: string, sessionId: string): string {
   return path.join(stateRoot(workspace), "transcripts", `${safeTranscriptSessionId(sessionId)}.md`);
+}
+
+/** Read the state copy when present, else the legacy file (migration reads). */
+function existingMarkdownTranscriptPath(workspace: string, sessionId: string): string {
+  const current = markdownTranscriptPath(workspace, sessionId);
+  if (existsSync(current)) return current;
+  const legacy = legacyMarkdownTranscriptPath(workspace, sessionId);
+  return existsSync(legacy) ? legacy : current;
 }
 
 export interface MarkdownTranscriptMeta {
@@ -180,7 +199,7 @@ export function resumeMessagesFromMarkdownTranscript(opts: {
   path?: string;
   seedCursor?: boolean;
 }): ResumeFromMarkdownTranscriptResult {
-  const file = opts.path ?? markdownTranscriptPath(opts.workspace, opts.sessionId);
+  const file = opts.path ?? existingMarkdownTranscriptPath(opts.workspace, opts.sessionId);
   if (!existsSync(file)) {
     return {
       ok: false,
@@ -281,8 +300,9 @@ export function syncMarkdownTranscript(opts: {
   }
 
   try {
+    ensureWorkspaceStateDir(opts.workspace);
     const dir = path.dirname(file);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensurePrivateDir(dir);
 
     const key = markdownTranscriptCursorKey(opts.workspace, opts.sessionId);
     const exists = existsSync(file);
@@ -307,6 +327,7 @@ export function syncMarkdownTranscript(opts: {
       });
       const body = formatMarkdownMessages(opts.history);
       writeFileSync(file, header + body, { mode: 0o600 });
+      chmodPrivateFile(file);
       cursors.set(key, opts.history.length);
       return {
         attempted: true,
@@ -319,10 +340,12 @@ export function syncMarkdownTranscript(opts: {
 
     const slice = opts.history.slice(from);
     if (slice.length === 0) {
+      chmodPrivateFile(file);
       cursors.set(key, opts.history.length);
       return { attempted: true, written: false, path: file, appended: 0, created: false };
     }
     appendFileSync(file, formatMarkdownMessages(slice), { mode: 0o600 });
+    chmodPrivateFile(file);
     cursors.set(key, opts.history.length);
     return {
       attempted: true,

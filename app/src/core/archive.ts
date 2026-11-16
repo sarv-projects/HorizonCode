@@ -6,14 +6,20 @@
  * docs/11 E6 trust work before foreign sessions may resume.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg } from "../contracts";
 import { type CheckpointRecord, listCheckpoints } from "./checkpoints";
 import { maskSecrets } from "./compaction";
 import { receiptHead } from "./convo";
 import { sanitizeStream } from "./kernel";
-import { kernelStateDir, stateRoot } from "./paths";
+import {
+  chmodPrivateFile,
+  ensurePrivateDir,
+  ensureWorkspaceStateDir,
+  kernelStateDir,
+  workspaceStateDir,
+} from "./paths";
 import { type SessionInfo, SessionStore } from "./session";
 
 /** Manifest version for `format: "hzs-json-v1"`. */
@@ -123,7 +129,7 @@ export function renderHzsArchive(archive: SessionArchiveV1): string {
 
 export function defaultHzsExportPath(workspace: string, sessionId: string): string {
   const safe = sessionId.replace(/[^A-Za-z0-9._-]/g, "_");
-  return path.join(stateRoot(workspace), "exports", `${safe}.hzs`);
+  return path.join(workspaceStateDir(workspace), "exports", `${safe}.hzs`);
 }
 
 /** Write `.hzs` under `<state>/exports/` unless `outPath` is set. */
@@ -134,9 +140,11 @@ export function writeSessionArchive(
 ): { path: string; messageCount: number; checkpointCount: number; eventCount: number } {
   const archive = buildSessionArchive(workspace, sessionId);
   const target = outPath ?? defaultHzsExportPath(workspace, sessionId);
-  mkdirSync(path.dirname(target), { recursive: true });
+  ensureWorkspaceStateDir(workspace);
+  ensurePrivateDir(path.dirname(target));
   const body = maskSecrets(renderHzsArchive(archive));
   writeFileSync(target, body, { mode: 0o600 });
+  chmodPrivateFile(target);
   return {
     path: target,
     messageCount: archive.messages.length,
