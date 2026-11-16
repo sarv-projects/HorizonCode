@@ -55,7 +55,8 @@ import {
 } from "./memory/banks";
 import { memoryDbPath, memoryDbPathForBank, memorySearchReadTargets } from "./memory/store";
 import { previewQuirks } from "./providers/quirks";
-import { enrichUsageCost, usageCostEventFields } from "./usage-cost";
+import { enrichUsageCost, estimateStepCostUsd, usageCostEventFields } from "./usage-cost";
+import { SpendLedger, SpendLimitError, spendLimitMicroFromEnv } from "./spend-ledger";
 import { negotiateReasoningEffort } from "./catalog/accepts-settings";
 import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
 import { canonicalJson, sha256Hex } from "./canon";
@@ -3331,6 +3332,17 @@ export async function runTurn(
                 : MAX_PROVIDER_CALLS,
           },
       );
+    // Backlog C-5: workspace-wide spend ceiling. A per-run BudgetLedger only
+    // bounds this turn; a durable ledger bounds every concurrent runtime in the
+    // workspace. It is constructed only when a ceiling is configured, so the
+    // default path pays nothing.
+    const spendLimitMicroUsd = spendLimitMicroFromEnv(process.env);
+    const spendLedger = spendLimitMicroUsd > 0
+      ? new SpendLedger(deps.workspace, { limitMicroUsd: spendLimitMicroUsd })
+      : undefined;
+    let spendReservationId: string | undefined;
+    let spendReservedUsd = 0;
+
     let calls = 0;
     let consecutiveFormatErrors = 0;
     let corrective: string | undefined;
@@ -3482,17 +3494,83 @@ export async function runTurn(
       // injected once, not re-sent on every dispatch.
       const hookContext = renderHookContextBlock(hookFragments);
       hookFragments.length = 0;
-      const turn = await collectAssistant(deps, faults, history, {
-        pinned,
-        budgetLine: budgetCountdownLine(ledger.countdown()),
-        corrective: combinedCorrective === "" ? undefined : combinedCorrective,
-        anchorBase,
-        appendedTokens,
-        instructions,
-        planLine,
-        hookContext,
-        nestedInstructions: lazy === undefined ? undefined : renderLazyInstructionBlock(lazy.all()),
-      });
+      if (spendLedger !== undefined) {
+        const inputEstimate =
+          tokensIn(history) +
+          estimateTokens(instructions) +
+          estimateTokens(planLine ?? "") +
+          estimateTokens(hookContext) +
+          4096;
+        const outputCap = fitMaxOutputTokens(
+          inputEstimate,
+          deps.contextWindowTokens ?? windowForModel(deps.model),
+        );
+        spendReservedUsd = estimateStepCostUsd(inputEstimate, outputCap, deps.provider.name, deps.model);
+        try {
+          const reservation = spendLedger.reserve(spendReservedUsd, {
+            sessionId: deps.sessionId,
+            note: `step ${calls} ${deps.provider.name}/${deps.model}`,
+          });
+          spendReservationId = reservation.id;
+        } catch (err) {
+          const message = errorMessage(err);
+          emit(deps.callbacks, {
+            type: "notice",
+            message:
+              err instanceof SpendLimitError
+                ? `spend ceiling: stopping before provider call — ${message}`
+                : `spend ledger: refusing to dispatch — ${message}`,
+          });
+          await logEvent(deps, faults, EventTypes.error, {
+            message,
+            detail: err instanceof SpendLimitError ? "spend_limit" : "spend_ledger_corrupt",
+          });
+          exit = {
+            terminal: err instanceof SpendLimitError ? "budget_exhausted" : "failed",
+            detail: err instanceof SpendLimitError ? "spend" : "internal_error",
+          };
+          break;
+        }
+      }
+      let turn: Awaited<ReturnType<typeof collectAssistant>>;
+      try {
+        turn = await collectAssistant(deps, faults, history, {
+          pinned,
+          budgetLine: budgetCountdownLine(ledger.countdown()),
+          corrective: combinedCorrective === "" ? undefined : combinedCorrective,
+          anchorBase,
+          appendedTokens,
+          instructions,
+          planLine,
+          hookContext,
+          nestedInstructions: lazy === undefined ? undefined : renderLazyInstructionBlock(lazy.all()),
+        });
+      } catch (err) {
+        if (spendLedger !== undefined && spendReservationId !== undefined) {
+          try {
+            spendLedger.settle(spendReservationId, spendReservedUsd, "provider call threw");
+          } catch (settleErr) {
+            emit(deps.callbacks, { type: "notice", message: `spend ledger settle failed: ${errorMessage(settleErr)}` });
+          }
+          spendReservationId = undefined;
+        }
+        throw err;
+      }
+      if (spendLedger !== undefined && spendReservationId !== undefined) {
+        const actualUsd = turn.usage
+          ? enrichUsageCost(turn.usage, deps.provider.name, deps.model).cost?.totalUsd ?? spendReservedUsd
+          : spendReservedUsd;
+        try {
+          const status = spendLedger.settle(spendReservationId, actualUsd, `step ${calls}`);
+          emit(deps.callbacks, {
+            type: "notice",
+            message: `spend: step ${calls} ~$${actualUsd.toFixed(4)} (workspace spent $${status.spentUsd.toFixed(4)}${Number.isFinite(status.remainingUsd) ? `, remaining $${status.remainingUsd.toFixed(2)}` : ""})`,
+          });
+        } catch (err) {
+          emit(deps.callbacks, { type: "notice", message: `spend ledger settle failed: ${errorMessage(err)}` });
+        }
+        spendReservationId = undefined;
+      }
       if (turn.usage) {
         await ledger.chargeTokens((turn.usage.inputTokens ?? 0) + (turn.usage.outputTokens ?? 0));
         const reportedInput = turn.usage.inputTokens ?? 0;

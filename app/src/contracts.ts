@@ -899,6 +899,9 @@ export interface RunExit {
     // (app/src/core/guards/thinking-loop.ts). Terminal `failed`, so
     // exitCodeFor's default arm already returns 1.
     | "thinking_loop"
+    // Backlog C-5: the workspace-wide SpendLedger refused the next provider
+    // dispatch because its configured ceiling would be exceeded.
+    | "spend"
     | "unverified_completion";
 }
 
