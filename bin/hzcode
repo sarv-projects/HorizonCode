@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # HorizonCode launcher — the human types `hzcode` and lands in a chat.
+#
+# --no-env-file is a trust-boundary control, not a convenience: without it Bun
+# auto-loads `.env` from the process cwd (the user's workspace), so a cloned
+# repository could set HZ_KERNEL_BIN, HZ_PROVIDER, HZ_BASE_URL, HZ_ANCHOR_KEY
+# or HZ_SANDBOX_EXEC=0 and choose the boundary it is then run behind.
+# hzcode loads only the user-owned, 0600 `<user config dir>/env` (see
+# loadUserEnvFile in app/src/core/config.ts); a workspace `.env` is never read.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
-exec "$BUN" run "$ROOT/app/src/main.ts" "$@"
+exec "$BUN" --no-env-file run "$ROOT/app/src/main.ts" "$@"

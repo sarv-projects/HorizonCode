@@ -26,6 +26,7 @@ import { readOAuthRefreshGeneration } from "./auth/oauth-refresh-notify";
 import { readOAuthToken } from "./auth/store";
 import { defaultConfigPath, loadConfig, missingKey, readConfigFile, type EnvLike } from "./config";
 import { resolveKernelBinary, resolveSandboxExecBinary } from "./kernel";
+import { verifyKernelPin, type KernelPinResult } from "./kernel-pin";
 import { hzEventCoverageReport } from "./event-catalogue";
 import { summarizeMemoryTopics } from "./memory/manifest";
 import { summarizeMemoryBanks } from "./memory/store";
@@ -138,9 +139,18 @@ export interface DoctorEnv {
   run: (cmd: string, args: string[], timeoutMs: number) => SpawnResult;
   /** Where the kernel binary is, or undefined when there is none. */
   kernelBinary: string | undefined;
+  /** Explicit pin manifest (tests); defaults to `<repo>/kernel/kernel.sha256`. */
+  kernelPinManifest?: string;
+  /** True when the user explicitly accepted an untrusted kernel (--allow-untrusted). */
+  allowUntrusted?: boolean;
 }
 
-export function realDoctorEnv(workspace: string, env: EnvLike = process.env): DoctorEnv {
+export interface RealDoctorEnvOptions {
+  allowUntrusted?: boolean;
+  kernelPinManifest?: string;
+}
+
+export function realDoctorEnv(workspace: string, env: EnvLike = process.env, opts: RealDoctorEnvOptions = {}): DoctorEnv {
   return {
     env,
     workspace,
@@ -158,6 +168,8 @@ export function realDoctorEnv(workspace: string, env: EnvLike = process.env): Do
       }
     },
     kernelBinary: resolveKernelBinary(env),
+    ...(opts.kernelPinManifest !== undefined ? { kernelPinManifest: opts.kernelPinManifest } : {}),
+    ...(opts.allowUntrusted === true ? { allowUntrusted: true } : {}),
   };
 }
 
@@ -185,7 +197,56 @@ function checkBun(d: DoctorEnv): DoctorCheck {
     : ok("bun", "bun", `version ${d.bunVersion}`);
 }
 
-function checkKernel(d: DoctorEnv): DoctorCheck[] {
+function kernelPinFix(d: DoctorEnv): string {
+  const manifest = d.kernelPinManifest ?? path.join(path.resolve(import.meta.dir, "../../.."), "kernel", "kernel.sha256");
+  return `pin the exact binary you built: sha256sum ${d.kernelBinary ?? "kernel/target/release/hz-kernel"} > ${manifest} (or set HZ_KERNEL_SHA256); never rebuild just to make a mismatch disappear`;
+}
+
+function kernelPinCheck(d: DoctorEnv, pin: KernelPinResult): DoctorCheck {
+  switch (pin.status) {
+    case "verified":
+      return ok("kernel.pin", "kernel pin", `sha256 ${pin.actual} matches ${pin.source === "env" ? "HZ_KERNEL_SHA256" : pin.manifest ?? "the manifest"}`);
+    case "disabled":
+      return warn(
+        "kernel.pin",
+        "kernel pin",
+        `verification disabled by HZ_KERNEL_PIN=off${pin.actual !== undefined ? ` (sha256 ${pin.actual})` : ""}`,
+        "set HZ_KERNEL_PIN=require (or auto) and pin the binary; off lets any file at that path become the trust boundary",
+      );
+    case "unverified":
+      return warn(
+        "kernel.pin",
+        "kernel pin",
+        `not pinned (HZ_KERNEL_PIN=auto; sha256 ${pin.actual ?? "unavailable"})`,
+        `write ${pin.manifest ?? "kernel/kernel.sha256"} or set HZ_KERNEL_SHA256; HZ_KERNEL_PIN=require turns an absent pin into a refusal`,
+      );
+    case "missing-required":
+      return fail("kernel.pin", "kernel pin", pin.reason, `${kernelPinFix(d)}; or set HZ_KERNEL_PIN=auto to start unverified`);
+    case "mismatch":
+      return fail(
+        "kernel.pin",
+        "kernel pin",
+        pin.reason,
+        `${kernelPinFix(d)}; if the binary changed unexpectedly, do not start it`,
+      );
+    case "invalid":
+      return fail("kernel.pin", "kernel pin", pin.reason, "write one 64-hex-character sha256 line (optional filename), or fix HZ_KERNEL_SHA256");
+    case "unreadable":
+      return fail("kernel.pin", "kernel pin", pin.reason, "fix the binary's path/permissions, or remove it so the untrusted fallback is used explicitly");
+  }
+}
+
+/** The chosen runtime posture, always visible in the report. */
+function kernelModeDetail(d: DoctorEnv, trusted: boolean, why: string): string {
+  if (trusted) return `trusted (Rust kernel); ${why}`;
+  const choice =
+    d.allowUntrusted === true
+      ? "runtime mode: explicit --allow-untrusted — writes are not forced read-only; the configured permission mode applies"
+      : "runtime mode: READ-ONLY — write, edit, shell, spawn, MCP and code_mode are refused (pass --allow-untrusted to opt out)";
+  return `untrusted — ${why}; ${choice}`;
+}
+
+export function checkKernel(d: DoctorEnv): DoctorCheck[] {
   const override = typeof d.env.HZ_KERNEL_BIN === "string" ? d.env.HZ_KERNEL_BIN.trim() : "";
   if (d.kernelBinary === undefined) {
     return [
@@ -197,10 +258,61 @@ function checkKernel(d: DoctorEnv): DoctorCheck[] {
           ? "fix or unset HZ_KERNEL_BIN"
           : "build it: cd kernel && cargo build --release --locked (without it the TypeScript fallback runs UNTRUSTED)",
       ),
-      warn("kernel.mode", "kernel mode", "untrusted (TypeScript fallback kernel)", "build the Rust kernel to get trusted mode; the guard and receipts still run, but not behind the process boundary"),
+      warn("kernel.pin", "kernel pin", "not checked: no kernel binary", "build and pin the Rust kernel; the runtime is untrusted until then"),
+      warn(
+        "kernel.mode",
+        "kernel mode",
+        kernelModeDetail(d, false, "no kernel binary"),
+        "build the Rust kernel to get trusted mode; the guard and receipts still run read-only, but not behind the process boundary",
+      ),
     ];
   }
-  const out: DoctorCheck[] = [ok("kernel.binary", "kernel binary", d.kernelBinary)];
+  const pin = verifyKernelPin({ binary: d.kernelBinary, env: d.env, manifestPath: d.kernelPinManifest });
+  // DoctorEnv normally only names an existing file (realDoctorEnv resolves it).
+  // A synthetic/injected env may name a path that is not there; that is a WARN
+  // on the binary line, not a pin "mismatch" — unless a pin was actually
+  // configured, in which case verifyKernelPin already refused it.
+  const binaryPresent = existsSync(d.kernelBinary);
+  const effectivePin: KernelPinResult =
+    !binaryPresent && pin.status === "unreadable" && pin.source === "none"
+      ? {
+          ok: true,
+          status: "unverified",
+          mode: pin.mode,
+          source: "none",
+          reason: `kernel binary ${d.kernelBinary} is not present; sha256 unavailable`,
+        }
+      : pin;
+  const out: DoctorCheck[] = [
+    effectivePin.actual !== undefined
+      ? ok("kernel.binary", "kernel binary", `${d.kernelBinary} (sha256 ${effectivePin.actual})`)
+      : binaryPresent
+        ? fail("kernel.binary", "kernel binary", `${d.kernelBinary} (sha256 unavailable)`, "fix the path/permissions; doctor cannot verify bytes it cannot read")
+        : warn("kernel.binary", "kernel binary", `${d.kernelBinary} (not found; sha256 unavailable)`, "point HZ_KERNEL_BIN at the built kernel or build it"),
+    kernelPinCheck(d, effectivePin),
+  ];
+
+  if (!effectivePin.ok) {
+    // Never execute a binary whose pin failed: a selftest run is execution.
+    out.push(
+      warn(
+        "kernel.selftest",
+        "kernel selftest",
+        "not run: the pin check failed, so the binary was not executed",
+        "resolve kernel.pin first; do not run a mismatched kernel to see whether it works",
+      ),
+    );
+    out.push(
+      warn(
+        "kernel.mode",
+        "kernel mode",
+        kernelModeDetail(d, false, `pin check refused (${effectivePin.status})`),
+        "fix kernel.pin; the runtime will not start this binary and will use the read-only local fallback",
+      ),
+    );
+    return out;
+  }
+
   // The selftest needs a state dir; give it a throwaway one so no real state is touched.
   let scratch: string | undefined;
   try {
@@ -209,7 +321,13 @@ function checkKernel(d: DoctorEnv): DoctorCheck[] {
     const tail = (r.stdout.trim().split("\n").pop() ?? "").trim();
     if (r.ok) {
       out.push(ok("kernel.selftest", "kernel selftest", tail !== "" ? tail : "passed"));
-      out.push(ok("kernel.mode", "kernel mode", "trusted (Rust kernel)"));
+      const pinNote =
+        effectivePin.status === "verified"
+          ? `sha256 ${effectivePin.actual} pinned`
+          : effectivePin.status === "disabled"
+            ? "pin verification explicitly disabled (HZ_KERNEL_PIN=off)"
+            : `sha256 ${effectivePin.actual ?? "unavailable"} not pinned (auto mode)`;
+      out.push(ok("kernel.mode", "kernel mode", kernelModeDetail(d, true, pinNote)));
     } else {
       out.push(
         fail(
@@ -219,7 +337,14 @@ function checkKernel(d: DoctorEnv): DoctorCheck[] {
           "rebuild the kernel (cd kernel && cargo build --release --locked) and re-run `hzcode doctor`; if it still fails, attach this output to a bug report",
         ),
       );
-      out.push(warn("kernel.mode", "kernel mode", "would fall back to untrusted", "fix the selftest failure above to get trusted mode"));
+      out.push(
+        warn(
+          "kernel.mode",
+          "kernel mode",
+          kernelModeDetail(d, false, "kernel selftest failed"),
+          "fix the selftest failure above to get trusted mode",
+        ),
+      );
     }
   } catch (err) {
     out.push(fail("kernel.selftest", "kernel selftest", `could not run: ${err instanceof Error ? err.message : String(err)}`, "check that the temp directory is writable"));

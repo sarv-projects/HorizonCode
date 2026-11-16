@@ -35,10 +35,10 @@ import {
   type EnvSnapshot,
 } from "./helpers";
 
-/** The unfallible marker of the mode notice. */
-const MODE_NOTICE = /without the Rust kernel binary \(untrusted\/fallback\)/;
+/** The unfallible marker of the mode notice (old and new wording). */
+const MODE_NOTICE = /(?:KERNEL UNTRUSTED|without the Rust kernel binary \(untrusted\/fallback\))/;
 /** The notice must be honest about the weaker guarantees, not just name a mode. */
-const WEAKER = /weaker in this mode/;
+const WEAKER = /(?:weaker in this mode|no OS-level process boundary)/;
 
 let envBackup: EnvSnapshot;
 let missingBinary = "";

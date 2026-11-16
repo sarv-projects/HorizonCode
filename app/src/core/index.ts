@@ -291,6 +291,12 @@ class HzRuntimeImpl implements HzRuntime {
   private planOn = false;
   /** The non-plan permission mode (default | accept-edits | read-only). */
   private mode: Exclude<PermissionMode, "plan"> = "default";
+  /**
+   * True when createRuntime refused an untrusted kernel and forced read-only.
+   * Kept on the instance so /mode cannot widen the posture during the session:
+   * the trust-boundary decision is made once, at startup.
+   */
+  private readonly untrustedReadOnly: boolean = false;
   /** The MCP manager this runtime owns, started by createRuntime, stopped by close(). */
   private mcp: McpManager | undefined;
   /** Optional models.dev background poll (`HZ_MODELS_POLL_MS`). */
@@ -339,9 +345,14 @@ class HzRuntimeImpl implements HzRuntime {
     kernel: KernelClient;
     budget: RunBudget;
     permissionMode?: PermissionMode;
+    /** createRuntime forced read-only because the kernel is untrusted. */
+    untrustedReadOnly?: boolean;
     effectHost: EffectHost;
   }) {
-    if (args.permissionMode === "plan") this.planOn = true;
+    if (args.untrustedReadOnly === true) {
+      this.untrustedReadOnly = true;
+      this.mode = "read-only";
+    } else if (args.permissionMode === "plan") this.planOn = true;
     else if (args.permissionMode !== undefined) this.mode = args.permissionMode;
     this.workspace = args.workspace;
     this.config = args.config;
@@ -703,6 +714,9 @@ class HzRuntimeImpl implements HzRuntime {
   }
 
   setPlanMode(on: boolean): void {
+    // An untrusted kernel pins the posture to read-only; plan mode would widen
+    // shell capability (read-only commands become runnable), so it is refused.
+    if (this.untrustedReadOnly) return;
     this.planOn = on === true;
   }
 
@@ -716,6 +730,12 @@ class HzRuntimeImpl implements HzRuntime {
 
   setPermissionMode(mode: PermissionMode): void {
     if (!isPermissionMode(mode)) throw new Error(permissionModeError(mode));
+    // The untrusted-kernel read-only posture cannot be widened mid-session.
+    if (this.untrustedReadOnly) {
+      this.planOn = false;
+      this.mode = "read-only";
+      return;
+    }
     if (mode === "plan") {
       this.planOn = true;
       return;
@@ -1691,6 +1711,22 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const provider = makeProvider(config, { mockFlag: opts?.mock === true });
   const store = new SessionStore(workspace);
 
+  let impl: HzRuntimeImpl | null = null;
+  const kernel = new KernelClient({
+    workspace,
+    onModeChange: (_mode, reason) => impl?.note(`kernel: ${reason}`),
+  });
+  const kernelMode = await kernel.start();
+  // An absent, crashed or pin-rejected kernel is UNTRUSTED: guard decisions
+  // still run (contract-identical), but there is no OS-level process boundary.
+  // Unless the caller explicitly opted in, the only honest posture is
+  // read-only — a warning alone would still let the model write and shell.
+  const allowUntrusted = opts?.allowUntrusted === true;
+  const untrustedReadOnly = kernelMode !== "trusted" && !allowUntrusted;
+  const effectivePermissionMode: PermissionMode = untrustedReadOnly
+    ? "read-only"
+    : opts?.permissionMode ?? config.permissionMode;
+
   let session: SessionInfo | null = null;
   const wantId = typeof opts?.sessionId === "string" && opts.sessionId !== "" ? opts.sessionId : undefined;
   if (wantId !== undefined) {
@@ -1701,11 +1737,12 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     session = store.getSession(wantId);
     if (!session) {
       store.close();
+      await kernel.close().catch(() => undefined);
       throw new Error(`no session ${wantId} in this workspace`);
     }
   }
   if (!session && opts?.continueSession) session = store.latestSession();
-  const initialMode = opts?.permissionMode ?? config.permissionMode;
+  const initialMode = effectivePermissionMode;
   if (!session) session = store.createSession("New chat", { permissionMode: initialMode });
 
   // Crash-recovery on open is TWO complementary repairs, not one — see external
@@ -1734,13 +1771,6 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const repaired = reexecTail ? { repaired: 0, calls: [] as string[] } : store.repairDanglingToolCalls(session.id);
   const interrupted = new AdmissionQueue(store).recoverInterrupted(session.id);
 
-  let impl: HzRuntimeImpl | null = null;
-  const kernel = new KernelClient({
-    workspace,
-    onModeChange: (_mode, reason) => impl?.note(`kernel: ${reason}`),
-  });
-  await kernel.start();
-
   const effectHostSandboxDefault = applyEffectHostKernelSandboxDefault(
     process.env,
     await kernelEnforcesProcessSandbox(kernel),
@@ -1761,7 +1791,8 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     store,
     session,
     kernel,
-    permissionMode: opts?.permissionMode ?? config.permissionMode,
+    permissionMode: effectivePermissionMode,
+    untrustedReadOnly,
     // NF-073: steps stay capped at MAX_PROVIDER_CALLS unless the environment or
     // the caller set a budget; 0 (explicit) = unlimited, per dimension.
     budget: {
@@ -1778,15 +1809,27 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     impl.note(`config permissionMode ignored: ${config.permissionModeRejected}`);
   }
   if (impl.kernelMode === "untrusted") {
-    // Ruling 33: the mode is first-class. Coming up without the Rust kernel
-    // gets exactly ONE notice, delivered on the first turn (note() queues it
-    // when nothing is running — the same path kernel mode-change notes use).
-    // The wording is honest about what parity does and does not cover: guard
-    // decisions are pinned to the kernel's by tests/core/interop.test.ts; the
-    // OS-level guarantees are what the in-process fallback cannot give.
+    // Ruling 33: the mode is first-class. Coming up without a trusted Rust
+    // kernel gets exactly ONE prominent notice, delivered on the first turn
+    // (note() queues it when nothing is running — the same path kernel
+    // mode-change notes use). The wording is honest about what parity does and
+    // does not cover: guard decisions are pinned to the kernel's by
+    // tests/core/interop.test.ts; the OS-level guarantees are what the
+    // in-process fallback cannot give.
+    const why = kernel.modeReason;
     impl.note(
-      "kernel: running without the Rust kernel binary (untrusted/fallback) — guard decisions are contract-identical " +
-        "(interop-pinned); OS-level process supervision, file locking and the supervised-kill ladder are weaker in this mode",
+      untrustedReadOnly
+        ? `KERNEL UNTRUSTED — the kernel is untrusted (${why}). This session is READ-ONLY: write, edit, shell, spawn, MCP tools and code_mode are refused. ` +
+            "Guard decisions are contract-identical (interop-pinned), but there is no OS-level process boundary. " +
+            "Restart with --allow-untrusted ONLY if you accept that risk."
+        : `KERNEL UNTRUSTED — the kernel is untrusted (${why}). --allow-untrusted was passed, so the permission mode ${effectivePermissionMode} was left to your settings; ` +
+            "guard decisions are contract-identical (interop-pinned), but OS-level process supervision, file locking and " +
+            "the supervised-kill ladder are weaker in this mode.",
+    );
+  }
+  if (untrustedReadOnly && opts?.permissionMode !== undefined && opts.permissionMode !== "read-only") {
+    impl.note(
+      `permission mode ${opts.permissionMode} was narrowed to read-only because the kernel is untrusted (use --allow-untrusted to opt out)`,
     );
   }
   if (repaired.repaired > 0) {

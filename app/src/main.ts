@@ -56,6 +56,7 @@ import {
   checkConfigFile,
   defaultConfigPath,
   loadConfig,
+  loadUserEnvFile,
   renderConfigCheck,
 } from "./core/config";
 import {
@@ -131,6 +132,7 @@ const HELP = [
   "  -p, --print [text]   one non-interactive turn, print the answer (prompt from stdin if no text)",
   "  --output-format <f>  with -p: text (default) | json | stream-json",
   "  --permission-mode <m>  default | plan | accept-edits | read-only (no bypass mode; /mode in chat)",
+  "  --allow-untrusted    explicit dev opt-in: keep write/execution tools when the Rust kernel is absent or unverified (default: read-only)",
   "  --max-steps <n>      cap model steps per turn (0 = unlimited)",
   "  --max-tokens <n>     cap tokens per turn    --max-wall-ms <n>  cap wall clock per turn",
   "  --fullscreen         reduced alt-screen chat (docs/33 §5.17; residuals remain)",
@@ -151,6 +153,8 @@ interface CliOptions {
   outputFormat?: PrintFormat;
   budget?: RunBudget;
   permissionMode?: PermissionMode;
+  /** Explicit dev opt-in: keep writes/execution when the kernel is untrusted. */
+  allowUntrusted: boolean;
   worktree?: string;
   tuiScreenMode?: TuiScreenMode;
   listModels: boolean;
@@ -181,6 +185,7 @@ function parseArgs(argv: string[]): CliOptions {
     listModels: false,
     showPrompts: false,
     showRepoMap: false,
+    allowUntrusted: false,
     errors: [],
   };
   const rest: string[] = [];
@@ -253,6 +258,9 @@ function parseArgs(argv: string[]): CliOptions {
         else opts.errors.push(`--permission-mode: ${permissionModeError(value)}`);
         break;
       }
+      case "--allow-untrusted":
+        opts.allowUntrusted = true;
+        break;
       case "--mock":
         opts.mock = true;
         break;
@@ -403,10 +411,12 @@ async function runServe(opts: CliOptions, workspace: string): Promise<number> {
 function runDoctorCommand(args: string[]): number {
   let json = false;
   let fixCheck: string | undefined;
+  let allowUntrusted = false;
   let workspace = process.cwd();
   for (let i = 0; i < args.length; i += 1) {
     const arg = String(args[i] ?? "");
     if (arg === "--json") json = true;
+    else if (arg === "--allow-untrusted") allowUntrusted = true;
     else if (arg === "--fix" || arg.startsWith("--fix=")) {
       const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[i + 1];
       if (value === undefined || value === "" || (!arg.includes("=") && String(value).startsWith("--"))) {
@@ -417,7 +427,7 @@ function runDoctorCommand(args: string[]): number {
       fixCheck = value;
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "hzcode doctor [--json] [--fix <check>] [--workspace <path>]\n  check bun, the kernel, config, provider, workspace, git and terminal; prints OK/WARN/FAIL with a fix per problem; --fix prints read-only export hints for one check id; exits 1 on FAIL; changes nothing\n",
+        "hzcode doctor [--json] [--fix <check>] [--workspace <path>] [--allow-untrusted]\n  check bun, the kernel (path + sha256 + pin), config, provider, workspace, git and terminal; prints OK/WARN/FAIL with a fix per problem; --fix prints read-only export hints for one check id; --allow-untrusted reports the chosen write-enabled fallback mode; exits 1 on FAIL; changes nothing\n",
       );
       return 0;
     } else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
@@ -433,7 +443,7 @@ function runDoctorCommand(args: string[]): number {
       return 2;
     }
   }
-  const env = realDoctorEnv(path.resolve(workspace));
+  const env = realDoctorEnv(path.resolve(workspace), process.env, { allowUntrusted });
   const checks = runDoctor(env);
   if (fixCheck !== undefined) {
     const lines = doctorFixSuggestion(fixCheck, env.env as Record<string, string | undefined>);
@@ -724,7 +734,7 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
   }
   let runtime: Runtime;
   try {
-    runtime = await createRuntime({ workspace, mock: opts.mock, permissionMode: "default" });
+    runtime = await createRuntime({ workspace, mock: opts.mock, permissionMode: "default", allowUntrusted: opts.allowUntrusted });
   } catch (err) {
     process.stderr.write(`hzcode: worktree: ${errorMessage(err)}\n`);
     return 1;
@@ -1115,6 +1125,32 @@ async function runCommitCommand(rawArgs: string[]): Promise<number> {
 }
 
 async function main(): Promise<number> {
+  // The trust boundary is decided by the USER environment, never by a file a
+  // cloned workspace can ship. Bun's auto-loaded `.env` is disabled by the
+  // launcher (`bin/hzcode --no-env-file`); the only env file read here is the
+  // user-owned, 0600 `<user config dir>/env`, outside the workspace. Explicit
+  // environment variables always win over that file.
+  const userEnv = loadUserEnvFile({ workspace: process.cwd() });
+  if (userEnv.skipped !== undefined) {
+    process.stderr.write(`hzcode: ignoring ${userEnv.path}: ${userEnv.skipped}\n`);
+  } else {
+    const trustKeys = new Set([
+      "HZ_KERNEL_BIN",
+      "HZ_KERNEL_SHA256",
+      "HZ_KERNEL_PIN",
+      "HZ_BASE_URL",
+      "HZ_PROVIDER",
+      "HZ_ANCHOR_KEY",
+      "HZ_SANDBOX_EXEC",
+    ]);
+    const trustLoaded = userEnv.loaded.filter((key) => trustKeys.has(key));
+    if (trustLoaded.length > 0) {
+      process.stderr.write(
+        `hzcode: ${userEnv.path} set ${trustLoaded.join(", ")} (trust-boundary settings come from the user environment; a workspace .env is never read)\n`,
+      );
+    }
+  }
+
   // Subcommand dispatch happens before the chat-first arg parse so no existing
   // flag behaviour changes: `serve` is additive, everything else is unchanged.
   const rawArgs = process.argv.slice(2);
@@ -1273,6 +1309,7 @@ async function main(): Promise<number> {
       mock: opts.mock,
       budget: opts.budget,
       permissionMode: opts.permissionMode,
+      allowUntrusted: opts.allowUntrusted,
     });
   } catch (err) {
     process.stderr.write(`\u26a0 could not start a session: ${errorMessage(err)}\n`);

@@ -54,6 +54,7 @@ import { createReceiptForHash, hashReceiptVersioned, receiptPreimageVersioned } 
 import { canonicalJson, sha256Hex } from "./canon";
 import { withFileLock } from "./file-lock";
 import { kernelStateDir } from "./paths";
+import { verifyKernelPin, type KernelPinResult } from "./kernel-pin";
 
 /** Refuse a symlink walk after this many hops (a loop, or an absurd chain). */
 const SYMLINK_HOP_LIMIT = 40;
@@ -1254,6 +1255,14 @@ export interface KernelClientOptions {
   timeoutMs?: number;
   /** Called once whenever the client switches transport (start, fallback). */
   onModeChange?: (mode: KernelMode, reason: string) => void;
+  /**
+   * Environment snapshot for `HZ_KERNEL_BIN` and the pin variables (tests).
+   * Defaults to process.env. Pinning is deliberately separate from the spawn
+   * environment so a caller cannot accidentally verify one file and run another.
+   */
+  pinEnv?: Record<string, string | undefined>;
+  /** Explicit pin manifest (tests); defaults to `<repo>/kernel/kernel.sha256`. */
+  pinManifestPath?: string;
 }
 
 /**
@@ -1316,6 +1325,8 @@ export class KernelClient {
   private readonly timeoutMs: number;
   private readonly onModeChange?: (mode: KernelMode, reason: string) => void;
   private readonly local: LocalKernel;
+  private readonly pinEnv: Record<string, string | undefined>;
+  private readonly pinManifestPath?: string;
   private child?: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingCall>();
   private writeChain: Promise<void> = Promise.resolve();
@@ -1328,6 +1339,8 @@ export class KernelClient {
   private everTrusted = false;
   private lostTrustedKernel = false;
   private binaryPath?: string;
+  /** The last pin decision for this client (undefined until startBinary). */
+  private pinResultValue?: KernelPinResult;
   /** Launch-only parent control credential; NEVER stored in process.env/argv. */
   #controlSecret?: string;
   private reason = "local fallback";
@@ -1342,6 +1355,8 @@ export class KernelClient {
     this.stateDir = opts.stateDir ?? kernelStateDir(opts.workspace);
     this.timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
     this.onModeChange = opts.onModeChange;
+    this.pinEnv = opts.pinEnv ?? process.env;
+    this.pinManifestPath = opts.pinManifestPath;
     this.local = new LocalKernel({ stateDir: this.stateDir });
   }
 
@@ -1356,6 +1371,11 @@ export class KernelClient {
 
   get binary(): string | undefined {
     return this.binaryPath;
+  }
+
+  /** The start-time pin decision (sha256, mode, manifest), when a start ran. */
+  get pin(): KernelPinResult | undefined {
+    return this.pinResultValue;
   }
 
   /** Start the Rust kernel when possible; resolve with the resulting mode. */
@@ -1378,9 +1398,9 @@ export class KernelClient {
   }
 
   private async startBinary(): Promise<KernelMode> {
-    const binary = resolveKernelBinary();
+    const binary = resolveKernelBinary(this.pinEnv);
     if (!binary) {
-      const requested = kernelBinOverride(process.env);
+      const requested = kernelBinOverride(this.pinEnv);
       this.setMode(
         "untrusted",
         requested !== ""
@@ -1389,6 +1409,22 @@ export class KernelClient {
       );
       return this.modeValue;
     }
+
+    // Existence is not authenticity. Hash the exact file this client is about
+    // to spawn and compare it with the configured pin BEFORE creating the
+    // child: a mismatch must never run, and it must never send us looking for
+    // a different build (release vs debug) to launch instead.
+    const pin = verifyKernelPin({ binary, env: this.pinEnv, manifestPath: this.pinManifestPath });
+    this.pinResultValue = pin;
+    if (!pin.ok) {
+      this.setMode(
+        "untrusted",
+        `kernel binary ${binary} refused by the pin check (${pin.reason}) — not started; ` +
+          "no other kernel binary will be tried",
+      );
+      return this.modeValue;
+    }
+
     try {
       // The only controlling parent knows this key. A raw NDJSON caller can
       // invoke guard.check, but cannot mint a lease/grant or amend the
@@ -1430,7 +1466,10 @@ export class KernelClient {
       controlPipe.end(`${controlSecret}\n`);
       const pong = await this.callRemote<"ping">("ping", {}, this.timeoutMs);
       this.binaryPath = binary;
-      this.setMode("trusted", `kernel ${pong?.version ?? "unknown"} (${binary})`);
+      this.setMode(
+        "trusted",
+        `kernel ${pong?.version ?? "unknown"} (${binary}${pin.status === "verified" ? ", sha256 verified" : ", sha256 unpinned"})`,
+      );
       return this.modeValue;
     } catch (err) {
       this.capture(`start failed: ${errorMessage(err)}`);

@@ -12,7 +12,7 @@
  * explicitly chosen one. Ollama needs no key at all: it is a local server.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
@@ -363,6 +363,106 @@ interface ConfigFile {
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
 export function defaultConfigPath(home: string = homedir()): string {
   return path.join(userConfigDir(home), "config.json");
+}
+
+/* --------------------------- user-owned env file -------------------------- */
+
+/**
+ * The ONLY env file hzcode loads: `<user config dir>/env`, owned by the user
+ * and unreadable by group/other (0600 or tighter).
+ *
+ * A workspace `.env` is deliberately NOT read. Bun auto-loads it from the
+ * process cwd, which would let a cloned repository choose HZ_KERNEL_BIN,
+ * HZ_PROVIDER, HZ_BASE_URL, HZ_ANCHOR_KEY or HZ_SANDBOX_EXEC=0 — the trust
+ * boundary itself. The launcher passes `--no-env-file`, and this function only
+ * ever opens a path under the user's config directory that is outside the
+ * workspace. Values already present in the real environment win.
+ */
+export interface UserEnvLoad {
+  path: string;
+  /** Variables actually written into the target. */
+  loaded: string[];
+  /** Why the file was not loaded, when it was present but refused. */
+  skipped?: string;
+}
+
+export interface LoadUserEnvOptions {
+  home?: string;
+  workspace?: string;
+  target?: EnvLike;
+  platform?: NodeJS.Platform;
+  /** Override the config directory (tests); defaults to the documented user config dir. */
+  configDir?: string;
+}
+
+function insideDir(dir: string, file: string): boolean {
+  const rel = path.relative(path.resolve(dir), path.resolve(file));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function unquote(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === `"` && last === `"`) || (first === `'` && last === `'`)) return value.slice(1, -1);
+  }
+  return value;
+}
+
+export function loadUserEnvFile(opts: LoadUserEnvOptions = {}): UserEnvLoad {
+  const home = opts.home ?? process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const configDir = opts.configDir ?? (home === "" ? "" : userConfigDir(home));
+  const file = configDir === "" ? "env" : path.join(configDir, "env");
+  const target = opts.target ?? process.env;
+  const platform = opts.platform ?? process.platform;
+
+  if (configDir === "") return { path: file, loaded: [] };
+  if (opts.workspace !== undefined && insideDir(opts.workspace, file)) {
+    return { path: file, loaded: [], skipped: "the env file is inside the workspace" };
+  }
+
+  let stat;
+  try {
+    stat = lstatSync(file, { throwIfNoEntry: false });
+  } catch (err) {
+    return { path: file, loaded: [], skipped: `cannot stat ${file}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (stat === undefined) return { path: file, loaded: [] };
+  // lstat semantics: a symlink is not a regular file here. Following one could
+  // point back into the workspace, which is exactly what this boundary forbids.
+  if (!stat.isFile()) return { path: file, loaded: [], skipped: "not a regular file (symlinks are refused)" };
+  if (platform !== "win32") {
+    if ((stat.mode & 0o077) !== 0) {
+      return { path: file, loaded: [], skipped: "permissions are wider than 0600 (chmod 600 it)" };
+    }
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    if (uid !== undefined && stat.uid !== uid) {
+      return { path: file, loaded: [], skipped: `not owned by this user (uid ${stat.uid})` };
+    }
+  }
+
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    return { path: file, loaded: [], skipped: `cannot read ${file}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const loaded: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const withoutExport = line.startsWith("export ") ? line.slice(7).trim() : line;
+    const at = withoutExport.indexOf("=");
+    if (at <= 0) continue;
+    const key = withoutExport.slice(0, at).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    // An explicit environment variable always wins over the user file.
+    if (target[key] !== undefined) continue;
+    target[key] = unquote(withoutExport.slice(at + 1).trim());
+    loaded.push(key);
+  }
+  return { path: file, loaded };
 }
 
 /** Infer `HOME` from `~/.config/horizon/config.json` so catalog cache is test-hermetic. */

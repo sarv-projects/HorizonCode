@@ -815,6 +815,14 @@ export interface RuntimeOptions {
    * `permissionMode`, else `default`.
    */
   permissionMode?: "default" | "plan" | "accept-edits" | "read-only";
+  /**
+   * Explicit dev opt-in (ADDITIVE): when the Rust kernel is absent or its pin
+   * check failed, the runtime defaults to READ-ONLY because guard decisions are
+   * then made in-process without the OS-level boundary. `true` preserves the
+   * historical write-capable fallback; it never makes the kernel trusted and
+   * the startup notice still says the kernel is untrusted.
+   */
+  allowUntrusted?: boolean;
 }
 
 export interface Runtime {
@@ -887,6 +895,10 @@ export interface RunExit {
     // (app/src/core/guards/mistake-tracker.ts), a SEPARATE axis from the
     // `format_errors` cap. Terminal `failed`, so exitCodeFor returns 1 by default.
     | "consecutive_mistakes"
+    // SAFETY-RAILS: the C-10 thinking/stall guard's hard stop
+    // (app/src/core/guards/thinking-loop.ts). Terminal `failed`, so
+    // exitCodeFor's default arm already returns 1.
+    | "thinking_loop"
     | "unverified_completion";
 }
 
