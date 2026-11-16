@@ -15,6 +15,7 @@ import {
   chmodSqliteFiles,
   ensurePrivateDir,
   ensureWorkspaceStateDir,
+  existingWorkspaceStateFile,
   workspaceStateDir,
   workspaceStateFile,
 } from "../paths";
@@ -123,9 +124,14 @@ export function resolveHandoffBranch(workspace: string, override?: string): { br
 }
 
 function openDb(workspace: string, readonly = false): Database | null {
-  ensureWorkspaceStateDir(workspace);
-  const dbPath = workspaceStateFile(workspace, "handoffs.db");
+  const dbPath = readonly
+    ? existingWorkspaceStateFile(workspace, "handoffs.db")
+    : workspaceStateFile(workspace, "handoffs.db");
+  // Diagnose-only callers (hzcode doctor) must not create `.hz/state` or the
+  // self-ignore just to discover there is no handoff database. Check the file
+  // before any directory creation; a read-only open of a missing DB is null.
   if (readonly && !existsSync(dbPath)) return null;
+  ensureWorkspaceStateDir(workspace);
   ensurePrivateDir(path.dirname(dbPath));
   const db = new Database(dbPath, readonly ? { readonly: true } : { create: true });
   chmodSqliteFiles(dbPath);

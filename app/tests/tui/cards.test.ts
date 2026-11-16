@@ -1,14 +1,20 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   cardDuration, describeTool, foldLabel, foldLine, formatToolEffectLinkage, lineDelta, patchStats, resultLine, shellFooter, shellHeader,
   shellOutputLines, shortPath, subagentGroupLines, subagentLine, toolCardLines, type CardStyle,
 } from "../../src/tui/cards";
 import { createRenderer } from "../../src/tui/render";
-import { setColorEnabled, strip, visibleWidth, type ColorLevel } from "../../src/tui/style";
+import { setColorEnabled, setThemeMode, strip, visibleWidth, type ColorLevel } from "../../src/tui/style";
 import { PLAIN_SCRIPT } from "./fixtures/plain-events";
 import { readFileSync } from "node:fs";
 
-afterEach(() => setColorEnabled(false));
+// The expected RGB values are the dark palette's; pin it (theme mode is global
+// and another test file may leave light/mono behind).
+beforeEach(() => setThemeMode("dark"));
+afterEach(() => {
+  setColorEnabled(false);
+  setThemeMode("auto");
+});
 
 const WIDTHS = [24, 40, 60, 80, 120];
 const LEVELS: ColorLevel[] = [0, 1, 2, 3];

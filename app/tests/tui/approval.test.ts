@@ -171,6 +171,9 @@ describe("approvals at the chat bar", () => {
         calls.push({ kind, pattern, ttlMs, sessionId });
         return { leaseId: "grant-1", kind, pattern, expiry: new Date(Date.now() + ttlMs).toISOString() };
       },
+      // The approval path hydrates the display TTL from the kernel when a
+      // session grant exists. This fake has no queryable grant table.
+      queryActiveGrantForAction: async () => undefined,
     };
     const h = harness({ interactive: true, answer: "always" });
     const action: GuardAction = { kind: "fs.write", target: "/ws/A.txt" };

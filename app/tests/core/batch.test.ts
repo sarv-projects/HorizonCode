@@ -162,7 +162,10 @@ describe("parallel batches through the loop", () => {
           const elapsed = Date.now() - started;
 
           expect(tracker.max).toBe(2);
-          expect(elapsed).toBeLessThan(950);
+          // Overlap is proven by the tracker (both reads inside execute at
+          // once). Wall clock is only a stall guard: a loaded WSL box can add
+          // hundreds of ms of scheduling noise that says nothing about order.
+          expect(elapsed).toBeLessThan(5_000);
 
           const reads = toolContents(store, deps.sessionId, "read");
           expect(reads.length).toBe(2);

@@ -504,6 +504,14 @@ export interface ToolContext {
   delegate?: DelegateRunner;
   /** Optional: used to decide hz-sandbox-exec wrapping on shell spawns (docs/33 §5.3). */
   kernel?: SandboxSpawnKernel;
+  /**
+   * Optional confinement override for a controlled, already-guarded command.
+   * `danger-full-access` is used only by the worktree bootstrap: `git worktree
+   * add` must create a sibling directory outside the workspace fence. The
+   * command is still admitted by the guard and receipted; it is not ambient
+   * model authority.
+   */
+  sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
 }
 
 /** Minimal kernel surface for spawn sandbox routing (avoids a contracts → core import). */
@@ -1091,6 +1099,9 @@ export interface KernelRequestMap {
       renameToPath?: string;
       /** Hermetic argv-only exec (**278**); advisory — not netns/Landlock enforced. */
       exitCode?: number;
+      /** Captured output, already capped by the kernel; present for `shell.exec`. */
+      stdout?: string;
+      stderr?: string;
       stdoutDigest?: string;
       stderrDigest?: string;
       stdoutConfirmDigest?: string;

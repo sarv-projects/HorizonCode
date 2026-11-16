@@ -7,17 +7,14 @@ import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 const HOOK_ID = /^\s*-\s+id:\s*([^\s#]+)/gm;
-const REPO_HOOK = /^\s*-\s+repo:\s*([^\s#]+)/gm;
 
 function parseHookIds(text: string): string[] {
   const ids = new Set<string>();
-  for (const re of [HOOK_ID, REPO_HOOK]) {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const id = m[1]?.trim();
-      if (id !== undefined && id !== "") ids.add(id);
-    }
+  HOOK_ID.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = HOOK_ID.exec(text)) !== null) {
+    const id = m[1]?.trim();
+    if (id !== undefined && id !== "") ids.add(id);
   }
   return [...ids].sort((a, b) => a.localeCompare(b));
 }

@@ -51,7 +51,7 @@ test("events.rc18 doctor line reports literal emission fraction", () => {
   const checks = runDoctor(fakeEnv());
   const line = byId(checks, "events.rc18");
   expect(line.status).toBe("ok");
-  expect(line.detail).toMatch(/21\/44 literal/);
+  expect(line.detail).toMatch(/32\/44 literal/);
   expect(line.detail).toContain("unimplemented");
 });
 
@@ -395,7 +395,10 @@ const OKRUN = (cmd: string): SpawnResult =>
 
 function fakeEnv(over: Partial<DoctorEnv> = {}): DoctorEnv {
   return {
-    env: { LANG: "en_US.UTF-8", TERM: "xterm-256color", COLORTERM: "truecolor", HZ_PROVIDER: "mock" },
+    // The injected fake kernel cannot match the repository's real pin manifest;
+    // these tests exercise the doctor table, not digest verification (which has
+    // its own kernel-pin suite).
+    env: { LANG: "en_US.UTF-8", TERM: "xterm-256color", COLORTERM: "truecolor", HZ_PROVIDER: "mock", HZ_KERNEL_PIN: "off" },
     workspace,
     home,
     bunVersion: "1.2.14",
@@ -656,9 +659,11 @@ describe("the real CLI", () => {
     expect(r.exitCode).toBe(1);
     expect(r.stdout.toString()).toContain("[FAIL] config file");
   });
+  // Three real Bun starts (~1.2-1.8 s each on the /mnt/c workspace) exceed the
+  // default 5 s under load; the assertion is about CLI semantics, not latency.
   test("an unknown argument is a usage error (2); --help documents the command", () => {
     expect(run(["doctor", "--bogus"], {}).exitCode).toBe(2);
     expect(run(["--help"], {}).stdout.toString()).toContain("hzcode doctor");
     expect(run(["doctor", "--help"], {}).exitCode).toBe(0);
-  });
+  }, 20_000);
 });

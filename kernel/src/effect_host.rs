@@ -522,6 +522,11 @@ fn execute_shell_exec(
         "shellCwd": resolved_cwd.to_string_lossy(),
         "stdoutTruncated": stdout_truncated,
         "stderrTruncated": stderr_truncated,
+        // The shell tool exists to show the model what the command printed.
+        // Digest-only evidence made every kernel-routed `ls`/`cat`/test run
+        // blank, so the captured (already capped) bytes travel with the result.
+        "stdout": String::from_utf8_lossy(&stdout),
+        "stderr": String::from_utf8_lossy(&stderr),
     });
     if stdout_obs.observation_stable {
         if let Some(d) = stdout_obs.digest {

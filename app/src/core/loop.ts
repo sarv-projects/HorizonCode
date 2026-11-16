@@ -37,7 +37,7 @@ import type {
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
 import { AdmissionQueue, admissionToolDispatchRefusal } from "./admission";
 import { unpairedToolCallTail } from "./session";
-import { parseToolArguments, type ToolArguments } from "./json-repair";
+import { parseToolArguments, TRUNCATION_TOLERANT_TOOLS, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
 import { projectExactEdit } from "../tools/edit";
 import { openTodos, todoUpdatedEventPayload, todoVersion } from "../tools/todo";
@@ -1004,7 +1004,12 @@ export function partitionWireCompleteToolCalls(calls: readonly ToolCall[]): {
   const incomplete: ToolCall[] = [];
   for (const call of calls) {
     const parsed = parseCall(call);
-    if (parsed.truncated === true) incomplete.push(call);
+    // A truncated tail is refused for side-effecting tools, but the parser
+    // deliberately allows the read-only allowlist (read/grep/glob/repo_map/
+    // tool_search/ast_search) to run with the cut-off fields disclosed. Do not
+    // re-classify those as incomplete here: the wire split runs before
+    // executeTool and would otherwise override the parser's policy.
+    if (parsed.truncated === true && !TRUNCATION_TOLERANT_TOOLS.has(call.name)) incomplete.push(call);
     else ready.push(call);
   }
   return { ready, incomplete };
@@ -2086,12 +2091,20 @@ async function collectAssistant(
         // streaming argument JSON for others). OpenAI assembly-cancel discards
         // pre-tool_call fragments on this abort (ruling 457).
         if (turn.toolCalls.length > 0) {
-          const { incomplete } = partitionWireCompleteToolCalls(turn.toolCalls);
+          // This note describes the wire, not the dispatch policy: a truncated
+          // read is executable, but it is still an incomplete call being
+          // dropped before dispatch, and the human is told so. A side-effecting
+          // blob is refused earlier by the parser, which reports the cut only
+          // as an error string, so look at both shapes.
+          const incomplete = turn.toolCalls.filter((call) => {
+            const parsed = parseCall(call);
+            return parsed.truncated === true || (parsed.error ?? "").includes("cut off");
+          }).length;
           const dropped = turn.toolCalls.length;
           turn.toolCalls = [];
           const wireNote =
-            incomplete.length > 0
-              ? ` (${incomplete.length} had incomplete wire JSON)`
+            incomplete > 0
+              ? ` (${incomplete} had incomplete wire JSON)`
               : "";
           emit(deps.callbacks, {
             type: "notice",
@@ -3608,7 +3621,9 @@ export async function runTurn(
       }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;
-      if (turn.toolCalls.length > 0) {
+      if (turn.toolCalls.length > 0 && turn.stopReason !== "max_tokens") {
+        // max_tokens owns its own batch policy below: it names the cause, fails
+        // only the truncated/unsafe calls, executes complete ones and continues.
         const wireSplit = partitionWireCompleteToolCalls(turn.toolCalls);
         if (wireSplit.incomplete.length > 0) {
           emit(deps.callbacks, {

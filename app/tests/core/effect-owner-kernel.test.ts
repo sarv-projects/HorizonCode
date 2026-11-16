@@ -413,6 +413,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     const snapshot = snapshotEnv();
     setEnv({
       HZ_KERNEL_BIN: faultKernelPath,
+      HZ_KERNEL_PIN: "off",
       HZ_EFFECT_HOST_KERNEL: "default",
       HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING: "1",
     });

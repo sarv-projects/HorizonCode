@@ -27,6 +27,11 @@ describe("modelsForProvider", () => {
     expect(list).toContain("gpt-4o-mini");
   });
 
+  test("a built-in provider lists its default even with a cold catalog", () => {
+    const list = modelsForProvider("mock", { providers: undefined }, { providers: {} });
+    expect(list).toContain("mock-1");
+  });
+
   test("nvidia provider ids come from the shipped snapshot when present", () => {
     if (!existsSync(COMMITTED_CATALOG_SNAPSHOT)) return;
     const prev = process.env.HZ_NO_COMMITTED_SNAPSHOT;

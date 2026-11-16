@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { Provider, ProviderEvent } from "../../src/contracts";
@@ -144,7 +144,9 @@ describe("mid-stream interjection", () => {
   });
 
   test("refuses dispatch when provider emits tool_use with broken argument JSON", async () => {
-    const notices: string[] = [];
+    // read tools may run on a truncated blob with the cut disclosed; a write
+    // may not, so this uses the side-effecting case to prove the refusal.
+    const target = path.join(workspace, "out.txt");
     let calls = 0;
     const provider: Provider = {
       name: "broken-args",
@@ -158,15 +160,14 @@ describe("mid-stream interjection", () => {
         yield {
           type: "tool_call",
           id: "call_broken",
-          name: "read",
-          arguments: '{"path": "README.md"',
+          name: "write",
+          arguments: '{"path": "out.txt", "content": "should not land"',
         } satisfies ProviderEvent;
         yield { type: "done", stopReason: "tool_use" } satisfies ProviderEvent;
       },
     };
     const kernel = new KernelClient({ workspace, stateDir: `${workspace}/.hz/state/kernel` });
     const store = new SessionStore(workspace);
-    writeFileSync(path.join(workspace, "README.md"), "hello");
     const deps: LoopDeps = {
       workspace,
       sessionId: store.createSession("wire-incomplete").id,
@@ -175,22 +176,20 @@ describe("mid-stream interjection", () => {
       kernel,
       store,
       signal: new AbortController().signal,
-      callbacks: {
-        onEvent: (ev) => {
-          if (ev.type === "notice") notices.push(ev.message);
-        },
-      },
+      callbacks: {},
       sessionLeases: [],
       approve: async () => true,
       budget: { maxSteps: 20 },
     };
     try {
-      const result = await runTurn(deps, "read file");
+      const result = await runTurn(deps, "write a file");
       expect(result.exit.terminal).toBe("succeeded");
-      expect(notices.some((m) => m.includes("incomplete wire JSON"))).toBe(true);
+      // The parser refuses a cut-off side effect; the refusal is visible to the
+      // model and nothing was written.
+      expect(existsSync(target)).toBe(false);
       const tools = store.history(deps.sessionId).filter((m) => m.role === "tool");
       expect(tools.length).toBe(1);
-      expect(String(tools[0]?.content ?? "")).toContain("not executed");
+      expect(String(tools[0]?.content ?? "")).toContain("cut off");
     } finally {
       await kernel.close();
       store.close();

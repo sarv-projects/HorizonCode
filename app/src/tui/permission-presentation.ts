@@ -85,7 +85,7 @@ export function permissionPresentationForRequest(
     return withActionResource(
       {
         icon: "\u2192",
-        title: shown ? `Read ${shown}` : "Read file",
+        title: shown ? `Read ${shown}` : req.title?.trim() || "Read file",
         lines: shown ? [`Path: ${shown}`] : [],
       },
       req.kind ?? "fs.read",
@@ -96,7 +96,7 @@ export function permissionPresentationForRequest(
     return withActionResource(
       {
         icon: "\u2192",
-        title: shown ? `Write ${shown}` : "Write file",
+        title: shown ? `Write ${shown}` : req.title?.trim() || "Write file",
         lines: shown ? [`Path: ${shown}`] : [],
       },
       req.kind ?? "fs.write",
@@ -107,7 +107,7 @@ export function permissionPresentationForRequest(
     return withActionResource(
       {
         icon: "%",
-        title: shown ? `Web fetch ${shown}` : "Network fetch",
+        title: shown ? `Web fetch ${shown}` : req.title?.trim() || "Network fetch",
         lines: shown ? [`URL: ${shown}`] : [],
       },
       req.kind ?? "net.fetch",

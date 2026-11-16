@@ -1,7 +1,7 @@
 [
   {
     "concurrencyClass": "exclusive",
-    "description": "Delegate a focused task to a subagent that works in its own context and returns a final summary. Must be used for self-contained research or multi-step sub-tasks.",
+    "description": "Delegate a focused task to a nested subagent (child session, own transcript — not a background thread). The subagent returns one final summary; the parent conversation does not see its tool steps. Must be used for self-contained research or multi-step sub-tasks.",
     "exposure": "direct",
     "name": "agent",
     "parameters": {
@@ -344,6 +344,10 @@
         "branch": {
           "type": "string"
         },
+        "diversify": {
+          "description": "When query is set: lexical MMR over BM25 hits (default true).",
+          "type": "boolean"
+        },
         "handoff_id": {
           "description": "Start from a specific handoff id.",
           "type": "string"
@@ -351,9 +355,17 @@
         "max_sections": {
           "type": "number"
         },
+        "merge_durable_branch": {
+          "description": "When HZ_TODO_DURABLE=1: copy open todos from another git/handoff branch into this branch's durable store (dedupe by text).",
+          "type": "string"
+        },
         "query": {
           "description": "Terms to rank matching sections.",
           "type": "string"
+        },
+        "rehydrate_todos": {
+          "description": "When true, import snapshotted open todos from the resumed handoff into this session's live todo list (skips duplicate text).",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -368,6 +380,10 @@
       "properties": {
         "branch": {
           "type": "string"
+        },
+        "diversify": {
+          "description": "Lexical MMR over BM25 hits (default true).",
+          "type": "boolean"
         },
         "limit": {
           "type": "number"
@@ -467,7 +483,7 @@
   },
   {
     "concurrencyClass": "shared",
-    "description": "Store a fact in a memory bank (FTS index). Default bank is project (.hz/state/memory.db). user and shared banks live in the user config dir. Does not edit MEMORY.md. Max 5000 chars.",
+    "description": "Store a fact in a memory bank (FTS index). Default bank is project (.hz/state/memory.db). user and shared banks live in the user config dir. With HZ_MEMORY_SYNC_MEMORY_MD=1, project remembers also append a capped bullet to MEMORY.md. Max 5000 chars.",
     "exposure": "deferred",
     "name": "memory_remember",
     "parameters": {
@@ -510,6 +526,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "diversify": {
+          "description": "When true, rerank BM25 hits with lexical MMR-lite (default true for shared_recall / all).",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Max hits (default 8; shared_recall enables BM25 MMR-lite diversify by default).",
+          "maximum": 32,
+          "minimum": 1,
+          "type": "integer"
         },
         "query": {
           "description": "Terms to search for in remembered facts.",
@@ -744,7 +770,7 @@
   },
   {
     "concurrencyClass": "exclusive",
-    "description": "Maintain the session todo checklist: list, add, or complete items.",
+    "description": "Maintain the session todo checklist: list, add, mark done, drop (with reason), or merge several ops in one call. Durable across sessions when HZ_TODO_DURABLE=1.",
     "exposure": "direct",
     "name": "todo",
     "parameters": {
@@ -754,12 +780,109 @@
           "enum": [
             "list",
             "add",
-            "done"
+            "done",
+            "drop",
+            "merge"
           ],
           "type": "string"
         },
+        "ops": {
+          "description": "For 'merge': ordered {op,text?|id?,reason?} entries (add/done/drop), max 32.",
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "add",
+                  "done",
+                  "drop"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Required for 'drop' — why this todo no longer applies.",
+          "type": "string"
+        },
         "text": {
-          "description": "Item text for 'add', or the item id (e.g. 't1') for 'done'.",
+          "description": "Item text for 'add', or the item id (e.g. 't1') for 'done' or 'drop'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Alias for `todo`: session checklist list/add/done/drop/merge (Engram `todo_write` naming). Durable when HZ_TODO_DURABLE=1.",
+    "exposure": "direct",
+    "name": "todo_write",
+    "parameters": {
+      "properties": {
+        "action": {
+          "description": "Checklist operation.",
+          "enum": [
+            "list",
+            "add",
+            "done",
+            "drop",
+            "merge"
+          ],
+          "type": "string"
+        },
+        "ops": {
+          "description": "For 'merge': ordered {op,text?|id?,reason?} entries (add/done/drop), max 32.",
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "add",
+                  "done",
+                  "drop"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Required for 'drop' — why this todo no longer applies.",
+          "type": "string"
+        },
+        "text": {
+          "description": "Item text for 'add', or the item id (e.g. 't1') for 'done' or 'drop'.",
           "type": "string"
         }
       },

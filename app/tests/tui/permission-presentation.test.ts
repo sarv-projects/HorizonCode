@@ -60,7 +60,9 @@ describe("permission presentation", () => {
       { kind: "shell.exec", title: "run", detail: "echo ok && rm -rf build" },
       workspace,
     );
-    expect(p.lines.join("\n")).toContain("saved-allows.json");
+    // The per-segment marker is "(saved allow)"; the file name is shown in the
+    // stale footnote, not on every compound segment.
+    expect(p.lines.join("\n")).toContain("saved allow");
     expect(p.lines.join("\n")).toContain("rm -rf build");
   });
 

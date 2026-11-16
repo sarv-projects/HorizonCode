@@ -16,19 +16,24 @@ import type { SavedAllowRow } from "./saved-allows";
 
 const SAVE_LOCK_SUFFIX = ".saved-allows.lock";
 
-function openSavedAllowsDb(workspace: string): Database {
+function openSavedAllowsDb(workspace: string, readonly = false): Database | null {
   const dbPath = sessionDbPath(workspace);
   const dir = path.dirname(dbPath);
+  // A presentation/doctor read must never create `.hz/state` (or fail on a
+  // read-only workspace). Only a writer creates the directory and schema.
+  if (readonly && (!existsSync(dir) || !existsSync(dbPath))) return null;
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const db = new Database(dbPath, { create: true });
-  try {
-    db.exec("PRAGMA busy_timeout = 5000;");
-    db.exec("PRAGMA journal_mode = WAL;");
-    db.exec("PRAGMA synchronous = FULL;");
-  } catch {
-    /* best effort */
+  const db = new Database(dbPath, readonly ? { readonly: true } : { create: true });
+  if (!readonly) {
+    try {
+      db.exec("PRAGMA busy_timeout = 5000;");
+      db.exec("PRAGMA journal_mode = WAL;");
+      db.exec("PRAGMA synchronous = FULL;");
+    } catch {
+      /* best effort */
+    }
+    migrateSessionDb(db);
   }
-  migrateSessionDb(db);
   return db;
 }
 
@@ -48,7 +53,8 @@ function rowFromSql(row: {
 
 /** Load rows from SQLite (newest `saved_at` first). */
 export function loadSavedAllowsSql(workspace: string): SavedAllowRow[] {
-  const db = openSavedAllowsDb(workspace);
+  const db = openSavedAllowsDb(workspace, true);
+  if (db === null) return [];
   try {
     const raw = db
       .query(
@@ -75,6 +81,7 @@ export function upsertSavedAllowsSql(workspace: string, rows: SavedAllowRow[], c
   const dbPath = sessionDbPath(workspace);
   withFileLockSync(`${dbPath}${SAVE_LOCK_SUFFIX}`, () => {
     const db = openSavedAllowsDb(workspace);
+    if (db === null) throw new Error("saved-allows: cannot open the workspace database for writing");
     try {
       const run = db.transaction(() => {
         const upsert = db.prepare(
@@ -102,6 +109,7 @@ export function importJsonIntoSqlIfEmpty(workspace: string, jsonRows: SavedAllow
   let imported = false;
   withFileLockSync(`${dbPath}${SAVE_LOCK_SUFFIX}`, () => {
     const db = openSavedAllowsDb(workspace);
+    if (db === null) throw new Error("saved-allows: cannot open the workspace database for import");
     try {
       const count = (db.query("SELECT COUNT(*) AS c FROM saved_allows").get() as { c: number }).c;
       if (count > 0) return;

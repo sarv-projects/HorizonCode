@@ -239,7 +239,7 @@ test("a binary that exists but cannot be executed falls back too", async () => {
   const badBinary = path.join(tempDir("hz-bad-bin-"), "hz-kernel");
   writeFileSync(badBinary, "this is not an executable\n");
   expect(existsSync(badBinary)).toBe(true);
-  setEnv({ HZ_KERNEL_BIN: badBinary });
+  setEnv({ HZ_KERNEL_BIN: badBinary, HZ_KERNEL_PIN: "off" });
 
   const workspace = tempDir("hz-ws-bad-");
   const stateDir = path.join(tempDir("hz-state-bad-"), "kernel");

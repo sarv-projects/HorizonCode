@@ -739,7 +739,12 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
     process.stderr.write(`hzcode: worktree: ${errorMessage(err)}\n`);
     return 1;
   }
-  const extras = runtime as Runtime & { runGuardedShell?: (command: string) => Promise<{ ok: boolean; output: string }> };
+  const extras = runtime as Runtime & {
+    runGuardedShell?: (
+      command: string,
+      opts?: { sandboxMode?: "read-only" | "workspace-write" | "danger-full-access" },
+    ) => Promise<{ ok: boolean; output: string }>;
+  };
   try {
     const ui = createApprovalUi(Boolean(process.stdin.isTTY));
     ui.runtime = runtime;
@@ -748,7 +753,7 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
       process.stderr.write("hzcode: worktree: this build cannot run a guarded command\n");
       return 1;
     }
-    const out = await extras.runGuardedShell(decision.command);
+    const out = await extras.runGuardedShell(decision.command, { sandboxMode: "danger-full-access" });
     if (!out.ok) {
       process.stderr.write(`hzcode: worktree: ${out.output.trim() || "git worktree add failed"}\n`);
       return 1;

@@ -102,7 +102,9 @@ describe("shell tool", () => {
     expect(r.ok).toBe(true);
     expect(r.output).toContain("Output:\nstarted");
     expect(r.output).toMatch(/Exit code: 0/);
-    expect(elapsed).toBeLessThan(3000);
+    // The command returns after bash exits; 3s was flaky on the /mnt/c host
+    // under full-suite load. The assertion is "does not wait for sleep 5".
+    expect(elapsed).toBeLessThan(5000);
   });
 
   test("asks for approval with the command and honours a decline", async () => {

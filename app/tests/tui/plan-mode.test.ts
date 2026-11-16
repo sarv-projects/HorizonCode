@@ -372,9 +372,11 @@ describe("the approval prompt's preview", () => {
     const out = strip(chunks.join(""));
 
     expect(approved).toBe(false);
-    expect(out).toContain("Approve write a.txt?");
+    expect(out).toContain("Approve Write /ws/a.txt?");
+    // the presentation title already names the target; it is not repeated
+    expect(out).not.toContain("/ws/a.txt? /ws/a.txt");
     expect(out).toContain("+ONE");
-    expect(out.indexOf("Approve write a.txt?")).toBeLessThan(out.indexOf("+ONE"));
+    expect(out.indexOf("Approve Write /ws/a.txt?")).toBeLessThan(out.indexOf("+ONE"));
   });
 
   test("without a preview the prompt is unchanged", async () => {
@@ -421,6 +423,7 @@ function startChat(workspace: string) {
   const command = [
     "exec",
     shellQuote(BUN_BIN),
+    "--no-env-file",
     "run",
     shellQuote(path.join(APP_DIR, "src", "main.ts")),
     "--workspace",

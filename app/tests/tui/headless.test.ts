@@ -5,7 +5,7 @@
  * stdin, a fresh temp workspace and the offline mock provider.
  */
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { MOCK_GREETING, MOCK_LOOKING } from "../../src/core/providers/mock";
 import {
   APP_DIR,
@@ -21,6 +21,10 @@ import {
 } from "./harness";
 
 const pool = createWorkspacePool();
+
+afterEach(() => {
+  killAllProcesses();
+});
 
 afterAll(() => {
   pool.cleanup();
@@ -101,7 +105,13 @@ describe("headless mode (stdin is a pipe)", () => {
     const run = await runHeadless(ws, "\n\nhello\n");
 
     expect(run.code).toBe(0);
-    expect(run.stdout).toBe(`${PROMPT} hello\n${MOCK_GREETING}\n`);
+    // Startup notices (sandbox posture, thinking effort) are allowed on the
+    // stream; the assertion is that blank input produced exactly one prompt,
+    // one user message and one reply.
+    expect(run.stdout).toContain(`${PROMPT} hello`);
+    expect(run.stdout).toContain(MOCK_GREETING);
+    expect(run.stdout.split(PROMPT).length - 1).toBe(1);
+    expect(run.stdout.split(MOCK_GREETING).length - 1).toBe(1);
   });
 
   test("answers a message typed on the command line before reading stdin", async () => {
@@ -141,7 +151,7 @@ describe("headless mode (stdin is a pipe)", () => {
     // `hzcode | head -c 3`: the reader leaves after a few bytes, so stdout EPIPEs.
     const proc = spawnProcess({
       file: "sh",
-      args: ["-c", `${shellQuote(BUN_BIN)} run src/main.ts --workspace ${shellQuote(ws)} --mock | head -c 3`],
+      args: ["-c", `${shellQuote(BUN_BIN)} --no-env-file run src/main.ts --workspace ${shellQuote(ws)} --mock | head -c 3`],
       cwd: APP_DIR,
       env: { NO_COLOR: "1" },
     });
@@ -182,8 +192,8 @@ describe("headless approvals fail closed", () => {
     expect(run.timedOut).toBe(false);
     expect(run.code).toBe(0);
     // the request is announced, with the reason it is refused
-    expect(run.stdout).toContain("approval requested (fs.read)");
-    expect(run.stdout).toContain("denied, no one is attached to say yes");
+    expect(run.stdout).toContain("approval required [fs.read]");
+    expect(run.stdout).toContain("no interactive TTY");
     // and the tool reports the refusal instead of pretending it worked
     expect(run.stdout).toMatch(new RegExp(`^  ${CORNER} error: DECLINED by the user$`, "m"));
     // nothing was read: the summary is the refusal, not the file listing

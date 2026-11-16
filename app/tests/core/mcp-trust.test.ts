@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { noticeUntrustedWorkspaceMcp, workspaceMcpConfigFile } from "../../src/core/trust";
+import {
+  bindWorkspaceTrustRecord,
+  collectWorkspaceTrustDigests,
+  noticeUntrustedWorkspaceMcp,
+  workspaceMcpConfigFile,
+} from "../../src/core/trust";
 
 let workspace: string;
 let home: string;
@@ -30,6 +35,7 @@ describe("workspace mcp trust", () => {
     const mcpFile = workspaceMcpConfigFile(workspace);
     mkdirSync(path.dirname(mcpFile), { recursive: true });
     writeFileSync(mcpFile, '{"servers":[]}');
+    bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
     const notes: string[] = [];
     noticeUntrustedWorkspaceMcp(workspace, [path.resolve(workspace)], home, (m) => notes.push(m));
     expect(notes.length).toBe(0);

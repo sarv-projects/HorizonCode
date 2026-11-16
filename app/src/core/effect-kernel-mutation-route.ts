@@ -27,6 +27,7 @@ import { sha256Hex, type KernelRequestMap, type ToolResult } from "../contracts"
 import { KernelRefusal, type KernelClient } from "./kernel";
 import type { KernelExecutePostimageObserve } from "./receipt-postimage";
 import { analyzeShellCompound } from "./shell-split";
+import { formatExecOutputForModel } from "../tools/exec-output-format";
 import { bindJournalWorkspace, recordChange } from "../tools/change-journal";
 import { parse } from "../tools/apply-patch-parser";
 import {
@@ -886,6 +887,7 @@ export async function tryKernelShellRoute(
         expiresAt: permit.expiry,
       };
     }
+    const startedAt = Date.now();
     const result = await kernel.executeEffect({
       effectId,
       sandboxRoot: workspace,
@@ -894,10 +896,25 @@ export async function tryKernelShellRoute(
       dispatch: { kind: "shell.exec", spec },
     });
     const exit = result.exitCode ?? -1;
+    const elapsed = Date.now() - startedAt;
+    const stdout = typeof result.stdout === "string" ? result.stdout : "";
+    const stderr = typeof result.stderr === "string" ? result.stderr : "";
+    const body = [stdout.replace(/\n+$/, ""), stderr.replace(/\n+$/, "")].filter((part) => part !== "").join("\n");
+    const okOutput =
+      stdout !== "" || stderr !== ""
+        ? formatExecOutputForModel({
+            exitCode: result.exitCode ?? null,
+            wallMs: elapsed,
+            body,
+            outputTruncated: result.stdoutTruncated === true || result.stderrTruncated === true,
+          })
+        : // A silent command still gets evidence: nothing was printed, and the
+          // digest proves the kernel observed the empty stream.
+          `${KERNEL_ROUTE_TAG} exit ${exit} (kernel shell.exec argv; stdout digest ${result.stdoutDigest ?? "?"})`;
     return {
       ...outcomeFromExecuteResult(
         result,
-        `${KERNEL_ROUTE_TAG} exit ${exit} (kernel shell.exec argv; stdout digest ${result.stdoutDigest ?? "?"})`,
+        okOutput,
         `${KERNEL_ROUTE_TAG} kernel shell.exec ${result.verdict}`,
         { journalSkipped: true },
       ),

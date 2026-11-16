@@ -1,5 +1,8 @@
 [test]
-# E2E headless/pty spawns need headroom under parallel load (default 5000ms flakes in ts-suite).
-timeout = 30000
+# Per-test timeout lives on the CLI: Bun 1.4 ignores `[test] timeout` in
+# bunfig, so plain `bun test` uses 5000ms and flakes on WSL/parallel load.
+# Use `bun run test` (or `bun test --timeout 30000`), as ops/gates.sh does.
+# Hermetic temp HOME so the developer's config/theme/skills cannot change tests.
+preload = ["./tests/setup.ts"]
 # Hermetic catalog tests expect the 5-provider curated floor; skip a local models-dev.snapshot.json.
 env = { HZ_NO_COMMITTED_SNAPSHOT = "1" }

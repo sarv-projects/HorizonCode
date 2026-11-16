@@ -83,11 +83,29 @@ function killTree(child: ChildProcess): void {
   }
 }
 
+/**
+ * Test-only switches that must not reach a spawned product process. The bunfig
+ * `[test].env` block is for in-process unit tests; `HZ_NO_COMMITTED_SNAPSHOT`
+ * would otherwise empty the catalog of the child and change `/models` output.
+ */
+const CHILD_ENV_DROPS = ["HZ_NO_COMMITTED_SNAPSHOT"] as const;
+
+/** Merge the parent env with the spec and drop test-only keys. */
+function childEnv(extra: Record<string, string | undefined>): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const [key, value] of Object.entries({ ...process.env, ...extra })) {
+    if (value === undefined) continue;
+    if ((CHILD_ENV_DROPS as readonly string[]).includes(key)) continue;
+    merged[key] = value;
+  }
+  return merged;
+}
+
 /** Start one process under a kill timer. */
 export function spawnProcess(spec: SpawnSpec): AppProcess {
   const child = spawn(spec.file ?? BUN_BIN, spec.args, {
     cwd: spec.cwd ?? APP_DIR,
-    env: { ...process.env, ...spec.env },
+    env: childEnv(spec.env),
     stdio: ["pipe", "pipe", "pipe"],
     detached: true,
   });
@@ -177,7 +195,9 @@ export const TUI_MOCK_ENV: Record<string, string> = { NO_COLOR: "1", HZ_MODEL: "
 export function appSpec(args: string[], env: Record<string, string | undefined> = {}): SpawnSpec {
   return {
     file: BUN_BIN,
-    args: ["run", "src/main.ts", ...args],
+    // Match the shipped launcher: never auto-load the developer's .env (the
+    // repo root has one; Bun searches parent directories).
+    args: ["--no-env-file", "run", "src/main.ts", ...args],
     cwd: APP_DIR,
     env: { ...TUI_MOCK_ENV, ...env },
   };
@@ -248,14 +268,26 @@ export function flatten(text: string): string {
   return text.replace(/\r/g, "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
 }
 
-/** How many times `needle` appears in `text`. */
+/**
+ * A pty wraps long lines at the terminal width, so a phrase can acquire a
+ * newline in the middle. Collapse every whitespace run to one space for
+ * substring matching; exact-output assertions use `flatten` directly instead.
+ */
+export function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** How many times `needle` appears in `text`. Strings match across line wraps. */
 export function occurrences(text: string, needle: string | RegExp): number {
   if (typeof needle === "string") {
+    const haystack = collapseWhitespace(text);
+    const wanted = collapseWhitespace(needle);
+    if (wanted === "") return 0;
     let count = 0;
-    let at = text.indexOf(needle);
+    let at = haystack.indexOf(wanted);
     while (at >= 0) {
       count += 1;
-      at = text.indexOf(needle, at + needle.length);
+      at = haystack.indexOf(wanted, at + wanted.length);
     }
     return count;
   }
@@ -273,9 +305,33 @@ export async function waitFor(
   opts: { count?: number; timeoutMs?: number } = {},
 ): Promise<boolean> {
   const wanted = opts.count ?? 1;
-  const deadline = Date.now() + (opts.timeoutMs ?? 8_000);
+  // PTY startup (Bun + kernel + first mock turn) is 2-5 s on the /mnt/c host,
+  // and a CI box can be slower still. 8 s was a flake generator; 20 s is a
+  // bound on a hang, not a latency budget.
+  const deadline = Date.now() + (opts.timeoutMs ?? 20_000);
   for (;;) {
     if (occurrences(flatten(proc.stdout()), needle) >= wanted) return true;
+    if (Date.now() > deadline) return false;
+    await sleep(40);
+  }
+}
+
+/**
+ * Wait until the chat bar is back at its prompt. The last non-empty line must
+ * end with the prompt glyph: the streamed answer, tool cards and slash output
+ * all sit above it, so this is the only honest "the turn is over, you may
+ * type" signal. Typing earlier is STEERING by design ("· steered"), not a
+ * dropped line — which used to make multi-turn pty tests flake under load.
+ */
+export async function waitForPrompt(
+  proc: AppProcess,
+  opts: { timeoutMs?: number } = {},
+): Promise<boolean> {
+  const deadline = Date.now() + (opts.timeoutMs ?? 20_000);
+  for (;;) {
+    const text = flatten(proc.stdout());
+    const lastLine = text.slice(text.lastIndexOf("\n") + 1).replace(/\s+$/u, "");
+    if (lastLine.endsWith("\u276f")) return true;
     if (Date.now() > deadline) return false;
     await sleep(40);
   }

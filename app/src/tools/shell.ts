@@ -627,8 +627,11 @@ export const shellTool: Tool = {
             // Own process group: `kill` below then reaches the whole tree, not just bash.
             detached: true,
             longLived: false,
-            sandboxWrap: "auto",
-            sandboxMode: "workspace-write",
+            // The worktree bootstrap is the one controlled command that must
+            // create a sibling outside the workspace fence; it is still guard-
+            // approved and receipted. Every model-issued shell stays wrapped.
+            sandboxWrap: ctx.sandboxMode === "danger-full-access" ? false : "auto",
+            sandboxMode: ctx.sandboxMode ?? "workspace-write",
             kernel: ctx.kernel,
           })
         ).proc;

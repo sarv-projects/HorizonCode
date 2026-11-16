@@ -210,7 +210,11 @@ export function createApprovalHandler(ui: ApprovalUi): ApprovalHandler {
         ? escapeInvisible(sanitizeText(req.guardian)).replace(/\s+/g, " ").trim()
         : "";
     if (!keyMode) {
-      r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + (detail ? " " + detail : "") + "\n");
+      // The presentation title usually names the target ("Write /ws/a.txt"), so
+      // appending the raw detail again would read `/ws/a.txt? /ws/a.txt`.
+      const titleNamesTarget = detail !== "" && title.endsWith(detail);
+      const suffix = detail !== "" && !titleNamesTarget ? " " + detail : "";
+      r.write("\n" + yellow("\u26a0") + " " + bold("Approve " + title + "?") + suffix + "\n");
       if (guardianLine !== "") r.write(guardianLine + "\n");
       if (staleFootnote !== undefined) r.write(dim(staleFootnote) + "\n");
     }

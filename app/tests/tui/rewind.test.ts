@@ -187,6 +187,7 @@ function startChat(workspace: string) {
   const command = [
     "exec",
     shellQuote(BUN_BIN),
+    "--no-env-file",
     "run",
     shellQuote(path.join(APP_DIR, "src", "main.ts")),
     "--workspace",

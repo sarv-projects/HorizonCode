@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { activeSkillSection, getSkill, listSkills } from "../../src/core/skills";
-import type { WorkspaceTrustOptions } from "../../src/core/trust";
+import { bindWorkspaceTrustRecord, collectWorkspaceTrustDigests, type WorkspaceTrustOptions } from "../../src/core/trust";
 
 let ws: string;
 let home: string;
@@ -26,7 +26,9 @@ function put(file: string, text: string): void {
 }
 
 function skillOpts(trusted = false): WorkspaceTrustOptions {
-  return trusted ? { home, trustedWorkspaceHooks: [path.resolve(ws)] } : { home };
+  if (!trusted) return { home };
+  bindWorkspaceTrustRecord(home, ws, collectWorkspaceTrustDigests(ws));
+  return { home, trustedWorkspaceHooks: [path.resolve(ws)] };
 }
 
 test("folder skill loads SKILL.md and lists resources", () => {

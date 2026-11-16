@@ -17,18 +17,24 @@ import { runTurn } from "../../src/core/loop";
 import { workspaceStateDir } from "../../src/core/paths";
 import { SessionStore } from "../../src/core/session";
 import { runNested } from "../../src/core/subagent";
+import { bindWorkspaceTrustRecord, collectWorkspaceTrustDigests } from "../../src/core/trust";
 
 const FIXTURES = path.join(import.meta.dir, "..", "fixtures", "hooks");
 
 let workspace: string;
 let home: string;
+let savedHome: string | undefined;
 
 beforeEach(() => {
   workspace = mkdtempSync(path.join(tmpdir(), "hz-hooks-loop-"));
   home = mkdtempSync(path.join(tmpdir(), "hz-hooks-home-"));
+  savedHome = process.env.HOME;
+  process.env.HOME = home;
 });
 
 afterEach(() => {
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
   rmSync(workspace, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -211,6 +217,7 @@ describe("hooks at the loop", () => {
       },
     };
 
+    bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
     const result = await runNested({
       workspace,
       task: "say hello",
@@ -220,6 +227,7 @@ describe("hooks at the loop", () => {
       store,
       signal: new AbortController().signal,
       trustedWorkspaceHooks: [path.resolve(workspace)],
+      home,
     });
     expect(result.ok).toBe(true);
 

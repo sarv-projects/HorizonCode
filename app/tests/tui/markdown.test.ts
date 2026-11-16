@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createMarkdownStream, highlight, hyperlinksEnabled, renderInline, renderTable } from "../../src/tui/markdown";
-import { strip, visibleWidth, type ColorLevel } from "../../src/tui/style";
+import { setThemeMode, strip, visibleWidth, type ColorLevel } from "../../src/tui/style";
+
+// The expected RGB values are the dark palette's; pin it (theme mode is global
+// and another test file may leave light/mono behind).
+beforeEach(() => setThemeMode("dark"));
+afterEach(() => setThemeMode("auto"));
 
 const ctx = (level: ColorLevel = 0, unicode = true, hyperlinks = false) => ({ level, unicode, hyperlinks });
 function render(doc: string, width = 80, level: ColorLevel = 0, unicode = true): string {

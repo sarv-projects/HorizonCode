@@ -1,11 +1,17 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   bgCode, blend, charWidth, detectColorLevel, detectTheme, fgCode, nearestIndexed, onBg, paint, pulse,
-  setColorEnabled, setColorLevel, strip, truncate, visibleWidth,
+  setColorEnabled, setColorLevel, setThemeMode, strip, truncate, visibleWidth,
 } from "../../src/tui/style";
 import { footerLine, pulseGlyph, syncEnabled, syncFrame, eraseRegion, SYNC_BEGIN, SYNC_END } from "../../src/tui/live";
 
-afterEach(() => setColorEnabled(false));
+// Palette hex values below are the dark theme's. Another test file may leave a
+// session theme behind (theme mode is process-global), so pin it here.
+beforeEach(() => setThemeMode("dark"));
+afterEach(() => {
+  setColorEnabled(false);
+  setThemeMode("auto");
+});
 
 describe("colour level detection", () => {
   test("NO_COLOR, dumb and non-TTY are level 0", () => {

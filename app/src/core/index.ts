@@ -231,7 +231,10 @@ export interface HzRuntime extends Runtime {
   /** T-12: the session title (for exports). */
   sessionTitle?(): string;
   /** T-16: run one shell command through the guard, approval and a receipt (hzcode commit). */
-  runGuardedShell?(command: string): Promise<{ ok: boolean; output: string }>;
+  runGuardedShell?(
+    command: string,
+    opts?: { sandboxMode?: "read-only" | "workspace-write" | "danger-full-access" },
+  ): Promise<{ ok: boolean; output: string }>;
   /** T-16: the newest receipt hash, when the chain has one. */
   receiptHead?(): string | undefined;
   /** T-12: the receipt chain status for exports (verify + head hash). */
@@ -664,7 +667,10 @@ class HzRuntimeImpl implements HzRuntime {
     return receiptHead(this.kernel.stateDir);
   }
 
-  async runGuardedShell(command: string): Promise<{ ok: boolean; output: string }> {
+  async runGuardedShell(
+    command: string,
+    opts?: { sandboxMode?: "read-only" | "workspace-write" | "danger-full-access" },
+  ): Promise<{ ok: boolean; output: string }> {
     const refusal = this.directMutationRefusal("shell", { command });
     if (refusal) return { ok: false, output: refusal };
     const shell = getTool("shell");
@@ -674,6 +680,7 @@ class HzRuntimeImpl implements HzRuntime {
       workspace: this.workspace,
       sessionId: this.session.id,
       signal: new AbortController().signal,
+      ...(opts?.sandboxMode !== undefined ? { sandboxMode: opts.sandboxMode } : {}),
       guard: (action: GuardAction) =>
         this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.session.id),
       approve: (req: ApprovalRequest) => (this.instanceApproval ?? getApprovalHandler())(req),

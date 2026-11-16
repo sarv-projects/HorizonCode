@@ -166,6 +166,12 @@ export interface NestedRunOptions {
   /** Parent EffectHost — child tool effects share this ledger for R172 child receipts. */
   effectHost?: EffectHost;
   trustedWorkspaceHooks?: string[];
+  /**
+   * Home/config directory for workspace trust resolution. Production leaves
+   * this undefined (the real home); hermetic tests pass a temp home so the
+   * digest binding they create is the one the child hook loader consults.
+   */
+  home?: string;
 }
 
 /**
@@ -264,9 +270,14 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   // delegated run.
   const hooks = loadHooks(
     opts.workspace,
-    hooksLoadOptions(opts.workspace, { trustedWorkspaceHooks: opts.trustedWorkspaceHooks }, (message) => {
-      emitBoundary({ type: "notice", message });
-    }),
+    hooksLoadOptions(
+      opts.workspace,
+      { trustedWorkspaceHooks: opts.trustedWorkspaceHooks },
+      (message) => {
+        emitBoundary({ type: "notice", message });
+      },
+      opts.home,
+    ),
   );
   const subagentDetail = { childSessionId: session.id, task: taskHead(task) };
   await runLifecycleHooks(hooks, {

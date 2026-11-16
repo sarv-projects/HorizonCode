@@ -263,8 +263,18 @@ describe("preview lifecycle is process-global", () => {
  * is approved, lands (BBBB), and a REPEAT of it in the same program asks
  * nothing again (the digest-keyed approval cache holds for the run).
  */
+const WSL_HOST = (() => {
+  try {
+    return /microsoft/i.test(readFileSync("/proc/version", "utf8"));
+  } catch {
+    return false;
+  }
+})();
+
 describe("code_mode cached approvals (finding 7, end to end)", () => {
-  test("a direct AAAA approval does not cover the program's BBBB write, which re-asks and then caches", async () => {
+  // code_mode now requires a live-verified network-off sandbox; WSL cannot
+  // unshare a netns, so the tool correctly refuses before any inner call.
+  test.skipIf(WSL_HOST)("a direct AAAA approval does not cover the program's BBBB write, which re-asks and then caches", async () => {
     const workspace = scratchDir("hz-hard-e2e-");
     const stateDir = kernelStateDir(workspace);
     mkdirSync(stateDir, { recursive: true });

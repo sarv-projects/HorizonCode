@@ -48,6 +48,7 @@ describe("workspace skills trust", () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-skill-home-"));
     writeSkill("deploy");
     const resolved = path.resolve(workspace);
+    bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
     const skills = listSkills(workspace, { trustedWorkspaceHooks: [resolved], home });
     expect(skills.some((s) => s.name === "deploy")).toBe(true);
     const digest = digestWorkspaceSkills(workspace);

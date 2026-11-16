@@ -10,6 +10,7 @@
     "stats": "bun --no-env-file run src/session-stats.ts",
     "grow": "bun --no-env-file run src/grow.ts",
     "typecheck": "bunx tsc --noEmit -p .",
+    "test": "bun test --timeout 30000",
     "check": "bun build src/main.ts --target=bun --outdir=/tmp/hz-b-app"
   },
   "devDependencies": {

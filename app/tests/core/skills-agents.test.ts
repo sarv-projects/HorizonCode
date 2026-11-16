@@ -26,7 +26,7 @@ import {
   skillsPromptSection,
 } from "../../src/core/skills";
 import { skillsDir, userSkillsDir } from "../../src/core/paths";
-import type { WorkspaceTrustOptions } from "../../src/core/trust";
+import { bindWorkspaceTrustRecord, collectWorkspaceTrustDigests, type WorkspaceTrustOptions } from "../../src/core/trust";
 import { clampSteps, runNested } from "../../src/core/subagent";
 import { agentTool } from "../../src/tools/agent";
 import { BASE_TOOL_NAMES, getTool } from "../../src/tools";
@@ -59,6 +59,10 @@ function writeSkill(root: string, file: string, content: string): void {
 }
 
 function skillTrust(): WorkspaceTrustOptions {
+  // The production gate requires the digest binding in trust.json, not only
+  // the folder listing. Bind the current on-disk skills here, after the test
+  // has written them, so the fixture reflects a real approved workspace.
+  bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
   return { home, trustedWorkspaceHooks: [path.resolve(workspace)] };
 }
 

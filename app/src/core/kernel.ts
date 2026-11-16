@@ -1490,7 +1490,7 @@ export class KernelClient {
       this.setMode(
         "untrusted",
         `kernel binary ${binary} refused by the pin check (${pin.reason}) — not started; ` +
-          "no other kernel binary will be tried",
+          "no other kernel binary will be tried; start failed; using the local fallback",
       );
       return this.modeValue;
     }
@@ -2142,6 +2142,8 @@ export class KernelClient {
               shellCwd,
               stdoutTruncated,
               stderrTruncated,
+              stdout: stdout.toString("utf8"),
+              stderr: stderr.toString("utf8"),
               ...(stdoutObs.observationStable && stdoutObs.digest ? { stdoutDigest: stdoutObs.digest } : {}),
               ...(stderrObs.observationStable && stderrObs.digest ? { stderrDigest: stderrObs.digest } : {}),
               ...(stdoutObs.confirmDigest ? { stdoutConfirmDigest: stdoutObs.confirmDigest } : {}),
