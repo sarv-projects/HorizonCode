@@ -61,7 +61,8 @@
 | Full R172 | **PARTIAL** (**284**, **289**, **292**, **322**) | Verify chain; nested stream; RC-7 depth |
 | apply_patch / fs.edit kernel | **PARTIAL** | Repair **335–339**, **345**, **347** relative_indent + unique trim/anchored direct fs.edit behind flag; general merge/patch, first-hit score fuzz **313**, cross-file and universal routing OPEN |
 | **338** attach / switchSession | **PARTIAL** | **343** same-process switchSession ledger reload shipped; cross-process owner identity and atomic fencing OPEN |
-| Topic branch review | **OPEN** | Rulings **343–347** + prior local work targeted for one docs+code commit; check git for push/PR, do not assume merged |
+| Topic branch review | **DONE (committed)** | Rulings **343–510** on `audit-remediation` (`ddc8ef8`); no merge or release implied |
+| Backlog waves 2–3 | **PARTIAL — TESTED** | E-1–E-4, F-1/F-3/F-4, G-1/G-4/G-6–G-8, H-4/H-5/H-7, I-4/I-5/I-7/I-8, J-2/J-4/J-5, B-5/B-7 (**485–510**); residuals per ruling |
 
 ---
 
@@ -130,7 +131,7 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 | `docs/HANDOFF-BACKLOG-2026-11-13.md` | Execution queue, P0 done bars, verification §8, impl order §10 |
 | `docs/GOAL-PROGRESS.md` | Goal NOT COMPLETE; wave table; P0 residual prose |
 | `docs/33-handoff.md` | Commands, env, invariants, §5 deferred backlog narrative |
-| `docs/28-implementation-status.md` | Status ladder; §3 rulings (**342**); header counts historical |
+| `docs/28-implementation-status.md` | Status ladder; §3 rulings (**510**); header counts historical |
 | `docs/30-steal-list.md` | §7 register + §8 waves; §0.1.1 E-5/LC queue |
 | `docs/MASTER-BACKLOG-ALL.md` | **This file** — wave residual matrix |
 | `CURRENT_RUN.md` (repo root) | Historical snapshot + pointers to router |
@@ -147,4 +148,4 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 
 ---
 
-*Last refreshed: 2026-11-13 (handoff + **AGENT-DOC-NAVIGATION**). Rulings through **347**. LICENSE **DEFERRED**. Uncommitted tree **315–342** + docs. P0 done bars **not met** — goal **NOT COMPLETE**.*
+*Last refreshed: 2026-11-16. Rulings through **510**; tree committed on `audit-remediation` @ `ddc8ef8`. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*

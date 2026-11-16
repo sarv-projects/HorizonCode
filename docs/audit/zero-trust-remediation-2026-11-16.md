@@ -35,7 +35,7 @@ cd app && bun test tests/core/{kernel-pin,env-trust,fallback-readonly}.test.ts  
 cd app && bun test tests/tools/{hostile-write,write,edit,grep,apply-patch,ast-edit,undo}.test.ts # 188 pass
 cd app && bun test tests/core/{sandbox-spawn,codemode-sandbox,sandbox-child-net}.test.ts # 30 pass
 cd app && bun test tests/core/{command-guard,session-owner,session,plan-loop}.test.ts # 45 pass
-cd kernel && cargo test --locked      # 132 + 80 + 17 passed
+cd kernel && cargo test --locked      # final gate passed; re-measure counts (static tree: 229 unit #[test], 80 + 17 integration; "132" not reproducible)
 ./bin/hzcode doctor --json            # kernel.pin OK, kernel.mode trusted + pinned
 ```
 
@@ -85,7 +85,7 @@ confinement, network egress explicitly NOT confined.
 
 ## Still open / next
 
-- Full `bun test` result is recorded in `/tmp/hz-full-test.log`; triage any
+- `/tmp/hz-full-test.log` is the obsolete pre-fix run (3165 pass / 51 fail); it is superseded by the final 8/8 gates run above (`ts-suite` passed). Historical note:
   failures before merging. The integrated tree's ts-suite passed as part of the
   final 8/8 gates run above.
 - **H9:** the 30 s window is a bound, not an incremental verifier. A true

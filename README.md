@@ -28,7 +28,7 @@ The model can request an action; a Rust trust kernel decides whether it runs (`d
 
 ## Features
 
-Every item below is in this tree (pull requests #1 to #28, all merged into `main`) and covered by automated tests. Items that are partial, opt-in or off by default say so.
+Every item below is in this tree (pull requests #1 to #29, all merged into `main`) and covered by automated tests. Items that are partial, opt-in or off by default say so.
 
 **Safety and evidence**
 
@@ -293,9 +293,9 @@ The eight gates run through one entry point, `bash ops/gates.sh`, which CI also 
 
 Results from a run on 2026-11-10 on this tree (as root in a sandbox container):
 
-- `cd kernel && cargo build --release --locked && cargo test --locked`: 49 unit tests and 50 integration tests pass.
+- `cd kernel && cargo build --release --locked && cargo test --locked`: all cargo tests pass in the final gate; re-measure for counts (the old 49+50 figures are obsolete).
 - `hz-kernel --selftest`: `SELFTEST OK (25 checks)`.
-- `cd app && bun run typecheck && bun test`: typecheck 0 errors; ~1,900 tests in ~185 files; ~1,892 pass, 8 skip, 0 fail (re-measure on your tree).
+- `cd app && bun run typecheck && bun test`: typecheck 0 errors; the final tree's suite passes (`ops/gates.sh` `ts-suite`, 2026-11-16). Re-measure for an exact count.
 - `bash ops/gates.sh`: all 8 gates pass (to be re-run at release).
 
 The 8 skips are chmod-based tests that cannot bind when the process runs as root, so they skip by design; the run above was as root. The same suite also runs on hosted CI as a non-root user, where they execute.
@@ -325,8 +325,8 @@ Pre-release and single-platform. Read this before relying on it.
 - **Platforms.** Linux x86_64 is the only tested platform. macOS and Windows are untested.
 - **Not wired by default.** Speculative execution exists as code and tests but is off, and a test pins it inert. The guardian is advisory unless `HORIZON_GUARDIAN=enforce`. The language server loop is off until you configure a server. Hashline anchors are opt-in.
 - **Partial.** Per-model tool dialects beyond `apply_patch` (the routing table exists, one dialect ships). The server accepts one client over stdio; there is no socket, TCP or HTTP transport and no SDK. Workspace trust loads hooks, skills, agent presets, **MCP** and **providers** when listed in `trustedWorkspaceHooks` and digests match `trust.json` (see `docs/33` §6.2).
-- **Not started.** Alternate-screen fullscreen TUI renderer (cell buffer + layout); MITM or routed egress proxy (egress decisions are recorded, nothing intercepts traffic); EffectHost / independent receipt postimage; same-model benchmarks.
-- **Partial.** Scrollback TUI only; `HZ_TUI_MODE=fullscreen` / `--fullscreen` fail closed (ruling **129**). Linux OS confinement via `hz-sandbox-exec` (Landlock/seccomp/netns/rlimits when host canary allows; macOS/Windows open). Deferred **`debug`** tool (DAP launch/step/attach slices; live dlv/js-debug e2e open). Deferred **`memory_search`** (FTS5 + `MEMORY.md` + dream plan; embeddings/auto-apply open).
+- **Partial / not started.** Reduced alt-screen fullscreen ships (cell buffer, layout, differential frames); MITM or routed egress proxy is prototype-only; EffectHost and independent receipt postimage are partial; no same-model benchmarks.
+- **Partial.** Scrollback is the default; a reduced alt-screen mode ships behind `--fullscreen` / `HZ_TUI_MODE=fullscreen` (ruling **221**; residuals remain). Linux OS confinement via `hz-sandbox-exec` (Landlock/seccomp/netns/rlimits when host canary allows; macOS/Windows open). Deferred **`debug`** tool (DAP launch/step/attach slices; live dlv/js-debug e2e open). Deferred **`memory_search`** (FTS5 + `MEMORY.md` + dream plan; embeddings/auto-apply open).
 - **Tamper-evident, not tamper-proof.** See Features. In `untrusted` mode the guarantees are weaker still.
 
 The authoritative status table is `CURRENT_RUN.md` §5.0, and the implemented-versus-designed map is [`docs/28-implementation-status.md`](./docs/28-implementation-status.md). Many capabilities described in `docs/` (web and desktop apps, IDE bridge, SDKs, plugin marketplace, collaboration, voice) are designs, not shipped code.

@@ -54,7 +54,7 @@ Repository: `github.com/sarv-projects/HorizonCode`. A terminal coding agent: Typ
 
 ### 1.2 `app/` (TypeScript runtime)
 
-`app/package.json` has scripts `start`, `eval`, `grow`, `typecheck` (`bunx tsc --noEmit -p .`) and `check`; only `devDependencies` (`@types/bun`, `@types/node`, `typescript`). `app/tsconfig.json` has `strict:false` (ruling 39 kept it as is). `app/bun.lock` is tracked and must never be committed again (section 2.3).
+`app/package.json` has scripts `start`, `eval`, `batch`, `stats`, `grow`, `typecheck` (`bunx tsc --noEmit -p .`), `test` and `check`; only `devDependencies` (`@types/bun`, `@types/node`, `typescript`). `app/tsconfig.json` has `strict:false` (ruling 39 kept it as is). `app/bun.lock` is tracked and must never be committed again (section 2.3).
 
 Entry points:
 
@@ -99,7 +99,7 @@ Entry points:
 | `catalog/` | `catalog.ts` and `models-dev.curated.json` (five providers, about 2.8 KB) |
 | `mcp/`, `lsp/` | MCP stdio client v1 and registry; LSP client, framing, mux, workspace diagnostics |
 
-`app/src/tools/` (the model-facing tools; 25 statically registered in `index.ts` as of ruling 343): `read`, `write`, `edit` (repair ladder, CRLF-safe, hashline mode), `grep`, `glob`, `shell` (`shell.ts`), `todo`, `undo`, `repo_map`, `agent`, `code_mode` (`codemode.ts`, `codemode-child.ts`), `preview`, `apply_patch` (`apply-patch.ts`, `apply-patch-parser.ts`), `shell_session` (`interactive-exec.ts`, PTY), `lsp`, `tool_search`, `ast_search`, `ast_edit` (`ast-match.ts`), `present`, `lint`, `debug`, `memory_search`, `handoff_create`, `handoff_resume`, `handoff_search`. Supporting modules: `hashline.ts`, `line-endings.ts`, `atomic-write.ts`, `verified-open.ts`, `change-journal.ts`, `read-ledger.ts`, `repo-map-cache.ts`, `model-tool-routing.ts`, `ignore.ts`, `helpers.ts`.
+`app/src/tools/` (the model-facing tools; 28 statically registered in `index.ts` as of 2026-11-16): `read`, `write`, `edit` (repair ladder, CRLF-safe, hashline mode), `grep`, `glob`, `shell` (`shell.ts`), `todo`, `undo`, `repo_map`, `agent`, `code_mode` (`codemode.ts`, `codemode-child.ts`), `preview`, `apply_patch` (`apply-patch.ts`, `apply-patch-parser.ts`), `shell_session` (`interactive-exec.ts`, PTY), `lsp`, `tool_search`, `ast_search`, `ast_edit` (`ast-match.ts`), `present`, `lint`, `debug`, `memory_search`, `handoff_create`, `handoff_resume`, `handoff_search`. Supporting modules: `hashline.ts`, `line-endings.ts`, `atomic-write.ts`, `verified-open.ts`, `change-journal.ts`, `read-ledger.ts`, `repo-map-cache.ts`, `model-tool-routing.ts`, `ignore.ts`, `helpers.ts`.
 
 `app/src/tui/` (the terminal UI, scrollback-native, rich on a TTY, plain otherwise): `index.ts` (chat surface), `interactive.ts` (chat loop, slash commands), `headless.ts`, `print.ts` (`-p`), `render.ts` (events to terminal output, `sanitizeText`), `live.ts` (status bar, spinner, live region), `style.ts` (ANSI and colour ladder, `/theme`), `markdown.ts` (streaming markdown), `cards.ts` (tool cards), `diff.ts` (diff gutters), `approval.ts` (line prompt), `approval-card.ts` (single-key card), `paste.ts` (bracketed paste), `completion.ts` (Tab and ghost text), `banner.ts`.
 
@@ -156,7 +156,7 @@ Entry points:
 | `24-feature-catalog.md` | Feature catalogue and the 18 gates (section 3.5) |
 | `25-roadmap-and-glossary.md` | Roadmap phases and glossary |
 | `26-learning-synthesis-2.md`, `27-implementation-plan.md` | Learning synthesis; the staged implementation plan |
-| `28-implementation-status.md` | THE ONLY home of the status ladder; per-feature levels; rulings 1 to 91 |
+| `28-implementation-status.md` | THE ONLY home of the status ladder; per-feature levels; rulings 1 to 510 |
 | `29-final-audit.md` | The final audit synthesis (parts A to C) |
 | `30-steal-list.md` | The steal list: every upstream idea, Upstream URL and Status columns, section 0.2 PR map, section 6 forgecode T-1 to T-20, section 7 open-work register |
 | `31-design-summary.md` | The designed capability list (the former long README) |
@@ -204,7 +204,7 @@ Baseline measured on `docs/handoff` before this file was added: typecheck clean;
 5. **Background cargo builds die between tool calls.** In the agent sandbox a `cargo build &` is killed when the call returns. Run cargo in the foreground in one call (give it a long timeout).
 6. **`/tmp` is wiped between calls** in the agent sandbox. Put scratch files, caches and generated artefacts under `/projects/sandbox/.scratch/` (or any path inside the workspace). `ops/gates.sh` itself uses `${TMPDIR:-/tmp}` for a throwaway directory and removes it on exit; that is fine because it lives within one call.
 7. **No network in some sandboxes.** `bun install` and `cargo` need registries unless already cached. The caches in `.scratch/` exist for this reason. Keyed provider runs need real API keys and were never possible there (this is why several quality items are deferred).
-8. **Run the gates in one call.** `bash ops/gates.sh` takes roughly 15 seconds locally; it is fail-fast and prints a summary table.
+8. **Run the gates in one call.** `bash ops/gates.sh` takes roughly 10 minutes on this WSL tree (final log: ts-suite 427 s); it is fail-fast and prints a summary table.
 9. **Do not run `bun test` while another bun process holds the same state directory.** Tests create temp dirs, but file-lock tests are timing sensitive on a loaded machine.
 10. **`gh` GraphQL does not work; use REST.** GraphQL-backed `gh` subcommands (`gh pr create`, `gh pr list`, `gh pr merge`) are unsupported. Use `gh api` REST calls as in known gap 7, and do not assume a sub-agent sandbox has `gh` access.
 
