@@ -9,12 +9,29 @@
 
 import * as path from "node:path";
 import { loadPostmortems } from "./core/postmortem";
+import { metricContract } from "./core/metrics";
 import {
   histogramFromPostmortems,
   renderCorpusTuningReport,
   renderSessionCorpusSummary,
   suggestCorpusTuning,
 } from "./core/session-corpus-stats";
+
+/**
+ * H-7 / ruling 510 — the corrupt-file count this CLI reports is a published
+ * numeric statistic, so it is contracted before any rendering. The state dir
+ * is known; the loader does not expose the total number of files scanned, so
+ * that part of the population is honestly "unknown" rather than fabricated.
+ */
+function corruptQuarantineBlock(stateDir: string, count: number): string {
+  return metricContract({
+    metric: "corrupt post-mortems quarantined during load",
+    anchor: "none — first measurement (no prior load of this state dir to compare against)",
+    population: `post-mortem files under ${stateDir}; total files scanned unknown`,
+    excludes: "none — every unparseable post-mortem file is quarantined, never read as empty",
+    value: count,
+  });
+}
 
 const USAGE =
   "usage: bun run src/session-stats.ts --postmortems <state-dir> [--suggest|--tune] [--json]";
@@ -34,6 +51,10 @@ export async function runSessionStatsCli(argv: readonly string[]): Promise<numbe
   }
   const stateDir = path.resolve(dir);
   const loaded = await loadPostmortems(stateDir);
+  // H-7/ruling 510: contract the load-status number. The human status line
+  // below is kept byte-identical; this block is its machine-readable form and
+  // is surfaced through the --json publication surface.
+  const quarantinePublished = loaded.corrupt ? [corruptQuarantineBlock(stateDir, loaded.quarantine.length)] : [];
   if (loaded.corrupt) {
     console.error(`session-stats: ${loaded.quarantine.length} corrupt post-mortem(s) quarantined`);
   }
@@ -42,7 +63,10 @@ export async function runSessionStatsCli(argv: readonly string[]): Promise<numbe
   const json = argv.includes("--json");
   if (json) {
     const report = suggestCorpusTuning(loaded.postmortems);
-    console.log(JSON.stringify(report, null, 2));
+    // Additive top-level `published` (summary + suggestions + load status).
+    // The existing `summary` / `suggestions` fields are left unchanged so the
+    // machine-readable output stays backward compatible.
+    console.log(JSON.stringify({ ...report, published: [...report.published, ...quarantinePublished] }, null, 2));
     return 0;
   }
   if (suggest) {

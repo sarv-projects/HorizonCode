@@ -6,6 +6,30 @@
  */
 
 import type { PostmortemRecord } from "./postmortem";
+import { metricContract } from "./metrics";
+
+/**
+ * H-7 / ruling 510 — metric contract (docs/16 §2.4.3) for this module's
+ * published numbers. Every numeric statistic is rendered by `metricContract`
+ * into a `published` block; the raw counts stay beside it only for branching
+ * and for the byte-identical human renderer (the same split evals.ts uses).
+ *
+ * There is no prior corpus snapshot in this repo, so the anchor is honestly
+ * "none — first measurement". The corpus population *is* known (the loaded
+ * record count), but where those sessions came from is not, so that part of
+ * the population is stated as "unknown" rather than fabricated.
+ */
+const CORPUS_ANCHOR = "none — first measurement (no prior corpus snapshot to compare against)";
+function corpusPopulation(recordCount: number): string {
+  return `${recordCount} post-mortem record(s) in this loaded corpus (session-corpus-stats.ts); session provenance unknown`;
+}
+const TERMINAL_EXCLUDES = "none — every loaded record contributes one terminal (a missing terminal is counted as 'unknown')";
+const TOOL_EXCLUDES =
+  "tool-call entries with a non-numeric or <1 count, and records that carry no toolCalls, contribute no tool counts";
+const SUGGESTION_EXCLUDES =
+  "none — every derived suggestion is published; thresholds are exported constants, not measured results";
+/** Row cap in the human summary; shared so the "+N more" count can be contracted below. */
+const SUMMARY_TOOL_ROW_CAP = 24;
 
 export interface ToolCallHistogram {
   tool: string;
@@ -16,6 +40,8 @@ export interface SessionCorpusSummary {
   records: number;
   terminals: Record<string, number>;
   tools: ToolCallHistogram[];
+  /** One contracted block per published numeric statistic (H-7, ruling 510) — never a bare number. */
+  published: string[];
 }
 
 export function histogramFromPostmortems(records: readonly PostmortemRecord[]): SessionCorpusSummary {
@@ -33,7 +59,60 @@ export function histogramFromPostmortems(records: readonly PostmortemRecord[]): 
   const tools = [...toolCounts.entries()]
     .map(([tool, count]) => ({ tool, count }))
     .sort((a, b) => b.count - a.count || a.tool.localeCompare(b.tool));
-  return { records: records.length, terminals, tools };
+
+  // H-7/ruling 510: contract every numeric statistic this summary publishes.
+  // The human renderer below reads the raw counts (so its text stays
+  // byte-identical); these blocks are the machine-readable publication surface.
+  const population = corpusPopulation(records.length);
+  const published = [
+    metricContract({
+      metric: "post-mortem records in corpus",
+      anchor: CORPUS_ANCHOR,
+      population,
+      excludes: "none — every loaded record is counted",
+      value: records.length,
+    }),
+  ];
+  for (const [term, count] of Object.entries(terminals)) {
+    published.push(
+      metricContract({
+        metric: `post-mortems with terminal ${term}`,
+        anchor: CORPUS_ANCHOR,
+        population,
+        excludes: TERMINAL_EXCLUDES,
+        value: count,
+      }),
+    );
+  }
+  for (const row of tools) {
+    published.push(
+      metricContract({
+        metric: `tool calls: ${row.tool}`,
+        anchor: CORPUS_ANCHOR,
+        population,
+        excludes: TOOL_EXCLUDES,
+        value: row.count,
+      }),
+    );
+  }
+  published.push(
+    metricContract({
+      metric: "distinct tools with recorded calls",
+      anchor: CORPUS_ANCHOR,
+      population,
+      excludes: TOOL_EXCLUDES,
+      value: tools.length,
+    }),
+    metricContract({
+      metric: "tool rows omitted from the human summary display",
+      anchor: CORPUS_ANCHOR,
+      population,
+      excludes: TOOL_EXCLUDES,
+      value: Math.max(0, tools.length - SUMMARY_TOOL_ROW_CAP),
+    }),
+  );
+
+  return { records: records.length, terminals, tools, published };
 }
 
 export function renderSessionCorpusSummary(summary: SessionCorpusSummary): string {
@@ -44,10 +123,12 @@ export function renderSessionCorpusSummary(summary: SessionCorpusSummary): strin
   if (termParts.length > 0) lines.push(`terminals: ${termParts.join(", ")}`);
   if (summary.tools.length > 0) {
     lines.push("tools:");
-    for (const row of summary.tools.slice(0, 24)) {
+    for (const row of summary.tools.slice(0, SUMMARY_TOOL_ROW_CAP)) {
       lines.push(`  ${row.tool}: ${row.count}`);
     }
-    if (summary.tools.length > 24) lines.push(`  … +${summary.tools.length - 24} more`);
+    if (summary.tools.length > SUMMARY_TOOL_ROW_CAP) {
+      lines.push(`  … +${summary.tools.length - SUMMARY_TOOL_ROW_CAP} more`);
+    }
   } else {
     lines.push("tools: (none recorded)");
   }
@@ -81,6 +162,8 @@ export interface TuningSuggestion {
 export interface CorpusTuningReport {
   summary: SessionCorpusSummary;
   suggestions: TuningSuggestion[];
+  /** One contracted block per published numeric statistic (H-7, ruling 510) — never a bare number. */
+  published: string[];
 }
 
 function failureClassCounts(records: readonly PostmortemRecord[]): Array<[string, number]> {
@@ -185,7 +268,32 @@ export function suggestCorpusTuning(records: readonly PostmortemRecord[]): Corpu
   }
 
   suggestions.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
-  return { summary, suggestions };
+
+  // H-7/ruling 510: the report's publication surface is the summary's blocks
+  // plus the suggestion count and each suggestion's numeric claim (its detail
+  // text). The renderer reads raw fields so --suggest output stays unchanged.
+  const population = corpusPopulation(records.length);
+  const published = [
+    ...summary.published,
+    metricContract({
+      metric: "tuning suggestions emitted",
+      anchor: CORPUS_ANCHOR,
+      population,
+      excludes: SUGGESTION_EXCLUDES,
+      value: suggestions.length,
+    }),
+    ...suggestions.map((s) =>
+      metricContract({
+        metric: `tuning suggestion ${s.id} (${s.area}/${s.severity})`,
+        anchor: CORPUS_ANCHOR,
+        population,
+        excludes: SUGGESTION_EXCLUDES,
+        value: s.detail,
+      }),
+    ),
+  ];
+
+  return { summary, suggestions, published };
 }
 
 /** Human-readable optimiser report (summary + concrete suggestions). */

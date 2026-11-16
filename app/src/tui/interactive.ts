@@ -103,6 +103,56 @@ import { persistNotifyConfig, persistThemeMode } from "../core/config";
 const PROMPT = "\u276f ";
 const HISTORY_LIMIT = 500;
 
+/* -------------------------- first-run onboarding -------------------------- */
+
+/**
+ * Env switch that silences the first-run onboarding notice. Truthy values follow
+ * the repo convention (1/true/yes/on). Reading it is pure: no writes, no network,
+ * no prompt. The notice never auto-sends data and never blocks a headless run —
+ * main.ts only asks for it when a human is attached to a TTY.
+ */
+export const ONBOARDING_OPT_OUT_ENV = "HZ_NO_ONBOARDING";
+
+/** The slice of a resolved config the onboarding decision looks at. */
+export interface OnboardingSignals {
+  provider: string;
+  sources: {
+    provider?: string;
+    model?: string;
+    apiKey?: string;
+  };
+}
+
+export function onboardingOptedOut(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[ONBOARDING_OPT_OUT_ENV]?.trim().toLowerCase() ?? "";
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+/**
+ * True only for a genuine first-run state: the default (mock) provider, no key
+ * from env/file/store and no explicitly chosen model. A key OR an explicit model
+ * means the person is already set up, so the banner/greeting stay byte-identical.
+ */
+export function needsOnboarding(config: OnboardingSignals, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (onboardingOptedOut(env)) return false;
+  const sources = config?.sources;
+  if (sources === undefined) return false;
+  const noKey = sources.apiKey === "none";
+  const defaultModel = sources.model === "default";
+  const firstRunProvider = config.provider === "mock" || sources.provider === "default";
+  return noKey && defaultModel && firstRunProvider;
+}
+
+/** The exact TUI lines printed after the greeting in the first-run state. */
+export function onboardingNoticeLines(): readonly string[] {
+  return [
+    "first run: no provider key or model configured — chatting with the offline mock provider (nothing is sent)",
+    "next: hzcode login <provider> (or set HZ_API_KEY), then hzcode --list-models to pick a model id",
+    "or just chat offline with hzcode --mock — no key, no network",
+    `hide this notice: ${ONBOARDING_OPT_OUT_ENV}=1 hzcode`,
+  ];
+}
+
 /** What the TUI needs from one staged change; a core `StagedChange` fits as-is. */
 export interface StagedChangeView {
   rel: string;
@@ -177,6 +227,12 @@ export interface InteractiveOptions {
   resumedDraft?: string;
   /** When true, fullscreen-experimental skips the startup resume picker (`--continue`, first message). */
   skipResumePickerOnStart?: boolean;
+  /**
+   * First-run onboarding lines, computed by main.ts from the resolved config and
+   * only passed when a human is attached. Absent/empty means say nothing, so a
+   * configured user's banner + greeting stay byte-identical.
+   */
+  onboardingNotice?: readonly string[];
 }
 
 /* ----------------------------- history file ----------------------------- */
@@ -1251,6 +1307,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   if (liveOn) printRichBanner(bannerInfo, { out, tip: pickTip() });
   else printBanner(bannerInfo, { out });
   printGreeting({ out });
+  // First-run guidance is printed after the unchanged banner/greeting and only
+  // when main.ts detected a fresh, unconfigured state on an interactive TTY.
+  if (opts.onboardingNotice !== undefined) {
+    for (const line of opts.onboardingNotice) renderer.notice(line);
+  }
 
   const finish = (code: number): void => {
     if (exiting) return;

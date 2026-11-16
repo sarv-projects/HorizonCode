@@ -5,8 +5,35 @@
  */
 
 import { createHash } from "node:crypto";
+import { metricContract } from "./metrics";
 
 export const BENCH_STIMULUS_VERSION = 1;
+
+/**
+ * H-7 / ruling 510 — metric contract (docs/16 §2.4.3) for bench ground truth.
+ * This module is a pure stimulus factory: it has no runner, no result
+ * population and no comparison baseline. Those slots are therefore honestly
+ * "unknown" / "none — first measurement" — never fabricated. Every numeric
+ * fact it publishes (stimulus version, stimulus index, cases built) goes
+ * through `metricContract` into a `published` block.
+ */
+const BENCH_ANCHOR = "none — first measurement (no prior benchmark run to compare against)";
+const BENCH_POPULATION =
+  "unknown — no bench runner or result population is registered in this module (stimuli are consumed by an external harness)";
+const BENCH_EXCLUDES = "none — deterministic derivation from (salt, index); no trials are discarded here";
+
+/** The module-level numeric facts, contracted even when no stimulus is built. */
+export function benchGroundTruthPublication(): string[] {
+  return [
+    metricContract({
+      metric: "bench stimulus version",
+      anchor: BENCH_ANCHOR,
+      population: BENCH_POPULATION,
+      excludes: BENCH_EXCLUDES,
+      value: BENCH_STIMULUS_VERSION,
+    }),
+  ];
+}
 
 export interface IndexedStimulus {
   index: number;
@@ -15,6 +42,8 @@ export interface IndexedStimulus {
   /** Ground-truth token the grader expects in the final answer. */
   expectedToken: string;
   salt: string;
+  /** H-7/ruling 510: contracted numeric facts this stimulus publishes. */
+  published: string[];
 }
 
 function deriveExpectedToken(salt: string, index: number): string {
@@ -36,14 +65,46 @@ export function stimulusFromIndex(index: number, salt = "hz-bench-v1"): IndexedS
     `Benchmark trial #${index}. Compute the ground-truth token: SHA-256 of ` +
     `UTF-8 bytes "${salt}\\n${index}", lowercase hex, take the first 12 chars, ` +
     `prefix with "gt_". Reply with only that token.`;
-  return { index, prompt, expectedToken, salt };
+  const published = [
+    ...benchGroundTruthPublication(),
+    metricContract({
+      metric: "bench stimulus index",
+      anchor: BENCH_ANCHOR,
+      population: BENCH_POPULATION,
+      excludes: BENCH_EXCLUDES,
+      value: index,
+    }),
+  ];
+  return { index, prompt, expectedToken, salt, published };
 }
 
-export function buildIndexedEvalCases(count: number, salt?: string): { id: string; task: string; expectedToken: string }[] {
-  const cases: { id: string; task: string; expectedToken: string }[] = [];
+export interface IndexedEvalCase {
+  id: string;
+  task: string;
+  expectedToken: string;
+  /** H-7/ruling 510: contracted numeric facts published for this case set. */
+  published: string[];
+}
+
+export function buildIndexedEvalCases(count: number, salt?: string): IndexedEvalCase[] {
+  const cases: IndexedEvalCase[] = [];
   for (let i = 0; i < count; i += 1) {
     const s = stimulusFromIndex(i, salt);
-    cases.push({ id: `bench-index-${i}`, task: s.prompt, expectedToken: s.expectedToken });
+    cases.push({
+      id: `bench-index-${i}`,
+      task: s.prompt,
+      expectedToken: s.expectedToken,
+      published: [
+        ...s.published,
+        metricContract({
+          metric: "indexed bench eval cases built in set",
+          anchor: BENCH_ANCHOR,
+          population: BENCH_POPULATION,
+          excludes: BENCH_EXCLUDES,
+          value: count,
+        }),
+      ],
+    });
   }
   return cases;
 }

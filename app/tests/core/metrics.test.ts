@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { assertPublishedNumber, isPublishable, metricContract, parsePublishedNumber } from "../../src/core/metrics";
+import type { PostmortemRecord } from "../../src/core/postmortem";
 
 const complete = {
   metric: "p95 tool dispatch latency",
@@ -98,5 +99,67 @@ describe("publication assertion (H-7 consumption half)", () => {
     });
     expect(run.aggregate.published.length).toBeGreaterThan(0);
     for (const block of run.aggregate.published) assertPublishedNumber(block);
+  });
+
+  test("NEGATIVE (ruling 510): an un-contracted bare number is refused", () => {
+    // A bare number, and a hand-written numeric line, are NOT results. The
+    // consumer half of the contract must refuse them, naming the reason.
+    expect(() => assertPublishedNumber("42")).toThrow("unpublished numeric claim");
+    expect(() => assertPublishedNumber("read: 3")).toThrow("unpublished numeric claim");
+    expect(() => assertPublishedNumber("session corpus: 2 post-mortem(s)")).toThrow("unpublished numeric claim");
+  });
+
+  test("ruling 510 sweep: every published number in the owned surfaces is contracted", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { recordPostmortem } = await import("../../src/core/postmortem");
+    const { histogramFromPostmortems, suggestCorpusTuning } = await import("../../src/core/session-corpus-stats");
+    const { benchGroundTruthPublication, stimulusFromIndex, buildIndexedEvalCases } = await import(
+      "../../src/core/bench-ground-truth"
+    );
+    const { runSessionStatsCli } = await import("../../src/session-stats");
+
+    const record = { terminal: "failed", failureClass: "tool_error", toolCalls: { read: 4 } } as PostmortemRecord;
+
+    // session-corpus-stats.ts publication surfaces
+    const blocks: string[] = [
+      ...histogramFromPostmortems([record]).published,
+      ...suggestCorpusTuning([record]).published,
+      // bench-ground-truth.ts publication surfaces
+      ...benchGroundTruthPublication(),
+      ...stimulusFromIndex(2).published,
+      ...buildIndexedEvalCases(2).flatMap((c) => c.published),
+    ];
+
+    // session-stats.ts CLI --json publication surface (includes load status).
+    const dir = mkdtempSync(path.join(os.tmpdir(), "metric-sweep-"));
+    await recordPostmortem({
+      stateDir: dir,
+      sessionId: "sweep",
+      terminal: "failed",
+      failureClass: "tool_error",
+      transcript: "task text",
+      toolCalls: { read: 4 },
+      now: 1_700_000_000_000,
+    });
+    const original = console.log;
+    let out = "";
+    console.log = (text?: unknown) => {
+      out += `${String(text)}\n`;
+    };
+    let code = 0;
+    try {
+      code = await runSessionStatsCli(["--postmortems", dir, "--json"]);
+    } finally {
+      console.log = original;
+    }
+    expect(code).toBe(0);
+    const cli = JSON.parse(out.trim()) as { published: string[] };
+    expect(cli.published.length).toBeGreaterThan(0);
+    blocks.push(...cli.published);
+
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) assertPublishedNumber(block);
   });
 });

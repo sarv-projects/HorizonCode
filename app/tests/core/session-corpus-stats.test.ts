@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { recordPostmortem, type PostmortemRecord } from "../../src/core/postmortem";
+import { assertPublishedNumber, parsePublishedNumber } from "../../src/core/metrics";
 import { runSessionStatsCli } from "../../src/session-stats";
 import {
   histogramFromPostmortems,
@@ -25,6 +26,26 @@ describe("J-5 session corpus stats", () => {
     expect(summary.tools[0]?.tool).toBe("read");
     const text = renderSessionCorpusSummary(summary);
     expect(text).toContain("read: 3");
+  });
+
+  test("ruling 510: every published corpus statistic is a contracted block", () => {
+    const records = [
+      pm({ id: "a", terminal: "failed", failureClass: "tool_error", toolCalls: { read: 3 } }),
+      pm({ id: "b", terminal: "succeeded", toolCalls: { grep: 2 } }),
+    ];
+    const summary = histogramFromPostmortems(records);
+    const report = suggestCorpusTuning(records);
+    expect(summary.published.length).toBeGreaterThan(0);
+    expect(report.published.length).toBeGreaterThan(summary.published.length);
+    for (const block of [...summary.published, ...report.published]) {
+      assertPublishedNumber(block);
+    }
+    // Honest fields: the corpus population IS known from the loaded records;
+    // it is a real value, not a fabricated or "unknown" one.
+    const parsed = parsePublishedNumber(summary.published[0]!);
+    expect(parsed.metric).toBe("post-mortem records in corpus");
+    expect(parsed.population).toContain("2 post-mortem record(s)");
+    expect(parsed.value).toBe("2");
   });
 });
 

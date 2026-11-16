@@ -29,6 +29,7 @@ import {
 } from "./core/doctor";
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
+import { needsOnboarding, onboardingNoticeLines } from "./tui/interactive";
 import {
   PRINT_FORMATS,
   createApprovalUi,
@@ -1314,6 +1315,13 @@ async function main(): Promise<number> {
   // -p is always a script: never a chat bar, never an approval prompt.
   const interactive = !opts.print && Boolean(process.stdin.isTTY);
 
+  // I-8 / ruling 509: first-run onboarding. A human in a genuinely fresh,
+  // unconfigured state gets a short pointer to login / model discovery / the
+  // zero-config mock. It is opt-outable, prints nothing when a key or model is
+  // already configured (banner/help stay byte-identical), and is never computed
+  // for a pipe or -p run: no prompt, no auto-send, no blocking of headless mode.
+  const onboardingNotice = interactive && needsOnboarding(config) ? onboardingNoticeLines() : undefined;
+
   const screenMode = resolveTuiScreenMode(process.env as Record<string, string | undefined>, opts.tuiScreenMode);
   let printPrompt = "";
   if (opts.print) {
@@ -1406,6 +1414,7 @@ async function main(): Promise<number> {
           handoff !== undefined && handoff.sessionId === runtime.sessionId ? handoff.draft : undefined,
         skipResumePickerOnStart:
           opts.continueSession || (opts.initialMessage !== undefined && opts.initialMessage.trim() !== ""),
+        onboardingNotice,
       };
       if (isFullscreenChatMode(screenMode)) {
         return await runFullscreenExperimentalChat(interactiveOpts);
