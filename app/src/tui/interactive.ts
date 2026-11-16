@@ -158,6 +158,8 @@ export type RuntimeWithExtras = Runtime & {
   /** Conversation verbs (T-12), optional like the rest. */
   history?: () => ChatMsg[];
   renameSession?: (title: string) => string;
+  setGoal?: (statement: string, status?: "active" | "achieved" | "abandoned" | "blocked") => Promise<string>;
+  goalStatement?: () => string | undefined;
   retryLast?: () => string | undefined;
   sessionTitle?: () => string;
   receiptChain?: () => Promise<ChainStatus>;
@@ -764,6 +766,32 @@ export async function runConvoCommand(
       case "learn": {
         const text = arg.trim() === "" ? renderLearnIndex(workspace) : renderLearnChapter(workspace, arg);
         renderer.notice(text);
+        return true;
+      }
+      case "goal": {
+        const trimmed = arg.trim();
+        if (trimmed === "") {
+          const current = typeof rt.goalStatement === "function" ? rt.goalStatement() : undefined;
+          renderer.notice(current ? `goal: ${current}` : "no goal set — usage: /goal <statement>");
+          return true;
+        }
+        if (typeof rt.setGoal !== "function") {
+          notSupported(renderer, "setGoal", name);
+          return true;
+        }
+        const statusWord = trimmed.toLowerCase();
+        if (statusWord === "achieved" || statusWord === "abandoned" || statusWord === "blocked") {
+          const current = typeof rt.goalStatement === "function" ? rt.goalStatement() : undefined;
+          if (!current) {
+            renderer.notice("no goal set — usage: /goal <statement>");
+            return true;
+          }
+          await rt.setGoal(current, statusWord);
+          renderer.notice(`goal ${statusWord}: ${current}`);
+          return true;
+        }
+        const statement = await rt.setGoal(trimmed, "active");
+        renderer.notice(`goal set: ${statement}`);
         return true;
       }
       case "trust": {
@@ -1552,6 +1580,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "stats":
       case "tokens":
       case "learn":
+      case "goal":
       case "trust":
       case "settings":
       case "graph":

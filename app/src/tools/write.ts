@@ -28,6 +28,7 @@ import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { withFileLock, targetLockPath } from "../core/file-lock";
+import { formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
@@ -242,7 +243,12 @@ export const writeTool: Tool = {
       // path counts as known: overwriting your own work is not the "never saw
       // it" hazard the gate targets.
       noteRead(ctx, resolved);
-      return { ok: true, output: `Wrote ${outLines} lines (${outBytes} bytes) to ${rel}` };
+      // E-1 residual: opt-in lint-fix commit after write of a recently linted path.
+      const lintFixNote = formatLintFixCommitSuffix(ctx.sessionId, ctx.workspace, rel);
+      return {
+        ok: true,
+        output: `Wrote ${outLines} lines (${outBytes} bytes) to ${rel}${lintFixNote}`,
+      };
     } catch (e) {
       return fail(msg(e));
     }

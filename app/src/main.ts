@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RunBudget, Runtime, RuntimeOptions } from "./contracts";
+import type { ProviderFailureCode, RunBudget, Runtime, RuntimeOptions } from "./contracts";
 import * as core from "./core";
 import type { PermissionMode } from "./core/permission-mode";
 import { describeMode, parsePermissionMode, permissionModeError } from "./core/permission-mode";
@@ -43,7 +43,6 @@ import { consumeTuiHandoff } from "./tui/handoff";
 import { isFullscreenChatMode, resolveTuiScreenMode, type TuiScreenMode } from "./tui/screen-mode";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
-import { loadCatalog } from "./core/catalog/catalog";
 import {
   allCatalogModelIds,
   filterModelIds,
@@ -59,19 +58,36 @@ import {
   loadConfig,
   renderConfigCheck,
 } from "./core/config";
+import {
+  appendAnalyticsEvent,
+  applyAnalyticsLogCliFlag,
+} from "./core/analytics-log";
 import { buildShowPromptsRequest, renderShowPrompts } from "./core/show-prompts";
 import { buildShowRepoMap } from "./core/show-repo-map";
 import { appendAttributionToMessage, parseCommitAttributeArgs } from "./core/commit-attribution";
-import { cleanCommitMessage, commitCommand, commitPrompt, stagedDiff, withReceiptTrailer } from "./core/commit";
+import {
+  commitCommand,
+  commitMessageModels,
+  commitPrompt,
+  formatCommitModelFallbackNotices,
+  generateCommitMessageWithModelFallback,
+  latestCommitConversationExcerpt,
+  resolveCommitWeakModel,
+  stagedDiff,
+  withReceiptTrailer,
+} from "./core/commit";
+import { windowForModel } from "./core/output-budget";
 import { resolveCommandForMessage } from "./core/commands";
 import { cleanSuggestedCommand, suggestPrompt } from "./core/suggest";
 import { validateWorktreeName } from "./core/worktree";
 import { resolveWorktreeAcquire, worktreePoolMaxFromEnv } from "./core/worktree-pool";
 import {
   catalogCachePath,
+  catalogWindow,
   CATALOG_PATH,
   DEFAULT_CATALOG_SOURCE,
   fetchLiveCatalog,
+  loadCatalog,
   readCatalogCache,
   summarizeCatalogDiff,
   writeCatalogCache,
@@ -110,6 +126,7 @@ const HELP = [
   "  --list-models [sub]  list known model ids (optional substring filter)",
   "  --show-prompts       dump the rendered provider request and exit (no API)",
   "  --show-repo-map      dump the repo_map render and exit (no API)",
+  "  --analytics-log [path]  opt-in local NDJSON analytics under state (no network)",
   "  --mock               offline demo, no key   --version    print the version",
   "  -p, --print [text]   one non-interactive turn, print the answer (prompt from stdin if no text)",
   "  --output-format <f>  with -p: text (default) | json | stream-json",
@@ -140,6 +157,8 @@ interface CliOptions {
   listModelsFilter?: string;
   showPrompts: boolean;
   showRepoMap: boolean;
+  /** false = unset; true = default state path; string = explicit path */
+  analyticsLog?: boolean | string;
   errors: string[];
 }
 
@@ -243,6 +262,20 @@ function parseArgs(argv: string[]): CliOptions {
       case "--show-repo-map":
         opts.showRepoMap = true;
         break;
+      case "--analytics-log": {
+        // Optional path: bare flag → default under state; next token if not a flag.
+        if (inline !== undefined) opts.analyticsLog = inline;
+        else {
+          const next = argv[i + 1];
+          if (next !== undefined && !String(next).startsWith("-")) {
+            i += 1;
+            opts.analyticsLog = String(next);
+          } else {
+            opts.analyticsLog = true;
+          }
+        }
+        break;
+      }
       case "--list-models": {
         opts.listModels = true;
         if (inline !== undefined) opts.listModelsFilter = inline;
@@ -986,6 +1019,8 @@ async function runCommitCommand(rawArgs: string[]): Promise<number> {
     process.stderr.write("hzcode: commit: nothing is staged (git add something first)\n");
     return 1;
   }
+  // Load before createRuntime: a fresh commit session would otherwise become latest.
+  const conversationExcerpt = latestCommitConversationExcerpt(workspace);
   const mod = core as unknown as CoreModule;
   const createRuntime = typeof mod.createRuntime === "function" ? mod.createRuntime : mod?.default?.createRuntime;
   if (typeof createRuntime !== "function") {
@@ -1002,18 +1037,58 @@ async function runCommitCommand(rawArgs: string[]): Promise<number> {
   const extras = runtime as Runtime & {
     runGuardedShell?: (command: string) => Promise<{ ok: boolean; output: string }>;
     receiptHead?: () => string | undefined;
+    setModel?: (model: string) => string;
   };
   try {
     const ui = createApprovalUi(Boolean(process.stdin.isTTY));
     ui.runtime = runtime;
     installApprovalHandler(ui);
-    const res = await runtime.send(commitPrompt(staged.diff, staged.truncated, context.join(" ")), { onEvent: () => {} });
-    let message = cleanCommitMessage(res.text);
-    if (res.aborted || message === "") {
-      process.stderr.write("hzcode: commit: no message was produced\n");
+    // E-3 reduced (ruling 480): weak-model-first then main on token/context limit.
+    const prompt = commitPrompt(staged.diff, staged.truncated, context.join(" "), conversationExcerpt);
+    const models = commitMessageModels(runtime.model, resolveCommitWeakModel());
+    const catalog = loadCatalog();
+    const providerName = runtime.providerName;
+    const drafted = await generateCommitMessageWithModelFallback({
+      models,
+      prompt,
+      windowForModel: (model) => catalogWindow(providerName, model, catalog) ?? windowForModel(model),
+      attempt: async (model) => {
+        if (runtime.model !== model) {
+          if (typeof extras.setModel !== "function") {
+            return {
+              text: "",
+              errorText: `cannot switch to model ${model} (setModel unavailable)`,
+            };
+          }
+          extras.setModel(model);
+        }
+        let failureCode: ProviderFailureCode | undefined;
+        let errorText = "";
+        const res = await runtime.send(prompt, {
+          onEvent: (ev) => {
+            if (ev.type === "error") {
+              if (ev.code !== undefined) failureCode = ev.code;
+              errorText = errorText === "" ? ev.message : `${errorText}\n${ev.message}`;
+            }
+          },
+        });
+        return {
+          text: res.text,
+          aborted: res.aborted,
+          failureCode,
+          errorText,
+          exitDetail: res.exit?.detail,
+        };
+      },
+    });
+    for (const notice of formatCommitModelFallbackNotices(drafted)) {
+      process.stderr.write(`hzcode: ${notice}\n`);
+    }
+    if ("error" in drafted) {
+      process.stderr.write(`hzcode: commit: ${drafted.error}\n`);
       return 1;
     }
-    message = appendAttributionToMessage(message, attribution);
+    let message = appendAttributionToMessage(drafted.message, attribution);
     // The head named in the trailer is the chain as it stands when the commit
     // is made; the commit's own receipt comes after it.
     const head = receipt ? extras.receiptHead?.() : undefined;
@@ -1117,15 +1192,20 @@ async function main(): Promise<number> {
     return runWorktreeBootstrap(opts, workspace);
   }
 
+  // I-4 / ruling 468: opt-in local analytics before any runtime or one-shot dump.
+  applyAnalyticsLogCliFlag(process.env, opts.analyticsLog);
+
   if (opts.showPrompts) {
     const config = cliConfig(workspace, opts);
     const request = buildShowPromptsRequest({ workspace, config, model: config.model });
     process.stdout.write(renderShowPrompts(request));
+    appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "show-prompts" });
     return 0;
   }
 
   if (opts.showRepoMap) {
     process.stdout.write(buildShowRepoMap({ workspace }));
+    appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "show-repo-map" });
     return 0;
   }
 

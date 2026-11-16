@@ -575,6 +575,11 @@ export class LocalKernel {
   private readonly acceptLegacy: boolean;
   /** An explicit policy injection (tests); absence means "read policy.json". */
   private readonly policyOverride?: PolicyRule[];
+  /** Last observed policy content digest (sha256 of canonical JSON rules). */
+  private policyDigest: string | undefined;
+  private pendingPolicyRevision:
+    | { previousRevision: string; newRevision: string; digest: string }
+    | undefined;
 
   constructor(opts: { stateDir: string; policy?: PolicyRule[] }) {
     this.stateDir = opts.stateDir;
@@ -584,8 +589,43 @@ export class LocalKernel {
     // — or a hardlinked policy — is noticed without a restart, exactly as the
     // Rust guard reloads per check (see currentPolicy).
     if (this.policyOverride === undefined) loadPolicy(opts.stateDir);
+    this.samplePolicyRevision();
     this.anchorKey = anchorKeyFromEnv();
     this.acceptLegacy = acceptLegacyAnchorsFromEnv();
+  }
+
+  /**
+   * Re-read policy and record a digest change for `hz.policy.revision.changed`
+   * (ruling 447). Safe to call on every guard.check (trusted or local).
+   */
+  samplePolicyRevision(): void {
+    try {
+      const rules =
+        this.policyOverride !== undefined ? this.policyOverride : loadPolicy(this.stateDir);
+      this.notePolicyDigest(sha256Hex(canonicalJson(rules)));
+    } catch {
+      // Malformed policy is refused at check; sampling must not widen that path.
+    }
+  }
+
+  private notePolicyDigest(digest: string): void {
+    if (this.policyDigest !== undefined && this.policyDigest !== digest) {
+      this.pendingPolicyRevision = {
+        previousRevision: this.policyDigest,
+        newRevision: digest,
+        digest,
+      };
+    }
+    this.policyDigest = digest;
+  }
+
+  /** Consume one pending policy revision observation (or undefined). */
+  drainPolicyRevisionChange():
+    | { previousRevision: string; newRevision: string; digest: string }
+    | undefined {
+    const pending = this.pendingPolicyRevision;
+    this.pendingPolicyRevision = undefined;
+    return pending;
   }
 
   /**
@@ -596,8 +636,13 @@ export class LocalKernel {
    * the window it would open.
    */
   private currentPolicy(): PolicyRule[] {
-    if (this.policyOverride !== undefined) return this.policyOverride;
-    return loadPolicy(this.stateDir);
+    if (this.policyOverride !== undefined) {
+      this.notePolicyDigest(sha256Hex(canonicalJson(this.policyOverride)));
+      return this.policyOverride;
+    }
+    const rules = loadPolicy(this.stateDir);
+    this.notePolicyDigest(sha256Hex(canonicalJson(rules)));
+    return rules;
   }
 
   /** Serialize writers per stream so seq/prevHash can never interleave. */
@@ -2178,6 +2223,9 @@ export class KernelClient {
    * so a caller without a session keeps the legacy owner-less shape.
    */
   async checkGuard(action: GuardAction, scope?: PolicyScope, leases?: Lease[], sessionId?: string): Promise<GuardDecision> {
+    // Sample policy.json digest on every check so mid-session edits surface as
+    // hz.policy.revision.changed even when the trusted Rust path answers (447).
+    this.local.samplePolicyRevision();
     // Structural, before any guard.check request: the trusted transport must
     // refuse a protected fs.write / shell.exec itself, and the Rust kernel
     // refuses it again on its side (defense in depth).
@@ -2217,6 +2265,16 @@ export class KernelClient {
       "guard.check",
       { action, scope, leases, sessionId } as unknown as KernelRequestMap["guard.check"]["params"],
     );
+  }
+
+  /**
+   * Consume a pending policy digest change observed on the last checkGuard
+   * sample (ruling 447). Callers emit `hz.policy.revision.changed` when set.
+   */
+  drainPolicyRevisionChange():
+    | { previousRevision: string; newRevision: string; digest: string }
+    | undefined {
+    return this.local.drainPolicyRevisionChange();
   }
 
   /**

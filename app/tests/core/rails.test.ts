@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { ChatMsg, Provider, ProviderEvent } from "../../src/contracts";
+import { EventTypes, type ChatMsg, type Provider, type ProviderEvent } from "../../src/contracts";
 import { KernelClient } from "../../src/core/kernel";
 import {
   BudgetLedger,
@@ -28,6 +28,7 @@ import {
 } from "../../src/core/loop";
 import { latestRunCompleteFromEvents, RUN_COMPLETE_EVENT } from "../../src/core/receipt-run-terminal";
 import { SessionStore } from "../../src/core/session";
+import { discoverDeferredTools } from "../../src/tools";
 
 let workspace: string;
 
@@ -157,7 +158,83 @@ describe("budgets (NF-073)", () => {
         (e) => e.type === EventTypes.usageRecorded,
       );
       expect(usage).toHaveLength(1);
-      expect(usage[0]?.payload).toMatchObject({ inputTokens: 10, outputTokens: 20 });
+      expect(usage[0]?.payload).toMatchObject({
+        inputTokens: 10,
+        outputTokens: 20,
+        currency: "USD",
+        priceTableRevision: "harness-v1",
+      });
+      const micro = (usage[0]?.payload as { costMicroUsd?: number }).costMicroUsd;
+      expect(typeof micro).toBe("number");
+      expect(micro).toBeGreaterThan(0);
+      expect(Number.isInteger(micro)).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+
+  test("text stream emits coalesced hz.step.llm.delta + hz.part.updated (445/446)", async () => {
+    const events: Array<{ type: string; message?: string }> = [];
+    const { provider } = recordingProvider([
+      [
+        { type: "text", text: "hel" },
+        { type: "text", text: "lo" },
+        { type: "done", stopReason: "end", usage: { inputTokens: 1, outputTokens: 1 } },
+      ],
+    ]);
+    const { deps, kernel, store } = depsFor(provider, events);
+    try {
+      await runTurn(deps, "say hello");
+      const rows = await kernel.readEvents(streamFor(deps.sessionId));
+      const deltas = rows.filter((e) => e.type === EventTypes.stepLlmDelta);
+      expect(deltas).toHaveLength(1);
+      expect(deltas[0]?.payload).toMatchObject({
+        channel: "text",
+        coalescedCount: 2,
+        bytes: 5,
+        complete: true,
+      });
+      expect(typeof (deltas[0]?.payload as { deltaDigest?: string }).deltaDigest).toBe("string");
+      const parts = rows.filter((e) => e.type === EventTypes.partUpdated);
+      expect(parts).toHaveLength(1);
+      expect(parts[0]?.payload).toMatchObject({
+        partType: "text",
+        patchKind: "append",
+        bytesAdded: 5,
+        coalescedCount: 2,
+        complete: true,
+      });
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+
+  test("memory tools emit hz.memory.retained / recalled / expired (442)", async () => {
+    const events: Array<{ type: string; message?: string }> = [];
+    const { provider } = recordingProvider([
+      [toolCall("memory_remember", { content: "use bun test for the app suite", bank: "project" }), { type: "done", stopReason: "tool_use" }],
+      [toolCall("memory_search", { query: "bun test" }, "call_2"), { type: "done", stopReason: "tool_use" }],
+      [toolCall("memory_forget", { content: "use bun test for the app suite", bank: "project" }, "call_3"), { type: "done", stopReason: "tool_use" }],
+      DONE,
+    ]);
+    const { deps, kernel, store } = depsFor(provider, events);
+    discoverDeferredTools(deps.sessionId, ["memory_remember", "memory_search", "memory_forget"]);
+    try {
+      const result = await runTurn(deps, "memory hz events");
+      expect(result.exit.terminal).toBe("succeeded");
+      const rows = await kernel.readEvents(streamFor(deps.sessionId));
+      const retained = rows.filter((e) => e.type === EventTypes.memoryRetained);
+      const recalled = rows.filter((e) => e.type === EventTypes.memoryRecalled);
+      const expired = rows.filter((e) => e.type === EventTypes.memoryExpired);
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.payload).toMatchObject({ bank: "project", changed: true });
+      expect(recalled).toHaveLength(1);
+      expect((recalled[0]?.payload as { hitCount?: number }).hitCount).toBeGreaterThan(0);
+      expect(expired).toHaveLength(1);
+      expect(expired[0]?.payload).toMatchObject({ bank: "project" });
+      expect((expired[0]?.payload as { deleted?: number }).deleted).toBeGreaterThan(0);
     } finally {
       await kernel.close();
       store.close();
@@ -295,9 +372,10 @@ describe("format-error cap (NF-073)", () => {
       const result = await runTurn(deps, "recover from one mistake");
       expect(result.exit.terminal).toBe("succeeded");
       expect(calls()).toBe(3);
-      // Step 2 carries the corrective; step 3 (after a clean step) does not.
+      // Step 2 carries the format-errors system-interrupt; step 3 (after a clean step) does not.
+      expect(systems[1] ?? "").toContain('reason="format_errors"');
       expect(systems[1] ?? "").toContain("invalid JSON");
-      expect(systems[2] ?? "").not.toContain("Runtime note");
+      expect(systems[2] ?? "").not.toContain('reason="format_errors"');
       const toolContents = store.history(deps.sessionId).filter((m) => m.role === "tool").map((m) => m.content);
       expect(toolContents.some((c) => c.includes("invalid arguments"))).toBe(true);
     } finally {

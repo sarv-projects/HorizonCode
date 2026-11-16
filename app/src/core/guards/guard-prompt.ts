@@ -1,7 +1,8 @@
 /**
  * guard-prompt.ts — one prompt file per failure class (docs/30 C-10 reduced).
  *
- * v1 ships `tool-call-loop` only, wrapped in `<system-interrupt reason="…">`.
+ * Each soft nudge is loaded from `prompts/guards/` and wrapped in
+ * `<system-interrupt reason="…">`.
  */
 
 import { readFileSync } from "node:fs";
@@ -9,12 +10,21 @@ import * as path from "node:path";
 
 const PROMPT_DIR = path.join(import.meta.dir, "..", "prompts", "guards");
 
-export type GuardPromptId = "tool-call-loop" | "action-stationarity" | "consecutive-mistakes";
+export type GuardPromptId =
+  | "tool-call-loop"
+  | "action-stationarity"
+  | "consecutive-mistakes"
+  | "format-errors"
+  | "context-overflow"
+  | "thinking-loop";
 
 const PROMPT_FILES: Record<GuardPromptId, string> = {
   "tool-call-loop": "tool-call-loop.md",
   "action-stationarity": "action-stationarity.md",
   "consecutive-mistakes": "consecutive-mistakes.md",
+  "format-errors": "format-errors.md",
+  "context-overflow": "context-overflow.md",
+  "thinking-loop": "thinking-loop.md",
 };
 
 export function wrapSystemInterrupt(reason: string, body: string): string {
@@ -48,4 +58,22 @@ export function consecutiveMistakesInterruptNudge(count: number, max: number): s
   const template = loadGuardPrompt("consecutive-mistakes");
   const body = template.replaceAll("{count}", String(count)).replaceAll("{max}", String(max));
   return wrapSystemInterrupt("consecutive_mistakes", body);
+}
+
+export function formatErrorsInterruptNudge(count: number, max: number): string {
+  const template = loadGuardPrompt("format-errors");
+  const body = template.replaceAll("{count}", String(count)).replaceAll("{max}", String(max));
+  return wrapSystemInterrupt("format_errors", body);
+}
+
+/** Soft nudge after CONTEXT_WINDOW_EXCEEDED emergency compaction (C-10). */
+export function contextOverflowInterruptNudge(): string {
+  const body = loadGuardPrompt("context-overflow");
+  return wrapSystemInterrupt("context_overflow", body);
+}
+
+/** Soft nudge after a repeated thinking / no-tool stall (C-10). */
+export function thinkingLoopInterruptNudge(): string {
+  const body = loadGuardPrompt("thinking-loop");
+  return wrapSystemInterrupt("thinking_loop", body);
 }

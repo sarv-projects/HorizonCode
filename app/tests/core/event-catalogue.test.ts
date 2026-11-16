@@ -50,9 +50,9 @@ function collectEmittedTypes(sources: string[]): Set<string> {
 }
 
 describe("shipped event catalogue", () => {
-  test("catalogue includes todo + agent + skill + effect decision + busy/claim bracket (34 shipped types)", () => {
-    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(34);
-    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(34);
+  test("catalogue includes full RC-18 literal set + legacy aliases (50 shipped types)", () => {
+    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(50);
+    expect(new Set(SHIPPED_EVENT_CATALOGUE).size).toBe(50);
   });
 
   test("reserved message.delta is not in the shipped catalogue", () => {
@@ -96,27 +96,43 @@ describe("RC-18 shipped → hz.* mapping", () => {
   test("separates shipped event names, canonical mappings, equivalence, and literal hz.* emission", () => {
     const coverage = hzEventCoverageReport();
     expect(coverage.canonicalTotal).toBe(44);
-    expect(coverage.shippedTypes).toBe(34);
-    expect(coverage.mappedCanonicalNames).toHaveLength(28);
-    expect(coverage.unmappedCanonicalNames).toHaveLength(16);
-    expect(coverage.equivalentCanonicalNames).toHaveLength(20);
+    expect(coverage.shippedTypes).toBe(50);
+    expect(coverage.mappedCanonicalNames).toHaveLength(44);
+    expect(coverage.unmappedCanonicalNames).toHaveLength(0);
+    expect(coverage.equivalentCanonicalNames).toHaveLength(36);
     expect(coverage.literalCanonicalEmitted).toEqual([
       "hz.session.prompt.admitted",
       "hz.session.claim.acquired",
       "hz.session.claim.released",
       "hz.session.busy.entered",
       "hz.session.busy.left",
+      "hz.step.llm.delta",
+      "hz.part.updated",
       "hz.todo.updated",
+      "hz.goal.updated",
       "hz.effect.decision.made",
+      "hz.effect.lease.issued",
       "hz.effect.settled",
       "hz.effect.unknown",
       "hz.effect.reconciled",
+      "hz.session.checkpoint.created",
+      "hz.session.moved",
       "hz.agent.spawned",
       "hz.agent.completed",
       "hz.agent.message.sent",
+      "hz.memory.retained",
+      "hz.memory.recalled",
+      "hz.memory.expired",
       "hz.skill.invoked",
+      "hz.skill.installed",
+      "hz.learn.trajectory.recorded",
+      "hz.learn.proposal.created",
+      "hz.learn.eval.completed",
       "hz.permission.asked",
       "hz.permission.answered",
+      "hz.policy.revision.changed",
+      "hz.provider.account.rotated",
+      "hz.usage.recorded",
     ]);
     expect(coverage.mappedCanonicalNames.length + coverage.unmappedCanonicalNames.length).toBe(44);
     expect(coverage.mappedCanonicalNames.length).toBeGreaterThan(coverage.literalCanonicalEmitted.length);
@@ -132,7 +148,7 @@ describe("RC-18 shipped → hz.* mapping", () => {
     for (const row of SHIPPED_TO_HZ_MAP) {
       for (const h of row.hz) expect(unimplemented.has(h)).toBe(false);
     }
-    expect(unimplemented.size).toBeGreaterThan(0);
+    expect(unimplemented.size).toBe(0);
   });
 
   test("hook audit rows map to canonical hz subsets (433)", () => {

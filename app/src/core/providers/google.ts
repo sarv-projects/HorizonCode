@@ -38,6 +38,7 @@ import {
   type RetryPolicy,
 } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
+import { toolArgsObject } from "./tool-args-object";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
 export const DEFAULT_GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com";
@@ -64,19 +65,6 @@ type GooglePart =
 interface GoogleContent {
   role: "user" | "model";
   parts: GooglePart[];
-}
-
-/** Tool-call arguments are a JSON string in the contract and an object on this wire. */
-function safeObject(raw: unknown): Record<string, unknown> {
-  const text = typeof raw === "string" ? raw.trim() : "";
-  if (text === "") return {};
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    /* unparsable arguments replay as no arguments */
-  }
-  return {};
 }
 
 /**
@@ -107,7 +95,7 @@ export function toGoogleContents(messages: ChatMsg[]): GoogleContent[] {
       if (typeof msg.content === "string" && msg.content.trim() !== "") parts.push({ text: msg.content });
       for (const call of msg.toolCalls ?? []) {
         callNames.set(call.id, call.name);
-        parts.push({ functionCall: { name: call.name, args: safeObject(call.arguments) } });
+        parts.push({ functionCall: { name: call.name, args: toolArgsObject(call.arguments) } });
       }
       push("model", parts);
       continue;

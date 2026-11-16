@@ -80,6 +80,10 @@ export const EventTypes = {
   sessionFork: "session.fork",
   messageStart: "message.start",
   messageDelta: "message.delta",
+  /** RC-18 literal LLM stream coalesce (ruling 445; one row per step). */
+  stepLlmDelta: "hz.step.llm.delta",
+  /** RC-18 literal part stream coalesce (ruling 446; pairs with llm.delta). */
+  partUpdated: "hz.part.updated",
   messageEnd: "message.end",
   toolCall: "tool.call",
   toolResult: "tool.result",
@@ -91,6 +95,8 @@ export const EventTypes = {
   /** Literal hz.* settle observation (EffectHost; docs/28). */
   /** Guard / policy decision on an effect intent (Wave 0 RC-18 ruling 407). */
   effectDecisionMade: "hz.effect.decision.made",
+  /** One-use lease mint (grant-bound or kernel transfer; ruling 444). */
+  effectLeaseIssued: "hz.effect.lease.issued",
   effectSettled: "hz.effect.settled",
   effectUnknown: "hz.effect.unknown",
   effectReconciled: "hz.effect.reconciled",
@@ -103,8 +109,32 @@ export const EventTypes = {
   todoUpdated: "hz.todo.updated",
   /** Literal hz.* slash-skill activation on `Runtime.send` (ruling 399). */
   skillInvoked: "hz.skill.invoked",
+  /** Literal hz.* skill discovery/install announcement (ruling 448). */
+  skillInstalled: "hz.skill.installed",
   /** Literal hz.* per-step provider usage (ruling 441). */
   usageRecorded: "hz.usage.recorded",
+  /** Literal hz.* memory bank write (ruling 442). */
+  memoryRetained: "hz.memory.retained",
+  /** Literal hz.* memory BM25 recall (ruling 442). */
+  memoryRecalled: "hz.memory.recalled",
+  /** Literal hz.* memory forget (ruling 442). */
+  memoryExpired: "hz.memory.expired",
+  /** Literal hz.* turn checkpoint (ruling 443). */
+  sessionCheckpointCreated: "hz.session.checkpoint.created",
+  /** Literal hz.* policy.json digest change (ruling 447). */
+  policyRevisionChanged: "hz.policy.revision.changed",
+  /** Literal hz.* OAuth/account credential rotation (ruling 449). */
+  providerAccountRotated: "hz.provider.account.rotated",
+  /** Literal hz.* curator proposal append (ruling 450). */
+  learnProposalCreated: "hz.learn.proposal.created",
+  /** Literal hz.* eval set completion (ruling 451). */
+  learnEvalCompleted: "hz.learn.eval.completed",
+  /** Literal hz.* turn trajectory digest (ruling 452; reduced). */
+  learnTrajectoryRecorded: "hz.learn.trajectory.recorded",
+  /** Literal hz.* session goal statement (ruling 453; reduced). */
+  goalUpdated: "hz.goal.updated",
+  /** Literal hz.* workspace relocation for a resumed session (ruling 454). */
+  sessionMoved: "hz.session.moved",
   error: "error",
 } as const;
 export type EventType = (typeof EventTypes)[keyof typeof EventTypes] | string;
@@ -591,6 +621,25 @@ export type ProviderEvent =
   | { type: "quirks"; applied: string[] }
   | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage }
   | { type: "error"; message: string; code?: ProviderFailureCode };
+
+/**
+ * ADDITIVE (C-9 / omp `response.steer` reduced): one claim a live-steering
+ * provider may take from the turn queue while streaming. `accept` records the
+ * text as delivered into the in-flight response; `reject` defers it to the
+ * next step boundary. Real Responses WebSocket wire is not required here.
+ */
+export interface LiveSteerClaim {
+  messages: string[];
+  accept: () => void;
+  reject: () => void;
+}
+
+/** ADDITIVE: provider-side pull API for mid-stream steer (omp LiveSteering). */
+export interface LiveSteering {
+  wait(signal: AbortSignal): Promise<void>;
+  claim(signal: AbortSignal): Promise<LiveSteerClaim | undefined>;
+}
+
 export interface ProviderRequest {
   model: string;
   system: string;
@@ -600,10 +649,21 @@ export interface ProviderRequest {
   /** C-11 reduced: explicit effort only (`reasoning_effort` on OpenAI-compatible hosts). */
   reasoningEffort?: string;
   signal: AbortSignal;
+  /**
+   * ADDITIVE (C-9): optional live-steering source when the provider opts in via
+   * {@link Provider.liveSteering}. Ignored by chat-completions providers.
+   */
+  liveSteering?: LiveSteering;
 }
 export interface Provider {
   name: string;
   stream(req: ProviderRequest): AsyncIterable<ProviderEvent>;
+  /**
+   * ADDITIVE (C-9): when true, `stream` may claim {@link ProviderRequest.liveSteering}
+   * mid-flight (omp `response.steer` reduced). The loop skips hard stream-cut
+   * while the buffer can still be claimed live.
+   */
+  liveSteering?: boolean;
 }
 
 /**

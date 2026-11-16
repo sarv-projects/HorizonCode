@@ -42,6 +42,7 @@ describe("command line", () => {
     expect(run.stdout).toContain("--list-models");
     expect(run.stdout).toContain("--show-prompts");
     expect(run.stdout).toContain("--show-repo-map");
+    expect(run.stdout).toContain("--analytics-log");
     expect(run.stdout).toContain("--mock");
     expect(run.stdout).toContain("--version");
     expect(run.stdout).toContain("hzcode keybind check");

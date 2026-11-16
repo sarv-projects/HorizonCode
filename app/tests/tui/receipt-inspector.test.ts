@@ -89,6 +89,8 @@ describe("receipt inspector (ruling 284)", () => {
     const pane = modelWs!.panes.find((p) => p.id === "children");
     expect(pane?.lines.some((l) => l.includes(child))).toBe(true);
     expect(pane?.lines.some((l) => l.includes("agent.spawn"))).toBe(true);
+    expect(pane?.lines.some((l) => l.includes("nested receipt replay:"))).toBe(true);
+    expect(pane?.lines.some((l) => l.includes("nested event-stream replay:"))).toBe(true);
   });
 
   test("run terminal pane surfaces provider failure code from run.complete", () => {

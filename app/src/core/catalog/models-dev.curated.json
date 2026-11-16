@@ -1,5 +1,5 @@
 {
-  "$comment": "Curated boot-time catalog floor (FEAT-003 / spec compare-providers.md §5.4). A reduced slice of the models.dev normalized shape, carrying ONLY the fields HorizonCode reads: per provider a default model id, and per model { id, provider, limit.context, limit.output?, capabilities?, cost? }. This small set is the OFFLINE FLOOR and is NOT subject to the MINIMUM_PROVIDERS validation floor (that applies only to externally-sourced snapshots — the env override or the documented live-fetch extension point). The default model ids here MUST stay byte-identical to config.ts DEFAULT_MODELS (claude-sonnet-4-5 / gpt-4o-mini / gemini-2.5-flash / llama3.1 / mock-1). Context windows are the CATALOG's own source of truth, taken from each model's published limit (e.g. gemini-2.5-flash at 1048576); they are NOT a mirror of output-budget.ts windowForModel, whose coarse table has no gemini/ollama branch and falls to its 128 KiB default (131072) for those ids. When the integrator wires the resolver, catalogWindow(provider, model, catalog) is preferred and windowForModel stays only as the fallback for ids the catalog lacks. NO SECRETS.",
+  "$comment": "Curated boot-time catalog floor (FEAT-003 / spec compare-providers.md §5.4). A reduced slice of the models.dev normalized shape, carrying ONLY the fields HorizonCode reads: per provider a default model id, and per model { id, provider, limit.context, limit.output?, capabilities?, cost?, accepts_settings? }. accepts_settings (H-1 / ruling 472) lists optional wire params the model accepts; unsupported params are stripped with a warning. This small set is the OFFLINE FLOOR and is NOT subject to the MINIMUM_PROVIDERS validation floor (that applies only to externally-sourced snapshots — the env override or the documented live-fetch extension point). The default model ids here MUST stay byte-identical to config.ts DEFAULT_MODELS (claude-sonnet-4-5 / gpt-4o-mini / gemini-2.5-flash / llama3.1 / mock-1). Context windows are the CATALOG's own source of truth, taken from each model's published limit (e.g. gemini-2.5-flash at 1048576); they are NOT a mirror of output-budget.ts windowForModel, whose coarse table has no gemini/ollama branch and falls to its 128 KiB default (131072) for those ids. When the integrator wires the resolver, catalogWindow(provider, model, catalog) is preferred and windowForModel stays only as the fallback for ids the catalog lacks. NO SECRETS.",
   "providers": {
     "anthropic": {
       "id": "anthropic",
@@ -9,7 +9,8 @@
           "id": "claude-sonnet-4-5",
           "provider": "anthropic",
           "limit": { "context": 204800, "output": 8192 },
-          "capabilities": { "tools": true, "reasoning": true }
+          "capabilities": { "tools": true, "reasoning": true },
+          "accepts_settings": ["reasoning_effort"]
         }
       }
     },
@@ -21,7 +22,8 @@
           "id": "gpt-4o-mini",
           "provider": "openai",
           "limit": { "context": 131072, "output": 16384 },
-          "capabilities": { "tools": true, "reasoning": false }
+          "capabilities": { "tools": true, "reasoning": false },
+          "accepts_settings": []
         }
       }
     },
@@ -33,7 +35,8 @@
           "id": "gemini-2.5-flash",
           "provider": "google",
           "limit": { "context": 1048576, "output": 65536 },
-          "capabilities": { "tools": true, "reasoning": true }
+          "capabilities": { "tools": true, "reasoning": true },
+          "accepts_settings": ["reasoning_effort"]
         }
       }
     },
@@ -45,7 +48,8 @@
           "id": "llama3.1",
           "provider": "ollama",
           "limit": { "context": 131072 },
-          "capabilities": { "tools": true, "reasoning": false }
+          "capabilities": { "tools": true, "reasoning": false },
+          "accepts_settings": []
         }
       }
     },
@@ -57,7 +61,8 @@
           "id": "mock-1",
           "provider": "mock",
           "limit": { "context": 131072 },
-          "capabilities": { "tools": true, "reasoning": false }
+          "capabilities": { "tools": true, "reasoning": false },
+          "accepts_settings": []
         }
       }
     }

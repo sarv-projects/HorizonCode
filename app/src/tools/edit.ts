@@ -13,7 +13,10 @@ import { sha256Hex } from "../core/canon";
 import { withFileLock, targetLockPath } from "../core/file-lock";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
-import { checkpointDirtyPathBeforeEdit } from "../core/git-dirty-checkpoint";
+import {
+  checkpointDirtyPathBeforeEdit,
+  formatLintFixCommitSuffix,
+} from "../core/git-dirty-checkpoint";
 import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { resolveAnchor } from "./hashline";
@@ -33,6 +36,11 @@ function dirtyCheckpointPrefix(ctx: ToolContext, rel: string): string {
   if (cp.committed && cp.notice) return `${cp.notice}\n`;
   if (cp.error) return `[git checkpoint failed: ${cp.error}]\n`;
   return "";
+}
+
+/** E-1 residual: separate lint-fix commit after edit of a recently linted path. */
+function lintFixCommitSuffix(ctx: ToolContext, rel: string): string {
+  return formatLintFixCommitSuffix(ctx.sessionId, ctx.workspace, rel);
 }
 
 /** Non-overlapping occurrences of `needle` in `hay`. */
@@ -658,7 +666,11 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
 
   noteRead(ctx, resolved);
   const suffix = shifts.length > 0 ? ` (anchors shifted: ${shifts.join(", ")})` : "";
-  return { ok: true, output: `${checkpointNote}Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}` };
+  const lintFixNote = lintFixCommitSuffix(ctx, rel);
+  return {
+    ok: true,
+    output: `${checkpointNote}Replaced lines ${first.line}-${last.line} (${span} line(s)) in ${rel} via anchors${suffix}${lintFixNote}`,
+  };
 }
 
 export const editTool: Tool = {
@@ -854,7 +866,11 @@ export const editTool: Tool = {
 
       reflections.delete(reflectionKey(ctx, resolved));
       const suffix = rung === "exact" ? "" : ` (matched via ${rung})`;
-      return { ok: true, output: `${checkpointNote}Replaced ${replacements} occurrence(s) in ${rel}${suffix}` };
+      const lintFixNote = lintFixCommitSuffix(ctx, rel);
+      return {
+        ok: true,
+        output: `${checkpointNote}Replaced ${replacements} occurrence(s) in ${rel}${suffix}${lintFixNote}`,
+      };
     } catch (e) {
       return fail(msg(e));
     }

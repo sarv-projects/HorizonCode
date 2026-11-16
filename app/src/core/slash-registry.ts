@@ -60,6 +60,7 @@ export const BUILTIN_SLASH_REGISTRY: readonly SlashCommandRow[] = [
   { name: "stats", usage: "/stats", description: "message, tool call and token counts for this chat" },
   { name: "tokens", usage: "/tokens", description: "per-chunk context cost table with $ estimates and hints" },
   { name: "learn", usage: "/learn [chapter]", description: "list or read one knowledge-base chapter (under .hz/state/learn)" },
+  { name: "goal", usage: "/goal [statement|achieved|abandoned|blocked]", description: "show or set this session's goal (hz.goal.updated)" },
   { name: "trust", usage: "/trust", description: "folder-trust status and digests for this workspace" },
   { name: "settings", usage: "/settings", description: "effective config and sources (secrets masked)" },
   { name: "graph", usage: "/graph", description: "ASCII curator proposal graph (growth store)" },

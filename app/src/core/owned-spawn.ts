@@ -47,7 +47,7 @@ import { appendJsonl } from "./jsonl-append";
 import * as path from "node:path";
 import { kernelStateDir as resolveKernelStateDir, userConfigDir } from "./paths";
 import { workspaceHooksFile } from "./trust";
-import { birthIdentityOf, readProcessFacts, type ProcessIdentity } from "./worker-identity";
+import { birthIdentityOf, readProcessFacts, recordIdentity, type ProcessIdentity } from "./worker-identity";
 import { startOwnerDeathSupervisor } from "./supervisor";
 import type { SandboxSpawnKernel } from "../contracts";
 import { resolveSandboxExecBinary } from "./kernel";
@@ -183,7 +183,11 @@ export interface SpawnLedgerEntry {
   pid: number;
   /** Process-group id from /proc, or null when /proc could not be read. */
   pgid: number | null;
-  /** `<pid>@<startTicks>` birth identity, or null when /proc could not be read. */
+  /**
+   * Birth identity, or null when /proc could not be read.
+   * Ruling 22: `<pid>@<startTicks>`. Ruling 473 when `/proc/stat` btime is
+   * available: `boot:<bootId>:<pid>@<startTicks>`.
+   */
   birthIdentity: string | null;
   label: string;
   ts: string;
@@ -544,7 +548,7 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
   }
 
   const facts = readProcessFacts(pid);
-  const identity: ProcessIdentity | undefined = facts === undefined ? undefined : { pid, startTicks: facts.startTicks };
+  const identity: ProcessIdentity | undefined = recordIdentity(pid);
   const entry: SpawnLedgerEntry = {
     pid,
     pgid: facts?.pgid ?? null,

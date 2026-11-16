@@ -1,8 +1,10 @@
 /**
  * session-verify-cli.ts — `hzcode session verify` (R172 reduced; ruling **291**).
  *
- * Receipt hash chain + read-only effect reconcile probe; no mutations.
- * Exit 3 when the chain is broken or reconcile probe reports mismatches / open UNKNOWN.
+ * Receipt hash chain + nested child-receipt graph replay (**456**) + nested
+ * child event-stream replay (**478**) + read-only effect reconcile probe; no
+ * mutations. Exit 3 when the chain is broken, nested replay refuses, or
+ * reconcile probe reports mismatches / open UNKNOWN.
  */
 
 import { SessionStore } from "./session";
@@ -34,6 +36,16 @@ import {
   verifyReceiptChainSync,
   type ReceiptChainVerifyVerdict,
 } from "./receipt-chain-verify";
+import {
+  formatNestedReceiptReplayLines,
+  replayNestedReceiptsInWorkspace,
+  type NestedReceiptReplayVerdict,
+} from "./receipt-nested-replay";
+import {
+  formatNestedEventStreamReplayLines,
+  replayNestedEventStreams,
+  type NestedEventStreamReplayVerdict,
+} from "./receipt-nested-event-stream-replay";
 
 export const SESSION_VERIFY_FAIL_EXIT = 3;
 
@@ -47,6 +59,10 @@ export interface SessionVerifyReport {
   reconcile: EffectReconcileProbeReport;
   evidence: EffectEvidenceGateReport;
   postimageReplayEnabled: boolean;
+  /** Nested child-receipt graph replay from one verified snapshot (ruling **456**). */
+  nestedReceipts: NestedReceiptReplayVerdict;
+  /** Nested child event-stream replay from a verified parent read (ruling **478**). */
+  nestedEventStreams: NestedEventStreamReplayVerdict;
   /** Effects still `unknown` after in-session reconcile simulation. */
   openUnknownCount: number;
   ok: boolean;
@@ -70,6 +86,8 @@ export function buildSessionVerifyReport(workspace: string, sessionId: string): 
   const reconcile = probeEffectReconcile(workspace, { sessionId: sessionScope });
   const replayOn = postimageReplayActive();
   const evidence = probeEffectEvidence(workspace, { sessionId: sessionScope });
+  const nestedReceipts = replayNestedReceiptsInWorkspace(workspace);
+  const nestedEventStreams = replayNestedEventStreams(workspace, sessionId);
   const openUnknownCount = countOpenUnknown(reconcile);
   const anchorsOk =
     (sessionEvents.ok || sessionEvents.skipped) && compactionChains.every((c) => c.ok || c.skipped);
@@ -77,6 +95,8 @@ export function buildSessionVerifyReport(workspace: string, sessionId: string): 
     sessionFound &&
     chain.ok &&
     anchorsOk &&
+    nestedReceipts.ok &&
+    nestedEventStreams.ok &&
     reconcile.mismatches.length === 0 &&
     evidence.failures.length === 0 &&
     openUnknownCount === 0;
@@ -90,6 +110,8 @@ export function buildSessionVerifyReport(workspace: string, sessionId: string): 
     reconcile,
     evidence,
     postimageReplayEnabled: replayOn,
+    nestedReceipts,
+    nestedEventStreams,
     openUnknownCount,
     ok,
   };
@@ -106,6 +128,12 @@ export function renderSessionVerify(report: SessionVerifyReport): string {
     `  workspace ${report.workspace}`,
   ];
   lines.push(...formatReceiptChainVerifySummary(report.chain).map((l) => (l.startsWith("  ") ? l : `  ${l}`)));
+  lines.push(...formatNestedReceiptReplayLines(report.nestedReceipts).map((l) => (l.startsWith("  ") ? l : `  ${l}`)));
+  lines.push(
+    ...formatNestedEventStreamReplayLines(report.nestedEventStreams).map((l) =>
+      l.startsWith("  ") ? l : `  ${l}`,
+    ),
+  );
   if (report.sessionEvents && !report.sessionEvents.skipped) {
     lines.push(...formatChainAnchorSummary(report.sessionEvents).map((l) => (l.startsWith("  ") ? l : `  ${l}`)));
   }

@@ -1,0 +1,1 @@
+Provider context window exceeded; one emergency compaction already ran for this turn. Continue from the retained recent tail and pinned task — do not re-request elided history verbatim. Prefer the smallest next tool call or a final answer; if details are missing, ask narrowly instead of dumping large reads.

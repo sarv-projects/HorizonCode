@@ -36,6 +36,23 @@ describe("RC-18 canonical prompt admission (ruling 359)", () => {
     }
   });
 
+  test("send appends hz.session.checkpoint.created for the turn (443)", async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-ckpt-evt-"));
+    const runtime = await createRuntime({ workspace: ws, mock: true });
+    try {
+      await runtime.send("checkpoint please", { onEvent() {} });
+      const file = sessionEventsPath(ws, runtime.sessionId);
+      const created = loadRows(file).filter((row) => row.type === EventTypes.sessionCheckpointCreated);
+      expect(created.length).toBeGreaterThanOrEqual(1);
+      expect(typeof created[0]?.payload?.checkpointId).toBe("string");
+      expect(typeof created[0]?.payload?.labelDigest).toBe("string");
+      expect(verifySessionEventAnchorSync(ws, runtime.sessionId).ok).toBe(true);
+    } finally {
+      await runtime.close();
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("send brackets a turn with claim then busy then release (439/440)", async () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-busy-bracket-"));
     const runtime = await createRuntime({ workspace: ws, mock: true });
@@ -86,6 +103,29 @@ describe("RC-18 canonical prompt admission (ruling 359)", () => {
       expect(invoked[0]?.payload?.skill).toBe("execute-plan");
       expect(invoked[0]?.payload?.sessionId).toBe(runtime.sessionId);
       expect(invoked[0]?.payload?.actionBytes).toBe(Buffer.byteLength("run phase one", "utf8"));
+      const installed = loadRows(file).filter((row) => row.type === EventTypes.skillInstalled);
+      expect(installed.some((row) => row.payload?.name === "execute-plan" && row.payload?.source === "synthesised")).toBe(
+        true,
+      );
+    } finally {
+      await runtime.close();
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("first send announces hz.skill.installed once per skill (448)", async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-skill-installed-"));
+    const runtime = await createRuntime({ workspace: ws, mock: true });
+    try {
+      await runtime.send("hello", { onEvent() {} });
+      await runtime.send("hello again", { onEvent() {} });
+      const file = sessionEventsPath(ws, runtime.sessionId);
+      const installed = loadRows(file).filter((row) => row.type === EventTypes.skillInstalled);
+      const builtins = installed.filter((row) => row.payload?.name === "execute-plan");
+      expect(builtins).toHaveLength(1);
+      expect(builtins[0]?.payload?.source).toBe("synthesised");
+      expect(builtins[0]?.payload?.status).toBe("installed");
+      expect(typeof builtins[0]?.payload?.digest).toBe("string");
     } finally {
       await runtime.close();
       rmSync(ws, { recursive: true, force: true });

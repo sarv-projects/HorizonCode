@@ -1,9 +1,10 @@
 /**
- * `lint` — compiler-grade errors via the LSP path (docs/30 F-1 reduced).
+ * `lint` — compiler-grade errors via user lint commands or the LSP path
+ * (docs/30 F-1 / F-3 reduced).
  *
- * Delegates to the same writethrough as `lsp`, then keeps only severity `error`
- * lines. Tree-sitter excerpts and a user-supplied per-language command table are
- * out of scope.
+ * User `lint.commands` run first (ruling 210); otherwise LSP writethrough with
+ * severity `error` only. Failures append marked line-context excerpts (ruling
+ * 462; tree-sitter grammar windows still deferred).
  */
 
 import { readFile } from "node:fs/promises";
@@ -14,6 +15,7 @@ import { workspaceDiagnostics } from "../core/lsp";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { defaultConfigPath, loadConfig, type LspConfig } from "../core/config";
 import { kernelStateDir } from "../core/owned-spawn";
+import { noteLintedPath } from "../core/git-dirty-checkpoint";
 import {
   formatLintFindings,
   parseLintOutputLines,
@@ -21,6 +23,11 @@ import {
   runUserLintCommand,
   substituteLintFile,
 } from "../core/lint-commands";
+import {
+  lintErrorLinesFromFindings,
+  lintErrorLinesFromMessages,
+  withLintExcerpts,
+} from "../core/lint-excerpts";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -114,7 +121,9 @@ export const lintTool: Tool = {
         });
         const parsed = parseLintOutputLines(ran.stdout);
         const errors = parsed.filter((row) => /error/i.test(row.message) || ran.exitCode !== 0);
-        const output = formatLintFindings(rel, errors.length > 0 ? errors : parsed);
+        const findings = errors.length > 0 ? errors : parsed;
+        const listed = formatLintFindings(rel, findings);
+        const output = withLintExcerpts(listed, content, lintErrorLinesFromFindings(findings));
         const receipt: ReceiptInput = {
           action: "lint.check",
           tool: "lint",
@@ -126,6 +135,7 @@ export const lintTool: Tool = {
         } catch {
           /* best-effort */
         }
+        noteLintedPath(ctx.sessionId, rel);
         return { ok: true, output };
       }
 
@@ -145,14 +155,19 @@ export const lintTool: Tool = {
       });
 
       if (result === undefined) {
+        noteLintedPath(ctx.sessionId, rel);
         return { ok: true, output: `no language server configured for ${rel} — lint unavailable` };
       }
 
       const errors = compilerErrorsOnly(result.messages);
-      const output =
+      const listed =
         errors.length === 0
           ? `${rel}: no compiler errors`
           : `${rel} (${result.server}): ${errors.length} compiler error(s)\n${errors.join("\n")}`;
+      const output =
+        errors.length === 0
+          ? listed
+          : withLintExcerpts(listed, content, lintErrorLinesFromMessages(errors));
 
       const receipt: ReceiptInput = {
         action: "lint.check",
@@ -166,6 +181,7 @@ export const lintTool: Tool = {
         /* receipt failure must not sink a read-only lint result */
       }
 
+      noteLintedPath(ctx.sessionId, rel);
       return { ok: true, output };
     } catch (e) {
       return fail(msg(e));

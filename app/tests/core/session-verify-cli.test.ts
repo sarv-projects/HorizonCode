@@ -2,17 +2,45 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { hashReceipt } from "../../src/contracts";
+import { hashEnvelope, hashReceipt } from "../../src/contracts";
 import { EffectHost, createEffectId } from "../../src/core/effect-host";
 import { WorkspaceEffectLedger } from "../../src/core/effect-ledger";
+import { hashReceiptVersioned } from "../../src/core/receipt-schema";
 import { SessionStore } from "../../src/core/session";
-import { receiptsPath } from "../../src/core/session-kernel-reconcile";
+import { receiptsPath, sessionEventsPath } from "../../src/core/session-kernel-reconcile";
 import {
   SESSION_VERIFY_FAIL_EXIT,
   buildSessionVerifyReport,
   renderSessionVerify,
   sessionVerifyExitCode,
 } from "../../src/core/session-verify-cli";
+
+function writeChainedSession(
+  ws: string,
+  sessionId: string,
+  entries: { type: string; payload: Record<string, unknown> }[],
+): void {
+  const file = sessionEventsPath(ws, sessionId);
+  mkdirSync(path.dirname(file), { recursive: true });
+  let prevHash: string | null = null;
+  const rows = entries.map(({ type, payload }, index) => {
+    const preimage = {
+      id: `evt_${sessionId}_${index}`,
+      seq: index + 1,
+      ts: "2026-11-15T00:00:00.000Z",
+      stream: `session:${sessionId}`,
+      type,
+      actor: { kind: "system" as const, id: "fixture" },
+      payload,
+      prevHash,
+    };
+    const hash = hashEnvelope(preimage);
+    prevHash = hash;
+    return { ...preimage, hash };
+  });
+  writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  writeFileSync(file + ".head", JSON.stringify({ seq: rows.length, hash: prevHash }) + "\n");
+}
 
 describe("session-verify-cli (ruling 291)", () => {
   test("ok session exits 0", () => {
@@ -110,6 +138,57 @@ describe("session-verify-cli (ruling 291)", () => {
       expect(report.reconcile.mismatches.length).toBeGreaterThan(0);
       expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
       expect(renderSessionVerify(report)).toContain("reconcile mismatches");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("nested childEffectIds missing receipt exits 3 (ruling 456)", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-nested-"));
+    try {
+      const store = new SessionStore(ws);
+      const session = store.createSession("verify-nested");
+      const base = {
+        id: "r-parent",
+        seq: 1,
+        ts: "2026-01-01T00:00:00.000Z",
+        prevHash: null as string | null,
+        action: "tool.execute" as const,
+        tool: "agent",
+        argsDigest: "a",
+        resultDigest: "b",
+        effectId: "eff-parent",
+        schemaVersion: 2 as const,
+        childEffectIds: ["missing-child"],
+      };
+      const row = { ...base, hash: hashReceiptVersioned(base) };
+      const file = receiptsPath(ws);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `${JSON.stringify(row)}\n`);
+      writeFileSync(file + ".head", JSON.stringify({ seq: 1, hash: row.hash }));
+      const report = buildSessionVerifyReport(ws, session.id);
+      expect(report.chain.ok).toBe(true);
+      expect(report.nestedReceipts.ok).toBe(false);
+      expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
+      expect(renderSessionVerify(report)).toContain("nested receipt replay: refused");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("nested child event-stream missing exits 3 (ruling 478)", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "hz-sess-verify-evt-"));
+    try {
+      const store = new SessionStore(ws);
+      const session = store.createSession("verify-evt");
+      writeChainedSession(ws, session.id, [
+        { type: "subagent.start", payload: { agentId: "missing-nested-child", task: "t" } },
+      ]);
+      const report = buildSessionVerifyReport(ws, session.id);
+      expect(report.nestedEventStreams.ok).toBe(false);
+      expect(report.nestedEventStreams.nodes[0]?.evidence).toBe("missing_stream");
+      expect(sessionVerifyExitCode(report)).toBe(SESSION_VERIFY_FAIL_EXIT);
+      expect(renderSessionVerify(report)).toContain("nested event-stream replay: refused");
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }

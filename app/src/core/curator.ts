@@ -61,6 +61,7 @@ import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { appendJsonlSync } from "./jsonl-append";
 import * as path from "node:path";
 import { canonicalJson, digestOf } from "./canon";
+import { notifyLearnProposalCreated } from "./learn-events";
 import {
   BODY_MAX_CHARS,
   PROPOSAL_KINDS,
@@ -578,6 +579,15 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
     // fsync by default (docs/33 §6.5).
     appendJsonlSync(file, lines.map((line) => `${line}\n`).join(""));
     setOwnerOnly(file, 0o600);
+  }
+  // RC-18: notify learn listeners for each newly appended proposal (450).
+  for (const row of result.appended) {
+    notifyLearnProposalCreated({
+      proposalId: row.digest,
+      kind: row.kind,
+      title: row.title,
+      status: "proposed",
+    });
   }
   return result;
 }

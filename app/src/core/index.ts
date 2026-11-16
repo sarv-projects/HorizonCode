@@ -13,7 +13,7 @@
  */
 
 import * as path from "node:path";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import type {
   ApprovalHandler,
@@ -47,7 +47,7 @@ import {
 import { hydrateSavedGrants } from "./saved-allows";
 import { durableAutoMergeEnabled, durableTodosEnabled, maybeAutoMergeDurableOnBranchChange } from "./durable-todos";
 import { hydrateTodosFromDurable } from "../tools/todo";
-import { resolveThinkingEffort } from "./thinking-effort";
+import { parseThinkingAutoFlag, resolveThinkingEffort } from "./thinking-effort";
 import { augmentConfigWithTrustedWorkspace, defaultConfigPath, loadConfig, readConfigFile, type HzConfig, type McpConfig } from "./config";
 import { applySandboxChildNetFromConfig } from "./sandbox-child-net";
 import {
@@ -55,7 +55,11 @@ import {
   applyEffectHostKernelSandboxDefault,
 } from "./effect-host-runtime";
 import { kernelEnforcesProcessSandbox } from "./sandbox-spawn";
-import { catalogWindow, loadCatalog } from "./catalog/catalog";
+import {
+  parseCheckModelAcceptsSettingsFlag,
+  resolveCatalogAcceptsSettings,
+} from "./catalog/accepts-settings";
+import { catalogModel, catalogWindow, loadCatalog } from "./catalog/catalog";
 import {
   makeModelsCatalogPollNetGuard,
   startModelsCatalogPoll,
@@ -89,7 +93,23 @@ import { loadHooks, runLifecycleHooks } from "./hooks";
 import { ensureWorkspaceHookTrust, formatUntrustedWorkspaceStartupNotice, hooksLoadOptions } from "./trust";
 import { SessionStore, type SessionInfo } from "./session";
 import { reindexSessionSearch, searchSessions as ftsSearchSessions } from "./session-search";
-import { activeSkillSection, resolveSkillForMessage, skillsPromptSection } from "./skills";
+import { onOAuthAccountRotated } from "./auth/refresh";
+import {
+  onLearnEvalCompleted,
+  onLearnProposalCreated,
+  notifyLearnTrajectoryRecorded,
+} from "./learn-events";
+import { appendAnalyticsEvent } from "./analytics-log";
+import { stateRoot } from "./paths";
+import { syncMarkdownTranscript } from "./markdown-transcript";
+import { readSessionGoal, writeSessionGoal, type SessionGoalStatus } from "./session-goal";
+import {
+  activeSkillSection,
+  BUILTIN_SKILLS,
+  listSkills,
+  resolveSkillForMessage,
+  skillsPromptSection,
+} from "./skills";
 import { runNested } from "./subagent";
 import { stopAllPreviews } from "../tools/preview";
 // Plan mode's staging store and the apply path: /apply runs each staged write
@@ -201,6 +221,10 @@ export interface HzRuntime extends Runtime {
   switchSession?(sessionId: string): HzRuntime;
   /** T-12: retitle the current session; returns the stored title. */
   renameSession?(title: string): string;
+  /** Wave 0: set session goal statement (emits hz.goal.updated). */
+  setGoal?(statement: string, status?: "active" | "achieved" | "abandoned" | "blocked"): Promise<string>;
+  /** Wave 0: current session goal statement, if any. */
+  goalStatement?(): string | undefined;
   /** T-12: drop the last reply and return the last user text to send again. */
   retryLast?(): string | undefined;
   /** T-12: the session title (for exports). */
@@ -275,6 +299,14 @@ class HzRuntimeImpl implements HzRuntime {
   private anthropicCacheKeepaliveStop?: AnthropicCacheKeepaliveStop;
   /** Durable EffectHost ledger (ruling 224); shared across turns for this runtime. */
   private readonly effectHost: EffectHost;
+  /** Skill ids already announced via hz.skill.installed this runtime (448). */
+  private readonly skillInstallAnnounced = new Set<string>();
+  /** Unsubscribe OAuth rotation → hz.provider.account.rotated (449). */
+  private readonly stopOAuthAccountRotated: () => void;
+  /** Unsubscribe learn.* projection listeners (450–451). */
+  private readonly stopLearnListeners: () => void;
+  /** Monotonic per-runtime turn counter for reduced trajectory ids (452). */
+  private trajectoryTurn = 0;
 
   beginModelsCatalogPoll(stop: ModelsPollStop): void {
     this.modelsCatalogPollStop = stop;
@@ -320,6 +352,58 @@ class HzRuntimeImpl implements HzRuntime {
     this.kernel = args.kernel;
     this.budget = args.budget;
     this.effectHost = args.effectHost;
+    this.stopOAuthAccountRotated = onOAuthAccountRotated((info) => {
+      void this.append(streamFor(this.session.id), EventTypes.providerAccountRotated, {
+        sessionId: this.session.id,
+        providerId: info.providerId,
+        reason: info.reason,
+        // Reduced: no raw tokens; account refs are digests of opaque handles.
+        fromAccountRef: "oauth:previous",
+        toAccountRef: "oauth:refreshed",
+      }).catch(() => undefined);
+    });
+    const stopProposal = onLearnProposalCreated((info) => {
+      void this.append(streamFor(this.session.id), EventTypes.learnProposalCreated, {
+        sessionId: this.session.id,
+        proposalId: info.proposalId,
+        kind: info.kind,
+        title: info.title,
+        status: info.status,
+        authorityImpact: "none",
+      }).catch(() => undefined);
+    });
+    const stopEval = onLearnEvalCompleted((info) => {
+      void this.append(streamFor(this.session.id), EventTypes.learnEvalCompleted, {
+        sessionId: this.session.id,
+        evalId: info.evalId,
+        caseCount: info.caseCount,
+        score: info.passed,
+        baseline: info.caseCount,
+        gate: info.gate,
+      }).catch(() => undefined);
+    });
+    this.stopLearnListeners = () => {
+      stopProposal();
+      stopEval();
+    };
+  }
+
+  /** Set or update the session goal statement (ruling 453). */
+  async setGoal(statement: string, status: SessionGoalStatus = "active"): Promise<string> {
+    const goal = writeSessionGoal(this.workspace, this.session.id, statement, status);
+    await this.append(streamFor(this.session.id), EventTypes.goalUpdated, {
+      sessionId: this.session.id,
+      goalId: goal.goalId,
+      revision: goal.revision,
+      statement: goal.statement,
+      status: goal.status,
+    });
+    return goal.statement;
+  }
+
+  /** Current session goal statement, if any. */
+  goalStatement(): string | undefined {
+    return readSessionGoal(this.workspace, this.session.id)?.statement;
   }
 
   private async emitEffectReconciled(
@@ -1027,6 +1111,33 @@ class HzRuntimeImpl implements HzRuntime {
 
   /** Public so createRuntime can open the session in the log at startup. */
   async logSessionStart(): Promise<void> {
+    // Ruling 454: sidecar records last workspace path per sessionId. A copied
+    // state tree still carries the old absolute path, so resume after relocate
+    // emits hz.session.moved without scanning the event log.
+    const here = path.resolve(this.workspace);
+    try {
+      const locDir = path.join(stateRoot(this.workspace), "session-locations");
+      const locFile = path.join(locDir, `${this.session.id}.txt`);
+      let prevWorkspace: string | undefined;
+      try {
+        const raw = readFileSync(locFile, "utf8").trim();
+        if (raw !== "") prevWorkspace = path.resolve(raw);
+      } catch {
+        /* first start for this session id in this tree */
+      }
+      if (prevWorkspace !== undefined && prevWorkspace !== here) {
+        await this.append(streamFor(this.session.id), EventTypes.sessionMoved, {
+          sessionId: this.session.id,
+          movedFrom: { directory: prevWorkspace },
+          movedTo: { directory: here },
+          reason: "user",
+        });
+      }
+      mkdirSync(locDir, { recursive: true });
+      writeFileSync(locFile, `${here}\n`, { mode: 0o600 });
+    } catch {
+      /* relocation detect is best-effort */
+    }
     await this.append(streamFor(this.session.id), EventTypes.sessionStart, {
       sessionId: this.session.id,
       workspace: this.workspace,
@@ -1038,6 +1149,15 @@ class HzRuntimeImpl implements HzRuntime {
       // under a different transport) can never rewrite an earlier run's record.
       kernelMode: this.kernel.mode,
     });
+    // I-4 / ruling 468: opt-in local analytics.ndjson (no network, no chat/keys).
+    appendAnalyticsEvent({
+      workspace: this.workspace,
+      event: "session.start",
+      sessionId: this.session.id,
+      provider: this.provider.name,
+      model: this.currentModel,
+      kernelMode: this.kernel.mode,
+    });
     // H1 session.start: an OBSERVATION lifecycle hook (H4 — it may observe and
     // may return an H9 note, but can never block the session opening). Loaded
     // at the runtime seam; absent config costs nothing.
@@ -1046,6 +1166,14 @@ class HzRuntimeImpl implements HzRuntime {
   private async logSessionEnd(sessionId: string): Promise<void> {
     clearDiscoveredTools(sessionId);
     await this.append(streamFor(sessionId), EventTypes.sessionEnd, { sessionId });
+    appendAnalyticsEvent({
+      workspace: this.workspace,
+      event: "session.end",
+      sessionId,
+      provider: this.provider.name,
+      model: this.currentModel,
+      kernelMode: this.kernel.mode,
+    });
     // H1 session.end: the OBSERVATION counterpart to session.start (H4).
     await this.runSessionHook("sessionEnd", {}, sessionId);
   }
@@ -1107,7 +1235,7 @@ class HzRuntimeImpl implements HzRuntime {
     );
   }
 
-  private recordTurnCheckpoint(userText: string, turnStartedAt: number): void {
+  private async recordTurnCheckpoint(userText: string, turnStartedAt: number): Promise<void> {
     try {
       const since = changesSince(this.workspace, turnStartedAt, this.session.id);
       if (since.corrupt === true) {
@@ -1117,10 +1245,29 @@ class HzRuntimeImpl implements HzRuntime {
         return;
       }
       const firstLine = userText.trim().split(/\r?\n/, 1)[0] ?? "";
-      recordCheckpoint(this.workspace, this.session.id, this.store.messageCount(this.session.id), since.entries.map((entry) => entry.id), {
-        label: firstLine.slice(0, 60),
-        onAppendFailure: (message) => this.note(message),
-      });
+      const label = firstLine.slice(0, 60);
+      const recorded = recordCheckpoint(
+        this.workspace,
+        this.session.id,
+        this.store.messageCount(this.session.id),
+        since.entries.map((entry) => entry.id),
+        {
+          label,
+          onAppendFailure: (message) => this.note(message),
+        },
+      );
+      try {
+        await this.append(streamFor(this.session.id), EventTypes.sessionCheckpointCreated, {
+          sessionId: this.session.id,
+          checkpointId: recorded.id,
+          messageIndex: recorded.messageIndex,
+          changeCount: recorded.changes.length,
+          labelDigest: sha256Hex(label),
+          labelBytes: Buffer.byteLength(label, "utf8"),
+        });
+      } catch (err) {
+        this.note(`checkpoint event not appended: ${errorMessage(err)}`);
+      }
     } catch (err) {
       this.note(`could not record a checkpoint for this turn: ${errorMessage(err)}`);
     }
@@ -1239,6 +1386,26 @@ class HzRuntimeImpl implements HzRuntime {
       };
       const directory = skillsPromptSection(this.workspace, skillTrust);
       if (directory !== "") skillSections.push(directory);
+      const discovered = [
+        ...listSkills(this.workspace, skillTrust).map((skill) => ({
+          skill,
+          source: "file" as const,
+        })),
+        ...BUILTIN_SKILLS.map((skill) => ({ skill, source: "synthesised" as const })),
+      ];
+      for (const row of discovered) {
+        const key = `${row.source}:${row.skill.name}:${row.skill.source}`;
+        if (this.skillInstallAnnounced.has(key)) continue;
+        this.skillInstallAnnounced.add(key);
+        await this.append(streamFor(this.session.id), EventTypes.skillInstalled, {
+          sessionId: this.session.id,
+          skillId: row.skill.name,
+          name: row.skill.name,
+          source: row.source,
+          status: "installed",
+          digest: sha256Hex(row.skill.body),
+        });
+      }
       let userContent = text;
       const activated = resolveSkillForMessage(this.workspace, text, skillTrust);
       if (activated) {
@@ -1268,10 +1435,18 @@ class HzRuntimeImpl implements HzRuntime {
       const turnStartedAt = Date.now();
       const catalog = loadCatalog();
       const contextWindowTokens = catalogWindow(this.provider.name, this.currentModel, catalog);
+      // H-1 / ruling 472: catalog accepts_settings for unsupported-param negotiation.
+      const acceptsSettings = resolveCatalogAcceptsSettings(
+        catalogModel(catalog, this.provider.name, this.currentModel),
+      );
+      const checkAcceptsSettings = parseCheckModelAcceptsSettingsFlag(
+        process.env.HZ_CHECK_MODEL_ACCEPTS_SETTINGS,
+      );
       const thinking = resolveThinkingEffort({
         userText: userContent,
         envValue: process.env.HZ_THINKING_EFFORT,
-        autoDifficulty: process.env.HZ_THINKING_AUTO === "1",
+        // Default-on cheap heuristic when effort unset; HZ_THINKING_AUTO=0 opts out (ruling 464).
+        autoDifficulty: parseThinkingAutoFlag(process.env.HZ_THINKING_AUTO),
       });
       if (thinking.effort !== undefined && thinking.source !== undefined) {
         emit(callbacks, {
@@ -1297,6 +1472,8 @@ class HzRuntimeImpl implements HzRuntime {
           interjection,
           sessionLeases: this.leases,
           thinkingEffort: thinking.effort,
+          acceptsSettings,
+          checkAcceptsSettings,
           // Plan mode rides this run's deps: staging/refusals happen inside
           // executeTool, and the model is told via the plan rail line.
           planMode: this.planOn,
@@ -1332,7 +1509,40 @@ class HzRuntimeImpl implements HzRuntime {
       // Wave-14c: record the turn's checkpoint AFTER the run completed. The
       // label is the user's first line; the change ids come from the durable
       // journal's window, so a resumed process still rewinds by file state.
-      this.recordTurnCheckpoint(text, turnStartedAt);
+      await this.recordTurnCheckpoint(text, turnStartedAt);
+      // E-4 reduced (ruling 467): opt-in continuous Markdown transcript under state.
+      // Best-effort — never fails the turn (parser/resume: ruling 476 helpers).
+      {
+        const md = syncMarkdownTranscript({
+          workspace: this.workspace,
+          sessionId: this.session.id,
+          history: this.store.history(this.session.id),
+          meta: { title: this.session.title, model: this.currentModel },
+        });
+        if (md.error) {
+          emit(cb, { type: "notice", message: `markdown transcript: ${md.error}` });
+        } else if (md.written && md.created) {
+          emit(cb, {
+            type: "notice",
+            message: `markdown transcript: writing to ${md.path} (HZ_MARKDOWN_TRANSCRIPT=1)`,
+          });
+        }
+      }
+      // Ruling 452: reduced post-turn trajectory digest (not full learn storage).
+      this.trajectoryTurn += 1;
+      const trajectoryId = `traj_${this.session.id.slice(0, 8)}_${this.trajectoryTurn}`;
+      notifyLearnTrajectoryRecorded({
+        trajectoryId,
+        rootSessionId: this.session.id,
+        eventCount: this.trajectoryTurn,
+      });
+      await this.append(streamFor(this.session.id), EventTypes.learnTrajectoryRecorded, {
+        sessionId: this.session.id,
+        trajectoryId,
+        rootSessionId: this.session.id,
+        eventCount: this.trajectoryTurn,
+        schemaRev: 1,
+      });
       const settlement =
         outcome.exit.terminal === "succeeded"
           ? "done"
@@ -1436,6 +1646,8 @@ class HzRuntimeImpl implements HzRuntime {
     if (this.closed) return;
     this.closed = true;
     this.abort();
+    this.stopOAuthAccountRotated();
+    this.stopLearnListeners();
     await this.sendQueue.catch(() => undefined);
     // MCP children are this runtime's spawns: reap them before the kernel goes
     // down, so no server process outlives the session that started it.
@@ -1658,6 +1870,14 @@ export {
   DEFAULT_CATALOG_SOURCE,
 } from "./catalog/catalog";
 export type { Catalog, LoadedCatalog, CatalogModel, CatalogProvider, CatalogSource, ModelCapabilities, ModelCost } from "./catalog/catalog";
+export {
+  negotiateAcceptsSettings,
+  negotiateReasoningEffort,
+  parseCheckModelAcceptsSettingsFlag,
+  resolveCatalogAcceptsSettings,
+  NEGOTIABLE_SETTINGS,
+} from "./catalog/accepts-settings";
+export type { NegotiableSetting, RequestedSettings, NegotiateAcceptsSettingsResult } from "./catalog/accepts-settings";
 export { KernelClient, LocalKernel, resolveKernelBinary } from "./kernel";
 export { SessionStore, type SessionInfo } from "./session";
 export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider, createGoogleProvider, createOllamaProvider } from "./providers";

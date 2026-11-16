@@ -55,7 +55,8 @@ import {
 } from "./memory/banks";
 import { memoryDbPath, memoryDbPathForBank, memorySearchReadTargets } from "./memory/store";
 import { previewQuirks } from "./providers/quirks";
-import { enrichUsageCost } from "./usage-cost";
+import { enrichUsageCost, usageCostEventFields } from "./usage-cost";
+import { negotiateReasoningEffort } from "./catalog/accepts-settings";
 import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
 import { canonicalJson, sha256Hex } from "./canon";
 import {
@@ -114,6 +115,7 @@ import {
   isContextWindowExceededCode,
 } from "./compaction-context-window";
 import { appendCompactionRecord, type CompactionTrigger } from "./compaction-journal";
+import { ProviderHistorySync } from "./sync-messages";
 import { sessionKernelReconcileNotice } from "./session-kernel-reconcile";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
@@ -165,9 +167,13 @@ import { buildRunCompletePayload, RUN_COMPLETE_EVENT } from "./receipt-run-termi
 import {
   actionStationarityInterruptNudge,
   consecutiveMistakesInterruptNudge,
+  contextOverflowInterruptNudge,
+  formatErrorsInterruptNudge,
   loopDetectionInterruptNudge,
+  thinkingLoopInterruptNudge,
 } from "./guards/guard-prompt";
 import { ActionStationarityTracker, LoopDetectionTracker, stepSignature } from "./guards/loop-detection";
+import { ThinkingLoopTracker } from "./guards/thinking-loop";
 import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
 import { truncatedToolCallMessage } from "./guards/truncated-tool-batch";
@@ -208,7 +214,8 @@ import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFro
 import { blobSpillEnabled } from "./blobs";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
-import { drainFormatted, type InterjectionBuffer } from "./interjection";
+import { drainFormatted, formatInterjection, type InterjectionBuffer } from "./interjection";
+import { interjectionLiveSteeringQueue, LiveSteeringChannel } from "./live-steering";
 import { recordHookAuditLine } from "./hook-handoff-capture";
 
 // The symlink-aware resolution moved to paths.ts (the single state-path
@@ -725,6 +732,50 @@ async function logEffectGuardDecision(
       target: input.action.target,
       decision: input.decision,
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    },
+    { kind: "system", id: "hz-guard" },
+  );
+}
+
+/** Grant-bound mint reason from LocalKernel.checkGuard / Rust mint_bound_lease. */
+function grantBoundLeaseMint(reason: string | undefined, leaseId: string | undefined): { grantId?: string } | undefined {
+  if (!leaseId || typeof reason !== "string") return undefined;
+  const match = /^grant (\S+) covers .+ \(minted one-use lease (\S+)\)$/.exec(reason);
+  if (!match || match[2] !== leaseId) return undefined;
+  return { grantId: match[1] };
+}
+
+async function logEffectLeaseIssued(
+  deps: LoopDeps,
+  faults: RunFaults,
+  input: {
+    effectId: string;
+    callId: string;
+    tool: string;
+    leaseId: string;
+    kind: string;
+    target: string;
+    oneUse?: boolean;
+    expiresAt?: string;
+    grantId?: string;
+    source: "grant_bound" | "kernel_transfer";
+  },
+): Promise<void> {
+  await logEvent(
+    deps,
+    faults,
+    EventTypes.effectLeaseIssued,
+    {
+      effectId: input.effectId,
+      callId: input.callId,
+      tool: input.tool,
+      leaseId: input.leaseId,
+      kind: input.kind,
+      target: input.target,
+      oneUse: input.oneUse !== false,
+      source: input.source,
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+      ...(input.grantId !== undefined ? { grantId: input.grantId } : {}),
     },
     { kind: "system", id: "hz-guard" },
   );
@@ -1311,6 +1362,17 @@ export interface LoopDeps {
   /** C-11 reduced: explicit thinking effort for this turn (no auto classifier). */
   thinkingEffort?: ThinkingRung;
   /**
+   * H-1 / ruling 472: catalog `accepts_settings` for this model. When set
+   * (including `[]`), unsupported optional params such as `reasoning_effort`
+   * are stripped before the provider wire. `undefined` = unknown / permissive.
+   */
+  acceptsSettings?: string[];
+  /**
+   * H-1: when false, force-send unsupported settings (`HZ_CHECK_MODEL_ACCEPTS_SETTINGS=0`).
+   * Default-on when omitted.
+   */
+  checkAcceptsSettings?: boolean;
+  /**
    * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
    * YET READ by the turn path. The field and the `buildSpeculationHost` /
    * `speculativeCandidatesFor` helpers are primitives for a future consumer;
@@ -1419,6 +1481,8 @@ export { SpeculativeOperationCoordinator };
 
 interface AssistantTurn {
   text: string;
+  /** Display-stream thinking deltas accumulated for C-10 thinking-loop detection only. */
+  thinkingText: string;
   toolCalls: ToolCall[];
   stopReason: "end" | "tool_use" | "max_tokens" | "abort";
   usage?: Usage;
@@ -1655,6 +1719,7 @@ function providerStreamSignal(userSignal: AbortSignal, streamCut: AbortControlle
 
 async function collectAssistant(
   deps: LoopDeps,
+  faults: RunFaults,
   history: ChatMsg[],
   rails?: {
     /** The task statement, pinned against trimming (see `pinnedTaskStatement`). */
@@ -1699,7 +1764,7 @@ async function collectAssistant(
           }
         : spec,
     );
-  const turn: AssistantTurn = { text: "", toolCalls: [], stopReason: "end" };
+  const turn: AssistantTurn = { text: "", thinkingText: "", toolCalls: [], stopReason: "end" };
   const kernelMode = (deps.kernel as { mode?: unknown } | undefined)?.mode;
   const basePrompt =
     deps.systemOverride !== undefined && deps.systemOverride !== ""
@@ -1747,6 +1812,21 @@ async function collectAssistant(
     historyLimit: HISTORY_LIMIT,
   });
   const streamCut = new AbortController();
+  const liveSteer =
+    deps.interjection !== undefined && deps.provider.liveSteering === true
+      ? new LiveSteeringChannel(interjectionLiveSteeringQueue(deps.interjection))
+      : undefined;
+  // H-1 / ruling 472: strip unsupported optional settings (e.g. reasoning_effort)
+  // when the catalog declares accepts_settings that omit them — warning, not 400.
+  const reasoningWire =
+    deps.thinkingEffort !== undefined ? toProviderReasoningEffort(deps.thinkingEffort) : undefined;
+  const negotiatedEffort = negotiateReasoningEffort(reasoningWire, deps.acceptsSettings, {
+    modelName: deps.model,
+    check: deps.checkAcceptsSettings !== false,
+  });
+  for (const warning of negotiatedEffort.warnings) {
+    emit(deps.callbacks, { type: "notice", message: warning });
+  }
   const request: ProviderRequest = {
     model: deps.model,
     system: basePrompt + extra + rail,
@@ -1754,18 +1834,24 @@ async function collectAssistant(
     messages: history,
     tools: specs,
     signal: providerStreamSignal(deps.signal, streamCut),
-    ...(deps.thinkingEffort !== undefined
-      ? { reasoningEffort: toProviderReasoningEffort(deps.thinkingEffort) }
-      : {}),
+    ...(negotiatedEffort.effort !== undefined ? { reasoningEffort: negotiatedEffort.effort } : {}),
+    ...(liveSteer !== undefined ? { liveSteering: liveSteer } : {}),
   };
+  let textChunks = 0;
+  let textBytes = 0;
   try {
     for await (const event of deps.provider.stream(request)) {
       if (event.type === "text") {
         turn.text += event.text;
+        textChunks += 1;
+        textBytes += event.text.length;
         emit(deps.callbacks, { type: "assistant.delta", text: event.text });
       } else if (event.type === "thinking") {
-        // Display only: reasoning never enters the transcript or the history.
-        if (typeof event.text === "string" && event.text !== "") emit(deps.callbacks, { type: "assistant.thinking", text: event.text });
+        // Display only for the transcript; accumulate for C-10 thinking-loop stalls.
+        if (typeof event.text === "string" && event.text !== "") {
+          turn.thinkingText += event.text;
+          emit(deps.callbacks, { type: "assistant.thinking", text: event.text });
+        }
       } else if (event.type === "tool_call") {
         turn.toolCalls.push({
           id: event.id && event.id !== "" ? event.id : `call_${turn.toolCalls.length + 1}`,
@@ -1788,11 +1874,18 @@ async function collectAssistant(
         if (event.code !== undefined) turn.failureCode = event.code;
         break;
       }
-      if (deps.interjection !== undefined && !deps.interjection.isEmpty()) {
+      // Live-steering providers claim via req.liveSteering (omp response.steer
+      // reduced); do not hard-cut while they can still deliver mid-stream.
+      if (
+        deps.interjection !== undefined &&
+        !deps.interjection.isEmpty() &&
+        deps.provider.liveSteering !== true
+      ) {
         streamCut.abort();
         // Steer wins over partially assembled tool calls: do not execute calls
         // that completed on the wire before the cut (provider may still be
-        // streaming argument JSON for others).
+        // streaming argument JSON for others). OpenAI assembly-cancel discards
+        // pre-tool_call fragments on this abort (ruling 457).
         if (turn.toolCalls.length > 0) {
           const { incomplete } = partitionWireCompleteToolCalls(turn.toolCalls);
           const dropped = turn.toolCalls.length;
@@ -1816,6 +1909,56 @@ async function collectAssistant(
     }
   } catch (err) {
     turn.error = `provider failed: ${errorMessage(err)}`;
+  }
+  // Record steers the provider accepted into the in-flight response; restore
+  // anything it deferred so the next step-boundary drain can admit them.
+  if (liveSteer !== undefined && deps.interjection !== undefined) {
+    for (const entry of liveSteer.accepted) {
+      try {
+        const modelText = formatInterjection(entry.text);
+        deps.store.appendMessage(deps.sessionId, { role: "user", content: modelText });
+        emit(deps.callbacks, { type: "interjection.admitted", text: entry.text });
+        emit(deps.callbacks, {
+          type: "notice",
+          message: "mid-turn steer: delivered your message into the in-flight response (live)",
+        });
+      } catch (err) {
+        faults.noteTranscript("interjection", err);
+        deps.interjection.restoreFront([entry]);
+      }
+    }
+    liveSteer.restoreDeferred(deps.interjection);
+  }
+  // RC-18 reduced: one coalesced durable delta + part.updated row per step (not per-token).
+  if (textChunks > 0) {
+    const deltaDigest = sha256Hex(turn.text);
+    await logEvent(
+      deps,
+      faults,
+      EventTypes.stepLlmDelta,
+      {
+        channel: "text",
+        coalescedCount: textChunks,
+        bytes: textBytes,
+        deltaDigest,
+        complete: true,
+      },
+      { kind: "system", id: "hz-llm" },
+    );
+    await logEvent(
+      deps,
+      faults,
+      EventTypes.partUpdated,
+      {
+        partType: "text",
+        patchKind: "append",
+        bytesAdded: textBytes,
+        coalescedCount: textChunks,
+        contentDigest: deltaDigest,
+        complete: true,
+      },
+      { kind: "system", id: "hz-llm" },
+    );
   }
   return turn;
 }
@@ -2077,6 +2220,35 @@ async function executeTool(
         decision: decision.decision,
         reason: decision.reason,
       });
+      const policyRev = deps.kernel.drainPolicyRevisionChange();
+      if (policyRev !== undefined) {
+        await logEvent(
+          deps,
+          faults,
+          EventTypes.policyRevisionChanged,
+          {
+            scope: "workspace",
+            previousRevision: policyRev.previousRevision,
+            newRevision: policyRev.newRevision,
+            digest: policyRev.digest,
+            source: "file",
+          },
+          { kind: "system", id: "hz-policy" },
+        );
+      }
+      const minted = grantBoundLeaseMint(decision.reason, decision.leaseId);
+      if (minted !== undefined && decision.leaseId !== undefined) {
+        await logEffectLeaseIssued(deps, faults, {
+          effectId,
+          callId: call.id,
+          tool: call.name,
+          leaseId: decision.leaseId,
+          kind: action.kind,
+          target: action.target,
+          source: "grant_bound",
+          ...(minted.grantId !== undefined ? { grantId: minted.grantId } : {}),
+        });
+      }
       if (decision.decision === "deny") {
         const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
         return { result: { ok: false, output: denied, error: denied }, expected: true };
@@ -2181,6 +2353,19 @@ async function executeTool(
     }
     if (routed !== undefined) {
       kernelRouted = true;
+      if (routed.issuedLease !== undefined) {
+        await logEffectLeaseIssued(deps, faults, {
+          effectId,
+          callId: call.id,
+          tool: call.name,
+          leaseId: routed.issuedLease.leaseId,
+          kind: routed.issuedLease.kind,
+          target: routed.issuedLease.target,
+          expiresAt: routed.issuedLease.expiresAt,
+          source: "kernel_transfer",
+        });
+        leaseId = routed.issuedLease.leaseId;
+      }
       if (routed.journalRecordFailed) {
         emit(deps.callbacks, { type: "notice", message: EFFECT_HOST_KERNEL_JOURNAL_FAIL_NOTICE });
       }
@@ -2519,6 +2704,58 @@ async function runToolCall(
           { kind: "tool", id: "todo" },
         );
       }
+    } else if (call.name === "memory_search") {
+      const query = typeof parsed.args.query === "string" ? parsed.args.query : "";
+      const hitCount =
+        result.output === "no memory hits"
+          ? 0
+          : result.output.split("\n").filter((line) => /^\d+\.\s/.test(line)).length;
+      await logEvent(
+        deps,
+        faults,
+        EventTypes.memoryRecalled,
+        {
+          sessionId: deps.sessionId,
+          hitCount,
+          queryDigest: sha256Hex(query),
+          queryBytes: Buffer.byteLength(query, "utf8"),
+        },
+        { kind: "tool", id: "memory_search" },
+      );
+    } else if (call.name === "memory_remember") {
+      const content = typeof parsed.args.content === "string" ? parsed.args.content : "";
+      const bank =
+        typeof parsed.args.bank === "string" && parsed.args.bank.trim() !== ""
+          ? parsed.args.bank.trim()
+          : "project";
+      const changed = !result.output.startsWith("no change");
+      await logEvent(
+        deps,
+        faults,
+        EventTypes.memoryRetained,
+        {
+          sessionId: deps.sessionId,
+          bank,
+          changed,
+          contentDigest: sha256Hex(content),
+          contentBytes: Buffer.byteLength(content, "utf8"),
+        },
+        { kind: "tool", id: "memory_remember" },
+      );
+    } else if (call.name === "memory_forget") {
+      const bank =
+        typeof parsed.args.bank === "string" && parsed.args.bank.trim() !== ""
+          ? parsed.args.bank.trim()
+          : "project";
+      const deletedMatch = /^forgot (\d+) fact/.exec(result.output);
+      const deleted = deletedMatch ? Number(deletedMatch[1]) : 0;
+      await logEvent(
+        deps,
+        faults,
+        EventTypes.memoryExpired,
+        { sessionId: deps.sessionId, bank, deleted },
+        { kind: "tool", id: "memory_forget" },
+      );
     }
   }
   // NF-074(b): cap the model-facing result and spill the full text. The
@@ -2911,6 +3148,12 @@ export async function runTurn(
     let contextWindowRecoveryUsed = false;
     let pendingCompactionTrigger: CompactionTrigger | undefined;
     const compactionHold = compactionHoldEnabled() ? new CompactionHoldBuffer() : undefined;
+    // B-5 / ruling 482: provider-facing history sync cursor (omp syncMessages).
+    // After compactHistory (and after steer appends land in the store), keep the
+    // longest byte-stable prefix of the prior dispatch instead of handing the
+    // provider a fully fresh array. Frozen StablePrefix / per-provider `auto`
+    // remain OPEN.
+    const historySync = new ProviderHistorySync();
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
@@ -2920,6 +3163,7 @@ export async function runTurn(
     // explicit statement of that, so the semantics do not depend on scope alone.
     const loopDetection = new LoopDetectionTracker();
     const actionStationarity = new ActionStationarityTracker();
+    const thinkingLoop = new ThinkingLoopTracker();
     const mistakes = new MistakeTracker();
     const repeatTool = new RepeatToolGuard();
     repeatTool.clear();
@@ -2972,7 +3216,10 @@ export async function runTurn(
       // to catch the missing argument; the pipeline now has one.)
       const rawHistory = deps.store.history(deps.sessionId);
       const view = compactHistory(rawHistory, { limit: historyLimit, holdBuffer: compactionHold });
-      const history = view.history;
+      // B-5: sync rewritten provider view to the longest byte-stable prefix of
+      // the previous dispatch (compact / emergency shrink / steer append).
+      const synced = historySync.sync(view.history);
+      const history = synced.messages;
       if (view.compacted && !compactionAnnounced) {
         // The elision is reported, never silent: a notice for the human of this
         // run, and an audit-trail event with the counts for the log.
@@ -3034,7 +3281,7 @@ export async function runTurn(
       // injected once, not re-sent on every dispatch.
       const hookContext = renderHookContextBlock(hookFragments);
       hookFragments.length = 0;
-      const turn = await collectAssistant(deps, history, {
+      const turn = await collectAssistant(deps, faults, history, {
         pinned,
         budgetLine: budgetCountdownLine(ledger.countdown()),
         corrective: combinedCorrective === "" ? undefined : combinedCorrective,
@@ -3054,6 +3301,7 @@ export async function runTurn(
           appendedTokens = FRAMING_CHARGE_TOKENS + estimateTokens(turn.text);
           for (const call of turn.toolCalls) appendedTokens += estimateTokens(call.arguments);
         }
+        const costFields = usageCostEventFields(turn.usage, deps.provider.name, deps.model);
         await logEvent(deps, faults, EventTypes.usageRecorded, {
           sessionId: deps.sessionId,
           provider: deps.provider.name,
@@ -3066,6 +3314,7 @@ export async function runTurn(
           ...(turn.usage.cacheCreationInputTokens !== undefined
             ? { cacheCreationInputTokens: turn.usage.cacheCreationInputTokens }
             : {}),
+          ...(costFields ?? {}),
         });
         if ((turn.usage.cacheReadInputTokens ?? 0) > 0 || (turn.usage.cacheCreationInputTokens ?? 0) > 0) {
           const enriched = enrichUsageCost(turn.usage, deps.provider.name, deps.model);
@@ -3121,6 +3370,8 @@ export async function runTurn(
             historyLimit = nextLimit;
             compactionAnnounced = false;
             pendingCompactionTrigger = "emergency-context-window";
+            // C-10: one prompt file per failure class — rides the retry step's system rail.
+            corrective = contextOverflowInterruptNudge();
             emit(deps.callbacks, { type: "notice", message: CONTEXT_WINDOW_COMPACTION_NOTICE });
             await logEvent(deps, faults, EventTypes.error, {
               message: turn.error,
@@ -3192,6 +3443,31 @@ export async function runTurn(
       }
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
         if (drainInterjectionsAtSafePoint(deps, faults)) continue;
+        // C-10: repeated thinking / no-tool stalls → system-interrupt nudge (or hard stop).
+        if (process.env.HZ_THINKING_LOOP !== "0") {
+          const thinkingVerdict = thinkingLoop.inspect({
+            toolCallCount: turn.toolCalls.length,
+            thinkingText: turn.thinkingText,
+            assistantText: turn.text,
+          });
+          if (thinkingVerdict.kind === "hard") {
+            emit(deps.callbacks, {
+              type: "error",
+              message: thinkingVerdict.message ?? "thinking loop detected",
+            });
+            await logEvent(deps, faults, EventTypes.error, {
+              message: thinkingVerdict.message,
+              detail: "thinking_loop",
+            });
+            exit = { terminal: "failed", detail: "thinking_loop" };
+            break;
+          }
+          if (thinkingVerdict.kind === "soft" && thinkingVerdict.message !== undefined) {
+            loopNudge = thinkingLoopInterruptNudge();
+            emit(deps.callbacks, { type: "notice", message: thinkingVerdict.message });
+            continue;
+          }
+        }
         // T-3: the model is ending its turn. If the session todo list still has
         // open items, give it ONE more step with a bounded reminder before the
         // run settles (the exit-status gate below keeps `unknown` as the
@@ -3214,6 +3490,7 @@ export async function runTurn(
       // SAFETY-RAILS (rail 1): Grok-style tiered identical-step detection, BEFORE
       // the batch is dispatched. One provider turn (parallel calls included) is
       // one step; tight tiers apply when every call is read/plan-style.
+      thinkingLoop.reset();
       loopNudge = undefined;
       const loopCalls = turn.toolCalls.map((call) => ({ name: call.name, input: parseCall(call).args }));
       const callStepSignature = stepSignature(loopCalls);
@@ -3396,7 +3673,7 @@ export async function runTurn(
       }
       if (parseErrors > 0 && cleanCalls === 0) {
         consecutiveFormatErrors += 1;
-        corrective = `Runtime note: your previous tool call(s) had invalid JSON arguments. Reissue them with valid JSON only (consecutive format errors: ${consecutiveFormatErrors}/${MAX_CONSECUTIVE_FORMAT_ERRORS}).`;
+        corrective = formatErrorsInterruptNudge(consecutiveFormatErrors, MAX_CONSECUTIVE_FORMAT_ERRORS);
         emit(deps.callbacks, {
           type: "notice",
           message: `the model sent invalid tool arguments (${consecutiveFormatErrors}/${MAX_CONSECUTIVE_FORMAT_ERRORS})`,

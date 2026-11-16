@@ -32,6 +32,10 @@ import {
   workspaceMcpConfigFile,
   workspaceProvidersConfigFile,
 } from "./trust";
+import {
+  parseConfigClassFields,
+  type ResolvedConfigClass,
+} from "./config-class-keys";
 
 export type ProviderName = "anthropic" | "openai" | "google" | "ollama" | "mock";
 
@@ -139,6 +143,15 @@ export interface HzConfig {
   notify?: NotifyConfig;
   /** User-only status-line script (stdin JSON, up to 5 lines). */
   statusLine?: { command: string; args?: string[] };
+  /**
+   * H-3 / ruling **484**: resolved `providerClass` / `modelClass` from user
+   * config (short name or documented import path). Module path only — not a
+   * dynamic plugin load. Absent when unset; rejections named below.
+   */
+  providerClass?: ResolvedConfigClass;
+  modelClass?: ResolvedConfigClass;
+  providerClassRejected?: string;
+  modelClassRejected?: string;
   /** Where the values came from, for the banner and for debugging. */
   sources: {
     provider: "env" | "file" | "detected" | "default";
@@ -340,6 +353,11 @@ interface ConfigFile {
   theme?: unknown;
   notify?: unknown;
   statusLine?: unknown;
+  /** H-3 class-name keys (camel or snake); resolved in `loadConfig`. */
+  providerClass?: unknown;
+  provider_class?: unknown;
+  modelClass?: unknown;
+  model_class?: unknown;
 }
 
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
@@ -1005,6 +1023,7 @@ export function loadConfig(
   const theme = parseTheme(fromFile.theme);
   const notify = parseNotify(fromFile.notify);
   const statusLine = parseStatusLine(fromFile.statusLine);
+  const classFields = parseConfigClassFields(fromFile as Record<string, unknown>);
 
   // Where the registry key came from, for the banner: an inline apiKey or the
   // entry's envKey var read as "file"/"env"; HZ_API_KEY stays "env".
@@ -1031,6 +1050,10 @@ export function loadConfig(
     theme,
     notify,
     statusLine,
+    providerClass: classFields.providerClass,
+    modelClass: classFields.modelClass,
+    providerClassRejected: classFields.providerClassRejected,
+    modelClassRejected: classFields.modelClassRejected,
     providers: registry,
     resolved,
     toolFormat,

@@ -38,6 +38,35 @@ export function ratesForModel(provider: string, model: string): ModelRateTable {
   return DEFAULT_RATES;
 }
 
+/** Harness estimate table id on `hz.usage.recorded` (not provider invoice truth). */
+export const HARNESS_PRICE_TABLE_REVISION = "harness-v1";
+
+export interface UsageCostEventFields {
+  /** Integer micro-USD of the harness total estimate (`Math.round(totalUsd * 1e6)`). */
+  costMicroUsd: number;
+  currency: "USD";
+  priceTableRevision: typeof HARNESS_PRICE_TABLE_REVISION;
+}
+
+/**
+ * Reduced H-2 / RC-18 fields for `hz.usage.recorded`: harness cost estimate only.
+ * Live provider billing / invoice reconciliation remains OPEN.
+ */
+export function usageCostEventFields(
+  usage: Usage,
+  provider: string,
+  model: string,
+): UsageCostEventFields | undefined {
+  const enriched = enrichUsageCost(usage, provider, model);
+  const total = enriched.cost?.totalUsd;
+  if (total === undefined) return undefined;
+  return {
+    costMicroUsd: Math.round(total * 1_000_000),
+    currency: "USD",
+    priceTableRevision: HARNESS_PRICE_TABLE_REVISION,
+  };
+}
+
 export function enrichUsageCost(usage: Usage, provider: string, model: string): Usage & { cost?: UsageCostBreakdown } {
   const rates = ratesForModel(provider, model);
   const input = usage.inputTokens ?? 0;

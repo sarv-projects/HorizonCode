@@ -10,6 +10,7 @@
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolCall, ToolSpec } from "../../contracts";
 import { anthropicSystemField } from "./anthropic-cache";
 import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
+import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
@@ -32,16 +33,6 @@ type AnthropicBlock =
 interface AnthropicMessage {
   role: "user" | "assistant";
   content: AnthropicBlock[];
-}
-
-function safeParse(text: unknown): unknown {
-  const raw = typeof text === "string" ? text.trim() : "";
-  if (raw === "") return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
 }
 
 /**
@@ -68,7 +59,7 @@ export function toAnthropicMessages(messages: ChatMsg[]): AnthropicMessage[] {
       const blocks: AnthropicBlock[] = [];
       if (typeof msg.content === "string" && msg.content.trim() !== "") blocks.push({ type: "text", text: msg.content });
       for (const call of msg.toolCalls ?? []) {
-        blocks.push({ type: "tool_use", id: call.id, name: call.name, input: safeParse(call.arguments) });
+        blocks.push({ type: "tool_use", id: call.id, name: call.name, input: anthropicToolInput(call.arguments) });
       }
       push("assistant", blocks);
       continue;
@@ -94,22 +85,6 @@ function mapStopReason(reason: unknown): "end" | "tool_use" | "max_tokens" {
   if (reason === "tool_use") return "tool_use";
   if (reason === "max_tokens") return "max_tokens";
   return "end";
-}
-
-/**
- * The JSON a tool block carries. Anthropic announces the block with
- * `input:{}` and streams the object as `input_json_delta`s; a tool with no
- * arguments sends no deltas at all, and a server may put the whole object in
- * the start block. The contract says `arguments` is a JSON string, so a block
- * that streamed nothing falls back to what it declared, never to "".
- */
-function toolArguments(raw: string, declared: unknown): string {
-  if (raw.trim() !== "") return raw;
-  if (declared !== null && typeof declared === "object" && Object.keys(declared).length > 0) {
-    const encoded = JSON.stringify(declared);
-    if (typeof encoded === "string" && encoded !== "") return encoded;
-  }
-  return "{}";
 }
 
 interface UsageShape {
@@ -205,7 +180,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
       const info = meta.get(index);
       if (!info) continue;
       emittedTool = true;
-      yield { type: "tool_call", id: info.id, name: info.name, arguments: toolArguments(args.get(index) ?? "", info.input) };
+      yield { type: "tool_call", id: info.id, name: info.name, arguments: anthropicToolArguments(args.get(index) ?? "", info.input) };
     }
     meta.clear();
     args.clear();
@@ -264,7 +239,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
           const info = meta.get(index);
           if (info) {
             meta.delete(index);
-            const raw = toolArguments(args.get(index) ?? "", info.input);
+            const raw = anthropicToolArguments(args.get(index) ?? "", info.input);
             args.delete(index);
             emittedTool = true;
             const call: ToolCall = { id: info.id, name: info.name, arguments: raw };

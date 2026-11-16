@@ -82,6 +82,12 @@ export interface CatalogModel {
   limit: { context: number; output?: number };
   capabilities?: ModelCapabilities;
   cost?: ModelCost;
+  /**
+   * H-1: optional provider params this model accepts (aider `accepts_settings`).
+   * Present (including `[]`) wins over capability derivation in
+   * `resolveCatalogAcceptsSettings`.
+   */
+  acceptsSettings?: string[];
 }
 
 /** One catalog provider: its default model id and its models by id. */
@@ -182,6 +188,16 @@ export function decodeModel(provider: string, key: string, value: unknown): Cata
     if (typeof caps.tools === "boolean") capabilities.tools = caps.tools;
     if (typeof caps.reasoning === "boolean") capabilities.reasoning = caps.reasoning;
     if (Object.keys(capabilities).length > 0) model.capabilities = capabilities;
+  }
+
+  // H-1: tolerant `accepts_settings` / `acceptsSettings` (string[] of param names).
+  const acceptsRaw = raw.accepts_settings ?? raw.acceptsSettings;
+  if (Array.isArray(acceptsRaw)) {
+    const names: string[] = [];
+    for (const entry of acceptsRaw) {
+      if (typeof entry === "string" && entry.trim() !== "") names.push(entry.trim());
+    }
+    model.acceptsSettings = names;
   }
 
   const cost = asRecord(raw.cost);

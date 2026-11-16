@@ -14,6 +14,7 @@ import { textFromOpenAiDeltaContent } from "./openai-delta-content";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
+import { formatAssemblyCancelNotice, ToolCallAssembler } from "./tool-call-assembly";
 
 export interface OpenAiSettings {
   apiKey: string;
@@ -43,12 +44,6 @@ export interface OpenAiWireSettings {
 
 const DEFAULT_BASE_URL = "https://api.openai.com";
 const DEFAULT_MAX_TOKENS = 4096;
-
-interface OpenAiToolCallDelta {
-  index?: number;
-  id?: string;
-  function?: { name?: string; arguments?: string };
-}
 
 /** ChatMsg[] -> OpenAI chat messages, tool calls and tool results included. */
 export function toOpenAiMessages(messages: ChatMsg[]): Array<Record<string, unknown>> {
@@ -236,7 +231,14 @@ export async function* streamOpenAiCompatible(
     cacheCreationInputTokens?: number;
     cacheReadInputTokens?: number;
   } | undefined;
-  const partials = new Map<number, { id: string; name: string; args: string }>();
+  const assembler = new ToolCallAssembler();
+
+  const yieldAssemblyCancel = function* (): Generator<ProviderEvent, void, unknown> {
+    const cancelled = assembler.cancel();
+    if (cancelled.length > 0) {
+      yield { type: "notice", message: formatAssemblyCancelNotice(cancelled) };
+    }
+  };
 
   try {
     for await (const message of readSse(response.body)) {
@@ -283,19 +285,15 @@ export async function* streamOpenAiCompatible(
       if (reasoning !== "") yield { type: "thinking", text: reasoning };
       const text = textFromOpenAiDeltaContent(delta.content);
       if (text !== "") yield { type: "text", text };
-      const deltas: OpenAiToolCallDelta[] = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+      const deltas = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
       for (const call of deltas) {
-        const index = typeof call.index === "number" ? call.index : 0;
-        const current = partials.get(index) ?? { id: "", name: "", args: "" };
-        if (typeof call.id === "string" && call.id !== "") current.id = call.id;
-        if (typeof call.function?.name === "string" && call.function.name !== "") current.name = call.function.name;
-        if (typeof call.function?.arguments === "string") current.args += call.function.arguments;
-        partials.set(index, current);
+        assembler.pushDelta(call);
       }
       if (choice.finish_reason) finish = choice.finish_reason;
     }
   } catch (err) {
     if (isAbortError(err, req.signal)) {
+      yield* yieldAssemblyCancel();
       yield { type: "done", stopReason: "abort" };
       return;
     }
@@ -304,28 +302,24 @@ export async function* streamOpenAiCompatible(
   }
 
   if (aborted || req.signal?.aborted) {
+    // C-9 assembly-cancel: never flush partial argument JSON after steer/abort.
+    yield* yieldAssemblyCancel();
     yield { type: "done", stopReason: "abort" };
     return;
   }
 
-  let emitted = false;
-  for (const index of [...partials.keys()].sort((a, b) => a - b)) {
-    const call = partials.get(index);
-    if (!call || call.name === "") continue;
-    emitted = true;
-    // `arguments` is a JSON string per the contract; a call that streamed no
-    // fragments at all (a no-argument tool) must still be parseable, the same
-    // way toOpenAiMessages already rewrites an empty replay to "{}".
+  const completed = assembler.flushCompleted();
+  for (const call of completed) {
     yield {
       type: "tool_call",
-      id: call.id !== "" ? call.id : `call_${index + 1}`,
+      id: call.id,
       name: call.name,
-      arguments: call.args.trim() === "" ? "{}" : call.args,
+      arguments: call.arguments,
     };
   }
 
   let stopReason = mapFinishReason(finish);
-  if (emitted && stopReason === "end") stopReason = "tool_use";
+  if (completed.length > 0 && stopReason === "end") stopReason = "tool_use";
   yield { type: "done", stopReason, usage };
 }
 

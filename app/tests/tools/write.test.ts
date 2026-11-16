@@ -1,11 +1,22 @@
 /** `write` — parent creation, overwrite, counts, guard/approve paths. */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
+import { clearLintedPaths, noteLintedPath } from "../../src/core/git-dirty-checkpoint";
 import { readTool } from "../../src/tools/read";
 import { writeTool } from "../../src/tools/write";
 import { makeWorkspace, mockToolContext, readFixture } from "./helpers";
+
+function initGitWorkspace(): string {
+  const ws = mkdtempSync(path.join(tmpdir(), "hz-write-git-"));
+  spawnSync("git", ["init"], { cwd: ws });
+  spawnSync("git", ["config", "user.email", "t@t.com"], { cwd: ws });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: ws });
+  return ws;
+}
 
 describe("write tool", () => {
   test("creates missing parent directories", async () => {
@@ -95,5 +106,57 @@ describe("write tool", () => {
     expect((await writeTool.execute({}, ctx)).error).toBe("path is required");
     expect((await writeTool.execute({ path: "f.txt" }, ctx)).error).toBe("content is required");
     expect(ctx.guardCalls.length).toBe(0);
+  });
+
+  test("E-1: opt-in lint-fix commit after successful write of a linted path", async () => {
+    const prev = process.env.HZ_GIT_LINT_FIX_COMMIT;
+    process.env.HZ_GIT_LINT_FIX_COMMIT = "1";
+    clearLintedPaths();
+    try {
+      const ws = initGitWorkspace();
+      const rel = "f.ts";
+      writeFileSync(path.join(ws, rel), "const x = 1\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+      const sessionId = "sess-write-lintfix";
+      const ctx = mockToolContext({ cwd: ws, workspace: ws, sessionId });
+      noteLintedPath(sessionId, rel);
+      expect((await readTool.execute({ path: rel }, ctx)).ok).toBe(true);
+      const r = await writeTool.execute({ path: rel, content: "const x = 1;\n" }, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.output).toContain("lint-fix commit");
+      const log = spawnSync("git", ["log", "-1", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(log).toContain("lint fix");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_LINT_FIX_COMMIT;
+      else process.env.HZ_GIT_LINT_FIX_COMMIT = prev;
+      clearLintedPaths();
+    }
+  });
+
+  test("E-1: write does not lint-fix commit when flag is off", async () => {
+    const prev = process.env.HZ_GIT_LINT_FIX_COMMIT;
+    delete process.env.HZ_GIT_LINT_FIX_COMMIT;
+    clearLintedPaths();
+    try {
+      const ws = initGitWorkspace();
+      const rel = "g.ts";
+      writeFileSync(path.join(ws, rel), "const x = 1\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+      const sessionId = "sess-write-off";
+      const ctx = mockToolContext({ cwd: ws, workspace: ws, sessionId });
+      noteLintedPath(sessionId, rel);
+      expect((await readTool.execute({ path: rel }, ctx)).ok).toBe(true);
+      const r = await writeTool.execute({ path: rel, content: "const x = 1;\n" }, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.output).not.toContain("lint-fix commit");
+      const log = spawnSync("git", ["log", "-1", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(log).not.toContain("lint fix");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_LINT_FIX_COMMIT;
+      else process.env.HZ_GIT_LINT_FIX_COMMIT = prev;
+      clearLintedPaths();
+    }
   });
 });

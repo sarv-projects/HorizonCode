@@ -42,6 +42,7 @@ import {
   type RetryPolicy,
 } from "./retry";
 import { errorText, isAbortError, truncate } from "./sse";
+import { toolArgsObject } from "./tool-args-object";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
 export const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
@@ -67,19 +68,6 @@ export interface OllamaMessage {
   tool_name?: string;
 }
 
-/** Tool-call arguments are a JSON string in the contract and an object on this wire. */
-function safeObject(raw: unknown): Record<string, unknown> {
-  const text = typeof raw === "string" ? raw.trim() : "";
-  if (text === "") return {};
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    /* unparsable arguments replay as no arguments */
-  }
-  return {};
-}
-
 /**
  * ChatMsg[] -> /api/chat messages. The native API matches a tool result by
  * function name, so a tool message without one cannot be replayed and is
@@ -98,7 +86,7 @@ export function toOllamaMessages(messages: ChatMsg[]): OllamaMessage[] {
       const entry: OllamaMessage = { role: "assistant", content: typeof msg.content === "string" ? msg.content : "" };
       const calls = msg.toolCalls ?? [];
       if (calls.length > 0) {
-        entry.tool_calls = calls.map((call) => ({ function: { name: call.name, arguments: safeObject(call.arguments) } }));
+        entry.tool_calls = calls.map((call) => ({ function: { name: call.name, arguments: toolArgsObject(call.arguments) } }));
       }
       out.push(entry);
       continue;

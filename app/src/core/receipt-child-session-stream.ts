@@ -157,6 +157,6 @@ export function formatChildSessionStreamLines(
     lines.push(`    stream ${child.eventLines} event line(s) — \`${child.streamPath}\``);
     lines.push(`    integrity ${formatNestedStreamIntegrity(integrity)}`);
   }
-  lines.push("(full nested stream replay / verify: residual — not R174)");
+  lines.push("(nested event-stream replay: see ruling **478** / session verify; issuer attestation still OPEN)");
   return lines;
 }

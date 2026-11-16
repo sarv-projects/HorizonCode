@@ -6,11 +6,13 @@
 import type { HzConfig } from "./config";
 import { renderConfigCheck, checkConfigFile, defaultConfigPath } from "./config";
 import { maskSecrets } from "./compaction";
+import { defaultAnalyticsLogPath, resolveAnalyticsLogPath } from "./analytics-log";
 
 export interface SettingsReportOptions {
   workspace: string;
   home: string;
   config: HzConfig;
+  env?: Record<string, string | undefined>;
 }
 
 function line(label: string, value: string): string {
@@ -20,6 +22,7 @@ function line(label: string, value: string): string {
 /** Human-readable settings snapshot for TUI `/settings`. */
 export function renderSettingsReport(opts: SettingsReportOptions): string {
   const { workspace, home, config } = opts;
+  const env = opts.env ?? process.env;
   const userFile = defaultConfigPath(home);
   const lines: string[] = [
     "settings (effective for this chat)",
@@ -47,8 +50,15 @@ export function renderSettingsReport(opts: SettingsReportOptions): string {
   if ((config.trustedWorkspaceHooks?.length ?? 0) > 0) {
     lines.push(`  trustedWorkspaceHooks: ${config.trustedWorkspaceHooks!.length} path(s)`);
   }
+  const analyticsPath = resolveAnalyticsLogPath(workspace, env);
+  if (analyticsPath !== undefined) {
+    lines.push(line("analyticsLog", analyticsPath));
+  } else {
+    lines.push(
+      `  analyticsLog: off (set HZ_ANALYTICS_LOG=1 or --analytics-log; default ${defaultAnalyticsLogPath(workspace)})`,
+    );
+  }
   lines.push("", `user config file: ${userFile}`);
   lines.push(renderConfigCheck(checkConfigFile(userFile)));
-  lines.push("", "Residual: local-only analytics log (not built).");
   return lines.join("\n");
 }

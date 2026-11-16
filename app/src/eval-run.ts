@@ -25,7 +25,11 @@ import type { PostmortemEvalCase } from "./core/evals";
 import { evalCaseFromPostmortem, runEvalSet } from "./core/evals";
 import { makeRuntimeExecutor } from "./core/eval-executor";
 import { loadPostmortems } from "./core/postmortem";
-import { assertEvalApprovalFresh, buildEvalApproval } from "./core/eval-approval";
+import {
+  assertEvalApprovalFresh,
+  buildEvalApproval,
+  buildFrozenSplit,
+} from "./core/eval-approval";
 import { upsertPredsRecord, type PredsRecordV1 } from "./core/preds-writer";
 
 export interface EvalCliIo {
@@ -45,7 +49,7 @@ interface CaseFileEntry {
 }
 
 const USAGE =
-  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir>) --forbidden <text-or-file> [--preds-out <preds.json>] [--approval <file.json>] [--write-approval <file.json>] [--keep] [--live]";
+  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir>) --forbidden <text-or-file> [--preds-out <preds.json>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--keep] [--live]";
 
 /** The value of `--flag`, or `undefined` when absent (an empty string when bare). */
 function argValue(argv: readonly string[], flag: string): string | undefined {
@@ -209,9 +213,43 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
   io.out(`summary: ${run.results.length} case(s), ${passed} passed, ${run.results.length - passed} failed`);
 
   if (writeApprovalPath !== undefined && writeApprovalPath !== "") {
-    const approval = buildEvalApproval(cases);
+    const heldOutRaw = argValue(argv, "--held-out-fraction");
+    const splitSeedRaw = argValue(argv, "--split-seed");
+    let frozenSplit = undefined;
+    if (heldOutRaw !== undefined && heldOutRaw !== "") {
+      const heldOutFraction = Number(heldOutRaw);
+      if (!Number.isFinite(heldOutFraction)) {
+        io.err(`--held-out-fraction must be a number between 0 and 1\n${USAGE}`);
+        return 2;
+      }
+      const splitSeed =
+        splitSeedRaw !== undefined && splitSeedRaw !== "" ? Number(splitSeedRaw) : undefined;
+      if (splitSeed !== undefined && (!Number.isInteger(splitSeed) || splitSeed < 0)) {
+        io.err(`--split-seed must be a non-negative integer\n${USAGE}`);
+        return 2;
+      }
+      try {
+        frozenSplit = buildFrozenSplit(
+          cases.map((c) => c.id),
+          { heldOutFraction, ...(splitSeed !== undefined ? { splitSeed } : {}) },
+        );
+      } catch (err) {
+        io.err(err instanceof Error ? err.message : String(err));
+        return 2;
+      }
+    } else if (splitSeedRaw !== undefined) {
+      io.err(`--split-seed requires --held-out-fraction (frozen split)\n${USAGE}`);
+      return 2;
+    }
+    const approval = buildEvalApproval(cases, undefined, frozenSplit);
     writeFileSync(writeApprovalPath, `${JSON.stringify(approval, null, 2)}\n`, "utf8");
-    io.out(`wrote approval: ${writeApprovalPath} (casesContentHash ${approval.casesContentHash})`);
+    const splitNote =
+      approval.frozenSplit !== undefined
+        ? ` · frozenSplit train=${approval.frozenSplit.trainIds.length} heldOut=${approval.frozenSplit.heldOutIds.length} seed=${approval.frozenSplit.splitSeed}`
+        : "";
+    io.out(
+      `wrote approval: ${writeApprovalPath} (casesContentHash ${approval.casesContentHash}${splitNote})`,
+    );
   }
 
   return passed === run.results.length ? 0 : 1;

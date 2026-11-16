@@ -186,6 +186,8 @@ export type KernelMutationRouteOutcome = {
   journalSkipped: boolean;
   /** True when write/edit journal record could not be attached (notice only). */
   journalRecordFailed?: boolean;
+  /** Fresh one-use lease minted for EffectHost transfer (shell admittedByLoop). */
+  issuedLease?: { leaseId: string; kind: string; target: string; expiresAt: string };
 };
 
 function workspaceRelPath(workspace: string, rawPath: string): string | undefined {
@@ -873,9 +875,16 @@ export async function tryKernelShellRoute(
     // bound to this session; do not mint when this helper is invoked directly.
     // Raw callers remain subject to the kernel's own ASK/deny policy.
     let approvedLeaseId: string | undefined;
+    let issuedLease: KernelMutationRouteOutcome["issuedLease"];
     if (approval?.admittedByLoop && kernel.mode === "trusted") {
       const permit = await kernel.makeLease("shell.exec", argv.join(" "), 60_000, approval.sessionId);
       approvedLeaseId = permit.leaseId;
+      issuedLease = {
+        leaseId: permit.leaseId,
+        kind: "shell.exec",
+        target: argv.join(" "),
+        expiresAt: permit.expiry,
+      };
     }
     const result = await kernel.executeEffect({
       effectId,
@@ -885,12 +894,15 @@ export async function tryKernelShellRoute(
       dispatch: { kind: "shell.exec", spec },
     });
     const exit = result.exitCode ?? -1;
-    return outcomeFromExecuteResult(
-      result,
-      `${KERNEL_ROUTE_TAG} exit ${exit} (kernel shell.exec argv; stdout digest ${result.stdoutDigest ?? "?"})`,
-      `${KERNEL_ROUTE_TAG} kernel shell.exec ${result.verdict}`,
-      { journalSkipped: true },
-    );
+    return {
+      ...outcomeFromExecuteResult(
+        result,
+        `${KERNEL_ROUTE_TAG} exit ${exit} (kernel shell.exec argv; stdout digest ${result.stdoutDigest ?? "?"})`,
+        `${KERNEL_ROUTE_TAG} kernel shell.exec ${result.verdict}`,
+        { journalSkipped: true },
+      ),
+      ...(issuedLease !== undefined ? { issuedLease } : {}),
+    };
   } catch (error) {
     return refusedKernelRoute(error, true);
   }

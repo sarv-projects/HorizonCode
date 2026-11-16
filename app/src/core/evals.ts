@@ -68,6 +68,7 @@
  */
 
 import type { RunExit, TerminalState } from "../contracts";
+import { notifyLearnEvalCompleted } from "./learn-events";
 import { metricContract } from "./metrics";
 import type { PostmortemRecord } from "./postmortem";
 
@@ -655,6 +656,15 @@ export async function runEvalSet(
     metricContract({ metric: "eval cases passed", anchor, population, excludes, value: passed }),
     metricContract({ metric: "eval cases failed", anchor, population, excludes, value: failed }),
   ];
+
+  // RC-18: notify learn listeners so a live Runtime can project hz.learn.eval.completed (451).
+  notifyLearnEvalCompleted({
+    evalId: `eval-set-${results.length}-${passed}-${failed}`,
+    caseCount: results.length,
+    passed,
+    failed,
+    gate: failed === 0 ? "pass" : "fail",
+  });
 
   return { results, aggregate: { published } };
 }

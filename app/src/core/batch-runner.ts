@@ -1,18 +1,34 @@
 /**
  * batch-runner.ts — resumable JSONL batch jobs (docs/30 J-2 reduced) and progress
- * text for batch ETA/histogram (docs/30 I-5 reduced).
+ * text for batch ETA/histogram/running cost (docs/30 I-5 reduced).
  *
  * Each line is one job row. Resume skips rows whose status is `done` or `failed`.
- * Deterministic --filter/--shuffle/--slice selection is available for planning;
- * runner-config snapshots, actually executing rows and Ctrl-C drain remain open.
+ * Deterministic --filter/--shuffle/--slice selection is available for planning.
+ * A sidecar `*.runner-config.json` snapshots those launch flags (plus optional
+ * J-4 `--arm`) so a later `--resume` need not re-specify them (omp metaharness
+ * runner-config spirit). Actually executing rows and Ctrl-C drain remain open.
  */
 
 import { appendFileSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
+import { canonicalJson, sha256Hex, type Usage } from "../contracts";
+import { HARNESS_PRICE_TABLE_REVISION, usageCostEventFields } from "./usage-cost";
 
 export type BatchJobStatus = "pending" | "running" | "done" | "failed";
+
+/**
+ * Optional per-row usage for I-5 running cost. Prefer a recorded harness
+ * `costMicroUsd` (H-2 / `hz.usage.recorded`); otherwise estimate from token
+ * fields via `usage-cost.ts` when provider/model are present.
+ */
+export interface BatchJobUsage extends Usage {
+  /** Integer micro-USD harness estimate when already known (ruling 455). */
+  costMicroUsd?: number;
+  provider?: string;
+  model?: string;
+}
 
 export interface BatchJobRow {
   id: string;
@@ -21,6 +37,8 @@ export interface BatchJobRow {
   terminal?: string;
   detail?: string;
   updatedAt?: string;
+  /** When present, contributes to `formatBatchProgress` running harness cost. */
+  usage?: BatchJobUsage;
 }
 
 export interface BatchJobLoad {
@@ -49,6 +67,7 @@ export function parseBatchJobLine(text: string, lineNo: number): BatchJobRow | {
   }
   const status = row.status ?? "pending";
   if (!STATUS_ORDER.includes(status)) return { corrupt: { line: lineNo, reason: `unknown status ${String(status)}` } };
+  const usage = parseBatchJobUsage(row.usage);
   return {
     id: row.id.trim(),
     task: row.task,
@@ -56,7 +75,68 @@ export function parseBatchJobLine(text: string, lineNo: number): BatchJobRow | {
     terminal: typeof row.terminal === "string" ? row.terminal : undefined,
     detail: typeof row.detail === "string" ? row.detail : undefined,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : undefined,
+    ...(usage === undefined ? {} : { usage }),
   };
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** Soft-parse optional usage; malformed blobs are omitted (row still loads). */
+export function parseBatchJobUsage(raw: unknown): BatchJobUsage | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const src = raw as Record<string, unknown>;
+  const usage: BatchJobUsage = {};
+  const inputTokens = optionalFiniteNumber(src.inputTokens);
+  const outputTokens = optionalFiniteNumber(src.outputTokens);
+  const cacheCreationInputTokens = optionalFiniteNumber(src.cacheCreationInputTokens);
+  const cacheReadInputTokens = optionalFiniteNumber(src.cacheReadInputTokens);
+  const costMicroUsd = optionalFiniteNumber(src.costMicroUsd);
+  if (inputTokens !== undefined) usage.inputTokens = inputTokens;
+  if (outputTokens !== undefined) usage.outputTokens = outputTokens;
+  if (cacheCreationInputTokens !== undefined) usage.cacheCreationInputTokens = cacheCreationInputTokens;
+  if (cacheReadInputTokens !== undefined) usage.cacheReadInputTokens = cacheReadInputTokens;
+  if (costMicroUsd !== undefined) usage.costMicroUsd = Math.round(costMicroUsd);
+  if (typeof src.provider === "string" && src.provider.trim() !== "") usage.provider = src.provider;
+  if (typeof src.model === "string" && src.model.trim() !== "") usage.model = src.model;
+  return Object.keys(usage).length === 0 ? undefined : usage;
+}
+
+/**
+ * Harness micro-USD for one row: prefer recorded `costMicroUsd`, else H-2
+ * `usageCostEventFields` from token fields + provider/model.
+ */
+export function batchRowCostMicroUsd(row: BatchJobRow): number | undefined {
+  const usage = row.usage;
+  if (!usage) return undefined;
+  if (usage.costMicroUsd !== undefined && Number.isFinite(usage.costMicroUsd)) {
+    return Math.round(usage.costMicroUsd);
+  }
+  const fields = usageCostEventFields(usage, usage.provider ?? "", usage.model ?? "");
+  return fields?.costMicroUsd;
+}
+
+/** Sum harness micro-USD across rows that record usable usage; else undefined. */
+export function batchRunningCostMicroUsd(rows: readonly BatchJobRow[]): number | undefined {
+  let sum = 0;
+  let any = false;
+  for (const row of rows) {
+    const cost = batchRowCostMicroUsd(row);
+    if (cost === undefined) continue;
+    any = true;
+    sum += cost;
+  }
+  return any ? sum : undefined;
+}
+
+/** Progress-line fragment; undefined when no rows recorded usable usage. */
+export function formatBatchRunningCost(rows: readonly BatchJobRow[]): string | undefined {
+  const micro = batchRunningCostMicroUsd(rows);
+  if (micro === undefined) return undefined;
+  const usd = micro / 1_000_000;
+  return ` · cost ~$${usd.toFixed(4)} (${HARNESS_PRICE_TABLE_REVISION})`;
 }
 
 export function loadBatchJob(file: string): BatchJobLoad {
@@ -77,16 +157,29 @@ export function loadBatchJob(file: string): BatchJobLoad {
 export interface BatchSelectionOptions {
   /** Case-insensitive substring of the stable row id or task text. */
   filter?: string;
+  /**
+   * Exact job-id arm prefix (substring before the first `-`, or the whole id).
+   * J-4 benchmark arms; snapshotted in runner-config with the other launch flags.
+   */
+  arm?: string;
   /** Stable content-independent ordering key; job status is NOT part of the hash. */
   shuffleSeed?: string;
   /** Zero-based, half-open range applied after filtering and shuffling. */
   slice?: { start: number; end?: number };
 }
 
+/** Arm = substring before the first `-` in the job id, or the whole id. */
+export function armPrefixFromJobId(id: string): string {
+  const trimmed = id.trim();
+  const dash = trimmed.indexOf("-");
+  return dash > 0 ? trimmed.slice(0, dash) : trimmed;
+}
+
 /**
  * Select a reproducible job subset without modifying rows or their status.
  * The full job population is selected BEFORE the pending/running resume filter,
  * so completed rows cannot shift positions in --slice on subsequent runs.
+ * Order: filter → arm → shuffle → slice.
  */
 export function selectBatchRows(
   rows: readonly BatchJobRow[],
@@ -98,6 +191,11 @@ export function selectBatchRows(
     if (!query) throw new Error("batch selection: --filter must be non-empty");
     selected = selected.filter((row) =>
       row.id.toLowerCase().includes(query) || row.task.toLowerCase().includes(query));
+  }
+  if (opts.arm !== undefined) {
+    const arm = opts.arm.trim();
+    if (!arm) throw new Error("batch selection: --arm must be non-empty");
+    selected = selected.filter((row) => armPrefixFromJobId(row.id) === arm);
   }
   if (opts.shuffleSeed !== undefined) {
     const seed = opts.shuffleSeed;
@@ -159,7 +257,8 @@ export function batchStatusHistogram(rows: readonly BatchJobRow[]): BatchStatusH
 }
 
 /**
- * I-5 reduced: human progress line with per-status histogram and a coarse ETA.
+ * I-5 reduced: human progress line with per-status histogram, coarse ETA, and
+ * harness running cost when rows record usage (H-2 / usage-cost.ts).
  * Returns `undefined` when there is no batch (`rows.length === 0`).
  */
 export function formatBatchProgress(rows: readonly BatchJobRow[], startedAtMs: number, nowMs = Date.now()): string | undefined {
@@ -172,7 +271,8 @@ export function formatBatchProgress(rows: readonly BatchJobRow[], startedAtMs: n
   const etaSec = rate > 0 ? remaining / rate : undefined;
   const eta =
     etaSec !== undefined && Number.isFinite(etaSec) ? ` · ETA ~${Math.ceil(etaSec)}s` : remaining === 0 ? "" : " · ETA unknown";
-  return `batch: ${finished}/${hist.total} finished · pending=${hist.pending} running=${hist.running} done=${hist.done} failed=${hist.failed}${eta}`;
+  const cost = formatBatchRunningCost(rows) ?? "";
+  return `batch: ${finished}/${hist.total} finished · pending=${hist.pending} running=${hist.running} done=${hist.done} failed=${hist.failed}${eta}${cost}`;
 }
 
 /** Append new rows (does not dedupe by id — caller's responsibility). */
@@ -185,4 +285,200 @@ export function appendBatchJobRows(file: string, rows: BatchJobRow[]): void {
 export async function readBatchJob(file: string): Promise<BatchJobLoad> {
   await readFile(file, "utf8");
   return loadBatchJob(file);
+}
+
+/**
+ * Launch-flag snapshot for resumable batch runs (J-2 / omp runner-config.json).
+ * Selection fields only — row status lives in the job JSONL, not here.
+ */
+export interface BatchRunnerConfigV1 {
+  version: 1;
+  /** Absolute job JSONL path recorded at write time. */
+  job: string;
+  filter?: string;
+  /** Exact arm prefix (J-4); omitted when unset. */
+  arm?: string;
+  shuffleSeed?: string;
+  slice?: { start: number; end?: number };
+  writtenAt: string;
+  /** sha256 of canonical {filter?, arm?, shuffleSeed?, slice?} (keys omitted when unset). */
+  selectionHash: string;
+}
+
+/** Digest binding the selection subset of a runner-config (not the job path). */
+export function batchSelectionHash(opts: BatchSelectionOptions): string {
+  const body: Record<string, unknown> = {};
+  if (opts.filter !== undefined) body.filter = opts.filter;
+  if (opts.arm !== undefined) body.arm = opts.arm;
+  if (opts.shuffleSeed !== undefined) body.shuffleSeed = opts.shuffleSeed;
+  if (opts.slice !== undefined) {
+    body.slice =
+      opts.slice.end === undefined
+        ? { start: opts.slice.start }
+        : { start: opts.slice.start, end: opts.slice.end };
+  }
+  return sha256Hex(canonicalJson(body));
+}
+
+export function selectionFromRunnerConfig(config: BatchRunnerConfigV1): BatchSelectionOptions {
+  return {
+    ...(config.filter === undefined ? {} : { filter: config.filter }),
+    ...(config.arm === undefined ? {} : { arm: config.arm }),
+    ...(config.shuffleSeed === undefined ? {} : { shuffleSeed: config.shuffleSeed }),
+    ...(config.slice === undefined ? {} : { slice: { ...config.slice } }),
+  };
+}
+
+export function buildBatchRunnerConfig(
+  jobFile: string,
+  opts: BatchSelectionOptions = {},
+  writtenAt = new Date().toISOString(),
+): BatchRunnerConfigV1 {
+  const job = path.resolve(jobFile);
+  const clean: BatchSelectionOptions = {
+    ...(opts.filter === undefined ? {} : { filter: opts.filter }),
+    ...(opts.arm === undefined ? {} : { arm: opts.arm }),
+    ...(opts.shuffleSeed === undefined ? {} : { shuffleSeed: opts.shuffleSeed }),
+    ...(opts.slice === undefined
+      ? {}
+      : {
+          slice:
+            opts.slice.end === undefined
+              ? { start: opts.slice.start }
+              : { start: opts.slice.start, end: opts.slice.end },
+        }),
+  };
+  return {
+    version: 1,
+    job,
+    ...clean,
+    writtenAt,
+    selectionHash: batchSelectionHash(clean),
+  };
+}
+
+/** Sidecar next to the job file: `job.jsonl` → `job.runner-config.json`. */
+export function defaultBatchRunnerConfigPath(jobFile: string): string {
+  const resolved = path.resolve(jobFile);
+  const dir = path.dirname(resolved);
+  const base = path.basename(resolved);
+  const stem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+  return path.join(dir, `${stem}.runner-config.json`);
+}
+
+export function writeBatchRunnerConfig(file: string, config: BatchRunnerConfigV1): void {
+  const expected = batchSelectionHash(selectionFromRunnerConfig(config));
+  if (config.version !== 1) throw new Error("batch runner-config: version must be 1");
+  if (config.selectionHash !== expected) {
+    throw new Error("batch runner-config: selectionHash does not match selection fields");
+  }
+  const text = `${JSON.stringify(config, null, 2)}\n`;
+  const dir = path.dirname(file);
+  const tmpDir = mkdtempSync(path.join(dir, ".batch-cfg-"));
+  const tmp = path.join(tmpDir, "runner-config.json");
+  writeFileSync(tmp, text, "utf8");
+  renameSync(tmp, file);
+}
+
+export function loadBatchRunnerConfig(file: string): BatchRunnerConfigV1 {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (err) {
+    throw new Error(`batch runner-config: cannot read ${file}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`batch runner-config: invalid JSON in ${file}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`batch runner-config: expected object in ${file}`);
+  }
+  const row = parsed as Partial<BatchRunnerConfigV1>;
+  if (row.version !== 1) throw new Error(`batch runner-config: unsupported version ${String(row.version)}`);
+  if (typeof row.job !== "string" || row.job.trim() === "") {
+    throw new Error("batch runner-config: missing job path");
+  }
+  if (typeof row.writtenAt !== "string" || row.writtenAt.trim() === "") {
+    throw new Error("batch runner-config: missing writtenAt");
+  }
+  if (typeof row.selectionHash !== "string" || !/^[0-9a-f]{64}$/.test(row.selectionHash)) {
+    throw new Error("batch runner-config: missing or malformed selectionHash");
+  }
+  const opts: BatchSelectionOptions = {};
+  if (row.filter !== undefined) {
+    if (typeof row.filter !== "string" || row.filter.trim() === "") {
+      throw new Error("batch runner-config: filter must be a non-empty string when set");
+    }
+    opts.filter = row.filter;
+  }
+  if (row.arm !== undefined) {
+    if (typeof row.arm !== "string" || row.arm.trim() === "") {
+      throw new Error("batch runner-config: arm must be a non-empty string when set");
+    }
+    opts.arm = row.arm;
+  }
+  if (row.shuffleSeed !== undefined) {
+    if (typeof row.shuffleSeed !== "string") {
+      throw new Error("batch runner-config: shuffleSeed must be a string when set");
+    }
+    opts.shuffleSeed = row.shuffleSeed;
+  }
+  if (row.slice !== undefined) {
+    if (row.slice === null || typeof row.slice !== "object" || Array.isArray(row.slice)) {
+      throw new Error("batch runner-config: slice must be an object when set");
+    }
+    const start = (row.slice as { start?: unknown }).start;
+    const end = (row.slice as { end?: unknown }).end;
+    if (!Number.isSafeInteger(start) || (start as number) < 0) {
+      throw new Error("batch runner-config: slice.start must be a nonnegative safe integer");
+    }
+    if (end !== undefined && (!Number.isSafeInteger(end) || (end as number) < (start as number))) {
+      throw new Error("batch runner-config: slice.end must be a safe integer >= start");
+    }
+    opts.slice = { start: start as number, ...(end === undefined ? {} : { end: end as number }) };
+  }
+  const expected = batchSelectionHash(opts);
+  if (row.selectionHash !== expected) {
+    throw new Error("batch runner-config: selectionHash does not match selection fields");
+  }
+  return {
+    version: 1,
+    job: path.resolve(row.job),
+    ...opts,
+    writtenAt: row.writtenAt,
+    selectionHash: row.selectionHash,
+  };
+}
+
+/** Refuse when the snapshot was recorded for a different job file. */
+export function assertRunnerConfigMatchesJob(config: BatchRunnerConfigV1, jobFile: string): void {
+  const expected = path.resolve(jobFile);
+  if (path.resolve(config.job) !== expected) {
+    throw new Error(
+      `batch runner-config: job path mismatch (snapshot ${config.job} vs --job ${expected})`,
+    );
+  }
+}
+
+/**
+ * On `--resume`, the snapshot is the source of truth. CLI selection flags are
+ * optional restatements: when present they must hash-equal the snapshot.
+ */
+export function resolveBatchSelectionForResume(
+  snapshot: BatchSelectionOptions,
+  cli: BatchSelectionOptions,
+): BatchSelectionOptions {
+  const cliActive =
+    cli.filter !== undefined ||
+    cli.arm !== undefined ||
+    cli.shuffleSeed !== undefined ||
+    cli.slice !== undefined;
+  if (!cliActive) return { ...snapshot };
+  if (batchSelectionHash(cli) !== batchSelectionHash(snapshot)) {
+    throw new Error("batch resume: CLI --filter/--arm/--shuffle/--slice disagrees with runner-config snapshot");
+  }
+  return { ...snapshot };
 }

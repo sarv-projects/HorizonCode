@@ -4,7 +4,7 @@
  */
 
 import type { ThinkingRung } from "./thinking-effort";
-import { THINKING_RUNGS } from "./thinking-effort";
+import { THINKING_RUNGS, capAtAutoThinkingCeiling } from "./thinking-effort";
 
 export interface DecisionScore {
   value: number;
@@ -49,14 +49,17 @@ export function scoreTaskDifficulty(userText: string): DecisionScore {
   return { value, reasons };
 }
 
-/** Map difficulty score to a thinking rung (auto tier below max unless hard). */
+/**
+ * Map difficulty score to a thinking rung.
+ * Auto ceiling is one tier below max (`high`); only `ultrathink` reaches `xhigh`.
+ */
 export function chooseThinkingEffort(score: DecisionScore): DecisionChoice<ThinkingRung> {
   let pick: ThinkingRung = "medium";
   if (score.value >= 0.72) pick = "high";
   else if (score.value >= 0.45) pick = "medium";
   else if (score.value >= 0.28) pick = "low";
   else pick = "minimal";
-  return { pick, score };
+  return { pick: capAtAutoThinkingCeiling(pick), score };
 }
 
 export function autoThinkingEffortFromText(userText: string): DecisionChoice<ThinkingRung> {

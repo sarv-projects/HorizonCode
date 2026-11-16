@@ -48,6 +48,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
+import { formatLintFixCommitSuffixes } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { acquireLock, targetLockPath } from "../core/file-lock";
@@ -515,6 +516,18 @@ export const applyPatchTool: Tool = {
       for (const w of warnings) {
         lines.push(`WARNING ${w.path} chunk ${w.chunkIndex}: ${w.message}\n${w.context}`);
       }
+      // E-1 residual: opt-in lint-fix commit after successful mutations of
+      // recently linted paths (add / update / move destination).
+      const lintTargets: string[] = [
+        ...summary.added,
+        ...summary.updated,
+        ...summary.moved.map((m) => {
+          const arrow = m.lastIndexOf(" -> ");
+          return arrow === -1 ? m : m.slice(arrow + 4);
+        }),
+      ];
+      const lintFixNote = formatLintFixCommitSuffixes(ctx.sessionId, ctx.workspace, lintTargets);
+      if (lintFixNote !== "") lines.push(lintFixNote.trimStart());
       return { ok: true, output: lines.join("\n") };
     } catch (e) {
       return fail(msg(e));

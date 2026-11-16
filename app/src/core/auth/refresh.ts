@@ -13,6 +13,32 @@ import { credentialFromStore, readOAuthToken, writeOAuthToken, type StoredOAuthT
 
 const pendingByProvider = new Map<string, Promise<Credential | undefined>>();
 
+/** Listeners notified after a successful OAuth access-token write (ruling 449). */
+export type OAuthAccountRotatedInfo = {
+  providerId: string;
+  reason: "retryable_failures" | "invalid_credentials" | "user_command";
+};
+type OAuthAccountRotatedListener = (info: OAuthAccountRotatedInfo) => void;
+const accountRotatedListeners = new Set<OAuthAccountRotatedListener>();
+
+/** Subscribe to successful OAuth refreshes; returns unsubscribe. */
+export function onOAuthAccountRotated(listener: OAuthAccountRotatedListener): () => void {
+  accountRotatedListeners.add(listener);
+  return () => {
+    accountRotatedListeners.delete(listener);
+  };
+}
+
+function notifyOAuthAccountRotated(info: OAuthAccountRotatedInfo): void {
+  for (const listener of accountRotatedListeners) {
+    try {
+      listener(info);
+    } catch {
+      /* a listener failure must never block refresh */
+    }
+  }
+}
+
 /** Margin before `expiresAt` when a proactive refresh is worthwhile. */
 export const OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -70,6 +96,7 @@ async function refreshOAuthAccessTokenLocked(
       next.expiresAt = stored.expiresAt;
     }
     writeOAuthToken(next, home);
+    notifyOAuthAccountRotated({ providerId: provider, reason: "retryable_failures" });
     return credentialFromStore(provider, home);
   });
 }

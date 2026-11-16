@@ -82,4 +82,49 @@ describe("lint tool", () => {
     expect(seen).toEqual([{ kind: "shell.exec", target: "eslint source.ts" }]);
     expect(approvals).toEqual(["Run lint command"]);
   });
+
+  test("user lint failures append marked line excerpts", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-lint-excerpt-"));
+    const priorHome = process.env.HOME;
+    const conf = path.join(home, ".config", "horizon");
+    const source = path.join(home, "source.ts");
+    mkdirSync(conf, { recursive: true });
+    writeFileSync(source, "const a = 1;\nconst b = 2;\nbad;\nconst c = 3;\n");
+    // Emit a compiler-shaped diagnostic for line 3 of {file}.
+    writeFileSync(
+      path.join(conf, "config.json"),
+      JSON.stringify({
+        lint: {
+          commands: [
+            {
+              extensions: ["ts"],
+              command: `printf '%s:3:1 error unexpected token\\n' {file}`,
+            },
+          ],
+        },
+      }),
+    );
+    try {
+      process.env.HOME = home;
+      const ctx = {
+        cwd: home,
+        workspace: home,
+        sessionId: "lint-excerpt",
+        signal: new AbortController().signal,
+        guard: async (): Promise<GuardDecision> => ({ decision: "allow" }),
+        approve: async () => true,
+        receipt: async () => {},
+      } as unknown as ToolContext;
+      const result = await lintTool.execute({ path: "source.ts" }, ctx);
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain("error unexpected token");
+      expect(result.output).toContain("--- lint excerpt ---");
+      expect(result.output).toContain("█");
+      expect(result.output).toContain("bad;");
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

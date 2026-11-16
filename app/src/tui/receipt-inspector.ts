@@ -21,6 +21,14 @@ import {
 } from "../core/receipt-child-list";
 import { formatChildSessionStreamLines } from "../core/receipt-child-session-stream";
 import {
+  formatNestedReceiptReplayLines,
+  replayNestedChildReceipts,
+} from "../core/receipt-nested-replay";
+import {
+  formatNestedEventStreamReplayLines,
+  replayNestedEventStreams,
+} from "../core/receipt-nested-event-stream-replay";
+import {
   deriveShellEffectTerminalView,
   formatShellEffectTerminalLines,
 } from "../core/receipt-shell-terminal";
@@ -213,8 +221,20 @@ function childReceiptsPane(
     }
     return `  · ${bits.join(" · ")}`;
   });
+  if (links.length > 0 && opts?.workspace) {
+    const nested = replayNestedChildReceipts(
+      opts.workspace,
+      links.map((l) => l.childEffectId),
+    );
+    lines.push(...formatNestedReceiptReplayLines(nested));
+  }
   if (links.length > 0 && opts?.workspace && opts.parentSessionId) {
     lines.push(...formatChildSessionStreamLines(opts.workspace, opts.parentSessionId, links.length));
+    lines.push(
+      ...formatNestedEventStreamReplayLines(
+        replayNestedEventStreams(opts.workspace, opts.parentSessionId),
+      ),
+    );
   } else if (links.length > 0) {
     lines.push("(child session streams: pass workspace + sessionId for agent.spawn summary)");
   }

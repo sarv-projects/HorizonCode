@@ -304,6 +304,52 @@ describe("openai failures and aborts", () => {
     );
   });
 
+  test("abort mid tool-call argument assembly cancels fragments (no tool_call event)", async () => {
+    const frames = [
+      chunk({ index: 0, delta: { role: "assistant", content: "…" }, finish_reason: null }),
+      chunk({
+        index: 0,
+        delta: {
+          tool_calls: [{ index: 0, id: "call_partial", type: "function", function: { name: "read", arguments: '{"path":' } }],
+        },
+        finish_reason: null,
+      }),
+      chunk({
+        index: 0,
+        delta: {
+          tool_calls: [{ index: 0, function: { arguments: '"README.md"}' } }],
+        },
+        finish_reason: null,
+      }),
+      chunk({ index: 0, delta: {}, finish_reason: "tool_calls" }),
+      sseFrame("[DONE]"),
+    ];
+    // Hold after the text+partial-args frames so abort lands with fragments in the assembler.
+    const prefix = frames[0]! + frames[1]!;
+    const body = frames.join("");
+    const cuts = [Buffer.byteLength(prefix, "utf8")];
+    const gate = deferred();
+
+    await withServer(
+      () => sseResponse(body, { cuts, hold: gate.promise }),
+      async (server) => {
+        const controller = new AbortController();
+        const result = run(providerFor(server), makeRequest({ signal: controller.signal }));
+        await waitFor(() => result.events.some((e) => e.type === "text"));
+        controller.abort();
+        await result.done;
+        gate.resolve();
+
+        expect(result.thrown).toBeNull();
+        expect(toolCallsOf(result.events)).toEqual([]);
+        expect(lastDone(result.events)?.stopReason).toBe("abort");
+        const notices = result.events.filter((e) => e.type === "notice");
+        expect(notices.some((e) => e.type === "notice" && e.message.includes("assembly-cancel"))).toBe(true);
+        expect(notices.some((e) => e.type === "notice" && e.message.includes("read"))).toBe(true);
+      },
+    );
+  });
+
   test("an already-aborted signal never reaches the network", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -318,7 +364,9 @@ describe("openai failures and aborts", () => {
   test("no messages to send yields one error event and sends nothing", async () => {
     await withServer(() => sseResponse(chunk({ index: 0, delta: {}, finish_reason: "stop" })), async (server) => {
       const result = await collect(providerFor(server), makeRequest({ messages: [] }));
-      expect(result.events).toEqual([{ type: "error", message: "openai: nothing to send (no messages)" }]);
+      expect(result.events).toEqual([
+        { type: "error", message: "openai: nothing to send (no messages)", code: "UNKNOWN" },
+      ]);
       expect(server.requests).toHaveLength(0);
     });
   });

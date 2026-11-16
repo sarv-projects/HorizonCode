@@ -11,7 +11,7 @@ For each doc or backlog row: state the claim, the code/test evidence, verdict (`
 | Claim | Evidence | Verdict |
 |---|---|---|
 | Eight P0 acceptance bars closed | `p0-eight-requirements-2026-11-14.md` | **OPEN** (all eight) |
-| RC-18 counts | `event-catalogue.test.ts` (**34/34** shipped rows mapped, **16/44** literal; rulings **439**–**440**) | **MATCH** partial (**16** canonical without emitters; claim reduced) |
+| RC-18 counts | `event-catalogue.test.ts` (**50/50** shipped rows mapped, **32/44** literal, **44/44** canonical mapped; rulings **439**–**454**) | **MATCH** (literals often reduced; claim/learn/goal reduced) |
 | C-13 not wired into loop | `loop.ts` `admissionToolDispatchRefusal` + ruling **363** | **STALE** → wired at executeTool |
 | C-8 tail re-exec not built | ruling **364**, `HZ_REEXECUTE_UNPAIRED_TOOL_TAIL=1` | **PARTIAL** (opt-in; default repair) |
 | Bash split “parser does not exist” | `shell-split.ts` + **365** Guard + **396** saved grants | **MATCH** partial — per-segment Guard + saved rows; **OPEN**: AST, execpolicy |

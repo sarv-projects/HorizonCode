@@ -8,8 +8,12 @@ import {
   oauthRefreshNotifyPath,
   readOAuthRefreshGeneration,
 } from "../../src/core/auth/oauth-refresh-notify";
-import { refreshOAuthAccessToken } from "../../src/core/auth/refresh";
+import { onOAuthAccountRotated, refreshOAuthAccessToken } from "../../src/core/auth/refresh";
 import { OAuthCredentialHandle, writeOAuthToken } from "../../src/core/auth/store";
+import { EventTypes } from "../../src/contracts";
+import { createRuntime } from "../../src/core";
+import { sessionEventsPath } from "../../src/core/session-kernel-reconcile";
+import { readFileSync } from "node:fs";
 
 describe("oauth refresh cross-process broadcast", () => {
   let home = "";
@@ -92,6 +96,80 @@ describe("oauth refresh cross-process broadcast", () => {
     handleA.bindCredential(refreshed);
     const viaA = handleA.pollCredential();
     if (viaA?.kind === "oauth") expect(viaA.accessToken).toBe("fresh-shared");
+  });
+
+  test("successful refresh notifies OAuth account-rotated listeners (449)", async () => {
+    home = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-"));
+    writeOAuthToken(
+      {
+        provider: "host",
+        accessToken: "stale",
+        refreshToken: "rtok",
+        obtainedAt: new Date().toISOString(),
+      },
+      home,
+    );
+    const seen: Array<{ providerId: string; reason: string }> = [];
+    const stop = onOAuthAccountRotated((info) => seen.push(info));
+    globalThis.fetch = (async (url) => {
+      if (String(url).endsWith("/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    try {
+      await refreshOAuthAccessToken("host", endpoints, home);
+      expect(seen).toEqual([{ providerId: "host", reason: "retryable_failures" }]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("Runtime appends hz.provider.account.rotated on OAuth refresh (449)", async () => {
+    home = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-"));
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-ws-"));
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    writeOAuthToken(
+      {
+        provider: "host",
+        accessToken: "stale",
+        refreshToken: "rtok",
+        obtainedAt: new Date().toISOString(),
+      },
+      home,
+    );
+    globalThis.fetch = (async (url) => {
+      if (String(url).endsWith("/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh-rt" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const runtime = await createRuntime({ workspace, mock: true });
+    try {
+      await refreshOAuthAccessToken("host", endpoints, home);
+      await new Promise((r) => setTimeout(r, 50));
+      const file = sessionEventsPath(workspace, runtime.sessionId);
+      const rows = readFileSync(file, "utf8")
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; payload?: Record<string, unknown> });
+      const rotated = rows.filter((row) => row.type === EventTypes.providerAccountRotated);
+      expect(rotated.length).toBeGreaterThanOrEqual(1);
+      expect(rotated[0]?.payload?.providerId).toBe("host");
+      expect(rotated[0]?.payload?.reason).toBe("retryable_failures");
+      expect(rotated[0]?.payload?.toAccountRef).toBe("oauth:refreshed");
+    } finally {
+      await runtime.close();
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+    }
   });
 
   test("bumpOAuthRefreshGeneration is monotonic", () => {

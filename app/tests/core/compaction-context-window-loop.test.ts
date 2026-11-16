@@ -1,12 +1,13 @@
 /**
  * One emergency compaction pass on CONTEXT_WINDOW_EXCEEDED before turn fail (ruling 233).
+ * Ruling 481: recovery retry carries `<system-interrupt reason="context_overflow">` (C-10).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { Provider, ProviderEvent, RuntimeEvent } from "../../src/contracts";
+import type { Provider, ProviderEvent, ProviderRequest, RuntimeEvent } from "../../src/contracts";
 import { CONTEXT_WINDOW_COMPACTION_NOTICE } from "../../src/core/compaction-context-window";
 import { KernelClient } from "../../src/core/kernel";
 import { runTurn, type LoopDeps } from "../../src/core/loop";
@@ -21,11 +22,12 @@ afterEach(() => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
-function ctxThenOkProvider(): Provider {
+function ctxThenOkProvider(systems?: string[]): Provider {
   let n = 0;
   return {
     name: "scripted",
-    async *stream() {
+    async *stream(req: ProviderRequest) {
+      systems?.push(req.system ?? "");
       n += 1;
       if (n === 1) {
         yield {
@@ -66,11 +68,12 @@ describe("CONTEXT_WINDOW_EXCEEDED compaction recovery", () => {
     const sessionId = store.createSession("ctx-recover").id;
     seedHistory(store, sessionId, 12);
     const seen: RuntimeEvent[] = [];
+    const systems: string[] = [];
     const deps: LoopDeps = {
       workspace,
       sessionId,
       model: "scripted-1",
-      provider: ctxThenOkProvider(),
+      provider: ctxThenOkProvider(systems),
       kernel: new KernelClient({ workspace, stateDir: path.join(workspace, ".hzcode", "kernel") }),
       store,
       signal: new AbortController().signal,
@@ -83,6 +86,11 @@ describe("CONTEXT_WINDOW_EXCEEDED compaction recovery", () => {
     expect(seen.some((e) => e.type === "notice" && e.message === CONTEXT_WINDOW_COMPACTION_NOTICE)).toBe(true);
     expect(seen.some((e) => e.type === "assistant.done" && e.text.includes("recovered"))).toBe(true);
     expect(seen.filter((e) => e.type === "error")).toHaveLength(0);
+    // First request fails; retry carries the C-10 context-overflow system-interrupt.
+    expect(systems).toHaveLength(2);
+    expect(systems[0] ?? "").not.toContain('reason="context_overflow"');
+    expect(systems[1] ?? "").toContain('reason="context_overflow"');
+    expect(systems[1] ?? "").toContain("emergency compaction");
   });
 
   test("fails after one recovery when context window still exceeded", async () => {

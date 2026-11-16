@@ -51,7 +51,7 @@ test("events.rc18 doctor line reports literal emission fraction", () => {
   const checks = runDoctor(fakeEnv());
   const line = byId(checks, "events.rc18");
   expect(line.status).toBe("ok");
-  expect(line.detail).toMatch(/16\/44 literal/);
+  expect(line.detail).toMatch(/21\/44 literal/);
   expect(line.detail).toContain("unimplemented");
 });
 

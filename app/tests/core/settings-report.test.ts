@@ -9,9 +9,11 @@ describe("renderSettingsReport", () => {
       model: "mock-1",
       sources: { provider: "default", model: "default", baseUrl: "default", apiKey: "none" },
     };
-    const text = renderSettingsReport({ workspace: "/tmp/ws", home: "/tmp/home", config });
+    const text = renderSettingsReport({ workspace: "/tmp/ws", home: "/tmp/home", config, env: {} });
     expect(text).toContain("provider: mock");
     expect(text).toContain("model: mock-1");
     expect(text).toContain("settings (effective");
+    expect(text).toContain("analyticsLog: off");
+    expect(text).not.toContain("Residual: local-only analytics log");
   });
 });

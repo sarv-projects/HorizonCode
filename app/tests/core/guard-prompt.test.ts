@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   actionStationarityInterruptNudge,
   consecutiveMistakesInterruptNudge,
+  contextOverflowInterruptNudge,
+  formatErrorsInterruptNudge,
   loopDetectionInterruptNudge,
   wrapSystemInterrupt,
 } from "../../src/core/guards/guard-prompt";
@@ -29,5 +31,20 @@ describe("guard prompts", () => {
     const text = actionStationarityInterruptNudge("read", 3);
     expect(text).toContain('reason="action_stationarity"');
     expect(text).toContain("true-noop");
+  });
+
+  test("formatErrorsInterruptNudge", () => {
+    const text = formatErrorsInterruptNudge(1, 3);
+    expect(text).toContain('reason="format_errors"');
+    expect(text).toContain("1/3");
+    expect(text).toContain("invalid JSON");
+  });
+
+  test("contextOverflowInterruptNudge", () => {
+    const text = contextOverflowInterruptNudge();
+    expect(text).toContain('reason="context_overflow"');
+    expect(text).toContain("emergency compaction");
+    expect(text).toContain("<system-interrupt");
+    expect(text).toContain("</system-interrupt>");
   });
 });

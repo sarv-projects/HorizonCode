@@ -1,22 +1,34 @@
 /**
- * batch-run.ts — resumable JSONL batch job stub (docs/30 J-2 reduced).
+ * batch-run.ts — resumable JSONL batch job stub (docs/30 J-2 / J-4 reduced).
  *
- *   bun run batch --job <file.jsonl> [--filter text] [--shuffle [seed]] [--slice start:end] [--dry-run] [--status]
+ *   bun run batch --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]]
+ *                 [--slice start:end] [--write-config [path]] [--resume] [--config <path>]
+ *                 [--dry-run] [--status]
  *
- * Execution of each row through the eval runner is not wired; this CLI loads,
- * resumes pending rows, and prints I-5 progress. Ctrl-C drain / interactive
- * steering are out of scope.
+ * `--write-config` persists launch selection flags beside the job (or at an
+ * explicit path). `--resume` recovers them so long runs need not re-specify
+ * filter/arm/shuffle/slice (J-4 arm report via `--status`). Execution of each
+ * row through the eval runner is not wired; Ctrl-C drain remains out of scope.
  */
 
 import {
+  assertRunnerConfigMatchesJob,
+  buildBatchRunnerConfig,
+  defaultBatchRunnerConfigPath,
   formatBatchProgress,
   loadBatchJob,
+  loadBatchRunnerConfig,
   pendingBatchRows,
+  resolveBatchSelectionForResume,
   selectBatchRows,
+  selectionFromRunnerConfig,
+  writeBatchRunnerConfig,
   type BatchSelectionOptions,
   type BatchJobRow,
 } from "./core/batch-runner";
 import { formatBenchmarkManagerReport } from "./core/benchmark-manager";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 
 export interface BatchCliIo {
   out(line: string): void;
@@ -28,7 +40,8 @@ const DEFAULT_IO: BatchCliIo = {
   err: (line) => console.error(line),
 };
 
-const USAGE = "usage: bun run src/batch-run.ts --job <file.jsonl> [--filter text] [--shuffle [seed]] [--slice start:end] [--dry-run] [--status]";
+const USAGE =
+  "usage: bun run src/batch-run.ts --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]] [--slice start:end] [--write-config [path]] [--resume] [--config <path>] [--dry-run] [--status]";
 
 function argValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -42,6 +55,8 @@ function argValue(argv: readonly string[], flag: string): string | undefined {
 function selectionFromArgs(argv: readonly string[]): { opts: BatchSelectionOptions; active: boolean } {
   const filter = argValue(argv, "--filter");
   if (filter !== undefined && filter.trim() === "") throw new Error("--filter requires a non-empty text value");
+  const arm = argValue(argv, "--arm");
+  if (arm !== undefined && arm.trim() === "") throw new Error("--arm requires a non-empty arm prefix");
   const sliceArg = argValue(argv, "--slice");
   let slice: BatchSelectionOptions["slice"];
   if (sliceArg !== undefined) {
@@ -58,10 +73,45 @@ function selectionFromArgs(argv: readonly string[]): { opts: BatchSelectionOptio
   const shuffleValue = argValue(argv, "--shuffle");
   const opts: BatchSelectionOptions = {
     ...(filter === undefined ? {} : { filter }),
+    ...(arm === undefined ? {} : { arm }),
     ...(slice === undefined ? {} : { slice }),
     ...(shuffleValue === undefined ? {} : { shuffleSeed: shuffleValue || "0" }),
   };
-  return { opts, active: filter !== undefined || slice !== undefined || shuffleValue !== undefined };
+  return {
+    opts,
+    active:
+      filter !== undefined ||
+      arm !== undefined ||
+      slice !== undefined ||
+      shuffleValue !== undefined,
+  };
+}
+
+function configPathFromArgs(argv: readonly string[], job: string): { writePath?: string; resumePath?: string } {
+  const writeFlag = argValue(argv, "--write-config");
+  const writeRequested = argv.includes("--write-config");
+  const explicitConfig = argValue(argv, "--config");
+  if (explicitConfig !== undefined && explicitConfig.trim() === "") {
+    throw new Error("--config requires a path");
+  }
+  const resume = argv.includes("--resume");
+  if (resume && writeRequested) {
+    throw new Error("--resume and --write-config cannot be combined");
+  }
+  const sidecar = defaultBatchRunnerConfigPath(job);
+  return {
+    ...(writeRequested
+      ? { writePath: writeFlag && writeFlag.trim() !== "" ? path.resolve(writeFlag) : sidecar }
+      : {}),
+    ...(resume || explicitConfig !== undefined
+      ? {
+          resumePath:
+            explicitConfig && explicitConfig.trim() !== ""
+              ? path.resolve(explicitConfig)
+              : sidecar,
+        }
+      : {}),
+  };
 }
 
 export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFAULT_IO): Promise<number> {
@@ -70,30 +120,77 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
     io.err(USAGE);
     return 2;
   }
+  const jobPath = path.resolve(job);
 
   let load;
   try {
-    load = loadBatchJob(job);
+    load = loadBatchJob(jobPath);
   } catch (err) {
     io.err(`batch: ${err instanceof Error ? err.message : String(err)}`);
     return 2;
   }
 
   if (load.corrupt.length > 0) {
-    io.err(`batch: ${load.corrupt.length} corrupt line(s) in ${job} — refusing`);
+    io.err(`batch: ${load.corrupt.length} corrupt line(s) in ${jobPath} — refusing`);
     for (const row of load.corrupt) io.err(`  line ${row.line}: ${row.reason}`);
     return 2;
   }
 
-  let selected = load.rows;
-  let selectionActive = false;
+  let cliSelection: { opts: BatchSelectionOptions; active: boolean };
+  let paths: { writePath?: string; resumePath?: string };
   try {
-    const selection = selectionFromArgs(argv);
-    selected = selectBatchRows(load.rows, selection.opts);
-    selectionActive = selection.active;
+    cliSelection = selectionFromArgs(argv);
+    paths = configPathFromArgs(argv, jobPath);
   } catch (err) {
     io.err(`batch: ${err instanceof Error ? err.message : String(err)}`);
     return 2;
+  }
+
+  let selectedOpts = cliSelection.opts;
+  let selectionActive = cliSelection.active;
+  let resumedFrom: string | undefined;
+
+  if (paths.resumePath !== undefined) {
+    if (!existsSync(paths.resumePath)) {
+      io.err(`batch: --resume/--config: missing runner-config at ${paths.resumePath}`);
+      return 2;
+    }
+    try {
+      const snap = loadBatchRunnerConfig(paths.resumePath);
+      assertRunnerConfigMatchesJob(snap, jobPath);
+      selectedOpts = resolveBatchSelectionForResume(selectionFromRunnerConfig(snap), cliSelection.opts);
+      selectionActive =
+        selectedOpts.filter !== undefined ||
+        selectedOpts.arm !== undefined ||
+        selectedOpts.shuffleSeed !== undefined ||
+        selectedOpts.slice !== undefined;
+      resumedFrom = paths.resumePath;
+    } catch (err) {
+      io.err(`batch: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+  }
+
+  if (paths.writePath !== undefined) {
+    try {
+      const config = buildBatchRunnerConfig(jobPath, cliSelection.opts);
+      writeBatchRunnerConfig(paths.writePath, config);
+      io.out(`batch runner-config: wrote ${paths.writePath}`);
+    } catch (err) {
+      io.err(`batch: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+  }
+
+  let selected;
+  try {
+    selected = selectBatchRows(load.rows, selectedOpts);
+  } catch (err) {
+    io.err(`batch: ${err instanceof Error ? err.message : String(err)}`);
+    return 2;
+  }
+  if (resumedFrom !== undefined) {
+    io.out(`batch resume: loaded runner-config ${resumedFrom}`);
   }
   if (selectionActive) io.out(`batch selection: selected ${selected.length} of ${load.rows.length} rows`);
 
@@ -118,6 +215,11 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
   if (argv.includes("--dry-run")) {
     for (const row of pending) io.out(`would run: ${row.id} · ${summarizeTask(row)}`);
     io.out(`batch dry-run: ${pending.length} row(s) would execute (runner wiring open)`);
+    return 0;
+  }
+
+  // Writing config alone is a successful no-op for the execution stub.
+  if (paths.writePath !== undefined && !argv.includes("--status") && !argv.includes("--dry-run")) {
     return 0;
   }
 

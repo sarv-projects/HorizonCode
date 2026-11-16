@@ -9,9 +9,17 @@
  * the original. Boot-relative ticks mean an NTP step or a VM clock adjustment
  * cannot make a live process look dead.
  *
+ * Ruling 473 (D-3 reduced): when `/proc/stat` exposes `btime`, birth tokens are
+ * boot-id anchored — `boot:<bootId>:<pid>@<startTicks>`. `bootId` prefers
+ * `/proc/sys/kernel/random/boot_id` (stable within a kernel boot even when WSL
+ * re-anchors `btime` after host sleep); falls back to the decimal `btime`
+ * seconds when the UUID file is absent. Legacy `<pid>@<startTicks>` tokens
+ * still parse and verify (ruling 22).
+ *
  * What IS checked:
  *   - the pid exists in /proc at verification time, and
- *   - its starttime equals the recorded starttime (pid-reuse refusal).
+ *   - its starttime equals the recorded starttime (pid-reuse refusal), and
+ *   - when a boot-id token was recorded, the current boot id still matches.
  *
  * What is NOT checked (the deferred half of the design, stated exactly):
  *   - the ancestor chain — that this process descended from the owner. There is
@@ -25,6 +33,8 @@
  *     liveness bookkeeping (subprocess exited) is the authority there.
  *   - platforms without /proc: identity is unavailable, so recordIdentity
  *     returns undefined and verifyIdentity refuses.
+ *   - macOS/Windows births; hermes-style monotonic create_time re-anchor when
+ *     btime moves under sleep-wake without a new boot_id.
  *
  * Tick granularity: two processes born within the same tick (10 ms at USER_HZ
  * 100) share a startTicks value, so startTicks identifies a *birth event*, not
@@ -39,6 +49,11 @@ export interface ProcessIdentity {
   pid: number;
   /** Field 22 of /proc/<pid>/stat (starttime), clock ticks since boot. */
   startTicks: number;
+  /**
+   * Boot-id anchor when `/proc/stat` `btime` was available at record time
+   * (ruling 473). Absent on legacy ruling-22 identities and non-Linux hosts.
+   */
+  bootId?: string;
 }
 
 /** The /proc facts this module parses from one stat line. */
@@ -47,6 +62,14 @@ export interface ProcessFacts {
   /** Process-group id (field 5); equals pid for a detached child. */
   pgid: number;
   startTicks: number;
+}
+
+/** Injectable /proc readers for hermetic boot-anchor tests. */
+export interface BootProcReaders {
+  /** Full text of `/proc/stat`, or undefined when unavailable. */
+  readStat?: () => string | undefined;
+  /** Trimmed text of `/proc/sys/kernel/random/boot_id`, or undefined. */
+  readBootId?: () => string | undefined;
 }
 
 /**
@@ -82,15 +105,81 @@ export function readProcessFacts(pid: number): ProcessFacts | undefined {
   return { ppid, pgid, startTicks };
 }
 
+function defaultReadStat(): string | undefined {
+  try {
+    return readFileSync("/proc/stat", "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function defaultReadBootId(): string | undefined {
+  try {
+    const text = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return text.length > 0 ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Kernel boot time in seconds since the Unix epoch from `/proc/stat` `btime`.
+ * Undefined when /proc is absent or the line cannot be parsed.
+ */
+export function readBootBtime(readers?: BootProcReaders): number | undefined {
+  const raw = (readers?.readStat ?? defaultReadStat)();
+  if (raw === undefined) return undefined;
+  const match = /^btime\s+(\d+)\s*$/m.exec(raw);
+  if (!match) return undefined;
+  const btime = Number(match[1]);
+  if (!Number.isInteger(btime) || btime <= 0) return undefined;
+  return btime;
+}
+
+/**
+ * Kernel boot UUID from `/proc/sys/kernel/random/boot_id`, or undefined.
+ */
+export function readKernelBootId(readers?: BootProcReaders): string | undefined {
+  const text = (readers?.readBootId ?? defaultReadBootId)();
+  if (text === undefined) return undefined;
+  const trimmed = text.trim();
+  // Refuse delimiters that would break `boot:<bootId>:<pid>@<startTicks>`.
+  if (trimmed.length === 0 || trimmed.includes(":") || /\s/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+export interface BootAnchor {
+  /** Token component: kernel boot_id UUID, or decimal btime when UUID absent. */
+  bootId: string;
+  /** `/proc/stat` btime seconds (gate that boot-anchored tokens are allowed). */
+  btime: number;
+}
+
+/**
+ * Resolve a boot anchor only when `/proc/stat` `btime` is available.
+ * Prefers the kernel boot_id UUID; falls back to decimal btime as the id.
+ */
+export function resolveBootAnchor(readers?: BootProcReaders): BootAnchor | undefined {
+  const btime = readBootBtime(readers);
+  if (btime === undefined) return undefined;
+  const uuid = readKernelBootId(readers);
+  return { bootId: uuid ?? String(btime), btime };
+}
+
 /**
  * The identity to record for `pid`, or undefined when it cannot be read.
  *
  * Callers MUST treat undefined as a refusal state — "identity unavailable",
  * not "no identity needed" — and must not reserve work for the process.
+ * When `btime` is readable, attaches `bootId` (ruling 473).
  */
-export function recordIdentity(pid: number): ProcessIdentity | undefined {
+export function recordIdentity(pid: number, readers?: BootProcReaders): ProcessIdentity | undefined {
   const facts = readProcessFacts(pid);
-  return facts === undefined ? undefined : { pid, startTicks: facts.startTicks };
+  if (facts === undefined) return undefined;
+  const identity: ProcessIdentity = { pid, startTicks: facts.startTicks };
+  const anchor = resolveBootAnchor(readers);
+  if (anchor !== undefined) identity.bootId = anchor.bootId;
+  return identity;
 }
 
 export interface IdentityVerdict {
@@ -101,13 +190,31 @@ export interface IdentityVerdict {
 /**
  * Re-read /proc and decide whether `identity` is still the recorded process.
  * Refusals carry a machine-readable reason (never prose the caller must parse
- * for meaning): the pid is gone, the pid was reused, or the identity given was
- * absent/malformed.
+ * for meaning): the pid is gone, the pid was reused, the boot changed, or the
+ * identity given was absent/malformed.
  */
-export function verifyIdentity(identity: ProcessIdentity | null | undefined): IdentityVerdict {
+export function verifyIdentity(
+  identity: ProcessIdentity | null | undefined,
+  readers?: BootProcReaders,
+): IdentityVerdict {
   if (identity === null || identity === undefined) return { ok: false, reason: "no identity recorded" };
   if (!Number.isInteger(identity.pid) || identity.pid <= 0 || !Number.isInteger(identity.startTicks) || identity.startTicks <= 0) {
     return { ok: false, reason: "malformed identity" };
+  }
+  if (identity.bootId !== undefined) {
+    if (typeof identity.bootId !== "string" || identity.bootId.length === 0 || identity.bootId.includes(":")) {
+      return { ok: false, reason: "malformed identity" };
+    }
+    const anchor = resolveBootAnchor(readers);
+    if (anchor === undefined) {
+      return { ok: false, reason: "boot anchor unavailable (cannot verify boot-id birth token)" };
+    }
+    if (anchor.bootId !== identity.bootId) {
+      return {
+        ok: false,
+        reason: `boot changed (recorded bootId ${identity.bootId} does not match current ${anchor.bootId})`,
+      };
+    }
   }
   const facts = readProcessFacts(identity.pid);
   if (facts === undefined) {
@@ -122,17 +229,37 @@ export function verifyIdentity(identity: ProcessIdentity | null | undefined): Id
   return { ok: true };
 }
 
-/** The ledger's birthIdentity string for an identity: `<pid>@<startTicks>`. */
+/**
+ * The ledger's birthIdentity string for an identity.
+ * Boot-anchored (ruling 473): `boot:<bootId>:<pid>@<startTicks>`.
+ * Legacy (ruling 22): `<pid>@<startTicks>`.
+ */
 export function birthIdentityOf(identity: ProcessIdentity | null | undefined): string | null {
   if (identity === null || identity === undefined) return null;
   if (!Number.isInteger(identity.pid) || !Number.isInteger(identity.startTicks)) return null;
+  if (identity.bootId !== undefined) {
+    if (typeof identity.bootId !== "string" || identity.bootId.length === 0 || identity.bootId.includes(":")) {
+      return null;
+    }
+    return `boot:${identity.bootId}:${identity.pid}@${identity.startTicks}`;
+  }
   return `${identity.pid}@${identity.startTicks}`;
 }
 
-/** Parse a ledger birthIdentity back to `{pid, startTicks}` (no /proc read). */
+/** Parse a ledger birthIdentity back to `{pid, startTicks[, bootId]}` (no /proc read). */
 export function identityFromBirth(text: unknown): ProcessIdentity | undefined {
   if (typeof text !== "string") return undefined;
-  const match = /^(\d+)@(\d+)$/.exec(text.trim());
+  const trimmed = text.trim();
+  const bootMatch = /^boot:([^:]+):(\d+)@(\d+)$/.exec(trimmed);
+  if (bootMatch) {
+    const bootId = bootMatch[1]!;
+    const pid = Number(bootMatch[2]);
+    const startTicks = Number(bootMatch[3]);
+    if (bootId.length === 0 || bootId.includes(":")) return undefined;
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(startTicks) || startTicks <= 0) return undefined;
+    return { pid, startTicks, bootId };
+  }
+  const match = /^(\d+)@(\d+)$/.exec(trimmed);
   if (!match) return undefined;
   const pid = Number(match[1]);
   const startTicks = Number(match[2]);

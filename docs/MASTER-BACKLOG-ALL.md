@@ -54,7 +54,7 @@
 
 | Item | Status | Open / residual |
 |---|---|---|
-| RC-18 `SHIPPED_TO_HZ_MAP` | **PARTIAL — TESTED** (**174b**, **418**, **439**–**440**) | **34 shipped** type names; **16/44** literal `hz.*`; **16** unmapped |
+| RC-18 `SHIPPED_TO_HZ_MAP` | **TESTED** (**174b**, **418**, **439**–**454**) | **50 shipped** type names; **32/44** literal `hz.*`; **0** unmapped (payloads often reduced) |
 | JSONL fsync default | **TESTED** (**174b**, **251**) | — |
 | DeepSeek child prompt sections | **TESTED** (**174b**) | — |
 | Full EffectHost + `hz.*` emission | **PARTIAL** (**220**, **348–350**) | Internal versioned `owner.*` transitions add direct Rust fencing/recovery proof only, NOT canonical `hz.*` additions or universal authority |
@@ -98,7 +98,7 @@ See **§5** of [`HANDOFF-BACKLOG-2026-11-13.md`](HANDOFF-BACKLOG-2026-11-13.md) 
 | ID | Status | Open |
 |---|---|---|
 | B-4 cache | **PARTIAL** | Live API cache-hit |
-| B-5 prefix | **PARTIAL** | `syncMessages` stable prefix |
+| B-5 prefix | **PARTIAL — TESTED** | rulings **470**, **482** `syncMessages` + main-loop `ProviderHistorySync`; StablePrefix / `auto` gate open |
 | C-7/C-8/C-9 | **PARTIAL** | steer / tail re-exec / interjection |
 | E-1–E-3, **E-5** | **PARTIAL / queued** | Git slices + new watch candidate |
 | little-coder TAKE pack | **OPEN** | `research/steal-little-coder-aider.md` |

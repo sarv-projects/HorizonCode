@@ -8,13 +8,24 @@
  * cwd-confinement discipline. Every test fails if the behaviour is reverted.
  */
 
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
+import { clearLintedPaths, noteLintedPath } from "../../src/core/git-dirty-checkpoint";
 import { applyPatchTool } from "../../src/tools/apply-patch";
 import { canonicalize, parse } from "../../src/tools/apply-patch-parser";
 import { readTool } from "../../src/tools/read";
 import { makeWorkspace, mockToolContext, readFixture } from "./helpers";
+
+function initGitWorkspace(): string {
+  const ws = mkdtempSync(path.join(tmpdir(), "hz-ap-git-"));
+  spawnSync("git", ["init"], { cwd: ws });
+  spawnSync("git", ["config", "user.email", "t@t.com"], { cwd: ws });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: ws });
+  return ws;
+}
 
 /** A context that has already read `rel`, so update/delete preimage reads pass. */
 async function ctxHavingRead(ws: string, rels: string[]) {
@@ -397,5 +408,63 @@ describe("apply_patch guard & preimage discipline", () => {
     const r = await applyPatchTool.execute({ input: wrap("*** Update File: a.txt\n@@\n-keep\n+done") }, ctx);
     expect(r.ok).toBe(true);
     expect(journalSize(ctx.sessionId)).toBe(before + 1);
+  });
+
+  test("E-1: opt-in lint-fix commit after successful apply_patch of a linted path", async () => {
+    const prev = process.env.HZ_GIT_LINT_FIX_COMMIT;
+    process.env.HZ_GIT_LINT_FIX_COMMIT = "1";
+    clearLintedPaths();
+    try {
+      const ws = initGitWorkspace();
+      const rel = "a.ts";
+      writeFileSync(path.join(ws, rel), "const x = 1\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+      const sessionId = "sess-ap-lintfix";
+      const ctx = mockToolContext({ cwd: ws, workspace: ws, sessionId });
+      noteLintedPath(sessionId, rel);
+      expect((await readTool.execute({ path: rel }, ctx)).ok).toBe(true);
+      const r = await applyPatchTool.execute(
+        { input: wrap(`*** Update File: ${rel}\n@@\n-const x = 1\n+const x = 1;`) },
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      expect(r.output).toContain("lint-fix commit");
+      const log = spawnSync("git", ["log", "-1", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(log).toContain("lint fix");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_LINT_FIX_COMMIT;
+      else process.env.HZ_GIT_LINT_FIX_COMMIT = prev;
+      clearLintedPaths();
+    }
+  });
+
+  test("E-1: apply_patch does not lint-fix commit when flag is off", async () => {
+    const prev = process.env.HZ_GIT_LINT_FIX_COMMIT;
+    delete process.env.HZ_GIT_LINT_FIX_COMMIT;
+    clearLintedPaths();
+    try {
+      const ws = initGitWorkspace();
+      const rel = "b.ts";
+      writeFileSync(path.join(ws, rel), "const x = 1\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+      const sessionId = "sess-ap-off";
+      const ctx = mockToolContext({ cwd: ws, workspace: ws, sessionId });
+      noteLintedPath(sessionId, rel);
+      expect((await readTool.execute({ path: rel }, ctx)).ok).toBe(true);
+      const r = await applyPatchTool.execute(
+        { input: wrap(`*** Update File: ${rel}\n@@\n-const x = 1\n+const x = 1;`) },
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      expect(r.output).not.toContain("lint-fix commit");
+      const log = spawnSync("git", ["log", "-1", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(log).not.toContain("lint fix");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_LINT_FIX_COMMIT;
+      else process.env.HZ_GIT_LINT_FIX_COMMIT = prev;
+      clearLintedPaths();
+    }
   });
 });

@@ -80,8 +80,8 @@ Clone verified at pin above. Aider’s thesis is **git as undo/state**. HZ delib
 | Mechanism | Aider | HZ | Disposition |
 |---|---|---|---|
 | Auto-commit after every edit | `base_coder.auto_commit` | Journal + `undo` | **SKIP** (ruling 36) |
-| Dirty-commit-before-edit | default-on | `git-dirty-checkpoint.ts` opt-in `HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=1` on `edit` only | **TAKE** deepen E-1: default policy decision + wire `write`/`apply_patch` |
-| Separate lint-fix commit | after `lint_edited` | lint tools; no post-lint commit | **TAKE** (E-1 residual) |
+| Dirty-commit-before-edit | default-on | `git-dirty-checkpoint.ts` opt-in `HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=1` on `edit` only | **PARTIAL** deepen E-1: default policy + wire dirty-checkpoint to `write`/`apply_patch` |
+| Separate lint-fix commit | after `lint_edited` | `HZ_GIT_LINT_FIX_COMMIT=1` lint→edit/write/apply_patch (rulings **460**, **479**) | **PARTIAL** — default-on still open |
 | LLM `/commit` / `hzcode commit` | chat+diff+weak model | `commit.ts` staged-only ruling **83** | **TAKE** E-3: weak-model chain + optional chat slice |
 | Attribution env author/committer | full truth table | trailers only (`commit-attribution.ts`) | **TAKE** (E-2 residual) |
 | `/undo` via git hashes | git reset rails | journal undo + `/rewind` | **SKIP** as primary; optional safety rails if ever git-undo |

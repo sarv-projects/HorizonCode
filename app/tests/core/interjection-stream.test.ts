@@ -196,4 +196,70 @@ describe("mid-stream interjection", () => {
       store.close();
     }
   });
+
+  test("liveSteering provider claims steer mid-stream without hard cut (response.steer reduced)", async () => {
+    const buffer = new InterjectionBuffer();
+    const admitted: string[] = [];
+    const notices: string[] = [];
+    let providerCalls = 0;
+    let claimed = false;
+    const provider: Provider = {
+      name: "live-steer-mock",
+      liveSteering: true,
+      async *stream(req) {
+        providerCalls += 1;
+        if (providerCalls > 1) {
+          yield { type: "text", text: "after-steer-step" } satisfies ProviderEvent;
+          yield { type: "done", stopReason: "end" } satisfies ProviderEvent;
+          return;
+        }
+        yield { type: "text", text: "before " } satisfies ProviderEvent;
+        buffer.push("live steer please");
+        // Give the loop a tick to observe the buffer; liveSteering skips hard cut.
+        await new Promise((r) => setTimeout(r, 15));
+        const claim = await req.liveSteering?.claim(req.signal);
+        expect(claim).toBeDefined();
+        expect(claim!.messages).toEqual(["live steer please"]);
+        claim!.accept();
+        claimed = true;
+        yield { type: "text", text: "continued " } satisfies ProviderEvent;
+        yield { type: "done", stopReason: "end" } satisfies ProviderEvent;
+      },
+    };
+    const kernel = new KernelClient({ workspace, stateDir: `${workspace}/.hz/state/kernel` });
+    const store = new SessionStore(workspace);
+    const deps: LoopDeps = {
+      workspace,
+      sessionId: store.createSession("live-steer").id,
+      model: "mock-1",
+      provider,
+      kernel,
+      store,
+      signal: new AbortController().signal,
+      callbacks: {
+        onEvent: (ev) => {
+          if (ev.type === "interjection.admitted") admitted.push(ev.text);
+          if (ev.type === "notice") notices.push(ev.message);
+        },
+      },
+      sessionLeases: [],
+      approve: async () => true,
+      interjection: buffer,
+      budget: { maxSteps: 20 },
+    };
+    try {
+      const result = await runTurn(deps, "task");
+      expect(result.exit.terminal).toBe("succeeded");
+      expect(claimed).toBe(true);
+      expect(admitted).toContain("live steer please");
+      expect(notices.some((m) => m.includes("in-flight response (live)"))).toBe(true);
+      expect(notices.some((m) => m.includes("dropped") && m.includes("tool call"))).toBe(false);
+      const history = store.history(deps.sessionId);
+      expect(history.some((m) => m.role === "user" && (m.content ?? "").includes("live steer please"))).toBe(true);
+      expect(history.some((m) => m.role === "assistant" && (m.content ?? "").includes("continued"))).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
 });
