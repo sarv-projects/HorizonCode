@@ -24,9 +24,13 @@
  *
  * `--apply` is deliberately not cron-able: it is opt-in per proposal with
  * `--yes`, and an unattended run that meets an `ask` decision refuses rather
- * than self-approving (below). Nothing else schedules anything: the review fork
- * itself still has no background launcher (provider calls are not in this
- * slice), and that residual is named, not papered over.
+ * than self-approving (below). This CLI still has no review-fork flag — it is
+ * the manual post-mortem curator only. The runnable fork now lives in
+ * `core/review.ts` (`runReviewFork`: one provider call, fail-closed parity/tool
+ * checks, SpendLedger reserve-before-dispatch, curator-only application) and is
+ * scheduled post-turn from `core/index.ts` behind the opt-in `HZ_REVIEW_FORK=1`
+ * gate with a configured `HZ_SPEND_LIMIT_USD`; with the gate off nothing runs.
+ * No shell-net egress enforcement is claimed.
  *
  * --apply, exactly:
  *   1. resolve the proposal by id. The store has no separate id column, so the

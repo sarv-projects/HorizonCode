@@ -85,6 +85,7 @@ import {
   SESSION_LEASE_TTL_MS,
   setApprovalHandler as setProcessApprovalHandler,
   streamFor,
+  systemPrompt,
 } from "./loop";
 import { makeProvider } from "./providers";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): the runtime seam emits session.start/
@@ -101,7 +102,10 @@ import {
   notifyLearnTrajectoryRecorded,
 } from "./learn-events";
 import { appendAnalyticsEvent } from "./analytics-log";
-import { stateRoot } from "./paths";
+import { stateRoot, workspaceStateDir } from "./paths";
+// G-1: opt-in post-turn review fork (spec builder + runnable, fail-closed runner).
+import { buildReviewFork, maybeRunReviewFork, parentPrefixRecord, reviewForkEnabled } from "./review";
+import { SpendLedger, spendLimitMicroFromEnv } from "./spend-ledger";
 import {
   appendMarkdownTranscriptEvent,
   markdownTranscriptCursor,
@@ -126,7 +130,7 @@ import { discardStaged, stagedChanges as planStagedChanges, type StagedChange } 
 // The MCP manager (docs/09 §4.7): connect-time spawn admissions happen through
 // the session's kernel; its children are reaped by close().
 import { startMcpManager, type McpManager } from "./mcp";
-import { clearDiscoveredTools, getTool } from "../tools";
+import { clearDiscoveredTools, getTool, toolSpecs } from "../tools";
 import { noteRead } from "../tools/read-ledger";
 import { canonicalJson, sha256Hex } from "./canon";
 // Wave-14c rewind: the durable checkpoint store (the TUI's /rewind) sits on the
@@ -1654,6 +1658,51 @@ class HzRuntimeImpl implements HzRuntime {
         eventCount: this.trajectoryTurn,
         schemaRev: 1,
       });
+      // G-1: opt-in, fail-closed post-turn review fork. Gate OFF (the default)
+      // builds nothing and makes NO provider call — zero behavior change. When
+      // ON, the fork reuses the parent's byte-stable compiled prefix, reserves
+      // through the workspace SpendLedger BEFORE dispatch (no budget -> refusal,
+      // never surprise spend), and applies proposals only as canonical curator
+      // rows (never to the workspace, ADR-010). Any failure is a notice; it never
+      // fails the turn. No shell-net egress enforcement is claimed here.
+      if (reviewForkEnabled()) {
+        try {
+          const limitMicroUsd = spendLimitMicroFromEnv();
+          const transcript = this.store.history(this.session.id).map((msg, index) => {
+            const content = typeof msg.content === "string" ? msg.content.replace(/\s+/g, " ").slice(0, 200) : "";
+            return { id: `msg_${index + 1}`, type: msg.role, ...(content !== "" ? { summary: content } : {}) };
+          });
+          await maybeRunReviewFork(
+            () =>
+              buildReviewFork({
+                parentPrefix: parentPrefixRecord(
+                  systemPrompt(this.workspace, new Date(), {
+                    tools: toolSpecs(this.session.id).map((spec) => spec.name),
+                    kernelMode:
+                      typeof (this.kernel as { mode?: unknown }).mode === "string"
+                        ? ((this.kernel as { mode?: unknown }).mode as string)
+                        : "untrusted",
+                    planMode: this.planOn,
+                  }),
+                ),
+                transcript,
+                workspace: this.workspace,
+                stateDir: workspaceStateDir(this.workspace),
+              }),
+            {
+              provider: this.provider,
+              model: this.currentModel,
+              // No configured HZ_SPEND_LIMIT_USD -> no ledger -> the runner
+              // refuses before dispatch with a clear notice.
+              spend: limitMicroUsd > 0 ? new SpendLedger(this.workspace, { limitMicroUsd }) : undefined,
+              signal: controller.signal,
+              onNotice: (message) => emit(cb, { type: "notice", message }),
+            },
+          );
+        } catch (err) {
+          emit(cb, { type: "notice", message: `review fork: ${errorMessage(err)}` });
+        }
+      }
       const settlement =
         outcome.exit.terminal === "succeeded"
           ? "done"
