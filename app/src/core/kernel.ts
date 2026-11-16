@@ -384,6 +384,55 @@ export function shellCommandReferencesKernelState(command: string, stateDir: str
  * wire code HZ_PRECONDITION_FAILED. Returns the refusal message, or undefined
  * when the action is not protected.
  */
+/**
+ * Mirror of `kernel/src/guard.rs::is_sensitive_write` for the LocalKernel
+ * fallback: execution-bearing workspace paths ask even when the policy says
+ * allow. Keep the two lists in step; the Rust rule is authoritative when a
+ * trusted kernel is present.
+ */
+export function isSensitiveWriteTarget(target: string): boolean {
+  const parts = path
+    .resolve(target)
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((part) => part !== "")
+    .map((part) => part.toLowerCase());
+  const base = parts[parts.length - 1] ?? "";
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i] !== ".git") continue;
+    if (parts[i + 1] === "hooks") return true;
+    if (parts[i + 1] === "config" && i + 2 === parts.length) return true;
+  }
+  if (base === ".env" || base.startsWith(".env.")) return true;
+  if (
+    [
+      "package.json",
+      "package-lock.json",
+      "bun.lock",
+      "bun.lockb",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "cargo.lock",
+      ".gitlab-ci.yml",
+      "makefile",
+      "gnumakefile",
+      "dockerfile",
+      ".bashrc",
+      ".bash_profile",
+      ".zshrc",
+      ".zshenv",
+      ".zprofile",
+      ".profile",
+    ].includes(base)
+  ) {
+    return true;
+  }
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (parts[i] === ".github" && parts[i + 1] === "workflows") return true;
+  }
+  return false;
+}
+
 export function protectedPathRefusal(action: GuardAction, stateDir: string): string | undefined {
   if (action === null || typeof action !== "object") return undefined;
   if (action.kind === "fs.write") {
@@ -1064,6 +1113,18 @@ export class LocalKernel {
     const matching = this.currentPolicy().filter((rule) => ruleMatches(rule, action.kind, effective));
     const deny = matching.find((rule) => rule.decision === "deny");
     if (deny) return { decision: "deny", reason: `policy denies ${action.kind} for ${effective} targets` };
+
+    // Execution-bearing workspace paths never ride a bare policy allow. The
+    // guard.rs structural rule is authoritative with a trusted kernel; this is
+    // its fallback twin, evaluated before leases/grants (neither can waive it).
+    if (action.kind === "fs.write" && isSensitiveWriteTarget(action.target)) {
+      return {
+        decision: "ask",
+        reason:
+          `sensitive-write: ${action.target} is a sensitive path (git hooks/config, env file, ` +
+          `lockfile, CI workflow, container/build file or shell profile); explicit approval required`,
+      };
+    }
 
     // Only leases this kernel issued (its own mint table) are honoured. A
     // caller-supplied lease is a claim, not a mint: a fabricated
