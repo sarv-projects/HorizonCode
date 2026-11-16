@@ -1,6 +1,7 @@
 /** Shared helpers for the HorizonCode tool set. */
 
 import path from "node:path";
+import { realpathish } from "../core/paths";
 
 /** Truncate text to `max` characters, appending an explicit marker when cut. */
 export function truncate(text: string, max: number): string {
@@ -10,6 +11,41 @@ export function truncate(text: string, max: number): string {
 /** Resolve a caller-supplied path against the tool context cwd. */
 export function resolvePath(cwd: string, p: string): string {
   return path.resolve(cwd, p);
+}
+
+/**
+ * A path as requested, where it really lands, and whether that real target is
+ * inside the workspace. `real` follows symlinks through the deepest existing
+ * ancestor (`realpathish`), so a new file under a symlinked directory resolves
+ * to the directory the bytes would actually land in, and an existing file
+ * resolves through its own link. Tools MUST guard `real`, never `requested`:
+ * the policy decides on the path whose bytes the effect touches.
+ */
+export interface RealTarget {
+  /** The lexical absolute path the caller asked for. */
+  requested: string;
+  /** Where the target really is (symlinks followed; new files through their parent). */
+  real: string;
+  /** True when `real` is the workspace root or inside it, after resolution. */
+  inside: boolean;
+}
+
+/** True when `p` is `root` itself or a descendant of it (both absolute). */
+function within(root: string, p: string): boolean {
+  const rel = path.relative(root, p);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * Resolve a caller-supplied path to the target a write/read would really touch.
+ * Both the requested path and the workspace root are resolved with
+ * `realpathish`, so a symlinked workspace, a symlinked target and a symlinked
+ * parent all compare in the same (real) namespace.
+ */
+export function resolveRealTarget(cwd: string, p: string, workspace: string): RealTarget {
+  const requested = path.resolve(cwd, p);
+  const real = realpathish(requested);
+  return { requested, real, inside: within(realpathish(path.resolve(workspace)), real) };
 }
 
 /** True when a NUL byte appears in the head of the buffer (binary file). */

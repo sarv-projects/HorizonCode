@@ -5,20 +5,24 @@
  * file-level symlink to a legitimate target keeps working, and the effect goes
  * through an open descriptor re-verified against the kernel state directory
  * before the write (see the header of ./write.ts for the residual).
+ *
+ * The guard, the preimage read and the write all use the RESOLVED target
+ * (`resolveRealTarget`), so an "inside" decision can never authorize an outside
+ * write through a symlink; `all:true` goes through this same Bun path even with
+ * a trusted kernel, so it is guarded here too.
  */
 
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { withFileLock, targetLockPath } from "../core/file-lock";
-import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import {
   checkpointDirtyPathBeforeEdit,
   formatLintFixCommitSuffix,
 } from "../core/git-dirty-checkpoint";
 import { recordChange } from "./change-journal";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { resolveAnchor } from "./hashline";
 import { detectLineEnding } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
@@ -590,9 +594,15 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
   if (args.all !== undefined) return fail("all does not apply to an anchored edit");
   if (typeof args.new !== "string") return fail("new is required");
 
-  const resolved = resolvePath(ctx.cwd, args.path);
+  const target = resolveRealTarget(ctx.cwd, args.path, ctx.workspace);
+  const resolved = target.requested;
+  const real = target.real;
   const rel = relPath(ctx.cwd, resolved);
-  const action: GuardAction = { kind: "fs.write", target: resolved };
+  const targetNote = real === resolved ? "" : `; resolves to ${real}`;
+  // Guard the path whose bytes will actually be replaced, not the lexical
+  // spelling: `edit {all:true}` is ineligible for the kernel route, so this Bun
+  // path must never let a symlink turn an "inside" decision into an outside write.
+  const action: GuardAction = { kind: "fs.write", target: real };
   const decision = await ctx.guard(action);
   if (decision.decision === "deny") {
     return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -601,7 +611,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
   let before: string;
   let preimageSha256: string;
   try {
-    const buf = await readFile(resolved);
+    const buf = await readFile(real);
     if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
     before = buf.toString("utf8");
     preimageSha256 = sha256Hex(before);
@@ -635,16 +645,16 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
 
   if (decision.decision === "ask") {
     const approved = await ctx.approve(
-      { title: `Edit ${rel}`, detail: `lines ${first.line}-${last.line} (anchored)`, kind: "fs.write" },
+      { title: `Edit ${rel}`, detail: `lines ${first.line}-${last.line} (anchored)${targetNote}`, kind: "fs.write" },
       action,
     );
     if (!approved) return fail("declined by user");
   }
 
-  const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+  const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
     let actualSha256: string;
     try {
-      actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+      actualSha256 = sha256Hex((await readFile(real)).toString("utf8"));
     } catch {
       actualSha256 = "unreadable";
     }
@@ -654,9 +664,9 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
           `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
       );
     }
-    const outcome = await writeAtomic(resolved, after, ctx);
+    const outcome = await writeAtomic(real, after, ctx, real);
     if (isRefused(outcome)) return fail(outcome.refusal);
-    if ((await readFile(resolved)).toString("utf8") !== after) {
+    if ((await readFile(real)).toString("utf8") !== after) {
       return fail(`verification failed: ${rel} does not match the intended content`);
     }
     recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
@@ -664,7 +674,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
   }).catch((e: unknown) => fail(msg(e)));
   if (locked !== undefined) return locked;
 
-  noteRead(ctx, resolved);
+  noteRead(ctx, real);
   const suffix = shifts.length > 0 ? ` (anchors shifted: ${shifts.join(", ")})` : "";
   const lintFixNote = lintFixCommitSuffix(ctx, rel);
   return {
@@ -707,10 +717,15 @@ export const editTool: Tool = {
       const oldStr = args.old;
       const newStr = args.new;
       const all = args.all === true;
-      const resolved = resolvePath(ctx.cwd, args.path);
+      const target = resolveRealTarget(ctx.cwd, args.path, ctx.workspace);
+      const resolved = target.requested;
+      const real = target.real;
       const rel = relPath(ctx.cwd, resolved);
+      const targetNote = real === resolved ? "" : `; resolves to ${real}`;
 
-      const action: GuardAction = { kind: "fs.write", target: resolved };
+      // Guard the resolved target (see executeAnchored): a symlink must not be
+      // able to turn this path's "inside" decision into an outside write.
+      const action: GuardAction = { kind: "fs.write", target: real };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -719,7 +734,7 @@ export const editTool: Tool = {
       let before: string;
       let preimageSha256: string;
       try {
-        const buf = await readFile(resolved);
+        const buf = await readFile(real);
         if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
         before = buf.toString("utf8");
         preimageSha256 = sha256Hex(before); // docs/09 §8.2: the preimage this call read
@@ -752,7 +767,7 @@ export const editTool: Tool = {
         // exact-string edit carries its own preimage text, but a fuzzy rung
         // RECONSTRUCTS a location and can splice a replacement into a region the
         // model never inspected. That requires having read the file this session.
-        if (!wasRead(ctx, resolved)) {
+        if (!wasRead(ctx, real)) {
           return fail(
             `HZ_PRECONDITION_FAILED: edit refused: no exact match for the old text in ${rel}, and this session ` +
               `has not read the file — so the fuzzy rungs cannot be trusted; read ${rel} and edit again`,
@@ -760,7 +775,7 @@ export const editTool: Tool = {
         }
         // NF-069 ladder: exact found nothing — escalate, but only while the
         // reflection slot is unspent, and only ever to a UNIQUE match.
-        const key = reflectionKey(ctx, resolved);
+        const key = reflectionKey(ctx, real);
         const attempts = (reflections.get(key) ?? 0) + 1;
         reflections.set(key, attempts);
         const fuzzyDisabled = attempts > MAX_EDIT_REFLECTIONS;
@@ -791,7 +806,7 @@ export const editTool: Tool = {
           }
         }
         if (found === null) {
-          return fail(locateFailed(rel, fileLines, oldLines, newLines, fuzzyDisabled, attempts, wasRead(ctx, resolved)));
+          return fail(locateFailed(rel, fileLines, oldLines, newLines, fuzzyDisabled, attempts, wasRead(ctx, real)));
         }
 
         rung = found.rung;
@@ -808,7 +823,7 @@ export const editTool: Tool = {
         const approved = await ctx.approve(
           {
             title: `Edit ${rel}`,
-            detail: `${replacements} occurrence(s)`,
+            detail: `${replacements} occurrence(s)${targetNote}`,
             kind: "fs.write",
           },
           action,
@@ -819,14 +834,14 @@ export const editTool: Tool = {
       // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
       // section per target file, taken AFTER approval. A second process that changed
       // the file first is caught by the sha256 check below, never clobbered.
-      const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+      const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
         // docs/09 §8.2 (R-tools-48): the preimage is checked immediately before
         // the write — a file changed during the guard/approval window is a
         // `Conflict`, and nothing is written. A stale edit may not silently
         // overwrite a human's (or a tool's) concurrent change with "success".
         let actualSha256: string;
         try {
-          actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+          actualSha256 = sha256Hex((await readFile(real)).toString("utf8"));
         } catch {
           actualSha256 = "unreadable";
         }
@@ -842,9 +857,9 @@ export const editTool: Tool = {
         // byte is written (same check, and same symlink policy, as `write` — see the
         // header of ./verified-open.ts). Not `truncate(0)` + `write`: a crash between
         // those two calls left the file at ZERO BYTES with nothing able to restore it.
-        const outcome = await writeAtomic(resolved, after, ctx);
+        const outcome = await writeAtomic(real, after, ctx, real);
         if (isRefused(outcome)) return fail(outcome.refusal);
-        const verified = (await readFile(resolved)).toString("utf8") === after;
+        const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
         recordChange(ctx.sessionId, {
@@ -862,9 +877,9 @@ export const editTool: Tool = {
 
       // The session has now read this file (twice: the preimage and the
       // post-write check), so later fuzzy rungs on it are legitimate.
-      noteRead(ctx, resolved);
+      noteRead(ctx, real);
 
-      reflections.delete(reflectionKey(ctx, resolved));
+      reflections.delete(reflectionKey(ctx, real));
       const suffix = rung === "exact" ? "" : ` (matched via ${rung})`;
       const lintFixNote = lintFixCommitSuffix(ctx, rel);
       return {

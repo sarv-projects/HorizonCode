@@ -1,10 +1,12 @@
 /** `grep` — search file contents, preferring ripgrep with a built-in fallback. */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { kernelStateDir, spawnOwned } from "../core/owned-spawn";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { realpathish } from "../core/paths";
+import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { gitIgnoredPaths } from "./ignore";
 
 const MAX_RESULTS = 200;
@@ -200,6 +202,11 @@ async function jsSearch(
         capped = true;
         return;
       }
+      // NEVER follow a symlink during the walk: a link inside the workspace can
+      // point at ~/.ssh or any other outside tree, and searching through it
+      // would read bytes the guard never classified. The root itself is
+      // realpath-resolved and guarded before the walk starts.
+      if (entry.isSymbolicLink()) continue;
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
@@ -212,7 +219,12 @@ async function jsSearch(
 
   let rootIsFile = false;
   try {
-    rootIsFile = statSync(root).isFile();
+    // lstat, not stat: the root was already realpath-resolved by the caller, so
+    // this refuses a symlink swapped into the root's place after that guard
+    // instead of following it.
+    const st = lstatSync(root);
+    if (st.isSymbolicLink()) return { matches: results };
+    rootIsFile = st.isFile();
   } catch {
     return { matches: results };
   }
@@ -223,6 +235,17 @@ async function jsSearch(
   for (const abs of candidates) {
     if (results.length >= MAX_RESULTS) break;
     if (ignored.has(abs)) continue;
+    // Defensive per-candidate check (a race can swap a path component after the
+    // walk): refuse symlinks and any candidate whose real path differs from the
+    // walked path, so a link planted mid-search cannot redirect the read.
+    let st: Stats;
+    try {
+      st = lstatSync(abs);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue; // symlinks and special files are not read
+    if (realpathish(abs) !== abs) continue;
     scanFile(abs, relPath(cwd, abs));
   }
   return {
@@ -251,7 +274,10 @@ export const grepTool: Tool = {
       if (typeof args.pattern !== "string" || args.pattern === "") return fail("pattern is required");
       const pattern = args.pattern;
       const rootInput = typeof args.path === "string" && args.path !== "" ? args.path : ".";
-      const root = resolvePath(ctx.cwd, rootInput);
+      // The guard must classify the root whose bytes are actually traversed:
+      // `statSync`/`readdirSync`/`readFileSync` all follow a symlink at the root,
+      // so a lexical "inside" decision would let a link to ~/.ssh be searched.
+      const root = resolveRealTarget(ctx.cwd, rootInput, ctx.workspace).real;
       const globFilter = typeof args.glob === "string" && args.glob !== "" ? args.glob : undefined;
 
       const denied = await checkAccess(ctx, root, relPath(ctx.cwd, root));

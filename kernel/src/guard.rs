@@ -10,6 +10,10 @@
 //!      it is evaluated before policy rules and leases and cannot be lifted by
 //!      policy.json (the model must never be able to rewrite its own policy);
 //!   1. any matching `deny` rule wins;
+//!   1b. a structural `sensitive-write` rule asks for any `fs.write` to a git
+//!      hook/config, `.env*`, lockfile, CI workflow, Makefile/Dockerfile or
+//!      shell profile — even when a policy (or the workspace default) says
+//!      `allow` — and cannot be waived by a lease or grant;
 //!   2. else an unexpired, matching lease grants `allow`;
 //!   3. else any matching `ask` rule asks (an ask beats a matching allow);
 //!   4. else any matching `allow` rule grants `allow`;
@@ -395,6 +399,23 @@ impl Guard {
                 reason: format!(
                     "policy deny: {} @ {} (action {} on {})",
                     deny.kind, deny.scope, action.kind, action.target
+                ),
+                lease_id: None,
+            });
+        }
+
+        // H6: structural sensitive-write rule. It sits AFTER the policy deny
+        // check (a deny still wins) and BEFORE leases/grants/allow, so neither a
+        // workspace-allow policy nor a held "always" lease can silently rewrite a
+        // path that decides what code runs or what credentials are exposed. It is
+        // independent of leases by construction: reaching this branch returns
+        // before any lease is consulted (and therefore never consumes one).
+        if action.kind == "fs.write" && is_sensitive_write(Path::new(&action.target)) {
+            return Ok(GuardDecision {
+                decision: "ask".to_string(),
+                reason: format!(
+                    "sensitive-write: {} is a sensitive path (git hooks/config, env file, lockfile, CI workflow, container/build file or shell profile); explicit approval required",
+                    action.target
                 ),
                 lease_id: None,
             });
@@ -875,6 +896,66 @@ fn is_memory_manifest_write(state_dir: &Path, target: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// H6: paths whose CONTENT decides what code runs, what dependencies install,
+/// or which credentials a process sees. A policy `allow` must never be enough to
+/// rewrite one of these silently — a compromised or confused model could turn a
+/// routine "edit a file" into arbitrary code execution (git hooks, CI workflows,
+/// Makefile/Dockerfile) or credential exposure (`.env*`, shell profiles), and a
+/// lockfile rewrite can redirect dependency resolution.
+///
+/// Matching is on the RESOLVED path (symlinks and `..` followed lexically, no
+/// existence required), by basename for the single-file targets and by
+/// component window for the directory-scoped ones, so `.git/hooks/pre-commit`
+/// and `nested/repo/.github/workflows/ci.yml` are caught at any depth.
+fn is_sensitive_write(target: &Path) -> bool {
+    let resolved = resolve_lexical(target).unwrap_or_else(|| absolutize(target));
+    let parts: Vec<&str> = resolved
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+
+    for (index, part) in parts.iter().enumerate() {
+        // `.git/hooks` and everything under it; `.git/config` exactly.
+        if *part == ".git" {
+            match parts.get(index + 1) {
+                Some(&"hooks") => return true,
+                Some(&"config") if index + 2 == parts.len() => return true,
+                _ => {}
+            }
+        }
+        // `.github/workflows` and everything under it.
+        if *part == ".github" && parts.get(index + 1) == Some(&"workflows") {
+            return true;
+        }
+    }
+
+    let Some(base) = resolved.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if base == ".env" || base.starts_with(".env.") {
+        return true;
+    }
+    matches!(
+        base,
+        "package.json"
+            | "package-lock.json"
+            | "bun.lock"
+            | "bun.lockb"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "Cargo.lock"
+            | ".gitlab-ci.yml"
+            | "Makefile"
+            | "Dockerfile"
+            | ".bashrc"
+            | ".zshrc"
+            | ".profile"
+    )
+}
+
 /// The path made absolute against the process cwd (relative targets are how a
 /// client sitting in the workspace spells them).
 fn absolutize(path: &Path) -> PathBuf {
@@ -1106,6 +1187,211 @@ mod tests {
             .check(&ok, Some("workspace"), &[], None)
             .expect("check");
         assert!(!decision.reason.contains("kernel-state-protected"));
+        let _ = fs::remove_dir_all(&state);
+    }
+
+    /* ---------------------- H6: sensitive-write rule ---------------------- */
+
+    /// A policy that allows every fs.write, whatever the scope. The sensitive
+    /// rule must still force `ask`.
+    fn write_allow_all_policy(state: &Path) {
+        let rules = serde_json::json!([
+            {"kind": "fs.write", "scope": "*", "decision": "allow"}
+        ]);
+        fs::write(state.join("policy.json"), rules.to_string()).expect("policy");
+    }
+
+    fn write_deny_all_policy(state: &Path) {
+        let rules = serde_json::json!([
+            {"kind": "fs.write", "scope": "*", "decision": "deny"}
+        ]);
+        fs::write(state.join("policy.json"), rules.to_string()).expect("policy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sensitive_writes_ask_even_when_policy_allows() {
+        let state = scratch("state-sensitive");
+        let workspace = scratch("ws-sensitive");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+
+        let sensitive = [
+            ".git/hooks",
+            ".git/hooks/pre-commit",
+            ".git/hooks/post-checkout",
+            ".git/config",
+            ".env",
+            ".env.local",
+            ".env.production",
+            "package.json",
+            "nested/package.json",
+            "package-lock.json",
+            "bun.lock",
+            "bun.lockb",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "Cargo.lock",
+            ".github/workflows",
+            ".github/workflows/ci.yml",
+            "nested/repo/.github/workflows/release.yaml",
+            ".gitlab-ci.yml",
+            "Makefile",
+            "Dockerfile",
+            ".bashrc",
+            ".zshrc",
+            ".profile",
+        ];
+        for rel in sensitive {
+            let decision = write_decision(&guard, &workspace.join(rel));
+            assert_eq!(decision.decision, "ask", "{}: {}", rel, decision.reason);
+            assert!(
+                decision.reason.contains("sensitive-write"),
+                "{}: {}",
+                rel,
+                decision.reason
+            );
+        }
+
+        // Near-misses stay on the policy answer: only the listed names are
+        // structural sensitive writes, not every `.env*`-looking or `.git*` name.
+        let ordinary = [
+            "src/main.rs",
+            "README.md",
+            ".gitignore",
+            ".environment",
+            ".envrc",
+            "package.json.bak",
+            "Makefile.in",
+            "Dockerfile.dev",
+            ".github/ISSUE_TEMPLATE/bug.yml",
+            "hooks/pre-commit",
+            ".git/objects/ab",
+        ];
+        for rel in ordinary {
+            let decision = write_decision(&guard, &workspace.join(rel));
+            assert_eq!(decision.decision, "allow", "{}: {}", rel, decision.reason);
+        }
+
+        // Scope is irrelevant to the structural rule: an outside path asks too.
+        let outside = scratch("outside-sensitive");
+        let decision = guard
+            .check(
+                &GuardAction {
+                    kind: "fs.write".to_string(),
+                    target: outside.join(".env").display().to_string(),
+                },
+                Some("outside"),
+                &[],
+                None,
+            )
+            .expect("check");
+        assert_eq!(decision.decision, "ask");
+        assert!(decision.reason.contains("sensitive-write"));
+
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&workspace);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sensitive_write_cannot_be_waived_by_a_lease_or_grant() {
+        let state = scratch("state-sensitive-lease");
+        let workspace = scratch("ws-sensitive-lease");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+
+        let lease = guard.issue_lease("fs.write", "*", 60_000, None);
+        let decision = write_decision(&guard, &workspace.join("package.json"));
+        assert_eq!(decision.decision, "ask", "{}", decision.reason);
+        assert!(decision.reason.contains("sensitive-write"));
+
+        // The structural branch ran BEFORE lease consultation, so the lease is
+        // still held: an ordinary write consumes it.
+        let ordinary = write_decision(&guard, &workspace.join("notes.txt"));
+        assert_eq!(ordinary.decision, "allow", "{}", ordinary.reason);
+        assert!(
+            ordinary.reason.contains(&lease.lease_id),
+            "{}",
+            ordinary.reason
+        );
+
+        // A grant is a pre-authorisation, not a bypass: it too cannot lift it.
+        guard.issue_grant("fs.write", "*", 60_000, None);
+        let decision = write_decision(&guard, &workspace.join(".env"));
+        assert_eq!(decision.decision, "ask", "{}", decision.reason);
+        assert!(decision.reason.contains("sensitive-write"));
+
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_deny_still_beats_the_sensitive_ask() {
+        let state = scratch("state-sensitive-deny");
+        let workspace = scratch("ws-sensitive-deny");
+        write_deny_all_policy(&state);
+        let guard = Guard::new(&state);
+        let decision = write_decision(&guard, &workspace.join(".env"));
+        assert_eq!(decision.decision, "deny", "{}", decision.reason);
+        assert!(decision.reason.contains("policy deny"), "{}", decision.reason);
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sensitive_write_follows_symlinks_to_the_sensitive_target() {
+        let state = scratch("state-sensitive-link");
+        let workspace = scratch("ws-sensitive-link");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+
+        // A link named innocuously, pointing at a sensitive basename.
+        let real_pkg = workspace.join("package.json");
+        fs::write(&real_pkg, "{}").expect("package.json");
+        let link = workspace.join("innocent.txt");
+        symlink(&real_pkg, &link).expect("link to package.json");
+        let decision = write_decision(&guard, &link);
+        assert_eq!(decision.decision, "ask", "{}", decision.reason);
+        assert!(decision.reason.contains("sensitive-write"));
+
+        let real_env = workspace.join(".env");
+        fs::write(&real_env, "SECRET=1").expect(".env");
+        let env_link = workspace.join("innocent-config");
+        symlink(&real_env, &env_link).expect("link to .env");
+        let decision = write_decision(&guard, &env_link);
+        assert_eq!(decision.decision, "ask", "{}", decision.reason);
+        assert!(decision.reason.contains("sensitive-write"));
+
+        // A symlinked directory towards a .git/hooks tree.
+        let repo = workspace.join("repo");
+        fs::create_dir_all(repo.join(".git").join("hooks")).expect("hooks dir");
+        let hooks_link = workspace.join("hooks-alias");
+        symlink(repo.join(".git").join("hooks"), &hooks_link).expect("hooks link");
+        let decision = write_decision(&guard, &hooks_link.join("pre-commit"));
+        assert_eq!(decision.decision, "ask", "{}", decision.reason);
+        assert!(decision.reason.contains("sensitive-write"));
+
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kernel_state_deny_precedes_the_sensitive_rule() {
+        let state = scratch("state-sensitive-kernel");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let decision = write_decision(&guard, &state.join("policy.json"));
+        assert_eq!(decision.decision, "deny", "{}", decision.reason);
+        assert!(
+            decision.reason.contains("kernel-state-protected"),
+            "{}",
+            decision.reason
+        );
         let _ = fs::remove_dir_all(&state);
     }
 }

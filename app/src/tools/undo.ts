@@ -14,12 +14,19 @@
  * undo appends a consume tombstone, so the entry cannot resurface from the
  * file. The restore path keeps `noteRead` -- the session has the restored
  * bytes, so later edits are legitimate.
+ *
+ * Containment: the journaled path is resolved to its real target
+ * (`resolveRealTarget`) before the guard, the stale-check and the effect. A path
+ * that has become a symlink out of the workspace since the change was recorded
+ * therefore reaches the policy as "outside" and cannot be silently restored or
+ * removed outside it.
  */
 
 import { rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
+import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import {
   BEFORE_MAX_BYTES,
@@ -30,7 +37,7 @@ import {
   type ChangeEntry,
   type JournalStatus,
 } from "./change-journal";
-import { relPath, resolvePath } from "./helpers";
+import { relPath, resolvePath, resolveRealTarget } from "./helpers";
 import { noteRead } from "./read-ledger";
 
 function fail(error: string): ToolResult {
@@ -128,11 +135,19 @@ export const undoTool: Tool = {
         );
       }
 
+      // Resolve the journaled path to the file the restore/removal would really
+      // touch. A path that has become a symlink since the change was recorded
+      // must be checked on its real target: the stale-check reads through the
+      // link, so an approval based on the lexical (inside) path would otherwise
+      // let undo write the saved bytes outside the workspace.
+      const target = resolveRealTarget(ctx.cwd, entry.path, ctx.workspace);
+      const real = target.real;
+
       // The stale-check: current bytes must still be what the recorded change
       // wrote. Anything else is a concurrent edit, and undo declines it.
       let current: string;
       try {
-        current = (await readFile(entry.path)).toString("utf8");
+        current = (await readFile(real)).toString("utf8");
       } catch {
         return fail(
           `HZ_PRECONDITION_FAILED: undo refused: ${rel} is gone or unreadable; ` +
@@ -148,32 +163,45 @@ export const undoTool: Tool = {
         );
       }
 
-      // Same consent path as the write/edit it reverses.
-      const action: GuardAction = { kind: "fs.write", target: entry.path };
+      // Same consent path as the write/edit it reverses, on the real target.
+      const action: GuardAction = { kind: "fs.write", target: real };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
       if (decision.decision === "ask") {
         const what = entry.before === null ? `remove ${rel} (created by a recorded change)` : `restore ${rel} to its prior content`;
-        const approved = await ctx.approve({ title: `Undo: ${what}`, detail: `reverts the last recorded ${entry.tool}`, kind: "fs.write" }, action);
+        const targetNote = real === target.requested ? "" : ` [resolves to ${real}]`;
+        const approved = await ctx.approve(
+          { title: `Undo: ${what}`, detail: `reverts the last recorded ${entry.tool}${targetNote}`, kind: "fs.write" },
+          action,
+        );
         if (!approved) return fail("declined by user");
       }
 
       if (entry.before === null) {
         // The file exists only because of the recorded change -- and it still
         // matches that change (checked above), so removing it is exact reversal.
+        // Re-resolve immediately before the removal: a path swapped for a link
+        // to another directory after the guard must not be removed there.
+        const effectReal = realpathish(entry.path);
+        if (effectReal !== real) {
+          return fail(
+            `HZ_PRECONDITION_FAILED: undo refused: ${entry.path} now resolves to ${effectReal} ` +
+              `(the approved target was ${real}); nothing was removed`,
+          );
+        }
         rmSync(entry.path);
         consumeChange(ctx.sessionId, entry);
         return { ok: true, output: `Removed ${rel} (it existed only because of the last recorded ${entry.tool}; undo)` };
       }
 
-      const outcome = await writeAtomic(entry.path, entry.before, ctx);
+      const outcome = await writeAtomic(real, entry.before, ctx, real);
       if (isRefused(outcome)) return fail(outcome.refusal);
       // Append the consume tombstone: a reload must not resurrect this entry.
       consumeChange(ctx.sessionId, entry);
       // The session now holds the restored bytes -- later edits are legitimate.
-      noteRead(ctx, entry.path);
+      noteRead(ctx, real);
       return { ok: true, output: `Restored ${rel} to its content before the last recorded ${entry.tool}` };
     } catch (e) {
       return fail(msg(e));

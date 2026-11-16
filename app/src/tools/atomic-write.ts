@@ -75,11 +75,30 @@ async function syncDir(dir: string): Promise<void> {
  * A file-level symlink is FOLLOWED (verify-then-allow, per ./verified-open.ts):
  * the symlink survives and its target receives the bytes, instead of the link
  * being replaced by a regular file.
+ *
+ * `expectedReal` is the real (symlink-resolved) target the guard approved. When
+ * supplied, a target whose resolution moved between the guard/approval window
+ * and this effect is a `HZ_PRECONDITION_FAILED` refusal: a path component
+ * swapped for a symlink out of the workspace can never redirect the bytes
+ * after the policy decided on a different path.
  */
-export async function writeAtomic(resolved: string, content: string, ctx: ToolContext): Promise<AtomicWriteOutcome> {
+export async function writeAtomic(
+  resolved: string,
+  content: string,
+  ctx: ToolContext,
+  expectedReal?: string,
+): Promise<AtomicWriteOutcome> {
   // Where the effect would really land, symlinks followed. Checked here as well
   // as at the call site so that every caller inherits the guarantee.
   const target = realpathish(resolved);
+  if (expectedReal !== undefined && target !== expectedReal) {
+    return {
+      ok: false,
+      refusal:
+        `HZ_PRECONDITION_FAILED: write refused: ${resolved} now resolves to ${target} ` +
+        `(the approved target was ${expectedReal}); nothing was written`,
+    };
+  }
   const refused = await protectedTargetRefusal(resolved, target, ctx);
   if (refused !== undefined) return { ok: false, refusal: refused };
 

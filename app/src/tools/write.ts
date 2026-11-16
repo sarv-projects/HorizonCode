@@ -6,6 +6,12 @@
  * re-verified against the kernel state directory before a byte lands — see the
  * header of ./verified-open.ts for why, and for the named residuals.
  *
+ * The guard runs on the RESOLVED target (`resolveRealTarget`): a file-level or
+ * directory-level symlink cannot turn a policy "inside" decision into an
+ * outside write, the approval text names the resolved path when it differs from
+ * the requested spelling, and the effect refuses if the target's resolution
+ * moves between the guard/approval window and the write.
+ *
  * Two guards exist because this is the most destructive tool in the set:
  *
  *   - STALENESS across the approval window: the target's identity is snapshotted
@@ -32,7 +38,7 @@ import { formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { detectLineEnding, normalizeLineEndings } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
 import { protectedTargetRefusal } from "./verified-open";
@@ -114,13 +120,22 @@ export const writeTool: Tool = {
       const force = args.force === true;
 
       const content = args.content;
-      const resolved = resolvePath(ctx.cwd, args.path);
+      // The guard must classify where the bytes would REALLY land: a symlink
+      // (file or parent directory) otherwise lets a policy "inside" decision
+      // authorize a write outside the workspace. `real` is the resolved target
+      // for an existing file, or the resolved parent for a new one.
+      const target = resolveRealTarget(ctx.cwd, args.path, ctx.workspace);
+      const resolved = target.requested;
+      const real = target.real;
       const rel = relPath(ctx.cwd, resolved);
+      // Name the resolved destination in the approval text whenever it differs
+      // from the requested spelling, so a human sees the real path they approve.
+      const targetNote = real === resolved ? "" : `; resolves to ${real}`;
       const lines = countLines(content);
       const bytes = Buffer.byteLength(content, "utf8");
 
-      const action: GuardAction = { kind: "fs.write", target: resolved };
-      const beforeGuard = await snapshot(resolved);
+      const action: GuardAction = { kind: "fs.write", target: real };
+      const beforeGuard = await snapshot(real);
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -129,7 +144,7 @@ export const writeTool: Tool = {
         const approved = await ctx.approve(
           {
             title: `Write ${rel}`,
-            detail: `${lines} lines, ${bytes} bytes`,
+            detail: `${lines} lines, ${bytes} bytes${targetNote}`,
             kind: "fs.write",
           },
           action,
@@ -138,10 +153,20 @@ export const writeTool: Tool = {
       }
 
       // Where the effect would land, decided AFTER the approval window and before
-      // anything is read or written. A racer that swapped a path component for a
-      // symlink into the kernel state directory is caught here, and the refusal
-      // names both the requested path and the resolved target.
-      const refused = await protectedTargetRefusal(resolved, realpathish(resolved), ctx);
+      // anything is read or written. Re-resolve the requested path: a racer that
+      // swapped it for a symlink while the human was deciding must not redirect
+      // the bytes to a path the policy never classified. The refusal names both
+      // the requested path and where it now resolves.
+      const effectReal = realpathish(resolved);
+      if (effectReal !== real) {
+        return fail(
+          `HZ_PRECONDITION_FAILED: write refused: ${resolved} now resolves to ${effectReal} ` +
+            `(the approved target was ${real}); nothing was written`,
+        );
+      }
+      // A racer that swapped a path component for a symlink into the kernel state
+      // directory is caught here too; the refusal names both paths.
+      const refused = await protectedTargetRefusal(resolved, effectReal, ctx);
       if (refused !== undefined) return fail(refused);
 
       // Cross-process (core/file-lock.ts): snapshot check -> write -> journal is one
@@ -149,11 +174,11 @@ export const writeTool: Tool = {
       // changed the file first is reported by the snapshot check, never clobbered.
       let outLines = 0;
       let outBytes = 0;
-      const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+      const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
         // Staleness across the window in which the user was deciding (docs/09 §8.2's
         // rule, extended to `write`): a concurrent change is a Conflict, not a
         // silent overwrite with "success".
-        const afterApproval = await snapshot(resolved);
+        const afterApproval = await snapshot(real);
         if (
           beforeGuard.exists !== afterApproval.exists ||
           beforeGuard.ino !== afterApproval.ino ||
@@ -169,7 +194,7 @@ export const writeTool: Tool = {
         // Read-before-write (audit finding 2): a file that already exists is only
         // replaced when this session has read it. `write` keeps no preimage of its
         // own, so without this the model can destroy content it never saw.
-        if (beforeGuard.exists && !force && !wasRead(ctx, resolved)) {
+        if (beforeGuard.exists && !force && !wasRead(ctx, real)) {
           return fail(
             `HZ_PRECONDITION_FAILED: write refused: ${rel} already exists and this session has not read it; ` +
               `read it first, or pass force:true to replace it wholesale`,
@@ -183,7 +208,7 @@ export const writeTool: Tool = {
         if (beforeGuard.exists) {
           let preimage: Buffer | undefined;
           try {
-            preimage = await readFile(resolved);
+            preimage = await readFile(real);
           } catch {
             preimage = undefined; // unreadable (a directory, a device, permissions)
           }
@@ -221,8 +246,8 @@ export const writeTool: Tool = {
         outLines = countLines(toWrite);
         outBytes = Buffer.byteLength(toWrite, "utf8");
 
-        await mkdir(path.dirname(resolved), { recursive: true });
-        const outcome = await writeAtomic(resolved, toWrite, ctx);
+        await mkdir(path.dirname(real), { recursive: true });
+        const outcome = await writeAtomic(real, toWrite, ctx, real);
         if (isRefused(outcome)) return fail(outcome.refusal);
 
         recordChange(ctx.sessionId, {
@@ -242,7 +267,7 @@ export const writeTool: Tool = {
       // The session authored (and verified, by re-reading) this content, so the
       // path counts as known: overwriting your own work is not the "never saw
       // it" hazard the gate targets.
-      noteRead(ctx, resolved);
+      noteRead(ctx, real);
       // E-1 residual: opt-in lint-fix commit after write of a recently linted path.
       const lintFixNote = formatLintFixCommitSuffix(ctx.sessionId, ctx.workspace, rel);
       return {

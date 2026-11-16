@@ -7,7 +7,8 @@
  * guard -> approve -> preimage(sha256 TOCTOU) -> protectedTarget -> writeAtomic
  * discipline that `edit` and `write` use. It NEVER bypasses the guard and never
  * uses ambient authority: each mutated/created/deleted/moved path raises its own
- * `fs.write` GuardAction, is confined to cwd, and records a change-journal entry.
+ * `fs.write` GuardAction on its REAL (symlink-resolved) target, is confined to
+ * cwd lexically, and records a change-journal entry.
  *
  * Context matching uses a GRADED FUZZ LADDER (docs/30; research A.5 + codex
  * seek_sequence 1.5) over the file's lines, carrying a fuzz cost:
@@ -54,7 +55,7 @@ import { isRefused, writeAtomic } from "./atomic-write";
 import { acquireLock, targetLockPath } from "../core/file-lock";
 import { recordChange } from "./change-journal";
 import { canonicalize, parse, type FileOp, type PatchChunk } from "./apply-patch-parser";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolveRealTarget, type RealTarget } from "./helpers";
 import { noteRead } from "./read-ledger";
 import { protectedTargetRefusal } from "./verified-open";
 
@@ -272,21 +273,26 @@ function closestSimilarity(fileLines: string[], want: string[], from: number): n
 
 /** One guarded effect: guard -> approve -> protectedTarget -> preimage TOCTOU. */
 async function guardAndPreimage(
-  resolved: string,
+  target: RealTarget,
   rel: string,
   verb: string,
   needsPreimage: boolean,
   ctx: ToolContext,
   held: Array<() => void>,
 ): Promise<{ ok: true; before: string | null } | { ok: false; error: string }> {
-  const action: GuardAction = { kind: "fs.write", target: resolved };
+  const resolved = target.requested;
+  const real = target.real;
+  // The guard classifies the REAL target, not the patch's lexical spelling: a
+  // symlinked file (or directory) must make the policy see "outside" and ask or
+  // deny, never let an "inside" decision authorize bytes outside the workspace.
+  const action: GuardAction = { kind: "fs.write", target: real };
 
   // Preimage BEFORE the guard/approval window (TOCTOU, like edit.ts).
   let before: string | null = null;
   let preSha = "absent";
   if (needsPreimage) {
     try {
-      const buf = await readFile(resolved);
+      const buf = await readFile(real);
       if (isBinary(buf)) return { ok: false, error: `apply_patch: binary file (contains a NUL byte): ${rel}` };
       before = buf.toString("utf8");
       preSha = sha256Hex(before);
@@ -300,19 +306,32 @@ async function guardAndPreimage(
     return { ok: false, error: `apply_patch: denied by policy${decision.reason ? `: ${decision.reason}` : ""} (${rel})` };
   }
   if (decision.decision === "ask") {
-    const approved = await ctx.approve({ title: `${verb} ${rel}`, detail: verb, kind: "fs.write" }, action);
+    const targetNote = real === resolved ? "" : `; resolves to ${real}`;
+    const approved = await ctx.approve({ title: `${verb} ${rel}`, detail: `${verb}${targetNote}`, kind: "fs.write" }, action);
     if (!approved) return { ok: false, error: `apply_patch: declined by user (${rel})` };
   }
 
-  // Effect-time protected-target refusal against the kernel state dir.
-  const refused = await protectedTargetRefusal(resolved, realpathish(resolved), ctx);
+  // Effect-time protected-target refusal against the kernel state dir. The path
+  // is re-resolved first: a racer that swapped the requested spelling while the
+  // human was deciding must not redirect a delete/read to a path the policy
+  // never classified. The refusal names the requested and the new real path.
+  const effectReal = realpathish(resolved);
+  if (effectReal !== real) {
+    return {
+      ok: false,
+      error:
+        `HZ_PRECONDITION_FAILED: apply_patch refused: ${resolved} now resolves to ${effectReal} ` +
+        `(the approved target was ${real}); nothing was written`,
+    };
+  }
+  const refused = await protectedTargetRefusal(resolved, effectReal, ctx);
   if (refused !== undefined) return { ok: false, error: refused };
 
   // Cross-process (core/file-lock.ts): take the per-file lock AFTER approval (never
   // hold it across a human decision) and keep it until applyOp's effect is done,
   // so verify -> write is one critical section. The caller releases `held`.
   try {
-    held.push(await acquireLock(targetLockPath(ctx.workspace, realpathish(resolved))));
+    held.push(await acquireLock(targetLockPath(ctx.workspace, effectReal)));
   } catch (e) {
     return { ok: false, error: `apply_patch: ${msg(e)} (${rel})` };
   }
@@ -321,7 +340,7 @@ async function guardAndPreimage(
   if (needsPreimage) {
     let actual = "absent";
     try {
-      actual = sha256Hex((await readFile(resolved)).toString("utf8"));
+      actual = sha256Hex((await readFile(effectReal)).toString("utf8"));
     } catch {
       actual = "unreadable";
     }
@@ -360,38 +379,43 @@ async function applyOpLocked(
   held: Array<() => void>,
 ): Promise<{ ok: true; fuzz: number } | { ok: false; error: string }> {
   if (op.kind === "add") {
-    const resolved = resolvePath(ctx.cwd, op.path);
+    const target = resolveRealTarget(ctx.cwd, op.path, ctx.workspace);
+    const resolved = target.requested;
+    const real = target.real;
     const rel = relPath(ctx.cwd, resolved);
     if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
     // Add File means a NEW file: refuse when the target already exists rather
     // than silently clobbering content we have no undo preimage for. (write.ts
     // enforces the same read-before-overwrite discipline; here the grammar is
     // stricter — Add never overwrites.)
-    if (await pathExists(resolved)) {
+    if (await pathExists(real)) {
       return {
         ok: false,
         error: `apply_patch: Add File refused: ${rel} already exists (Add File creates a new file; use '*** Update File:' to modify it)`,
       };
     }
-    const guarded = await guardAndPreimage(resolved, rel, "Add", false, ctx, held);
+    const guarded = await guardAndPreimage(target, rel, "Add", false, ctx, held);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
     const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
-    const outcome = await writeAtomic(resolved, content, ctx);
+    const outcome = await writeAtomic(real, content, ctx, real);
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
     recordChange(ctx.sessionId, { path: resolved, rel, before: null, afterSha256: sha256Hex(content), at: Date.now(), tool: "write" });
-    noteRead(ctx, resolved);
+    noteRead(ctx, real);
     summary.added.push(rel);
     return { ok: true, fuzz: 0 };
   }
 
   if (op.kind === "delete") {
-    const resolved = resolvePath(ctx.cwd, op.path);
+    const target = resolveRealTarget(ctx.cwd, op.path, ctx.workspace);
+    const resolved = target.requested;
     const rel = relPath(ctx.cwd, resolved);
     if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
-    const guarded = await guardAndPreimage(resolved, rel, "Delete", true, ctx, held);
+    const guarded = await guardAndPreimage(target, rel, "Delete", true, ctx, held);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
     // The removal only runs after the full guard + approval + protectedTarget +
     // preimage checks above; the preimage is journaled so the delete can undo.
+    // `rm` on the requested path removes a symlink itself rather than its target;
+    // the guard above already classified (and required approval for) the target.
     try {
       await rm(resolved);
     } catch (e) {
@@ -403,11 +427,13 @@ async function applyOpLocked(
   }
 
   // update (optionally with a move)
-  const resolved = resolvePath(ctx.cwd, op.path);
+  const target = resolveRealTarget(ctx.cwd, op.path, ctx.workspace);
+  const resolved = target.requested;
+  const real = target.real;
   const rel = relPath(ctx.cwd, resolved);
   if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
 
-  const guarded = await guardAndPreimage(resolved, rel, op.movePath === undefined ? "Update" : "Move", true, ctx, held);
+  const guarded = await guardAndPreimage(target, rel, op.movePath === undefined ? "Update" : "Move", true, ctx, held);
   if (guarded.ok !== true) return { ok: false, error: guarded.error };
   const before = guarded.before ?? "";
 
@@ -415,17 +441,19 @@ async function applyOpLocked(
   warnings.push(...w);
 
   if (op.movePath === undefined) {
-    const outcome = await writeAtomic(resolved, after, ctx);
+    const outcome = await writeAtomic(real, after, ctx, real);
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
     recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
-    noteRead(ctx, resolved);
+    noteRead(ctx, real);
     summary.updated.push(rel);
     return { ok: true, fuzz };
   }
 
   // Move: the destination is its own guarded write target; the source is then
   // removed. Confine the destination to cwd as well.
-  const destResolved = resolvePath(ctx.cwd, op.movePath);
+  const destTarget = resolveRealTarget(ctx.cwd, op.movePath, ctx.workspace);
+  const destResolved = destTarget.requested;
+  const destReal = destTarget.real;
   const destRel = relPath(ctx.cwd, destResolved);
   if (escapesCwd(ctx.cwd, destResolved)) return { ok: false, error: `apply_patch: move destination escapes the workspace: ${op.movePath}` };
   // A move may legitimately land on an existing file. Unlike Add File we do not
@@ -433,11 +461,11 @@ async function applyOpLocked(
   // destination's content: read its real bytes first (when `needsPreimage`,
   // guardAndPreimage returns that preimage) so undo can restore what the move
   // clobbered. A brand-new destination returns `before: null` as before.
-  const destExists = await pathExists(destResolved);
-  const destGuarded = await guardAndPreimage(destResolved, destRel, "Create", destExists, ctx, held);
+  const destExists = await pathExists(destReal);
+  const destGuarded = await guardAndPreimage(destTarget, destRel, "Create", destExists, ctx, held);
   if (destGuarded.ok !== true) return { ok: false, error: destGuarded.error };
   const destBefore = destGuarded.before; // the clobbered file's real preimage, or null for a new file
-  const outcome = await writeAtomic(destResolved, after, ctx);
+  const outcome = await writeAtomic(destReal, after, ctx, destReal);
   if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
   try {
     await rm(resolved);
@@ -446,7 +474,7 @@ async function applyOpLocked(
   }
   recordChange(ctx.sessionId, { path: destResolved, rel: destRel, before: destBefore, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
   recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
-  noteRead(ctx, destResolved);
+  noteRead(ctx, destReal);
   summary.moved.push(`${rel} -> ${destRel}`);
   return { ok: true, fuzz };
 }

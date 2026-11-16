@@ -5,7 +5,8 @@
  * is strictly more dangerous than an exact-string edit: it RECONSTRUCTS the
  * regions it changes from a pattern the model may never have inspected. So:
  *
- *   1. GuardAction {kind:'fs.write', target:resolved} via ctx.guard; deny fails.
+ *   1. GuardAction {kind:'fs.write', target:real} via ctx.guard, where `real` is
+ *      the symlink-resolved target (`resolveRealTarget`); deny fails.
  *   2. Read the preimage (reject binary; file-not-found -> fail), sha256 it.
  *   3. Require wasRead(ctx, resolved) before trusting the rewrite — the same
  *      read-before-write gate edit.ts puts on its fuzzy rungs (audit finding 2).
@@ -25,9 +26,8 @@ import { sha256Hex } from "../core/canon";
 import { MAX_MATCHES, MAX_SOURCE_BYTES, langFromPath, rewriteMatches } from "./ast-match";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { withFileLock, targetLockPath } from "../core/file-lock";
-import { realpathish } from "../core/paths";
 import { recordChange } from "./change-journal";
-import { isBinary, relPath, resolvePath } from "./helpers";
+import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { noteRead, wasRead } from "./read-ledger";
 
 function fail(error: string): ToolResult {
@@ -65,10 +65,15 @@ export const astEditTool: Tool = {
 
       const pat = args.pat;
       const out = args.out;
-      const resolved = resolvePath(ctx.cwd, args.path);
+      const target = resolveRealTarget(ctx.cwd, args.path, ctx.workspace);
+      const resolved = target.requested;
+      const real = target.real;
       const rel = relPath(ctx.cwd, resolved);
+      const targetNote = real === resolved ? "" : `; resolves to ${real}`;
 
-      const action: GuardAction = { kind: "fs.write", target: resolved };
+      // Guard the real target: a structural rewrite through a symlink must be
+      // classified on the file whose bytes it replaces.
+      const action: GuardAction = { kind: "fs.write", target: real };
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -77,7 +82,7 @@ export const astEditTool: Tool = {
       let before: string;
       let preimageSha256: string;
       try {
-        const buf = await readFile(resolved);
+        const buf = await readFile(real);
         if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
         before = buf.toString("utf8");
         preimageSha256 = sha256Hex(before); // the preimage this call read
@@ -88,7 +93,7 @@ export const astEditTool: Tool = {
       // Read-before-write (audit finding 2), as in edit.ts: a structural rewrite
       // reconstructs regions the model may not have inspected, so the session
       // must have READ the file before it can be trusted to rewrite it.
-      if (!wasRead(ctx, resolved)) {
+      if (!wasRead(ctx, real)) {
         return fail(
           `HZ_PRECONDITION_FAILED: ast_edit refused: this session has not read ${rel} — ` +
             `a structural rewrite reconstructs regions the model may not have inspected; read ${rel} and edit again`,
@@ -96,8 +101,9 @@ export const astEditTool: Tool = {
       }
 
       // Lexical family from the lang hint, else the file extension (Rust
-      // lifetimes, Python/shell `#` comments and `//` floor division).
-      const lang = typeof args.lang === "string" && args.lang !== "" ? args.lang : langFromPath(resolved);
+      // lifetimes, Python/shell `#` comments and `//` floor division). The real
+      // target's extension is the one whose bytes are rewritten.
+      const lang = typeof args.lang === "string" && args.lang !== "" ? args.lang : langFromPath(real);
       const rewrite = rewriteMatches(before, pat, out, { lang });
       // A rewrite that cannot be COMPLETE and CORRECT must fail loudly, never
       // report success for a partial or unscanned file.
@@ -135,7 +141,7 @@ export const astEditTool: Tool = {
         const approved = await ctx.approve(
           {
             title: `AST edit ${rel}`,
-            detail: `${rewrite.count} replacement(s)`,
+            detail: `${rewrite.count} replacement(s)${targetNote}`,
             kind: "fs.write",
           },
           action,
@@ -146,12 +152,12 @@ export const astEditTool: Tool = {
       // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
       // section per target file, taken AFTER approval. A second process that changed
       // the file first is caught by the check below, never clobbered.
-      const locked = await withFileLock(targetLockPath(ctx.workspace, realpathish(resolved)), async (): Promise<ToolResult | undefined> => {
+      const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
         // Preimage check immediately before the write: a file changed during the
         // guard/approval window is a conflict, and nothing is written (docs/09 §8.2).
         let actualSha256: string;
         try {
-          actualSha256 = sha256Hex((await readFile(resolved)).toString("utf8"));
+          actualSha256 = sha256Hex((await readFile(real)).toString("utf8"));
         } catch {
           actualSha256 = "unreadable";
         }
@@ -162,9 +168,9 @@ export const astEditTool: Tool = {
           );
         }
 
-        const outcome = await writeAtomic(resolved, after, ctx);
+        const outcome = await writeAtomic(real, after, ctx, real);
         if (isRefused(outcome)) return fail(outcome.refusal);
-        const verified = (await readFile(resolved)).toString("utf8") === after;
+        const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
         recordChange(ctx.sessionId, {
@@ -175,7 +181,7 @@ export const astEditTool: Tool = {
           at: Date.now(),
           tool: "edit",
         });
-        noteRead(ctx, resolved);
+        noteRead(ctx, real);
 
         return undefined;
       }).catch((e: unknown) => fail(msg(e)));
