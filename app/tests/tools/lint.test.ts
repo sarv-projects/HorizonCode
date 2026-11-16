@@ -127,4 +127,47 @@ describe("lint tool", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("ambiguous catch-alls warn and the last one wins deterministically", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-lint-catchall-"));
+    const priorHome = process.env.HOME;
+    const conf = path.join(home, ".config", "horizon");
+    const source = path.join(home, "source.ts");
+    mkdirSync(conf, { recursive: true });
+    writeFileSync(source, "const a = 1;\nconst b = 2;\nbad;\nconst c = 3;\n");
+    writeFileSync(
+      path.join(conf, "config.json"),
+      JSON.stringify({
+        lint: {
+          commands: [
+            { extensions: ["*"], command: `printf '%s:3:1 error from first\\n' {file}` },
+            { extensions: ["*"], command: `printf '%s:3:1 error from last\\n' {file}` },
+          ],
+        },
+      }),
+    );
+    try {
+      process.env.HOME = home;
+      const ctx = {
+        cwd: home,
+        workspace: home,
+        sessionId: "lint-catchall",
+        signal: new AbortController().signal,
+        guard: async (): Promise<GuardDecision> => ({ decision: "allow" }),
+        approve: async () => true,
+        receipt: async () => {},
+      } as unknown as ToolContext;
+      const result = await lintTool.execute({ path: "source.ts" }, ctx);
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain("warning:");
+      expect(result.output).toContain("2 catch-all");
+      expect(result.output).toContain("error from last");
+      expect(result.output).not.toContain("error from first");
+      expect(result.output).toContain("--- lint excerpt ---");
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

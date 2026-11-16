@@ -102,7 +102,13 @@ import {
 } from "./learn-events";
 import { appendAnalyticsEvent } from "./analytics-log";
 import { stateRoot } from "./paths";
-import { syncMarkdownTranscript } from "./markdown-transcript";
+import {
+  appendMarkdownTranscriptEvent,
+  markdownTranscriptCursor,
+  markdownTranscriptEnabled,
+  resumeMessagesFromMarkdownTranscript,
+  syncMarkdownTranscript,
+} from "./markdown-transcript";
 import { readSessionGoal, writeSessionGoal, type SessionGoalStatus } from "./session-goal";
 import {
   activeSkillSection,
@@ -488,6 +494,40 @@ class HzRuntimeImpl implements HzRuntime {
   note(message: string): void {
     if (this.active) emit(this.active, { type: "notice", message });
     else if (this.queued.length < 8) this.queued.push(message);
+  }
+
+  /** E-4: user-facing wording for the default-on continuous transcript. */
+  private transcriptNotice(path: string): string {
+    return `markdown transcript: writing to ${path} (default-on; set HZ_MARKDOWN_TRANSCRIPT=0 to disable)`;
+  }
+
+  /**
+   * E-4: mirror newly stored conversation messages into the Markdown transcript
+   * as events happen. The in-process cursor is the single source of truth for
+   * how many sections are already on disk, so this never duplicates a section
+   * written by an earlier append or by the per-turn `syncMarkdownTranscript`
+   * safety net. Best-effort: a write failure is a notice, never a failed turn.
+   */
+  private mirrorTranscript(): void {
+    if (!markdownTranscriptEnabled()) return;
+    const total = this.store.messageCount(this.session.id);
+    const from = markdownTranscriptCursor(this.workspace, this.session.id, total);
+    if (from >= total) return;
+    const history = this.store.history(this.session.id);
+    const meta = { title: this.session.title, model: this.currentModel };
+    for (let i = from; i < history.length; i += 1) {
+      const r = appendMarkdownTranscriptEvent({
+        workspace: this.workspace,
+        sessionId: this.session.id,
+        message: history[i]!,
+        meta,
+      });
+      if (r.error) {
+        this.note(`markdown transcript: ${r.error}`);
+        break;
+      }
+      if (r.created) this.note(this.transcriptNotice(r.path));
+    }
   }
 
   /** Append recovered steer rows to the transcript before the next model turn. */
@@ -1497,6 +1537,9 @@ class HzRuntimeImpl implements HzRuntime {
         onEvent: (event) => {
           if (event.type === "context.usage") this.lastContext = event;
           emit(cb, event);
+          // E-4: append each newly stored conversation message as its event
+          // arrives (input, tool result, assistant reply, steer interjection).
+          this.mirrorTranscript();
         },
       };
       const turnStartedAt = Date.now();
@@ -1568,7 +1611,10 @@ class HzRuntimeImpl implements HzRuntime {
               ledger,
               effectHost: this.effectHost,
               trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
-              onEvent: (ev) => emit(cb, ev),
+              onEvent: (ev) => {
+                emit(cb, ev);
+                this.mirrorTranscript();
+              },
             }),
         },
         userContent,
@@ -1577,8 +1623,9 @@ class HzRuntimeImpl implements HzRuntime {
       // label is the user's first line; the change ids come from the durable
       // journal's window, so a resumed process still rewinds by file state.
       await this.recordTurnCheckpoint(text, turnStartedAt);
-      // E-4 reduced (ruling 467): opt-in continuous Markdown transcript under state.
-      // Best-effort — never fails the turn (parser/resume: ruling 476 helpers).
+      // E-4: per-event append (above) is the primary writer; this full-history
+      // sync is a safety net for any message that arrived without a mapped
+      // event. Best-effort — never fails the turn (parser/resume: ruling 476).
       {
         const md = syncMarkdownTranscript({
           workspace: this.workspace,
@@ -1589,10 +1636,7 @@ class HzRuntimeImpl implements HzRuntime {
         if (md.error) {
           emit(cb, { type: "notice", message: `markdown transcript: ${md.error}` });
         } else if (md.written && md.created) {
-          emit(cb, {
-            type: "notice",
-            message: `markdown transcript: writing to ${md.path} (HZ_MARKDOWN_TRANSCRIPT=1)`,
-          });
+          emit(cb, { type: "notice", message: this.transcriptNotice(md.path) });
         }
       }
       // Ruling 452: reduced post-turn trajectory digest (not full learn storage).
@@ -1862,6 +1906,42 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     effectHost,
     sessionOwner,
   });
+  // E-4: `--restore` / `restoreFromTranscript` seeds the conversation into the
+  // opened session's store from a Markdown transcript. FAIL-CLOSED: a missing
+  // or unreadable transcript seeds nothing and emits a clear notice instead;
+  // the session simply starts with its stored history. A successful restore
+  // replaces that history and materialises the default-path transcript at the
+  // restored cursor so per-event append does not duplicate restored messages.
+  if (opts?.restoreFromTranscript !== undefined && opts.restoreFromTranscript !== false) {
+    const restorePath =
+      typeof opts.restoreFromTranscript === "string" ? opts.restoreFromTranscript : undefined;
+    const restored = resumeMessagesFromMarkdownTranscript({
+      workspace,
+      sessionId: session.id,
+      ...(restorePath !== undefined ? { path: restorePath } : {}),
+    });
+    if (!restored.ok || restored.messages.length === 0) {
+      impl.note(
+        !restored.ok
+          ? `could not restore Markdown transcript from ${restored.path}: ` +
+              (restored.missing ? "file not found" : (restored.error ?? "unreadable")) +
+              "; starting with the stored session history"
+          : `Markdown transcript ${restored.path} had no messages to restore`,
+      );
+    } else {
+      store.truncateMessages(session.id, 0);
+      for (const msg of restored.messages) store.appendMessage(session.id, msg);
+      syncMarkdownTranscript({
+        workspace,
+        sessionId: session.id,
+        history: store.history(session.id),
+        meta: { title: session.title, model },
+      });
+      impl.note(
+        `restored ${restored.messages.length} message(s) from Markdown transcript ${restored.path}`,
+      );
+    }
+  }
   try {
     await impl.logSessionStart();
     await impl.attachEffectLedger();

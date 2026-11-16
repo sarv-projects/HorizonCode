@@ -58,5 +58,13 @@ running unsandboxed.
   guard digest.
 - **EffectHost/R170/egress (backlog §Z):** universal kernel ownership, atomic
   `fs.batch`, routed netns egress and full R172 remain the P0 backlog.
-- **E-4:** continuous Markdown transcript exists; `--restore` / default-on wiring
-  is the next user-visible backlog row.
+- **E-4: CLOSED (ruling 485).** `--restore [path]` → `RuntimeOptions.restoreFromTranscript`
+  → SessionStore seed, fail-closed on missing/corrupt; continuous write is
+  default-on (`HZ_MARKDOWN_TRANSCRIPT=0` opts out) and appends per event with a
+  cursor shared with the full-history writer. 0600 file / 0700 dir preserved.
+- **Host artifact (WSL drvfs, not a product finding):** the repo's `.hz/`,
+  `.hz/state/` and `.hz/state/kernel/` read `777` because the checkout is on a
+  DrvFS/9p mount that ignores POSIX mode bits; a native `/tmp` workspace created
+  by the same product code reads `700`. The doc claim "every state store is
+  0600/0700" holds on a native filesystem; do not treat the mount mode as a
+  product regression.

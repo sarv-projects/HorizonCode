@@ -1,6 +1,12 @@
 /**
  * F-3 reduced: user-supplied per-extension lint commands with `{file}` substitution
  * and `path:line` output parsing (aider-style; no tree-sitter).
+ *
+ * Catch-all policy (part of the ruling draft for the 462 residual): exactly one
+ * `"*"` catch-all is expected. When several are configured the choice is still
+ * deterministic - the LAST catch-all wins. `parseLintConfig` records a `rejected`
+ * diagnostic naming every catch-all index so `config check` surfaces the
+ * ambiguity, and the `lint` tool echoes the same warning in its output.
  */
 
 import { extname } from "node:path";
@@ -17,6 +23,16 @@ export interface LintCommandEntry {
 export interface LintConfig {
   commands: LintCommandEntry[];
   rejected: string[];
+}
+
+/** Cap findings from a single linter run so a noisy linter cannot flood the prompt. */
+export const LINT_OUTPUT_MAX_FINDINGS = 200;
+
+export interface LintFinding {
+  path: string;
+  line: number;
+  col?: number;
+  message: string;
 }
 
 function normExt(ext: string): string {
@@ -46,6 +62,20 @@ export function parseLintCommandEntry(raw: unknown, index: number): LintCommandE
   return { extensions, command: row.command.trim() };
 }
 
+/**
+ * Clear diagnostic for the ambiguous-catch-all case. Returns `undefined` when
+ * there are zero or exactly one catch-all entries (the supported case).
+ */
+export function lintCatchAllDiagnostic(commands: readonly LintCommandEntry[]): string | undefined {
+  const indices: number[] = [];
+  commands.forEach((entry, index) => {
+    if (entry.extensions.includes("*")) indices.push(index);
+  });
+  if (indices.length < 2) return undefined;
+  const last = indices[indices.length - 1]!;
+  return `lint.commands: ${indices.length} catch-all ("*") entries at indices ${indices.join(", ")}; exactly one is expected; the last one (index ${last}) wins deterministically`;
+}
+
 export function parseLintConfig(value: unknown): LintConfig | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -61,17 +91,27 @@ export function parseLintConfig(value: unknown): LintConfig | undefined {
     if (typeof parsed === "string") rejected.push(parsed);
     else commands.push(parsed);
   });
+  const catchAllIssue = lintCatchAllDiagnostic(commands);
+  if (catchAllIssue !== undefined) rejected.push(catchAllIssue);
   if (commands.length === 0 && rejected.length === 0) return undefined;
   return { commands, rejected };
 }
 
-/** Pick the most specific lint command for a file path. `*` is catch-all. */
+/**
+ * Pick the most specific lint command for a file path. `*` is the catch-all.
+ *
+ * Deterministic policy: a specific extension match always wins (first one in
+ * config order), regardless of where a catch-all sits. If no specific match
+ * exists, the LAST catch-all wins. Multiple catch-alls are reported by
+ * `lintCatchAllDiagnostic` so the ambiguity is never silent.
+ */
 export function resolveLintCommand(absPath: string, config: LintConfig | undefined): LintCommandEntry | undefined {
   if (config === undefined || config.commands.length === 0) return undefined;
   const ext = normExt(extname(absPath));
   let catchAll: LintCommandEntry | undefined;
   for (const entry of config.commands) {
     if (entry.extensions.includes("*")) {
+      // Documented last-wins assignment (see lintCatchAllDiagnostic).
       catchAll = entry;
       continue;
     }
@@ -80,27 +120,85 @@ export function resolveLintCommand(absPath: string, config: LintConfig | undefin
   return catchAll;
 }
 
-export function substituteLintFile(command: string, absPath: string): string {
-  const quoted = JSON.stringify(absPath);
-  return command.replaceAll("{file}", quoted);
+/**
+ * POSIX single-quote a path so it becomes one inert shell word: spaces, `$`,
+ * backticks, quotes and backslashes are all literal. This matters because the
+ * file path can originate in a tool argument, while the command template is
+ * user config; substitution must never let a path break out of its quotes.
+ */
+export function shellQuotePath(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/** Parse `filename:line[:col] message` lines (compiler-style). */
-export function parseLintOutputLines(text: string): { path: string; line: number; col?: number; message: string }[] {
-  const out: { path: string; line: number; col?: number; message: string }[] = [];
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
+export function substituteLintFile(command: string, absPath: string): string {
+  return command.replaceAll("{file}", shellQuotePath(absPath));
+}
+
+const ANSI_RE = /\u001B\[[0-9;]*[A-Za-z]/g;
+
+/**
+ * A finding head: `path:line[:col]`. The path may carry a Windows drive prefix
+ * (`C:\...`); it otherwise cannot contain a colon. Kept global so one output
+ * line can yield several findings (e.g. `a.ts:3:1 error one; b.ts:5:2 error two`).
+ */
+const FINDING_HEAD_RE = /((?:[A-Za-z]:)?[^\s:;,]+):(\d+)(?::(\d+))?/g;
+
+/** A whitespace-separated head is only trusted as a second path if it looks like one. */
+function isPathLike(token: string): boolean {
+  return /[./\\]/.test(token) || /^[A-Za-z]:[\\/]/.test(token);
+}
+
+/**
+ * Parse `filename:line[:col] message` lines (compiler-style).
+ *
+ * Handles Windows drive paths, ANSI colour codes, several findings on one line
+ * (separated by `;`/`,` or by whitespace before a path-like token), and caps
+ * the total number of findings via `opts.maxFindings`.
+ */
+export function parseLintOutputLines(
+  text: string,
+  opts?: { maxFindings?: number },
+): LintFinding[] {
+  const cap = Math.max(1, opts?.maxFindings ?? LINT_OUTPUT_MAX_FINDINGS);
+  const out: LintFinding[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(ANSI_RE, "").trim();
     if (line === "") continue;
-    const m = /^([^:]+):(\d+)(?::(\d+))?\s*(.*)$/.exec(line);
-    if (!m) continue;
-    const [, file, ln, col, rest] = m;
-    const message = rest.trim() === "" ? "(no message)" : rest.trim();
-    out.push({
-      path: file,
-      line: Number.parseInt(ln, 10),
-      col: col !== undefined ? Number.parseInt(col, 10) : undefined,
-      message,
-    });
+
+    const heads: { start: number; end: number; path: string; line: number; col?: number }[] = [];
+    FINDING_HEAD_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = FINDING_HEAD_RE.exec(line)) !== null && heads.length < cap) {
+      if (m.index > 0) {
+        const before = line[m.index - 1]!;
+        const strong = before === ";" || before === ",";
+        if (!strong && !(/\s/.test(before) && isPathLike(m[1]!))) continue;
+      }
+      heads.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        path: m[1]!,
+        line: Number.parseInt(m[2]!, 10),
+        col: m[3] !== undefined ? Number.parseInt(m[3], 10) : undefined,
+      });
+    }
+    if (heads.length === 0) continue;
+
+    for (let i = 0; i < heads.length; i++) {
+      const head = heads[i]!;
+      const message = line
+        .slice(head.end, i + 1 < heads.length ? heads[i + 1]!.start : line.length)
+        .replace(/^[\s;,:]+/, "")
+        .replace(/[\s;,]+$/, "")
+        .trim();
+      out.push({
+        path: head.path,
+        line: head.line,
+        col: head.col,
+        message: message === "" ? "(no message)" : message,
+      });
+      if (out.length >= cap) return out;
+    }
   }
   return out;
 }
@@ -137,7 +235,7 @@ export async function runUserLintCommand(
 
 export function formatLintFindings(
   relPath: string,
-  findings: { path: string; line: number; col?: number; message: string }[],
+  findings: LintFinding[],
 ): string {
   if (findings.length === 0) return `${relPath}: no issues from user lint command`;
   const lines = findings.map((f) => {

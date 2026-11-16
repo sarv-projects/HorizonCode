@@ -3,7 +3,7 @@
  * answer-isolation precondition, and the executor-injected eval runner
  * (docs/30 §4 item 8, reduced form).
  *
- * Four things live here and nothing else:
+ * Five things live here and nothing else:
  *  1. `evalCaseFromPostmortem(pm)`: a candidate case in a LOCAL form, plainly
  *     named `PostmortemEvalCase`. The wire schema is docs/05 §4.10
  *     `EvalCaseV1` (`evl_<ulid>`, a different field set, `DESIGNED` in that
@@ -24,7 +24,17 @@
  *     provider call and no loop run, which is what makes the grader fully
  *     unit-testable today. NOTHING in the product wires this to the live loop:
  *     the loop/provider executor and the test-model-in-library are the
- *     remaining docs/30 §4 item 8 pieces (named at the bottom).
+ *     remaining docs/30 §4 item 8 pieces (named at the bottom). The runner
+ *     DOES read the clock once per case (wall-clock duration) and derives USD
+ *     cost from usage the executor chooses to report — see item 5.
+ *  5. Cost/latency metrics (F-4, additive): every graded case carries an
+ *     `EvalRunMetrics` record — measured wall-clock ms plus a USD cost whose
+ *     source is stated honestly (`reported` | `harness-estimate` | `none`).
+ *     A provider that reports neither cost nor usage is counted as exactly
+ *     $0 with source `none`; no number is invented. Cases may carry opt-in
+ *     `max_wall_ms` / `max_cost_usd` assertions, and the set runner accepts
+ *     optional suite-wide caps; `runEvalSet` publishes the totals through the
+ *     SAME `metricContract` as every other number here.
  *
  * The runner, as pinned (one case): (a) it re-asserts the answer-isolation
  * precondition against the case with the caller's `forbiddenTexts` FIRST — a
@@ -36,23 +46,26 @@
  * `loop.ts` reports `detail: "internal_error"` as terminal `failed`, and the
  * RC-7 terminal vocabulary has no `internal_error` value, so it cannot be a
  * terminal here); (c) it grades every assertion the case carries — `terminal`
- * (the observed terminal must equal the case's value) and `no_answer_leak`
- * (definition below) — and a kind the runner cannot grade fails as
+ * (the observed terminal must equal the case's value), `no_answer_leak`
+ * (definition below), and the opt-in `max_wall_ms` / `max_cost_usd` thresholds
+ * (F-4) — and a kind the runner cannot grade fails as
  * `unknown_assertion` rather than being silently skipped; (d) it returns
- * `{caseId, passed, failures, outcome}`. `runEvalSet` re-asserts every case
+ * `{caseId, passed, failures, outcome, metrics}`. `runEvalSet` re-asserts every case
  * BEFORE the set's first execution (a leak anywhere refuses the whole set —
- * nothing has run) and publishes the run/passed/failed counts as contracted
- * blocks; the aggregate carries no bare count.
+ * nothing has run) and publishes the run/passed/failed counts AND the F-4
+ * wall-clock/USD totals as contracted blocks; the aggregate carries no bare
+ * count.
  *
  * The `no_answer_leak` definition, pinned — both halves. CASE half: the case
  * record itself must contain none of the forbidden texts; step (a) proves that
  * before execution and refuses, naming the field (`$.task`, `$.setup.tools[1]`,
  * …). RUN half: with the executor's `finalAnswer` in hand, that string must
  * not contain any of the forbidden texts; the first match in list order fails
- * the assertion, naming the text. The injected executor reports only
- * `{terminal, finalAnswer, toolCalls?}` — no transcript, tool results or
+ * the assertion, naming the text. The injected executor reports
+ * `{terminal, finalAnswer, toolCalls?}` plus the OPTIONAL numeric meters
+ * `{usage?, provider?, model?, costUsd?}` — no transcript, tool results or
  * receipts — so the run half is exactly this finalAnswer check, stated rather
- * than implied.
+ * than implied. The meters are validated numbers, never leaked answer text.
  *
  * Refusals are typed (`EvalCaseRefusal`) and carry a machine-readable `code`;
  * the four codes and their exact message prefixes are: `no_task`, `bad_source`,
@@ -67,10 +80,11 @@
  * leak and still must not be run.
  */
 
-import type { RunExit, TerminalState } from "../contracts";
+import type { RunExit, TerminalState, Usage } from "../contracts";
 import { notifyLearnEvalCompleted } from "./learn-events";
 import { metricContract } from "./metrics";
 import type { PostmortemRecord } from "./postmortem";
+import { enrichUsageCost, HARNESS_PRICE_TABLE_REVISION } from "./usage-cost";
 
 /** Why a case was refused (the `code` carried by every `EvalCaseRefusal`). */
 export type EvalCaseRefusalCode = "no_task" | "bad_source" | "answer_leak" | "bad_forbidden";
@@ -89,8 +103,40 @@ export class EvalCaseRefusal extends Error {
   }
 }
 
-/** One assertion a case makes about a run (the two kinds this slice builds). */
-export type EvalAssertion = { kind: "terminal"; value: TerminalState } | { kind: "no_answer_leak" };
+/**
+ * One assertion a case makes about a run. The first two are the original
+ * reduced-slice kinds; `max_wall_ms` / `max_cost_usd` are the F-4 opt-in
+ * resource thresholds. Adding a kind here does not silently skip it: the
+ * runner's `gradeAssertions` fails any kind it does not recognise.
+ */
+export type EvalAssertion =
+  | { kind: "terminal"; value: TerminalState }
+  | { kind: "no_answer_leak" }
+  | { kind: "max_wall_ms"; value: number }
+  | { kind: "max_cost_usd"; value: number };
+
+/**
+ * Where a case's USD number came from. `none` means the executor reported
+ * neither a cost nor any usage — the case is counted as exactly $0, never as a
+ * fabricated estimate. `harness-estimate` means the number was derived from
+ * provider-reported usage via `usage-cost.ts` (harness price table, not a
+ * billing invoice). `reported` means the executor supplied the USD directly.
+ */
+export type EvalCostSource = "none" | "harness-estimate" | "reported";
+
+/** Resource metrics captured for one graded case (always present, F-4). */
+export interface EvalRunMetrics {
+  /** Wall-clock milliseconds around the single injected executor call. */
+  wallMs: number;
+  /** USD for the case. 0 when the executor reported no cost and no usage. */
+  costUsd: number;
+  /** Honest source of `costUsd`; see `EvalCostSource`. */
+  costSource: EvalCostSource;
+  /** Harness price-table revision when `costSource === "harness-estimate"`. */
+  priceTableRevision?: typeof HARNESS_PRICE_TABLE_REVISION;
+  /** Provider usage exactly as the executor reported it, when it did. */
+  usage?: Usage;
+}
 
 /**
  * The local candidate form (NOT docs/05 `EvalCaseV1` — see the header): the
@@ -116,6 +162,12 @@ const MAX_SCAN_DEPTH = 64;
 export interface EvalCaseFromPostmortemOptions {
   /** Override the local id (default `eval-from-<pm.id>`). */
   id?: string;
+  /**
+   * Additional opt-in assertions (e.g. `max_wall_ms` / `max_cost_usd`) appended
+   * AFTER the two default assertions. A post-mortem-derived case can therefore
+   * carry resource thresholds without the builder inventing a measurement.
+   */
+  assertions?: readonly EvalAssertion[];
 }
 
 /**
@@ -150,7 +202,11 @@ export function evalCaseFromPostmortem(
     from,
     task,
     setup: { tools },
-    assertions: [{ kind: "terminal", value: pm.terminal }, { kind: "no_answer_leak" }],
+    assertions: [
+      { kind: "terminal", value: pm.terminal },
+      { kind: "no_answer_leak" },
+      ...(opts.assertions ?? []),
+    ],
   };
 }
 
@@ -367,6 +423,17 @@ export interface EvalExecutorResult {
   finalAnswer: string;
   /** The tool names the run exercised, when the executor can report them. */
   toolCalls?: string[];
+  /** Provider-reported usage for the case, when the executor can report it. */
+  usage?: Usage;
+  /** Provider/model names, used only to pick the harness price table. */
+  provider?: string;
+  model?: string;
+  /**
+   * An already-computed USD cost, when the provider/harness reports one
+   * directly. Takes precedence over `usage`; when neither is present the runner
+   * records $0 with `costSource: "none"` (it never fabricates a number).
+   */
+  costUsd?: number;
 }
 
 /**
@@ -385,10 +452,25 @@ export interface EvalRunnerOptions {
    * forbidden text in the run's `finalAnswer` fails `no_answer_leak`.
    */
   forbiddenTexts: readonly string[];
+  /**
+   * F-4 suite-wide caps (additive, opt-in). When absent, no suite gate is
+   * applied. A breach is a `suite_wall_ms` / `suite_cost_usd` failure on the
+   * aggregate with PASS/FAIL evidence — never a silently skipped check.
+   */
+  maxSuiteWallMs?: number;
+  maxSuiteCostUsd?: number;
 }
 
 /** Why a run failed; the closed set of failure kinds the runner produces. */
-export type EvalFailureKind = "terminal" | "no_answer_leak" | "executor_error" | "unknown_assertion";
+export type EvalFailureKind =
+  | "terminal"
+  | "no_answer_leak"
+  | "executor_error"
+  | "unknown_assertion"
+  | "max_wall_ms"
+  | "max_cost_usd"
+  | "suite_wall_ms"
+  | "suite_cost_usd";
 
 /** One graded failure: what was expected, what was observed, and why. */
 export interface EvalFailure {
@@ -420,6 +502,8 @@ export interface EvalRunResult {
   passed: boolean;
   failures: EvalFailure[];
   outcome: EvalRunOutcome;
+  /** Captured cost/latency metrics — present on every result, even errors. */
+  metrics: EvalRunMetrics;
 }
 
 /** The set aggregate: published numbers only (H-7). */
@@ -428,9 +512,14 @@ export interface EvalSetRunAggregate {
    * One contracted block per count (Metric/Anchor/Population/Excludes): the
    * aggregate carries no bare count — a caller that needs one counts
    * `results`, and a number that leaves here without its four slots cannot be
-   * produced.
+   * produced. F-4 appends wall-clock and USD blocks here, same contract.
    */
   published: string[];
+  /**
+   * Suite-wide gate failures (F-4). Empty when no suite caps were supplied or
+   * every cap was met; a breach carries explicit expected/observed evidence.
+   */
+  suiteFailures: EvalFailure[];
 }
 
 /** `runEvalSet`'s full result: per-case results in input order + the aggregate. */
@@ -487,12 +576,27 @@ function requireExecutor(opts: EvalRunnerOptions | undefined, label: string): Ev
   return executor;
 }
 
+/** A finite, non-negative number — the shape every resource cap and USD value needs. */
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** The normalised executor observation, including the optional F-4 meters. */
+interface NormalizedExecutor {
+  outcome: EvalRunOutcome;
+  usage?: Usage;
+  costUsd?: number;
+  provider?: string;
+  model?: string;
+}
+
 /**
  * Normalise an executor return value; a malformed result is refused the same
  * way a throw is — as a graded `executor_error`, never a comparison. There is
- * no honest terminal to compare and no text to scan.
+ * no honest terminal to compare and no text to scan. The optional cost fields
+ * are validated too: a bad usage/cost shape is malformed, not silently dropped.
  */
-function normalizeExecutorResult(raw: unknown): { outcome: EvalRunOutcome } | { malformed: string } {
+function normalizeExecutorResult(raw: unknown): { ok: NormalizedExecutor } | { malformed: string } {
   const result = raw as Partial<EvalExecutorResult> | null;
   if (result === null || typeof result !== "object") {
     return { malformed: "the executor returned a non-object result" };
@@ -509,17 +613,70 @@ function normalizeExecutorResult(raw: unknown): { outcome: EvalRunOutcome } | { 
   if (toolCalls !== undefined && (!Array.isArray(toolCalls) || !toolCalls.every((name) => typeof name === "string"))) {
     return { malformed: "the executor returned toolCalls that is not an array of strings" };
   }
+  if (result.usage !== undefined) {
+    if (result.usage === null || typeof result.usage !== "object" || Array.isArray(result.usage)) {
+      return { malformed: "the executor returned usage that is not an object" };
+    }
+    for (const value of Object.values(result.usage as Record<string, unknown>)) {
+      if (value !== undefined && !isNonNegativeNumber(value)) {
+        return { malformed: "the executor returned usage with a non-numeric token field" };
+      }
+    }
+  }
+  if (result.costUsd !== undefined && !isNonNegativeNumber(result.costUsd)) {
+    return { malformed: "the executor returned costUsd that is not a finite non-negative number" };
+  }
+  if (result.provider !== undefined && typeof result.provider !== "string") {
+    return { malformed: "the executor returned provider that is not a string" };
+  }
+  if (result.model !== undefined && typeof result.model !== "string") {
+    return { malformed: "the executor returned model that is not a string" };
+  }
   return {
-    outcome: {
-      terminal: result.terminal as TerminalState,
-      finalAnswer: result.finalAnswer,
-      toolCalls: [...(toolCalls ?? [])],
+    ok: {
+      outcome: {
+        terminal: result.terminal as TerminalState,
+        finalAnswer: result.finalAnswer,
+        toolCalls: [...(toolCalls ?? [])],
+      },
+      ...(result.usage !== undefined ? { usage: result.usage } : {}),
+      ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+      ...(result.provider !== undefined ? { provider: result.provider } : {}),
+      ...(result.model !== undefined ? { model: result.model } : {}),
     },
   };
 }
 
+/**
+ * Build the metrics record from a normalised observation. Honesty is the rule:
+ * an explicit `costUsd` is `reported`; usage alone is a `harness-estimate`
+ * through `usage-cost.ts`; neither is exactly $0 with source `none`.
+ */
+function metricsFrom(observed: NormalizedExecutor, wallMs: number): EvalRunMetrics {
+  const base: EvalRunMetrics = { wallMs, costUsd: 0, costSource: "none" };
+  if (observed.costUsd !== undefined) {
+    return { ...base, costUsd: observed.costUsd, costSource: "reported" };
+  }
+  if (observed.usage !== undefined) {
+    const enriched = enrichUsageCost(observed.usage, observed.provider ?? "unknown", observed.model ?? "unknown");
+    return {
+      ...base,
+      costUsd: enriched.cost?.totalUsd ?? 0,
+      costSource: "harness-estimate",
+      priceTableRevision: HARNESS_PRICE_TABLE_REVISION,
+      usage: observed.usage,
+    };
+  }
+  return base;
+}
+
+/** Metrics for the no-observation case: wall time to the failure, $0, source `none`. */
+function errorMetrics(wallMs: number): EvalRunMetrics {
+  return { wallMs, costUsd: 0, costSource: "none" };
+}
+
 /** The graded shape of "the executor produced no run": one failure, errored outcome. */
-function executorErrorResult(caseId: string, message: string): EvalRunResult {
+function executorErrorResult(caseId: string, message: string, metrics: EvalRunMetrics): EvalRunResult {
   return {
     caseId,
     passed: false,
@@ -531,6 +688,7 @@ function executorErrorResult(caseId: string, message: string): EvalRunResult {
       },
     ],
     outcome: { terminal: "failed", finalAnswer: "", toolCalls: [], error: message },
+    metrics,
   };
 }
 
@@ -542,6 +700,7 @@ function executorErrorResult(caseId: string, message: string): EvalRunResult {
 function gradeAssertions(
   caseObj: PostmortemEvalCase,
   outcome: EvalRunOutcome,
+  metrics: EvalRunMetrics,
   forbidden: readonly string[],
 ): EvalFailure[] {
   const failures: EvalFailure[] = [];
@@ -573,6 +732,42 @@ function gradeAssertions(
       }
       return;
     }
+    if (assertion?.kind === "max_wall_ms") {
+      const cap = assertion.value;
+      if (!isNonNegativeNumber(cap)) {
+        failures.push({
+          kind: "unknown_assertion",
+          observed: String(cap),
+          detail: `assertions[${index}] (max_wall_ms) needs a finite non-negative number — ${JSON.stringify(cap)} is not one; refusing rather than skipping`,
+        });
+      } else if (metrics.wallMs > cap) {
+        failures.push({
+          kind: "max_wall_ms",
+          expected: `<= ${cap}ms`,
+          observed: `${metrics.wallMs}ms`,
+          detail: `max_wall_ms assertion failed: observed ${metrics.wallMs}ms exceeds ${cap}ms (wall clock measured around the executor call)`,
+        });
+      }
+      return;
+    }
+    if (assertion?.kind === "max_cost_usd") {
+      const cap = assertion.value;
+      if (!isNonNegativeNumber(cap)) {
+        failures.push({
+          kind: "unknown_assertion",
+          observed: String(cap),
+          detail: `assertions[${index}] (max_cost_usd) needs a finite non-negative number — ${JSON.stringify(cap)} is not one; refusing rather than skipping`,
+        });
+      } else if (metrics.costUsd > cap) {
+        failures.push({
+          kind: "max_cost_usd",
+          expected: `<= ${displayUsd(cap)}`,
+          observed: `${displayUsd(metrics.costUsd)} (${metrics.costSource})`,
+          detail: `max_cost_usd assertion failed: observed ${displayUsd(metrics.costUsd)} (source ${metrics.costSource}) exceeds ${displayUsd(cap)}`,
+        });
+      }
+      return;
+    }
     failures.push({
       kind: "unknown_assertion",
       observed: assertion?.kind === undefined ? "undefined" : String(assertion.kind),
@@ -585,13 +780,16 @@ function gradeAssertions(
 /**
  * Run one eval case (docs/30 §4 item 8, runner half — reduced form).
  *
- * Pure and dependency-injected: no I/O, no clock, no randomness; the same case
- * and the same executor yield the same result. Order is the contract: (a) the
+ * Dependency-injected: no I/O, no provider call, no loop run, no randomness.
+ * The ONE clock read is the wall-clock measurement around the injected
+ * executor call (F-4) — everything graded off that measurement is still
+ * deterministic for a given executor. Order is the contract: (a) the
  * answer-isolation precondition is re-asserted against the case BEFORE the
  * executor is called (a leak refuses, typed, naming the field); (b) the
  * executor is awaited inside try/catch — a throw or a malformed result becomes
  * a graded `executor_error` result, never a rejection; (c) every assertion is
- * graded; (d) the typed result is returned.
+ * graded, including the opt-in resource thresholds; (d) the typed result with
+ * its captured metrics is returned.
  */
 export async function runEvalCase(caseObj: PostmortemEvalCase, opts: EvalRunnerOptions): Promise<EvalRunResult> {
   const evalCase = requireRunnableCase(caseObj, "runEvalCase: caseObj");
@@ -604,33 +802,76 @@ export async function runEvalCase(caseObj: PostmortemEvalCase, opts: EvalRunnerO
   const forbidden = normalizeForbidden(opts.forbiddenTexts);
 
   // (b) Execute; an executor throw or a malformed result is graded, not thrown.
-  let outcome: EvalRunOutcome;
+  // The clock is read once, immediately around the call, so wallMs is the
+  // duration of the execution regardless of how the execution ended.
+  const started = Date.now();
+  let normalized: ReturnType<typeof normalizeExecutorResult>;
   try {
-    const normalized = normalizeExecutorResult(await executor(evalCase));
-    if ("malformed" in normalized) {
-      return executorErrorResult(evalCase.id, `the executor returned a malformed result: ${normalized.malformed}`);
-    }
-    outcome = normalized.outcome;
+    normalized = normalizeExecutorResult(await executor(evalCase));
   } catch (err) {
-    return executorErrorResult(evalCase.id, `the executor threw: ${errorMessage(err)}`);
+    return executorErrorResult(evalCase.id, `the executor threw: ${errorMessage(err)}`, errorMetrics(Date.now() - started));
   }
+  const wallMs = Date.now() - started;
+  if ("malformed" in normalized) {
+    return executorErrorResult(
+      evalCase.id,
+      `the executor returned a malformed result: ${normalized.malformed}`,
+      errorMetrics(wallMs),
+    );
+  }
+  const metrics = metricsFrom(normalized.ok, wallMs);
 
-  // (c) Grade every assertion the case carries.
-  const failures = gradeAssertions(evalCase, outcome, forbidden);
+  // (c) Grade every assertion the case carries, against the observation AND
+  // the captured resource metrics.
+  const failures = gradeAssertions(evalCase, normalized.ok.outcome, metrics, forbidden);
 
   // (d) The typed result.
-  return { caseId: evalCase.id, passed: failures.length === 0, failures, outcome };
+  return { caseId: evalCase.id, passed: failures.length === 0, failures, outcome: normalized.ok.outcome, metrics };
+}
+
+/** Round a wall-clock total for display without changing what was measured. */
+function displayMs(value: number): string {
+  return `${Math.round(value)}ms`;
+}
+
+/** Six-decimal USD display; $0 is $0, never an invented estimate. */
+function displayUsd(value: number): string {
+  return `$${value.toFixed(6)}`;
+}
+
+/** Suite caps are programming input — validate them before any execution. */
+function validateSuiteCaps(opts: EvalRunnerOptions): void {
+  for (const [key, value] of [
+    ["maxSuiteWallMs", opts.maxSuiteWallMs],
+    ["maxSuiteCostUsd", opts.maxSuiteCostUsd],
+  ] as const) {
+    if (value !== undefined && !isNonNegativeNumber(value)) {
+      throw new Error(`runEvalSet: opts.${key} must be a finite non-negative number — ${JSON.stringify(value)} is not one`);
+    }
+  }
+}
+
+/** One explicit suite-gate failure with PASS/FAIL evidence. */
+function suiteGateFailure(kind: "suite_wall_ms" | "suite_cost_usd", cap: number, observed: number, unit: "ms" | "usd"): EvalFailure {
+  const fmt = unit === "ms" ? displayMs : displayUsd;
+  return {
+    kind,
+    expected: `<= ${fmt(cap)}`,
+    observed: fmt(observed),
+    detail: `suite ${kind} gate failed: ${fmt(observed)} total exceeds ${fmt(cap)}`,
+  };
 }
 
 /**
  * Run a whole set: every case is checked against the answer side BEFORE the
  * set's first execution (a leak anywhere refuses the whole set — nothing has
  * run), then each case goes through `runEvalCase`. The aggregate publishes the
- * run/passed/failed counts as contracted blocks (H-7) and carries no bare
- * count: a caller that needs one counts `results`.
+ * run/passed/failed counts AND the F-4 wall-clock/USD totals as contracted
+ * blocks (H-7) and carries no bare count: a caller that needs one counts
+ * `results` or reads `results[i].metrics`.
  *
- * Determinism mirrors `runEvalCase`: no I/O, no clock, no randomness; the same
- * cases and the same executor yield the same results, twice in a row.
+ * Determinism mirrors `runEvalCase`: no I/O, no provider call, no loop run, no
+ * randomness; the only clock reads are the per-case wall-clock measurements.
  */
 export async function runEvalSet(
   cases: readonly PostmortemEvalCase[],
@@ -638,6 +879,7 @@ export async function runEvalSet(
 ): Promise<EvalSetRun> {
   if (!Array.isArray(cases)) throw new Error("runEvalSet: cases must be an array");
   const executor = requireExecutor(opts, "runEvalSet");
+  validateSuiteCaps(opts);
   // A refusal anywhere refuses the set before ANY execution.
   cases.forEach((c, index) => requireRunnableCase(c, `runEvalSet: cases[${index}]`));
   for (const c of cases) assertAnswerIsolation(c, opts.forbiddenTexts);
@@ -647,14 +889,48 @@ export async function runEvalSet(
 
   const passed = results.filter((result) => result.passed).length;
   const failed = results.length - passed;
+
+  // F-4 resource totals, derived strictly from captured per-case metrics.
+  const totalWallMs = results.reduce((sum, r) => sum + r.metrics.wallMs, 0);
+  const maxWallMs = results.reduce((max, r) => Math.max(max, r.metrics.wallMs), 0);
+  const totalCostUsd = results.reduce((sum, r) => sum + r.metrics.costUsd, 0);
+  const maxCostUsd = results.reduce((max, r) => Math.max(max, r.metrics.costUsd), 0);
+  const withCostData = results.filter((r) => r.metrics.costSource !== "none").length;
+
+  const suiteFailures: EvalFailure[] = [];
+  if (opts.maxSuiteWallMs !== undefined && totalWallMs > opts.maxSuiteWallMs) {
+    suiteFailures.push(suiteGateFailure("suite_wall_ms", opts.maxSuiteWallMs, totalWallMs, "ms"));
+  }
+  if (opts.maxSuiteCostUsd !== undefined && totalCostUsd > opts.maxSuiteCostUsd) {
+    suiteFailures.push(suiteGateFailure("suite_cost_usd", opts.maxSuiteCostUsd, totalCostUsd, "usd"));
+  }
+
   const population = `${results.length} eval case(s) run through the injected executor (core/evals.ts runEvalSet; the executor is caller-supplied — no loop or provider wiring)`;
   const anchor = "none — first eval run in this repository (no prior run of this set to compare against)";
   const excludes =
     "none — every case in the set produced a graded result (a case-side refusal refuses the whole set before its first execution; an executor throw is graded as executor_error)";
+  const resourcePopulation =
+    `${population}; ${withCostData}/${results.length} case(s) reported cost or usage, the rest counted at $0 with source 'none'`;
+  const resourceExcludes =
+    `${excludes}; executor-error cases contribute wall time to the throw and $0 cost (no usage was reported)`;
   const published = [
     metricContract({ metric: "eval cases run", anchor, population, excludes, value: results.length }),
     metricContract({ metric: "eval cases passed", anchor, population, excludes, value: passed }),
     metricContract({ metric: "eval cases failed", anchor, population, excludes, value: failed }),
+    metricContract({
+      metric: "eval wall-clock (milliseconds)",
+      anchor,
+      population,
+      excludes,
+      value: `${displayMs(totalWallMs)} total / ${displayMs(maxWallMs)} max case`,
+    }),
+    metricContract({
+      metric: "eval cost (USD, harness estimate where derived from usage)",
+      anchor,
+      population: resourcePopulation,
+      excludes: resourceExcludes,
+      value: `${displayUsd(totalCostUsd)} total / ${displayUsd(maxCostUsd)} max case`,
+    }),
   ];
 
   // RC-18: notify learn listeners so a live Runtime can project hz.learn.eval.completed (451).
@@ -663,8 +939,8 @@ export async function runEvalSet(
     caseCount: results.length,
     passed,
     failed,
-    gate: failed === 0 ? "pass" : "fail",
+    gate: failed === 0 && suiteFailures.length === 0 ? "pass" : "fail",
   });
 
-  return { results, aggregate: { published } };
+  return { results, aggregate: { published, suiteFailures } };
 }

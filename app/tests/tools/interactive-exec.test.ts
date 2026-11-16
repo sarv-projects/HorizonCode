@@ -173,9 +173,12 @@ describe("shell_session: timeout", () => {
       await new Promise((resolve) => setTimeout(resolve, 900));
       const after = await interactiveExecTool.execute({ mode: "write", sessionId, input: "" }, ctx);
       expect(after.ok).toBe(true);
-      // Reported as exited (killed) within a few seconds, not after 30s.
+      // Reported as exited (killed) promptly, not after the 30s process
+      // lifetime. 4s is too tight on a loaded WSL box (measured 4.8s under the
+      // gates run while the session was still killed correctly); 10s still
+      // proves the watchdog fired and is load-tolerant.
       expect(after.output).toMatch(/Exit code:|Signal:/);
-      expect(Date.now() - started).toBeLessThan(4000);
+      expect(Date.now() - started).toBeLessThan(10_000);
       expect(liveSessionCount()).toBe(0);
     });
   });

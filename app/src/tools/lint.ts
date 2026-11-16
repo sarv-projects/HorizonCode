@@ -4,7 +4,10 @@
  *
  * User `lint.commands` run first (ruling 210); otherwise LSP writethrough with
  * severity `error` only. Failures append marked line-context excerpts (ruling
- * 462; tree-sitter grammar windows still deferred).
+ * 462): plain ±context PLUS best-effort structural (balanced-delimiter/dedent)
+ * windows. True tree-sitter ERROR-node windows remain owner-blocked by the
+ * zero-runtime-dependency rule. Ambiguous user catch-all commands are warned
+ * about via the parsed config diagnostics.
  */
 
 import { readFile } from "node:fs/promises";
@@ -22,6 +25,7 @@ import {
   resolveLintCommand,
   runUserLintCommand,
   substituteLintFile,
+  type LintConfig,
 } from "../core/lint-commands";
 import {
   lintErrorLinesFromFindings,
@@ -61,6 +65,12 @@ const ERROR_LINE = /:\d+:\d+ error /;
 
 function compilerErrorsOnly(messages: readonly string[]): string[] {
   return messages.filter((line) => ERROR_LINE.test(line));
+}
+
+/** Surface parsed lint-config diagnostics (e.g. ambiguous catch-alls) at run time. */
+function lintConfigWarning(config: LintConfig | undefined): string {
+  if (config === undefined || config.rejected.length === 0) return "";
+  return `${config.rejected.map((why) => `warning: ${why}`).join("\n")}\n`;
 }
 
 /**
@@ -122,7 +132,7 @@ export const lintTool: Tool = {
         const parsed = parseLintOutputLines(ran.stdout);
         const errors = parsed.filter((row) => /error/i.test(row.message) || ran.exitCode !== 0);
         const findings = errors.length > 0 ? errors : parsed;
-        const listed = formatLintFindings(rel, findings);
+        const listed = `${lintConfigWarning(hz.lint)}${formatLintFindings(rel, findings)}`;
         const output = withLintExcerpts(listed, content, lintErrorLinesFromFindings(findings));
         const receipt: ReceiptInput = {
           action: "lint.check",

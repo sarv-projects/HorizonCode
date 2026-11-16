@@ -813,6 +813,16 @@ export interface RuntimeOptions {
    * `sessionId` takes precedence over `continueSession` when both are present.
    */
   sessionId?: string;
+  /**
+   * ADDITIVE (E-4): resume the conversation from a Markdown transcript into the
+   * opened session's store. `true` loads the default
+   * `<state>/transcripts/<sessionId>.md` (or its legacy pre-audit location); a
+   * string is an explicit file path. Absent/`false` = no restore. A missing or
+   * unreadable transcript FAILS CLOSED: no messages are seeded and a clear
+   * user-facing notice is emitted instead. Continuous write then resumes from
+   * the restored cursor, so restored messages are not duplicated.
+   */
+  restoreFromTranscript?: boolean | string;
   mock?: boolean;
   /** NF-073 run budget overrides (0 or absent per dimension = unlimited). */
   budget?: RunBudget;

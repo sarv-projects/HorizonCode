@@ -24,6 +24,7 @@ import {
   assertAnswerIsolation,
   EvalCaseRefusal,
   evalCaseFromPostmortem,
+  runEvalCase,
   summarizeEvalSet,
   type PostmortemEvalCase,
 } from "../../src/core/evals";
@@ -404,5 +405,50 @@ describe("summarizeEvalSet publishes through the metric contract", () => {
     // contract; the directive below fails a typecheck if that ever loosens.
     // @ts-expect-error — the four slots are required (metrics.ts, H-7)
     expect(() => metricContract({ value: 3 })).toThrow("missing metric, anchor, population, excludes");
+  });
+});
+
+/* -------------------- F-4: resource thresholds on derived cases -------------------- */
+
+describe("post-mortem-derived cases can carry cost/latency thresholds (F-4)", () => {
+  const ANSWER = "the final answer is 42";
+
+  test("opt-in thresholds append to the two defaults and grade without inventing cost", async () => {
+    const stateDir = tempDir("hz-eval-f4-pm-");
+    const pm = await onePostmortem(stateDir);
+    const evalCase = evalCaseFromPostmortem(pm, {
+      assertions: [{ kind: "max_wall_ms", value: 5000 }, { kind: "max_cost_usd", value: 0 }],
+    });
+    expect(evalCase.assertions.map((a) => a.kind)).toEqual([
+      "terminal",
+      "no_answer_leak",
+      "max_wall_ms",
+      "max_cost_usd",
+    ]);
+
+    // The injected executor reports no usage/cost — a zero-cost provider is
+    // $0 with source `none`, never a fabricated estimate.
+    const graded = await runEvalCase(evalCase, {
+      executor: async () => ({ terminal: pm.terminal, finalAnswer: "work done" }),
+      forbiddenTexts: [ANSWER],
+    });
+    expect(graded.passed).toBe(true);
+    expect(graded.metrics.costUsd).toBe(0);
+    expect(graded.metrics.costSource).toBe("none");
+    expect(graded.metrics.wallMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("the run-half no_answer_leak check survives the added threshold assertions", async () => {
+    const stateDir = tempDir("hz-eval-f4-pm-leak-");
+    const pm = await onePostmortem(stateDir);
+    const evalCase = evalCaseFromPostmortem(pm, {
+      assertions: [{ kind: "max_cost_usd", value: 5 }, { kind: "max_wall_ms", value: 5000 }],
+    });
+    const graded = await runEvalCase(evalCase, {
+      executor: async () => ({ terminal: pm.terminal, finalAnswer: `oops ${ANSWER}` }),
+      forbiddenTexts: [ANSWER],
+    });
+    expect(graded.passed).toBe(false);
+    expect(graded.failures.map((f) => f.kind)).toEqual(["no_answer_leak"]);
   });
 });

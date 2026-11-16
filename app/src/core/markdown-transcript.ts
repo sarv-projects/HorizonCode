@@ -1,12 +1,16 @@
 /**
- * markdown-transcript.ts — E-4 reduced (docs/30): opt-in continuous Markdown
- * chat transcript under state (`HZ_MARKDOWN_TRANSCRIPT=1`).
+ * markdown-transcript.ts — E-4 (docs/30): continuous Markdown chat transcript
+ * under state, ON by default with an explicit opt-out
+ * (`HZ_MARKDOWN_TRANSCRIPT=0`).
  *
- * After each completed turn the runtime appends new chat messages to
- * `<workspace>/.hz/state/transcripts/<sessionId>.md` (0600). Off by default.
- * Secrets are masked like `/export`. Parser + resume-from-transcript helpers
- * restore `ChatMsg[]` from that file (aider `split_chat_history_markdown` /
- * `--restore-chat-history` spirit, adapted to HZ `## role` sections).
+ * Each conversation event appends one chat message to
+ * `<workspace>/.hz/state/transcripts/<sessionId>.md` (0600 in a 0700 dir) via
+ * `appendMarkdownTranscriptEvent`. `syncMarkdownTranscript` remains as the
+ * full-history mirror/safety net; both share the same in-process cursor so a
+ * message is written exactly once. Secrets are masked like `/export`. Parser +
+ * resume-from-transcript helpers restore `ChatMsg[]` from that file (aider
+ * `split_chat_history_markdown` / `--restore-chat-history` spirit, adapted to
+ * HZ `## role` sections).
  */
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,7 +35,33 @@ const TOOL_CALL_HEAD = /^### tool call:\s+(\S.*?)\s*$/;
 export function markdownTranscriptEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return env.HZ_MARKDOWN_TRANSCRIPT === "1";
+  // Default-on. The ONLY opt-out is an explicit `HZ_MARKDOWN_TRANSCRIPT=0`;
+  // a missing value (and legacy `=1`) both mean enabled.
+  return env.HZ_MARKDOWN_TRANSCRIPT !== "0";
+}
+
+/**
+ * Current sync/append cursor (number of `## role` sections already mirrored)
+ * for a workspace/session. Seeds from the on-disk section count on first use —
+ * the same restart-safe seed `syncMarkdownTranscript` uses — so a caller that
+ * appends per event cannot duplicate messages already written by an earlier
+ * process. `historyLength`, when supplied, clamps a stale cursor after a
+ * truncation/rewind (the section count can only shrink with the history).
+ */
+export function markdownTranscriptCursor(
+  workspace: string,
+  sessionId: string,
+  historyLength?: number,
+): number {
+  const key = markdownTranscriptCursorKey(workspace, sessionId);
+  let from = cursors.get(key);
+  if (from === undefined) {
+    const file = markdownTranscriptPath(workspace, sessionId);
+    from = existsSync(file) ? countMarkdownMessageSections(readFileSync(file, "utf8")) : 0;
+    cursors.set(key, from);
+  }
+  if (historyLength !== undefined && from > historyLength) from = historyLength;
+  return from;
 }
 
 /** @internal test hook */
@@ -354,6 +384,77 @@ export function syncMarkdownTranscript(opts: {
       appended: slice.length,
       created: false,
     };
+  } catch (err) {
+    return {
+      attempted: true,
+      written: false,
+      path: file,
+      appended: 0,
+      created: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Append exactly ONE chat message (`## role` section) as its conversation
+ * event happens. Shares the cursor with `syncMarkdownTranscript`, so the
+ * per-turn full-history mirror sees these sections as already written and does
+ * not duplicate them. The caller passes the message at index `cursor` (use
+ * `markdownTranscriptCursor` to read it); the cursor advances by one on every
+ * successful append.
+ *
+ * Fail-closed: if the in-process cursor is ahead of a missing file (a restored
+ * session whose default-path transcript was not materialised), the append is
+ * REFUSED rather than writing a one-section file with an inconsistent cursor.
+ */
+export function appendMarkdownTranscriptEvent(opts: {
+  workspace: string;
+  sessionId: string;
+  message: ChatMsg;
+  meta?: Omit<MarkdownTranscriptMeta, "sessionId">;
+  env?: Record<string, string | undefined>;
+}): SyncMarkdownTranscriptResult {
+  const file = markdownTranscriptPath(opts.workspace, opts.sessionId);
+  const env = opts.env ?? process.env;
+  if (!markdownTranscriptEnabled(env)) {
+    return { attempted: false, written: false, path: file, appended: 0, created: false };
+  }
+  try {
+    ensureWorkspaceStateDir(opts.workspace);
+    const dir = path.dirname(file);
+    ensurePrivateDir(dir);
+
+    const key = markdownTranscriptCursorKey(opts.workspace, opts.sessionId);
+    const exists = existsSync(file);
+    const from = cursors.get(key) ?? (exists ? countMarkdownMessageSections(readFileSync(file, "utf8")) : 0);
+    if (!exists && from > 0) {
+      return {
+        attempted: true,
+        written: false,
+        path: file,
+        appended: 0,
+        created: false,
+        error: "transcript file is missing after its cursor advanced; refusing to append with an inconsistent cursor",
+      };
+    }
+    const block = formatMarkdownMessage(opts.message);
+    if (!exists) {
+      const header = formatMarkdownTranscriptHeader({
+        sessionId: opts.sessionId,
+        title: opts.meta?.title,
+        model: opts.meta?.model,
+        startedAt: opts.meta?.startedAt,
+      });
+      writeFileSync(file, header + block, { mode: 0o600 });
+      chmodPrivateFile(file);
+      cursors.set(key, from + 1);
+      return { attempted: true, written: true, path: file, appended: 1, created: true };
+    }
+    appendFileSync(file, block, { mode: 0o600 });
+    chmodPrivateFile(file);
+    cursors.set(key, from + 1);
+    return { attempted: true, written: true, path: file, appended: 1, created: false };
   } catch (err) {
     return {
       attempted: true,

@@ -124,6 +124,7 @@ const HELP = [
   "  --worktree <name>    create a git worktree beside the repo and start there (not OS sandbox)",
   "  --workspace <path>   folder to work in (default: the current folder)",
   "  --model <name>       model to use           --continue   resume the last session",
+  "  --restore [path]     resume the conversation from a Markdown transcript (default: <state>/transcripts/<session>.md)",
   "  --list-models [sub]  list known model ids (optional substring filter)",
   "  --show-prompts       dump the rendered provider request and exit (no API)",
   "  --show-repo-map      dump the repo_map render and exit (no API)",
@@ -163,6 +164,8 @@ interface CliOptions {
   showRepoMap: boolean;
   /** false = unset; true = default state path; string = explicit path */
   analyticsLog?: boolean | string;
+  /** false = unset; true = default transcript path; string = explicit path */
+  restoreFromTranscript?: boolean | string;
   errors: string[];
 }
 
@@ -231,6 +234,22 @@ function parseArgs(argv: string[]): CliOptions {
       case "--resume":
         opts.continueSession = true;
         break;
+      case "--restore": {
+        // Optional path: bare flag → default state transcript; next token if
+        // it is not another flag. Distinct from --continue/--resume (which
+        // resume the durable SQLite session store).
+        if (inline !== undefined) opts.restoreFromTranscript = inline;
+        else {
+          const next = argv[i + 1];
+          if (next !== undefined && !String(next).startsWith("-")) {
+            i += 1;
+            opts.restoreFromTranscript = String(next);
+          } else {
+            opts.restoreFromTranscript = true;
+          }
+        }
+        break;
+      }
       case "--print":
       case "-p": {
         opts.print = true;
@@ -1311,6 +1330,7 @@ async function main(): Promise<number> {
       workspace,
       model: opts.model,
       continueSession: opts.continueSession,
+      restoreFromTranscript: opts.restoreFromTranscript,
       mock: opts.mock,
       budget: opts.budget,
       permissionMode: opts.permissionMode,
