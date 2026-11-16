@@ -47,6 +47,12 @@ running unsandboxed.
 
 ## Verification record (final tree)
 
+`bash ops/gates.sh` on the G-1 tree (`af789fb`, ruling 488) → **`G1_GATES_EXIT=0`,
+all 8 gates passed**: rust-kernel-suite 214 s, kernel-selftest 7399 ms,
+ts-typecheck 9597 ms, ts-suite 637 s, e2e-headless-smoke 2741 ms,
+e2e-budget-rail 5267 ms, e2e-usage-error 1478 ms, startup-latency 41 s.
+Full log: `/tmp/gates-g1-final.log`.
+
 `bash ops/gates.sh` on the integrated tree (`1eb4504`, all subagent work landed)
 → **`FINAL_GATES_EXIT=0`, all 8 gates passed**: rust-kernel-suite 210 s,
 kernel-selftest 4344 ms, ts-typecheck 8287 ms, ts-suite 470 s,
