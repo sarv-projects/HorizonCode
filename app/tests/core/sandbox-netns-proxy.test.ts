@@ -157,6 +157,17 @@ except OSError:
       encoding: "utf8",
       env: { ...process.env, HZ_SANDBOX_CHILD_NET: "off" },
     });
+    const inNetnsErr = `${inNetns.stderr ?? ""}`.toLowerCase();
+    if (
+      inNetns.status !== 0 &&
+      inNetnsErr.includes("hz-sandbox-exec: exec") &&
+      inNetnsErr.includes("operation not permitted")
+    ) {
+      console.log(
+        `skip netns proxy reachability probe: host cannot apply child_net confinement: ${(inNetns.stderr ?? "").trim()}`,
+      );
+      return;
+    }
     expect(inNetns.stdout).toContain("PROXY_BLOCKED");
     const reach = assessNetnsParentProxyReachability({
       HZ_SANDBOX_EXEC: "1",

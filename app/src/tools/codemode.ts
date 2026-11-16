@@ -1,15 +1,19 @@
 /**
  * `code_mode` — run a JavaScript program that chains tool calls.
  *
- * The program runs in a Bun subprocess (codemode-child.ts). What confines it is
- * the contract, not the process boundary: the only way it reaches the tools is
- * `tools.call(name, args)`, every call comes back here, goes through the guard
- * (deny > ask > allow, with the regular approval prompt) carrying the canonical
- * digest of the exact arguments it is about to execute — so an approval granted
- * for one set of arguments never covers a different set — and leaves a receipt
- * exactly like a direct tool call would. The child inherits a scrubbed
- * environment, and every control frame it sends carries a per-run frame key
- * (grammar below) — so a logged JSON object, or a program writing
+ * The program runs in a Bun subprocess (codemode-child.ts) that is started ONLY
+ * through a live-verified `hz-sandbox-exec` (workspace-write FS fence, network
+ * off). A kernel report is not accepted as proof: the sandbox posture helper
+ * spawns the helper with the exact child policy and refuses to start the runner
+ * when that canary fails. Model-authored JavaScript is never run unsandboxed.
+ * Inside that OS boundary the contract still governs tool use: the only way it
+ * reaches the tools is `tools.call(name, args)`, every call comes back here,
+ * goes through the guard (deny > ask > allow, with the regular approval prompt)
+ * carrying the canonical digest of the exact arguments it is about to execute —
+ * so an approval granted for one set of arguments never covers a different set —
+ * and leaves a receipt exactly like a direct tool call would. The child inherits
+ * a scrubbed environment, and every control frame it sends carries a per-run
+ * frame key (grammar below) — so a logged JSON object, or a program writing
  * `{"done":true}` to stdout itself, is ordinary output and cannot end the run.
  * Big tool outputs can therefore be filtered and reduced inside the program
  * instead of landing in the model's context.
@@ -46,7 +50,8 @@ import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { GuardAction, GuardDecision, Tool, ToolContext, ToolResult } from "../contracts";
 import { canonicalJson, digestOf, sha256Hex } from "../core/canon";
-import { kernelStateDir, spawnOwned, type OwnedProc } from "../core/owned-spawn";
+import { kernelStateDir, sandboxSpawnRoPaths, spawnOwned, type OwnedProc } from "../core/owned-spawn";
+import { SandboxUnavailableError, sandboxEnforcementPosture } from "../core/sandbox-spawn";
 import { scrubEnv } from "./helpers";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
@@ -304,6 +309,33 @@ export const codemodeTool: Tool = {
     const subCallAllowance = ptcSubCallAllowance(timeoutMs);
     const started = Date.now();
 
+    // OS confinement is a REQUIREMENT, not an optimization. The child runs
+    // model-authored JavaScript with ambient Bun privileges, so code_mode runs
+    // ONLY under a live-verified hz-sandbox-exec (workspace-write FS fence,
+    // network off). A kernel report is not enough: the posture helper also
+    // spawns `hz-sandbox-exec -- /bin/true` with the exact policy. If that
+    // canary fails, refuse and do not spawn — never run the program unsandboxed.
+    const posture = await sandboxEnforcementPosture(ctx.kernel, {
+      fsRoot: ctx.cwd,
+      fsMode: "workspace-write",
+      roPaths: sandboxSpawnRoPaths(ctx.cwd, kernelStateDir(ctx.workspace), process.env.HZ_SANDBOX_FS_RO_PATHS),
+      childNet: "off",
+      requireTrusted: true,
+    });
+    if (!posture.enforced) {
+      const reason = posture.reason ?? "the sandbox canary did not pass";
+      const message =
+        "code_mode refused: model-authored JavaScript requires a verified OS sandbox " +
+        `(workspace-write FS, network off), but confinement could not be proven: ${reason}. ` +
+        "The program did not run.";
+      return {
+        ok: false,
+        output: message,
+        error: "SANDBOX_UNAVAILABLE: code_mode requires a verified OS sandbox",
+      };
+    }
+    if (ctx.signal.aborted) return { ok: false, output: "code_mode aborted", error: "aborted" };
+
     // The bootstrap half of the frame protocol: it travels in the child's
     // environment, frames the child's single handshake line, and is retired the
     // moment that line lands (see acceptHandshake below).
@@ -311,22 +343,34 @@ export const codemodeTool: Tool = {
 
     // NF-071: the single spawn path. The runner is long-lived (up to the timeout
     // above), so the owner-death supervisor starts with it — a SIGKILL of hzcode
-    // cannot leave the runner, or anything it spawned, behind.
+    // cannot leave the runner, or anything it spawned, behind. Provider secrets
+    // are removed by scrubEnv(); PR_SET_DUMPABLE is deliberately NOT the control
+    // (dumpability resets across exec, and the verified OS sandbox above is the
+    // actual boundary — the child never runs without it).
     let proc: OwnedProc;
     try {
       ({ proc } = await spawnOwned([process.execPath || "bun", "run", CHILD], {
         stateDir: kernelStateDir(ctx.workspace),
         label: "code_mode",
         cwd: ctx.cwd,
-        env: { ...scrubEnv(), [FRAME_KEY_ENV]: bootstrapKey },
+        env: { ...scrubEnv(), HZ_SANDBOX_CHILD_NET: "off", [FRAME_KEY_ENV]: bootstrapKey },
         stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         detached: true,
-        sandboxWrap: "auto",
+        sandboxWrap: "required",
         sandboxMode: "workspace-write",
         kernel: ctx.kernel,
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof SandboxUnavailableError) {
+        // A canary that passed the preflight but failed at the spawn seam (the
+        // helper changed or disappeared) is still a typed refusal, never a run.
+        return {
+          ok: false,
+          output: `code_mode refused: the spawn-time sandbox check failed: ${message}. The program did not run.`,
+          error: "SANDBOX_UNAVAILABLE: code_mode requires a verified OS sandbox",
+        };
+      }
       return { ok: false, output: `failed to start the code runner: ${message}`, error: message };
     }
 
@@ -338,6 +382,7 @@ export const codemodeTool: Tool = {
       let calls = 0;
       let settled = false;
       let stderrTail = "";
+      let stdoutBytes = 0;
       let rpcChain: Promise<void> = Promise.resolve();
       // The key in force: the bootstrap nonce until the handshake lands, the
       // child's own run key afterwards. A line prefixed with anything else — a
@@ -600,10 +645,14 @@ export const codemodeTool: Tool = {
             const { done, value } = await reader.read();
             if (done) break;
             if (value === undefined) continue;
+            stdoutBytes += value.byteLength;
             framer.feed(decoder.decode(value, { stream: true }), () => activeKey, handleLine);
           }
-        } catch {
-          /* stream closed by a kill */
+        } catch (err) {
+          // A stopped stdout pump is the difference between "the runner died"
+          // and "the parent stopped reading"; name it in the failure tail.
+          const message = err instanceof Error ? err.message : String(err);
+          stderrTail = `${stderrTail}\n[stdout pump stopped: ${message}]`.slice(-2000);
         }
       })();
       void (async (): Promise<void> => {
@@ -626,7 +675,11 @@ export const codemodeTool: Tool = {
         void stdoutPump.then(() => {
           if (settled) return;
           const stage = handshaken ? "before finishing" : "before presenting its frame key";
-          finish({ ok: false, output: `code runner exited (code ${exitCode}) ${stage}${tail()}`, error: `runner exited (${exitCode})` });
+          finish({
+            ok: false,
+            output: `code runner exited (code ${exitCode}) ${stage} (stdout ${stdoutBytes} bytes, pid ${child.pid})${tail()}`,
+            error: `runner exited (${exitCode})`,
+          });
         });
       });
     });

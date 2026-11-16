@@ -51,7 +51,19 @@ import { birthIdentityOf, readProcessFacts, recordIdentity, type ProcessIdentity
 import { startOwnerDeathSupervisor } from "./supervisor";
 import type { SandboxSpawnKernel } from "../contracts";
 import { resolveSandboxExecBinary } from "./kernel";
-import { kernelEnforcesProcessSandbox, SANDBOX_AUTO_LABELS } from "./sandbox-spawn";
+import {
+  SANDBOX_AUTO_LABELS,
+  SandboxUnavailableError,
+  emitSandboxNoticeOnce,
+  probeSandboxExec,
+  resolveSandboxChildPolicy,
+  sandboxExecEnvOverlay,
+  sandboxEnforcementPosture,
+  sandboxRequireWslRefusal,
+  sandboxWrapRequired,
+  wslChildNetNotice,
+  type SandboxChildPolicy,
+} from "./sandbox-spawn";
 import { mergeEgressProxyEnv } from "./egress-env";
 import { mergeNetnsEgressProxySpawnEnv } from "./sandbox-netns-proxy";
 import { mergeSandboxChildNetSpawnEnv } from "./sandbox-child-net";
@@ -60,14 +72,14 @@ import { mergeSandboxExecVethJoinSpawnEnv } from "./sandbox-exec-veth-join";
 import { mergeSandboxNetnsHonestySpawnEnv } from "./sandbox-netns-route";
 import { mergeSandboxNetnsProductDefaultSpawnEnv } from "./sandbox-netns-spawn-product-default";
 
-function sandboxRequireClosed(): boolean {
-  return process.env.HZ_SANDBOX_REQUIRE === "1";
-}
-
 /** Paths that must stay read-only under workspace-write (Grok hook write-deny adapt). */
 export function sandboxHookWriteDenyRoPaths(workspace: string, stateDir: string, home?: string): string[] {
   const ro = new Set<string>();
-  ro.add(path.resolve(stateDir));
+  // Only an existing state dir can be handed to Landlock as an RO carve-out:
+  // `hz-sandbox-exec` fails closed if an RO path cannot be opened. `spawnOwned`
+  // ensures the dir exists before it builds the policy, so the protection is
+  // present for every real spawn.
+  if (existsSync(stateDir)) ro.add(path.resolve(stateDir));
   const wsHooks = workspaceHooksFile(workspace);
   if (existsSync(wsHooks)) ro.add(path.resolve(wsHooks));
   const resolvedHome = home ?? homedir();
@@ -89,47 +101,119 @@ function mergeRoPaths(existing: string | undefined, extra: string[]): string {
   return [...set].join(":");
 }
 
-function wrapArgvForSandbox(argv: string[], required: boolean): string[] {
-  const bin = resolveSandboxExecBinary();
-  if (!bin) {
-    if (required) {
-      throw new Error(
-        "spawnOwned: sandbox wrap required but hz-sandbox-exec was not found (set HZ_SANDBOX_EXEC_BIN or unset HZ_SANDBOX_REQUIRE)",
-      );
-    }
-    return argv;
-  }
-  return [bin, "--", ...argv];
+/**
+ * The exact `HZ_SANDBOX_FS_RO_PATHS` value a wrapped child receives for this
+ * workspace/state dir. Both `spawnOwned` and the code_mode preflight use it, so
+ * the canary and the child cannot disagree about the FS carve-outs.
+ */
+export function sandboxSpawnRoPaths(
+  fsRoot: string,
+  stateDir: string,
+  existing?: string,
+): string {
+  return mergeRoPaths(existing, sandboxHookWriteDenyRoPaths(fsRoot, stateDir));
 }
 
-async function resolveSpawnArgv(cmd: string[], opts: SpawnOwnedOptions): Promise<string[]> {
+function wrapArgvForSandbox(cmd: string[], bin: string): string[] {
+  return [bin, "--", ...cmd];
+}
+
+interface SpawnPlan {
+  argv: string[];
+  wrapped: boolean;
+  policy?: SandboxChildPolicy;
+}
+
+async function resolveSpawnPlan(
+  cmd: string[],
+  opts: SpawnOwnedOptions,
+  policyEnv: Record<string, string | undefined>,
+): Promise<SpawnPlan> {
+  if (opts.sandboxWrap === false) return { argv: cmd, wrapped: false };
   const auto =
     opts.sandboxWrap === "auto" ||
     (opts.sandboxWrap === undefined && SANDBOX_AUTO_LABELS.has(opts.label) && opts.kernel !== undefined);
-  const required =
-    opts.sandboxWrap === true || (auto && sandboxRequireClosed()) || process.env.HZ_SANDBOX_EXEC === "1";
+  const explicitlyDemanded = opts.sandboxWrap === true || opts.sandboxWrap === "required";
+  const forcedOn = process.env.HZ_SANDBOX_EXEC === "1";
+  const required = explicitlyDemanded || (auto && sandboxWrapRequired()) || forcedOn;
+  if (!auto && !explicitlyDemanded && !forcedOn) return { argv: cmd, wrapped: false };
 
-  if (opts.sandboxWrap === false) return cmd;
   if (process.env.HZ_SANDBOX_EXEC === "0") {
     if (required) {
-      throw new Error(
-        "spawnOwned: sandbox wrap required but HZ_SANDBOX_EXEC=0 disables confinement",
+      throw new SandboxUnavailableError(
+        `spawnOwned(${opts.label}): sandbox wrap required but HZ_SANDBOX_EXEC=0 disables confinement`,
       );
     }
-    return cmd;
+    return { argv: cmd, wrapped: false };
   }
-  if (process.env.HZ_SANDBOX_EXEC === "1" || opts.sandboxWrap === true) {
-    return wrapArgvForSandbox(cmd, true);
+
+  const fsRoot = opts.cwd ?? process.cwd();
+  const fromMode =
+    opts.sandboxMode === "read-only"
+      ? "read-only"
+      : opts.sandboxMode === "workspace-write"
+        ? "workspace-write"
+        : undefined;
+  const fsMode = opts.sandboxFsMode ?? fromMode ?? "workspace-write";
+  // The canary and the real child get the SAME policy: FS root/mode, RO
+  // carve-outs, and the resolved child-net mode.
+  const policy = resolveSandboxChildPolicy({
+    fsRoot,
+    fsMode,
+    roPaths: sandboxSpawnRoPaths(
+      fsRoot,
+      opts.stateDir,
+      typeof policyEnv.HZ_SANDBOX_FS_RO_PATHS === "string" ? policyEnv.HZ_SANDBOX_FS_RO_PATHS : undefined,
+    ),
+    env: policyEnv,
+  });
+  const wslRefusal = sandboxRequireWslRefusal(policy, sandboxWrapRequired());
+  if (wslRefusal !== undefined) {
+    throw new SandboxUnavailableError(`spawnOwned(${opts.label}): ${wslRefusal}`);
   }
-  if (auto && opts.kernel !== undefined && (await kernelEnforcesProcessSandbox(opts.kernel))) {
-    return wrapArgvForSandbox(cmd, required);
+  const wslNotice = wslChildNetNotice(policy);
+  if (wslNotice !== undefined) emitSandboxNoticeOnce(wslNotice);
+
+  const bin = resolveSandboxExecBinary();
+  if (bin === undefined) {
+    const reason =
+      "hz-sandbox-exec was not found (build the kernel helper or set HZ_SANDBOX_EXEC_BIN)";
+    if (required) throw new SandboxUnavailableError(`spawnOwned(${opts.label}): ${reason}`);
+    emitSandboxNoticeOnce(
+      `[sandbox] spawnOwned(${opts.label}): auto-wrap skipped — ${reason}; the child runs WITHOUT OS sandbox confinement.`,
+    );
+    return { argv: cmd, wrapped: false };
   }
-  if (auto && sandboxRequireClosed()) {
-    throw new Error(
-      "spawnOwned: sandbox wrap required (HZ_SANDBOX_REQUIRE=1) but the kernel reports no enforceable process sandbox",
+
+  let reason: string | undefined;
+  if (auto) {
+    // Auto wrap additionally requires a trusted kernel whose report names the
+    // process dimension enforced; the live canary is still the decisive gate.
+    const posture = await sandboxEnforcementPosture(opts.kernel, {
+      fsRoot,
+      fsMode,
+      roPaths: policy.roPaths,
+      env: policyEnv,
+    });
+    if (posture.enforced) return { argv: wrapArgvForSandbox(cmd, bin), wrapped: true, policy };
+    reason = posture.reason ?? "the sandbox posture is not verified";
+  } else {
+    // An explicit demand (sandboxWrap:true / "required" / HZ_SANDBOX_EXEC=1)
+    // wraps only when the live canary passes; otherwise it refuses.
+    const canary = await probeSandboxExec({ policy, env: policyEnv, binary: bin });
+    if (canary.ok) return { argv: wrapArgvForSandbox(cmd, bin), wrapped: true, policy };
+    reason = canary.reason ?? "the sandbox canary failed";
+  }
+
+  if (required) {
+    throw new SandboxUnavailableError(
+      `spawnOwned(${opts.label}): sandbox wrap required but ${reason}`,
     );
   }
-  return cmd;
+  emitSandboxNoticeOnce(
+    `[sandbox] spawnOwned(${opts.label}): auto-wrap skipped — ${reason}; the child runs WITHOUT OS sandbox confinement.`,
+  );
+  return { argv: cmd, wrapped: false };
 }
 
 /**
@@ -165,8 +249,14 @@ export interface SpawnOwnedOptions {
   longLived?: boolean;
   /** The process whose death must take this child down (default: this process). */
   ownerPid?: number;
-  /** When `"auto"` (or for shell/code labels), wrap via hz-sandbox-exec if the kernel reports enforcement. */
-  sandboxWrap?: boolean | "auto";
+  /**
+   * `"auto"` (or the default for shell/code labels) wraps only when the kernel
+   * reports a process boundary AND a live `hz-sandbox-exec` canary passes.
+   * `true` / `"required"` demand confinement: the child is wrapped when the
+   * canary passes and the spawn is refused (`SandboxUnavailableError`) when it
+   * does not. `false` never wraps.
+   */
+  sandboxWrap?: boolean | "auto" | "required";
   /**
    * Landlock access on `HZ_SANDBOX_FS_ROOT` when the child is sandbox-wrapped.
    * Default `workspace-write` (RW fence). `read-only` makes the workspace RO.
@@ -272,21 +362,29 @@ async function setOwnerOnly(target: string, mode: number): Promise<void> {
   }
 }
 
-async function appendLedgerRow(stateDir: string, entry: SpawnLedgerEntry): Promise<void> {
-  const file = spawnLedgerPath(stateDir);
-  const dir = path.dirname(file);
-  await mkdir(dir, { recursive: true });
-  // Docs/03 D12: the state directory is owner-only. Strip group/other bits only
-  // — never grant owner write to a directory that deliberately lacks it, so the
-  // append below still fails honestly on a read-only state dir.
+/**
+ * Create the state dir and make it owner-only, before any child is spawned.
+ *
+ * The ledger write already did this after the spawn; doing it first also makes
+ * the state dir a valid Landlock RO carve-out when the sandbox canary/policy is
+ * built. Docs/03 D12: group/other bits are stripped only — never grant owner
+ * write to a directory that deliberately lacks it.
+ */
+async function ensureStateDir(stateDir: string): Promise<void> {
+  await mkdir(stateDir, { recursive: true });
   if (isUnix) {
     try {
-      const current = (await stat(dir)).mode & 0o777;
-      await chmod(dir, current & 0o700);
+      const current = (await stat(stateDir)).mode & 0o777;
+      await chmod(stateDir, current & 0o700);
     } catch {
-      /* best effort: the append below reports anything fatal */
+      /* best effort: the ledger append reports anything fatal */
     }
   }
+}
+
+async function appendLedgerRow(stateDir: string, entry: SpawnLedgerEntry): Promise<void> {
+  const file = spawnLedgerPath(stateDir);
+  await ensureStateDir(stateDir);
   // One append of one line: whole lines only, so a crash cannot interleave the
   // rows of two concurrent spawns beyond what O_APPEND already prevents.
   // fsync by default (docs/33 §6.5); HZ_JSONL_FSYNC=0 disables.
@@ -483,11 +581,30 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
     );
   }
 
-  const argv = await resolveSpawnArgv(cmd, opts);
-  const wrapped = argv[0] !== undefined && argv[0] !== cmd[0];
+  // Prepare the state dir before the sandbox policy is built: it is both the
+  // ledger location and an RO carve-out inside the workspace fence, and
+  // hz-sandbox-exec fails closed on an RO path that does not exist.
+  try {
+    await ensureStateDir(opts.stateDir);
+  } catch (err) {
+    throw new Error(
+      `spawnOwned(${opts.label}): cannot prepare the state directory (${errorMessage(err)})`,
+    );
+  }
+
+  const baseEnv = { ...(opts.env ?? process.env) };
+  // The policy env is the child env BEFORE the sandbox overlay: it carries the
+  // parent's explicit CHILD_NET and the netns-honesty merge, so the canary and
+  // the child agree on every confinement-relevant value.
+  const policyEnv = mergeSandboxChildNetSpawnEnv(
+    mergeSandboxNetnsHonestySpawnEnv(baseEnv),
+  );
+  const plan = await resolveSpawnPlan(cmd, opts, policyEnv);
+  const argv = plan.argv;
+  const wrapped = plan.wrapped;
   const spawnPid = process.pid;
   const productBase = mergeSandboxNetnsProductDefaultSpawnEnv(
-    { ...(opts.env ?? process.env) },
+    baseEnv,
     { sandboxWrapped: wrapped, spawnPid },
   );
   let spawnEnv = mergeSandboxChildNetSpawnEnv(
@@ -503,29 +620,11 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
       ),
     ),
   );
-  if (wrapped) {
-    const root = opts.cwd ?? process.cwd();
-    const fromMode =
-      opts.sandboxMode === "read-only"
-        ? "read-only"
-        : opts.sandboxMode === "workspace-write"
-          ? "workspace-write"
-          : undefined;
-    const fsMode = opts.sandboxFsMode ?? fromMode ?? "workspace-write";
-    // Keep the kernel state directory read-only inside the workspace fence so
-    // a wrapped shell cannot rewrite policy/events/receipts via redirects.
-    const existingRo = spawnEnv.HZ_SANDBOX_FS_RO_PATHS;
-    const workspaceRoot = opts.cwd ?? process.cwd();
-    const roPaths = mergeRoPaths(
-      typeof existingRo === "string" ? existingRo : undefined,
-      sandboxHookWriteDenyRoPaths(workspaceRoot, opts.stateDir),
-    );
-    spawnEnv = {
-      ...spawnEnv,
-      HZ_SANDBOX_FS_ROOT: root,
-      HZ_SANDBOX_FS_MODE: fsMode,
-      HZ_SANDBOX_FS_RO_PATHS: roPaths,
-    };
+  if (wrapped && plan.policy !== undefined) {
+    // Exact same FS root/mode, RO carve-outs and child-net mode the canary
+    // proved. The state directory stays RO inside the workspace fence so a
+    // wrapped shell cannot rewrite policy/events/receipts via redirects.
+    spawnEnv = { ...spawnEnv, ...sandboxExecEnvOverlay(plan.policy) };
   }
   const proc = Bun.spawn({
     cmd: argv,

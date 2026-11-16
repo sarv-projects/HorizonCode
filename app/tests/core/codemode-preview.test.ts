@@ -7,14 +7,59 @@
  * trust path is asserted, not assumed.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { GuardAction, GuardDecision, ToolContext } from "../../src/contracts";
+import type { EnforcementOutcome, GuardAction, GuardDecision, SandboxSpawnKernel, ToolContext } from "../../src/contracts";
 import { guardActionFor } from "../../src/core/loop";
 import { actionForCall, codemodeTool } from "../../src/tools/codemode";
 import { previewTool } from "../../src/tools/preview";
+
+
+/* ------------------------ verified sandbox test shim ---------------------- */
+
+/**
+ * code_mode now refuses to run unless a live `hz-sandbox-exec -- /bin/true`
+ * canary passes with its exact policy. These protocol tests exercise the frame
+ * boundary, not the kernel's namespace setup, so they run behind a real
+ * subprocess wrapper that execs the target (the canary is genuinely spawned and
+ * observed). The real `unshare` path is covered by sandbox-spawn.test.ts and
+ * the host-gated real-sandbox tests, which skip on WSL.
+ */
+const SANDBOX_BIN_DIR = mkdtempSync(path.join(tmpdir(), "hz-cm-sbx-"));
+const SANDBOX_BIN = path.join(SANDBOX_BIN_DIR, "hz-sandbox-exec");
+const SANDBOX_REPORT: EnforcementOutcome = {
+  status: "report",
+  mode: "workspace-write",
+  completeness: "partial",
+  backend: "hz-sandbox-exec",
+  dimensions: [{ dimension: "process", guarantee: "enforced", backend: "seccomp", residual: "" }],
+};
+const SANDBOX_KERNEL: SandboxSpawnKernel = {
+  mode: "trusted",
+  sandboxReport: async () => SANDBOX_REPORT,
+};
+const SANDBOX_ENV_KEYS = ["HZ_SANDBOX_EXEC_BIN", "HZ_SANDBOX_CHILD_NET", "HZ_SANDBOX_EXEC", "HZ_SANDBOX_REQUIRE"] as const;
+const savedSandboxEnv: Record<string, string | undefined> = {};
+
+beforeAll(() => {
+  writeFileSync(SANDBOX_BIN, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n", { mode: 0o755 });
+  for (const key of SANDBOX_ENV_KEYS) savedSandboxEnv[key] = process.env[key];
+  process.env.HZ_SANDBOX_EXEC_BIN = SANDBOX_BIN;
+  process.env.HZ_SANDBOX_CHILD_NET = "off";
+  delete process.env.HZ_SANDBOX_EXEC;
+  delete process.env.HZ_SANDBOX_REQUIRE;
+});
+
+afterAll(() => {
+  for (const key of SANDBOX_ENV_KEYS) {
+    const value = savedSandboxEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  rmSync(SANDBOX_BIN_DIR, { recursive: true, force: true });
+});
 
 const temps: string[] = [];
 let sessionCounter = 0;
@@ -54,6 +99,7 @@ function makeCtx(workspace: string, opts: { guardDecision?: GuardDecision; appro
     workspace,
     sessionId: `codemode-test-${sessionCounter}`,
     signal: new AbortController().signal,
+    kernel: SANDBOX_KERNEL,
     guard: async (action) => {
       guards.push(action);
       const key = keyOf(action);
@@ -268,6 +314,7 @@ describe("code_mode", () => {
       );
       Bun.gc(true);
       const delta = process.memoryUsage().rss - before;
+      if (!result.ok) throw new Error(`20 MB flood failed: ${result.output}`);
       expect(result.ok).toBe(true);
       expect(result.output).toContain('"flood-complete"');
       expect(result.output).toContain("[truncated]"); // the 20 KB output cap now says so

@@ -38,9 +38,14 @@
  *     has accepted it — so no model code runs, and no byte a program writes is
  *     sent, before the run key is in force.
  *
- * What this does NOT defend against, named rather than implied — Code Mode is
- * bridge-policed, not OS-sandboxed. The facts below were verified in this
- * runtime rather than assumed; re-check them if the spawn configuration changes.
+ * What this does NOT defend against, named rather than implied. The parent
+ * starts this process only through a canary-verified `hz-sandbox-exec`
+ * (workspace-write Landlock FS fence, seccomp deny-list, rlimits, and
+ * network-off where the host permits `unshare`). code_mode refuses to start the
+ * runner at all when that canary fails, so this file is never reached by the
+ * product path unsandboxed. Inside that OS boundary the program still shares
+ * THIS process. The facts below were verified in this runtime rather than
+ * assumed; re-check them if the spawn configuration changes.
  *   - Ambient process/Bun access: the program shares this process. It can write
  *     to fd 1 directly (`fs.writeSync(1, ...)`) — those bytes are output, never
  *     frames — and it can read its own stdin, which is how it sees the parent's
@@ -65,8 +70,11 @@
  *   - In-process reflection: the run key lives in this process's memory, so a
  *     runtime facility that can inspect live frames or module scope could
  *     recover it. Only process isolation closes that (NF-016).
- *   - Everything outside the bridge: the program may touch the filesystem, the
- *     network and the CPU directly. Only tools.call is policed.
+ *   - Inside the sandbox: the program may still touch the workspace filesystem
+ *     and consume CPU directly, and the in-process reflection above still sees
+ *     the run key. The bridge polices tool use; the OS sandbox bounds ambient
+ *     filesystem/process access, and network is off where the host permits
+ *     network namespaces. Neither mechanism makes the frame key a memory secret.
  *
  * The user program is one async function body: `tools.call(name, args)` is the
  * bridge back to the parent (which enforces the guard, approvals and receipts),
@@ -216,13 +224,25 @@ let initSeen = false;
 const pending = new Map<number, (result: RpcResult) => void>();
 
 function flushAndExit(code: number): void {
-  // One last write (through the captured writer), then leave only once it has
-  // drained.
+  // One last write (through the captured writer), then leave only once the
+  // stream has actually drained. `process.stdout.write("", cb)` is NOT a
+  // drain barrier under Bun: the callback can run while megabytes queued by a
+  // program are still in user space, cutting the final `done` frame in half
+  // (a false "exited before finishing" under load). Ending the stream is the
+  // real barrier; the timer is only a last-resort escape hatch and deliberately
+  // outlasts a 20 MB flood. The parent's timeout/kill and the owner-death
+  // supervisor remain the primary bounds.
+  const done = (): void => process.exit(code);
+  setTimeout(done, 30_000);
   try {
-    writeStdout("", () => process.exit(code));
-    setTimeout(() => process.exit(code), 250);
+    const end = (process.stdout as unknown as { end?: (cb?: () => void) => void }).end;
+    if (typeof end === "function") {
+      end.call(process.stdout, done);
+      return;
+    }
+    writeStdout("", done);
   } catch {
-    process.exit(code);
+    done();
   }
 }
 

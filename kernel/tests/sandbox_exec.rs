@@ -3,8 +3,65 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+
+/// True when the helper failed BEFORE exec because this host refuses the
+/// namespace/landlock setup (e.g. WSL: `unshare(CLONE_NEWNET)` is EPERM). Such a
+/// host cannot exercise the confinement assertions; skip with a visible reason
+/// instead of reporting a false regression. The program never ran, which is the
+/// fail-closed outcome the canary test pins.
+fn host_refuses_confinement(out: &std::process::Output) -> bool {
+    if out.status.success() {
+        return false;
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+    stderr.contains("hz-sandbox-exec: exec") && stderr.contains("operation not permitted")
+}
+
+fn skip_if_host_refuses(out: &std::process::Output, test: &str) -> bool {
+    if !host_refuses_confinement(out) {
+        return false;
+    }
+    eprintln!(
+        "skip {test}: host cannot apply hz-sandbox-exec confinement before exec: {}",
+        String::from_utf8_lossy(&out.stderr).trim(),
+    );
+    true
+}
+
 fn bpf_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bpf_probe.py")
+}
+
+/// The truthfulness primitive shared by the app canary and `sandbox.report`:
+/// `hz-sandbox-exec -- /bin/echo` either runs the program (confinement applied)
+/// or exits non-zero with a reason. It must never exit 0 without running the
+/// program, and a failure must never be silent.
+#[test]
+fn hz_sandbox_exec_canary_is_never_silent() {
+    let bin = env!("CARGO_BIN_EXE_hz-sandbox-exec");
+    let out = Command::new(bin)
+        .env("HZ_SANDBOX_CHILD_NET", "off")
+        .args(["--", "/bin/echo", "CANARY_RAN"])
+        .output()
+        .expect("spawn hz-sandbox-exec");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if out.status.success() {
+        assert!(
+            stdout.contains("CANARY_RAN"),
+            "a successful canary must have run the program, stdout={stdout} stderr={stderr}",
+        );
+    } else {
+        assert!(
+            !stdout.contains("CANARY_RAN"),
+            "a failed canary must not run the program, stdout={stdout} stderr={stderr}",
+        );
+        assert!(
+            !stderr.trim().is_empty(),
+            "a failed canary must explain itself, status={:?}",
+            out.status,
+        );
+    }
 }
 
 #[test]
@@ -16,6 +73,9 @@ fn hz_sandbox_exec_denies_bpf_syscall() {
         .output()
         .expect("spawn hz-sandbox-exec");
     if out.status.code() == Some(2) {
+        return;
+    }
+    if skip_if_host_refuses(&out, "hz_sandbox_exec_denies_bpf_syscall") {
         return;
     }
     let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
@@ -69,6 +129,9 @@ except PermissionError as e:
         .expect("spawn hz-sandbox-exec");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&outside_dir);
+    if skip_if_host_refuses(&out, "hz_sandbox_exec_landlock_denies_outside_workspace") {
+        return;
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
@@ -114,6 +177,9 @@ except PermissionError as e:
         .expect("spawn hz-sandbox-exec");
     let after = std::fs::read_to_string(&target).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&root);
+    if skip_if_host_refuses(&out, "hz_sandbox_exec_landlock_read_only_denies_workspace_write") {
+        return;
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
@@ -233,6 +299,9 @@ except OSError as e:
         .args(["--", "python3", "-c", probe])
         .output()
         .expect("spawn hz-sandbox-exec");
+    if skip_if_host_refuses(&out, "hz_sandbox_exec_network_off") {
+        return;
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
@@ -263,6 +332,9 @@ except OSError as e:
         .args(["--", "python3", "-c", probe])
         .output()
         .expect("spawn hz-sandbox-exec");
+    if skip_if_host_refuses(&out, "hz_sandbox_exec_network_off") {
+        return;
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
@@ -591,6 +663,9 @@ except OSError as e:
         .args(["--", "python3", "-c", probe])
         .output()
         .expect("spawn hz-sandbox-exec");
+    if skip_if_host_refuses(&out, "hz_sandbox_exec_isolates_network") {
+        return;
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr.to_lowercase().contains("no such file") || stderr.to_lowercase().contains("not found") {
@@ -602,4 +677,59 @@ except OSError as e:
         "expected network-off inside hz-sandbox-exec, stdout={stdout} stderr={stderr} status={:?}",
         out.status,
     );
+}
+
+/// `sandbox.report` must never claim enforcement when the live canary fails.
+/// A broken helper (`/bin/false`) is executable but cannot confine, so the
+/// report carries `probe.probed=true, probe.ok=false` and NO enforced dimension.
+#[test]
+fn kernel_sandbox_report_never_claims_enforcement_when_canary_fails() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let bin = env!("CARGO_BIN_EXE_hz-kernel");
+    let dir = std::env::temp_dir().join(format!("hz-report-canary-fail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
+
+    let mut child = Command::new(bin)
+        .arg("--state-dir")
+        .arg(&dir)
+        .env("HZ_SANDBOX_EXEC_BIN", "/bin/false")
+        .env_remove("HZ_SANDBOX_EXEC")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn hz-kernel");
+
+    let request = "{\"id\":1,\"method\":\"sandbox.report\",\"params\":{\"mode\":\"workspace-write\",\"allowPartial\":true}}\n";
+    {
+        let stdin = child.stdin.as_mut().expect("kernel stdin");
+        stdin.write_all(request.as_bytes()).expect("write request");
+    }
+    let out = child.wait_with_output().expect("kernel output");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .expect("one response line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("response JSON");
+    let result = &value["result"];
+
+    assert_eq!(result["probe"]["probed"], serde_json::json!(true), "{}", result);
+    assert_eq!(result["probe"]["ok"], serde_json::json!(false), "{}", result);
+    assert!(
+        result["probe"]["reason"].as_str().unwrap_or("").contains("failed"),
+        "the failed canary must carry a reason: {}",
+        result
+    );
+    let dims = result["dimensions"].as_array().expect("dimensions");
+    assert!(
+        dims.iter().all(|dim| dim["guarantee"] != serde_json::json!("enforced")),
+        "no dimension may be enforced without a passing probe: {}",
+        result
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

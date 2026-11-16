@@ -11,11 +11,22 @@ import {
 } from "../../src/core/sandbox-netns-route";
 import { runDoctor, type DoctorEnv } from "../../src/core/doctor";
 
+const realRun = (cmd: string, args: string[], timeoutMs: number) => {
+  try {
+    const r = spawnSync(cmd, args, { encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "pipe"] });
+    if (r.error) return { ok: false, status: null, stdout: "", stderr: r.error.message };
+    return { ok: r.status === 0, status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  } catch (err) {
+    return { ok: false, status: null, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
+  }
+};
+
 function doctorFakeEnv(over: Partial<DoctorEnv> = {}): DoctorEnv {
   return {
     home: "/tmp",
     workspace: "/tmp/ws",
     env: { ...(over.env ?? process.env) },
+    run: realRun,
     ...over,
   };
 }
@@ -112,6 +123,17 @@ except OSError as e:
       encoding: "utf8",
       env: { ...process.env, HZ_SANDBOX_CHILD_NET: "off" },
     });
+    const blockedErr = `${blocked.stderr ?? ""}`.toLowerCase();
+    if (
+      blocked.status !== 0 &&
+      blockedErr.includes("hz-sandbox-exec: exec") &&
+      blockedErr.includes("operation not permitted")
+    ) {
+      console.log(
+        `skip netns direct-443 probe: host cannot apply child_net confinement: ${(blocked.stderr ?? "").trim()}`,
+      );
+      return;
+    }
     expect(blocked.stdout).toContain("BLOCKED");
     expect(blocked.stdout).not.toContain("CONNECTED");
 

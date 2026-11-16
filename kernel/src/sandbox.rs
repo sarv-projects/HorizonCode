@@ -27,14 +27,17 @@
 //! and `workspace-write` REQUIRE kernel-enforced per-path FS confinement.
 //! Enforcement for owned children is applied by the companion binary
 //! `hz-sandbox-exec` (seccomp + rlimits + userns/netns + Landlock FS via
-//! `HZ_SANDBOX_FS_ROOT` / `HZ_SANDBOX_FS_MODE`) when the host canary succeeds
-//! (docs/28 rulings 140–150). This module remains the REPORTING/admission seam:
-//! a dimension is `enforced` ONLY when the host OFFERS the mechanism
-//! (capability detection) AND `kernel_applied_mechanisms()` says this tree
-//! APPLIES it. Detection alone (`available` / `hostCapabilities`) is never
-//! converted into enforcement (ruling 51). When the helper/canary cannot
-//! confine FS, FS-demanding modes yield `SANDBOX_UNAVAILABLE` with a residual
-//! that names the gap. `danger-full-access` reports NO dimension enforced (S4).
+//! `HZ_SANDBOX_FS_ROOT` / `HZ_SANDBOX_FS_MODE`) when the live host canary
+//! succeeds (docs/28 rulings 140–150). This module remains the REPORTING/
+//! admission seam: a dimension is `enforced` ONLY when the host OFFERS the
+//! mechanism (capability detection) AND `kernel_applied_mechanisms()` — which
+//! now runs `hz-sandbox-exec -- /bin/true` with the child policy — proves this
+//! tree APPLIES it. Detection alone (`available` / `hostCapabilities`) is never
+//! converted into enforcement (ruling 51). The report always carries the
+//! `probe` object so a caller can see whether a live probe was possible. When
+//! the helper/canary cannot confine FS, FS-demanding modes yield
+//! `SANDBOX_UNAVAILABLE` with a residual that names the gap.
+//! `danger-full-access` reports NO dimension enforced (S4).
 //!
 //! LAW reuse: nothing here invents a hash. Where a digest or canonical form is
 //! needed (`EnforcementReport::to_canonical_json`) it goes through
@@ -57,8 +60,11 @@
 // unused — matching `egress.rs`.
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -759,13 +765,328 @@ fn detect_netns() -> bool {
     Path::new("/proc/self/ns/net").exists() && detect_userns()
 }
 
+/* ------------------------------ exec canary -------------------------------- */
+
+/// The live `hz-sandbox-exec -- /bin/true` posture. `probed=false` means no
+/// canary could even be attempted (helper missing/disabled); `ok=false` means
+/// the helper ran and refused or failed before exec. Neither is ever reported
+/// as enforcement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxExecProbe {
+    pub probed: bool,
+    pub ok: bool,
+    pub executable: Option<String>,
+    /// `"off"` (netns requested) or `"on"` (no netns; never a network claim).
+    pub child_net: String,
+    /// True when WSL supplied `on` because nothing was requested.
+    pub wsl_default_child_net: bool,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub reason: Option<String>,
+    /// Visible host limitations (e.g. the WSL child-net default).
+    pub notes: Vec<String>,
+}
+
+impl SandboxExecProbe {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "probed": self.probed,
+            "ok": self.ok,
+            "executable": self.executable,
+            "childNet": self.child_net,
+            "wslDefaultChildNet": self.wsl_default_child_net,
+            "exitCode": self.exit_code,
+            "timedOut": self.timed_out,
+            "reason": self.reason,
+            "notes": self.notes,
+        })
+    }
+}
+
+/// WSL kernels carry a `microsoft` marker in the osrelease/version string.
+pub fn wsl_signature(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("microsoft")
+}
+
+/// True on a WSL host (`/proc/sys/kernel/osrelease` or `/proc/version`).
+pub fn host_is_wsl() -> bool {
+    ["/proc/sys/kernel/osrelease", "/proc/version"]
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .any(|text| wsl_signature(&text))
+}
+
+/// Resolve the child-net mode: an explicit `off`/`on` wins; an absent value is
+/// `on` on WSL (because `unshare(CLONE_NEWNET)` is not permitted there) and
+/// `off` elsewhere. The bool is true only for the WSL default.
+pub fn resolve_child_net(explicit: Option<&str>, wsl: bool) -> (String, bool) {
+    match explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            // Mirror hz-sandbox-exec: only the literal `on` disables isolation;
+            // any other explicit value (including a typo) requests isolation and
+            // must never silently become the WSL `on` default.
+            let mode = if value.eq_ignore_ascii_case("on") {
+                "on"
+            } else {
+                "off"
+            };
+            (mode.to_string(), false)
+        }
+        None => {
+            if wsl {
+                ("on".to_string(), true)
+            } else {
+                ("off".to_string(), false)
+            }
+        }
+    }
+}
+
+fn child_net_notes(child_net: &str, wsl_default: bool) -> Vec<String> {
+    if wsl_default {
+        vec![
+            "WSL detected: HZ_SANDBOX_CHILD_NET defaults to \"on\" for sandboxed children because unshare(CLONE_NEWNET) is not permitted on this host; network egress is NOT confined and the network dimension is not reported enforced.".to_string(),
+        ]
+    } else if child_net == "on" {
+        vec![
+            "HZ_SANDBOX_CHILD_NET=on: network egress is NOT confined and the network dimension is not reported enforced.".to_string(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Resolve the helper the same way the app does: explicit override, then a
+/// sibling of the running kernel binary, then PATH. Fail-closed: an override
+/// that does not exist is not silently replaced.
+pub fn resolve_sandbox_exec_binary() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var("HZ_SANDBOX_EXEC_BIN") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            return is_executable_file(&path).then_some(path);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join("hz-sandbox-exec");
+            if is_executable_file(&sibling) {
+                return Some(sibling);
+            }
+        }
+    }
+    find_on_path("hz-sandbox-exec")
+}
+
+fn tail_chars(text: &str, cap: usize) -> String {
+    let count = text.chars().count();
+    if count <= cap {
+        return text.to_string();
+    }
+    text.chars().skip(count - cap).collect()
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(400)
+        .collect()
+}
+
+fn failed_probe(
+    executable: Option<&Path>,
+    child_net: &str,
+    wsl_default: bool,
+    notes: Vec<String>,
+    probed: bool,
+    reason: String,
+) -> SandboxExecProbe {
+    SandboxExecProbe {
+        probed,
+        ok: false,
+        executable: executable.map(|p| p.display().to_string()),
+        child_net: child_net.to_string(),
+        wsl_default_child_net: wsl_default,
+        exit_code: None,
+        timed_out: false,
+        reason: Some(reason),
+        notes,
+    }
+}
+
+/// Spawn the canary with the exact confinement environment the app passes to a
+/// wrapped child (FS root/mode + child net; RO paths are empty here because the
+/// kernel does not own a workspace fence). Bounded wait so `sandbox.report`
+/// cannot hang on a stuck helper.
+pub fn run_sandbox_exec_probe(
+    binary: Option<&Path>,
+    child_net: &str,
+    wsl_default: bool,
+    notes: Vec<String>,
+) -> SandboxExecProbe {
+    let Some(binary) = binary else {
+        return failed_probe(
+            None,
+            child_net,
+            wsl_default,
+            notes,
+            false,
+            "hz-sandbox-exec was not found (build the kernel helper or set HZ_SANDBOX_EXEC_BIN)"
+                .to_string(),
+        );
+    };
+
+    let mut command = Command::new(binary);
+    command.env_clear();
+    if let Some(path) = std::env::var_os("PATH") {
+        command.env("PATH", path);
+    }
+    command
+        .env("HZ_SANDBOX_FS_ROOT", std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .env("HZ_SANDBOX_FS_MODE", "workspace-write")
+        .env("HZ_SANDBOX_CHILD_NET", child_net)
+        .arg("--")
+        .arg("/bin/true")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            return failed_probe(
+                Some(binary),
+                child_net,
+                wsl_default,
+                notes,
+                false,
+                format!("cannot start hz-sandbox-exec: {}", err),
+            )
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut timed_out = false;
+    let mut wait_error: Option<String> = None;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => {
+                wait_error = Some(err.to_string());
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    let stderr = tail_chars(&stderr, 2_000);
+
+    if timed_out {
+        return SandboxExecProbe {
+            probed: true,
+            ok: false,
+            executable: Some(binary.display().to_string()),
+            child_net: child_net.to_string(),
+            wsl_default_child_net: wsl_default,
+            exit_code: None,
+            timed_out: true,
+            reason: Some("hz-sandbox-exec canary timed out after 5000ms".to_string()),
+            notes,
+        };
+    }
+    if let Some(err) = wait_error {
+        return SandboxExecProbe {
+            probed: true,
+            ok: false,
+            executable: Some(binary.display().to_string()),
+            child_net: child_net.to_string(),
+            wsl_default_child_net: wsl_default,
+            exit_code: None,
+            timed_out: false,
+            reason: Some(format!("cannot wait for hz-sandbox-exec: {}", err)),
+            notes,
+        };
+    }
+    let exit_code = status.and_then(|status| status.code());
+    let ok = status.map(|status| status.success()).unwrap_or(false);
+    let reason = if ok {
+        None
+    } else {
+        let detail = first_line(&stderr);
+        Some(format!(
+            "hz-sandbox-exec -- /bin/true failed (exit {}){}",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            if detail.is_empty() { String::new() } else { format!(": {}", detail) }
+        ))
+    };
+    SandboxExecProbe {
+        probed: true,
+        ok,
+        executable: Some(binary.display().to_string()),
+        child_net: child_net.to_string(),
+        wsl_default_child_net: wsl_default,
+        exit_code,
+        timed_out: false,
+        reason,
+        notes,
+    }
+}
+
+static SANDBOX_EXEC_PROBE: OnceLock<SandboxExecProbe> = OnceLock::new();
+
+/// The process-wide live canary (once). `HZ_SANDBOX_EXEC=0` is explicit
+/// "unconfined": the probe reports `probed:false` and nothing is enforced.
+pub fn probe_sandbox_exec() -> &'static SandboxExecProbe {
+    SANDBOX_EXEC_PROBE.get_or_init(|| {
+        let wsl = host_is_wsl();
+        let (child_net, wsl_default) =
+            resolve_child_net(std::env::var("HZ_SANDBOX_CHILD_NET").ok().as_deref(), wsl);
+        let notes = child_net_notes(&child_net, wsl_default);
+        if std::env::var("HZ_SANDBOX_EXEC")
+            .map(|value| value.trim() == "0")
+            .unwrap_or(false)
+        {
+            return failed_probe(
+                None,
+                &child_net,
+                wsl_default,
+                notes,
+                false,
+                "HZ_SANDBOX_EXEC=0 disables sandbox wrapping".to_string(),
+            );
+        }
+        let binary = resolve_sandbox_exec_binary();
+        run_sandbox_exec_probe(binary.as_deref(), &child_net, wsl_default, notes)
+    })
+}
+
 /* ----------------------------- mode composition ---------------------------- */
 
-/// Which confinement mechanisms THIS KERNEL ACTUALLY APPLIES to child
-/// processes. This is deliberately separate from `Capabilities` (what the host
-/// OFFERS): a dimension may be reported `enforced` ONLY when the host offers the
-/// mechanism AND this kernel applies it. Detection is not enforcement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which confinement mechanisms THIS KERNEL ACTUALLY APPLIED to a child. This is
+/// deliberately separate from `Capabilities` (what the host OFFERS): a dimension
+/// may be reported `enforced` ONLY when the host offers the mechanism AND a live
+/// `hz-sandbox-exec` canary proves the helper applied it. Detection is not
+/// enforcement, and a kernel report alone is not evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedMechanisms {
     /// A Landlock ruleset is applied to shell/code execution.
     pub filesystem: bool,
@@ -775,30 +1096,57 @@ pub struct AppliedMechanisms {
     pub process: bool,
     /// rlimits are applied to shell/code execution.
     pub resources: bool,
+    /// Why network confinement was not applied even though the helper ran.
+    pub network_disabled_reason: Option<String>,
+    /// Why the live probe did not prove confinement (report diagnostic).
+    pub probe_reason: Option<String>,
 }
 
 impl AppliedMechanisms {
     /// Nothing is applied.
-    pub const fn none() -> Self {
+    pub fn none() -> Self {
         AppliedMechanisms {
             filesystem: false,
             network: false,
             process: false,
             resources: false,
+            network_disabled_reason: None,
+            probe_reason: None,
         }
     }
 }
 
-/// What the reduced `hz-sandbox-exec` helper applies when `HZ_SANDBOX_EXEC=1`
-/// wraps a child (docs/33 §5.3): rlimits + seccomp deny-list + unprivileged
-/// user+net namespace (network-off) + Landlock FS fence (`HZ_SANDBOX_FS_ROOT`).
-pub const fn kernel_applied_mechanisms() -> AppliedMechanisms {
-    AppliedMechanisms {
-        filesystem: true,
-        network: true,
-        process: true,
-        resources: true,
+/// Derive the applied set from a probe + host capabilities. A failed probe
+/// applies NOTHING (fail closed). A passing probe with child net on applies
+/// filesystem/process/resources but never network.
+pub fn applied_from_probe(probe: &SandboxExecProbe, caps: &Capabilities) -> AppliedMechanisms {
+    if !probe.probed || !probe.ok {
+        return AppliedMechanisms {
+            probe_reason: probe.reason.clone(),
+            ..AppliedMechanisms::none()
+        };
     }
+    AppliedMechanisms {
+        filesystem: caps.landlock_fs,
+        network: caps.netns && probe.child_net == "off",
+        process: caps.seccomp,
+        resources: caps.rlimits,
+        network_disabled_reason: if probe.child_net == "off" {
+            None
+        } else {
+            Some(
+                "network namespace isolation is disabled for sandboxed children (HZ_SANDBOX_CHILD_NET=on); egress is NOT confined"
+                    .to_string(),
+            )
+        },
+        probe_reason: None,
+    }
+}
+
+/// What the reduced `hz-sandbox-exec` helper ACTUALLY applied on this host,
+/// decided by the cached live canary. Never all-true by assumption.
+pub fn kernel_applied_mechanisms() -> AppliedMechanisms {
+    applied_from_probe(probe_sandbox_exec(), capabilities())
 }
 
 /// Compose a requested `SandboxMode` into an `EnforcementOutcome`, FAIL-CLOSED
@@ -889,21 +1237,24 @@ fn confined_outcome(
         return EnforcementOutcome::Report(partial_confined_report(mode, caps, applied, reason));
     }
 
-    // Only reachable when the host offers Landlock AND the kernel applies it
-    // (a future confinement backend; `kernel_applied_mechanisms()` is all-false
-    // today, so no live call gets here).
+    // Reachable only when the host offers Landlock AND the live
+    // `hz-sandbox-exec` canary proved this kernel applies a ruleset.
     EnforcementOutcome::Report(full_confined_report(mode, caps, applied))
 }
 
 /// Why FS confinement is not enforced, in plain words.
 fn fs_unmet_note(caps: &Capabilities, applied: &AppliedMechanisms) -> String {
-    if caps.landlock_fs && !applied.filesystem {
+    let mut note = if caps.landlock_fs && !applied.filesystem {
         "Landlock is available on this host but this kernel does not apply a ruleset to executed processes yet".to_string()
     } else if caps.bwrap_present {
         "bwrap present but no FS-LSM backing (Landlock inactive), and this kernel applies no FS confinement".to_string()
     } else {
         "no Landlock/bwrap FS backend, and this kernel applies no FS confinement".to_string()
+    };
+    if let Some(reason) = &applied.probe_reason {
+        note = format!("{}; live sandbox canary: {}", note, reason);
     }
+    note
 }
 
 /// The filesystem dimension: `enforced` only when available AND applied.
@@ -961,8 +1312,7 @@ fn partial_confined_report(
 }
 
 /// The FULL report for an FS-confined mode when FS confinement IS available and
-/// applied (a future confinement backend; unreachable with today's all-false
-/// `kernel_applied_mechanisms()`).
+/// the live exec canary proved it is applied.
 fn full_confined_report(
     mode: SandboxMode,
     caps: &Capabilities,
@@ -1018,7 +1368,10 @@ fn network_dimension(caps: &Capabilities, applied: &AppliedMechanisms) -> Dimens
             dimension: "network".to_string(),
             guarantee: Guarantee::Unsupported,
             backend: "none".to_string(),
-            residual: unmet_residual(caps.netns, "egress", "network namespaces"),
+            residual: applied
+                .network_disabled_reason
+                .clone()
+                .unwrap_or_else(|| unmet_residual(caps.netns, "egress", "network namespaces")),
             available: caps.netns,
         }
     }
@@ -1288,6 +1641,8 @@ mod tests {
             network: true,
             process: true,
             resources: true,
+            network_disabled_reason: None,
+            probe_reason: None,
         }
     }
 
@@ -1306,16 +1661,148 @@ mod tests {
 
     #[test]
     fn kernel_applied_matches_hzsandbox_exec() {
+        // The live applied set is probe-derived: nothing is claimed when the
+        // canary did not prove confinement, and network is never claimed with
+        // child net `on` (the WSL default).
+        let probe = probe_sandbox_exec();
         let applied = kernel_applied_mechanisms();
+        if !probe.ok {
+            assert!(!applied.filesystem);
+            assert!(!applied.network);
+            assert!(!applied.process);
+            assert!(!applied.resources);
+        } else {
+            assert_eq!(applied.filesystem, capabilities().landlock_fs);
+            assert_eq!(applied.process, capabilities().seccomp);
+            assert_eq!(applied.resources, capabilities().rlimits);
+            assert_eq!(applied.network, capabilities().netns && probe.child_net == "off");
+        }
+    }
+
+    #[test]
+    fn applied_from_probe_never_claims_without_a_passing_probe() {
+        let caps = caps_all();
+        let failed = SandboxExecProbe {
+            probed: false,
+            ok: false,
+            executable: None,
+            child_net: "off".to_string(),
+            wsl_default_child_net: false,
+            exit_code: None,
+            timed_out: false,
+            reason: Some("helper missing".to_string()),
+            notes: Vec::new(),
+        };
+        let applied = applied_from_probe(&failed, &caps);
+        assert!(!applied.filesystem);
+        assert!(!applied.network);
+        assert!(!applied.process);
+        assert!(!applied.resources);
+        assert_eq!(applied.probe_reason.as_deref(), Some("helper missing"));
+
+        let wsl_ok = SandboxExecProbe {
+            probed: true,
+            ok: true,
+            executable: Some("/x/hz-sandbox-exec".to_string()),
+            child_net: "on".to_string(),
+            wsl_default_child_net: true,
+            exit_code: Some(0),
+            timed_out: false,
+            reason: None,
+            notes: vec!["wsl".to_string()],
+        };
+        let applied = applied_from_probe(&wsl_ok, &caps);
         assert!(applied.filesystem);
-        assert!(applied.network);
         assert!(applied.process);
         assert!(applied.resources);
+        assert!(!applied.network, "child net on must never claim network enforcement");
+        assert!(applied.network_disabled_reason.is_some());
+        // And the composed report is honest about it.
+        let report = match enforce(
+            SandboxMode::WorkspaceWrite,
+            &caps,
+            &applied_from_probe(&wsl_ok, &caps),
+            true,
+        ) {
+            EnforcementOutcome::Report(report) => report,
+            other => panic!("expected a partial report, got {:?}", other),
+        };
+        let network = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == "network")
+            .unwrap();
+        assert_eq!(network.guarantee, Guarantee::Unsupported);
+        assert!(network.residual.contains("HZ_SANDBOX_CHILD_NET=on"));
+
+        let off_ok = SandboxExecProbe {
+            child_net: "off".to_string(),
+            wsl_default_child_net: false,
+            ..wsl_ok
+        };
+        let applied = applied_from_probe(&off_ok, &caps);
+        assert!(applied.network);
+        assert!(applied.network_disabled_reason.is_none());
+    }
+
+    #[test]
+    fn wsl_signature_and_child_net_default_are_truthful() {
+        assert!(wsl_signature("5.15.153.1-microsoft-standard-WSL2"));
+        assert!(wsl_signature("Linux version ... (Microsoft@...)")); // case-insensitive
+        assert!(!wsl_signature("6.8.0-generic"));
+
+        assert_eq!(resolve_child_net(None, false), ("off".to_string(), false));
+        assert_eq!(resolve_child_net(None, true), ("on".to_string(), true));
+        assert_eq!(resolve_child_net(Some("off"), true), ("off".to_string(), false));
+        assert_eq!(resolve_child_net(Some("ON"), false), ("on".to_string(), false));
+        // A typo requests isolation (same fail-closed reading as the helper), so
+        // it can never silently become the WSL `on` default.
+        assert_eq!(resolve_child_net(Some("maybe"), true), ("off".to_string(), false));
+        assert_eq!(resolve_child_net(Some("  "), true), ("on".to_string(), true));
+    }
+
+    #[test]
+    fn exec_probe_plumbing_reports_success_and_failure_not_silence() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("hz-probe-unit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ok_bin = dir.join("ok.sh");
+        std::fs::write(&ok_bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&ok_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ok = run_sandbox_exec_probe(Some(&ok_bin), "off", false, Vec::new());
+        assert!(ok.probed && ok.ok, "{:?}", ok);
+        assert_eq!(ok.exit_code, Some(0));
+
+        let fail_bin = dir.join("fail.sh");
+        let mut f = std::fs::File::create(&fail_bin).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(f, "echo 'exec /bin/true: Operation not permitted' >&2").unwrap();
+        writeln!(f, "exit 1").unwrap();
+        drop(f);
+        std::fs::set_permissions(&fail_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let failed = run_sandbox_exec_probe(Some(&fail_bin), "off", false, Vec::new());
+        assert!(failed.probed && !failed.ok, "{:?}", failed);
+        assert_eq!(failed.exit_code, Some(1));
+        assert!(failed
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("Operation not permitted"));
+
+        let missing = run_sandbox_exec_probe(None, "off", false, Vec::new());
+        assert!(!missing.probed && !missing.ok);
+        assert!(missing.reason.unwrap().contains("not found"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn fs_confined_modes_fail_closed_without_landlock_or_succeed_when_applied() {
-        let applied = kernel_applied_mechanisms();
+        let applied = all_applied();
         for mode in [SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite] {
             match enforce(mode, &caps_none(), &applied, true) {
                 EnforcementOutcome::Unavailable { mode: m, reason, host_capabilities } => {
@@ -1338,7 +1825,7 @@ mod tests {
 
     #[test]
     fn partial_report_honest_for_hzsandbox_exec_backend() {
-        let applied = kernel_applied_mechanisms();
+        let applied = all_applied();
         // Without Landlock: allowPartial yields a PARTIAL report (FS unsupported).
         let report = match enforce(SandboxMode::WorkspaceWrite, &caps_none(), &applied, false) {
             EnforcementOutcome::Report(r) => r,
@@ -1391,7 +1878,7 @@ mod tests {
 
     #[test]
     fn platform_notes_on_wire_never_claim_macos_enforced() {
-        let report = match enforce(SandboxMode::DangerFullAccess, &caps_none(), &kernel_applied_mechanisms(), true) {
+        let report = match enforce(SandboxMode::DangerFullAccess, &caps_none(), &all_applied(), true) {
             EnforcementOutcome::Report(r) => r,
             other => panic!("expected a report, got {:?}", other),
         };
@@ -1417,7 +1904,7 @@ mod tests {
     #[test]
     fn danger_full_access_reports_no_enforced_dimension() {
         for caps in [caps_none(), caps_all()] {
-            let report = match enforce(SandboxMode::DangerFullAccess, &caps, &kernel_applied_mechanisms(), true) {
+            let report = match enforce(SandboxMode::DangerFullAccess, &caps, &all_applied(), true) {
                 EnforcementOutcome::Report(r) => r,
                 other => panic!("expected a report, got {:?}", other),
             };
@@ -1435,7 +1922,7 @@ mod tests {
 
     #[test]
     fn outcome_json_is_stable_and_typed() {
-        let applied = kernel_applied_mechanisms();
+        let applied = all_applied();
         let unavail = enforce(SandboxMode::ReadOnly, &caps_none(), &applied, true).to_json();
         assert_eq!(unavail["status"], json!("sandbox_unavailable"));
         assert_eq!(unavail["mode"], json!("read-only"));

@@ -46,6 +46,16 @@ except OSError as e:
       const out = spawnSync(bin, ["--", "python3", "-c", probe], { encoding: "utf8", env: { ...process.env, ...env } });
       const combined = `${out.stdout}\n${out.stderr}`.toLowerCase();
       if (combined.includes("not found") || combined.includes("no such file")) return;
+      if (
+        out.status !== 0 &&
+        combined.includes("hz-sandbox-exec: exec") &&
+        combined.includes("operation not permitted")
+      ) {
+        console.log(
+          `skip netns CONNECT denial probe: host cannot apply child_net confinement: ${(out.stderr ?? "").trim()}`,
+        );
+        return;
+      }
       expect(out.stdout).toContain("BLOCKED");
       expect(out.stdout).not.toContain("CONNECTED");
     }

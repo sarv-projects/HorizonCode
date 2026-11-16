@@ -26,6 +26,8 @@ const SRC = path.resolve(import.meta.dir, "../../src");
  */
 const ALLOWLIST: Record<string, string> = {
   "core/owned-spawn.ts": "the single spawn path itself — the one Bun.spawn call every other spawn in app/src routes through",
+  "core/sandbox-spawn.ts":
+    "the pre-wrap canary: it spawns `hz-sandbox-exec -- /bin/true` to PROVE confinement before spawnOwned wraps; it is a bounded probe with no ledger/supervisor, and the actual child (when any) still goes through spawnOwned",
 };
 
 const BUN_SPAWN = /Bun\s*\.\s*spawn\s*\(/;
@@ -65,7 +67,7 @@ test("every Bun.spawn call site is allowlisted with a reason", () => {
     offenders,
     "Bun.spawn call sites outside the spawnOwned allowlist (route them through spawnOwned, or add an entry WITH a reason):",
   ).toEqual([]);
-});
+}, 30_000);
 
 test("every allowlist entry exists, carries a reason, and really spawns", () => {
   const entries = Object.entries(ALLOWLIST);

@@ -299,16 +299,20 @@ impl Kernel {
             }
 
             // FEAT-004: report the fail-closed per-call SandboxMode enforcement
-            // posture against the LIVE host capabilities. Additive, mirrored in
+            // posture against the LIVE host capabilities AND a live
+            // `hz-sandbox-exec -- /bin/true` canary. Additive, mirrored in
             // contracts.ts KERNEL_METHODS + KernelRequestMap; the NDJSON
-            // envelope is unchanged. Validates the requested mode and the
-            // optional escalation args (sandbox_permissions + justification must
-            // travel together, justification non-empty) BEFORE anything, and
-            // FAILS CLOSED: a mode that requires FS confinement unavailable here
-            // returns a typed SANDBOX_UNAVAILABLE (HZ_PRECONDITION_FAILED class)
-            // — NEVER a silent 'enforced', NEVER silently unconfined. A caller
-            // that can tolerate a partial boundary passes {"allowPartial":true}
-            // to receive an EnforcementReport with completeness=partial instead.
+            // envelope is unchanged. Every answer carries a `probe` object;
+            // `probe.probed=false` means confinement could not be proven, and
+            // no dimension is then reported `enforced`. Validates the requested
+            // mode and the optional escalation args (sandbox_permissions +
+            // justification must travel together, justification non-empty)
+            // BEFORE anything, and FAILS CLOSED: a mode that requires FS
+            // confinement unavailable here returns a typed SANDBOX_UNAVAILABLE
+            // (HZ_PRECONDITION_FAILED class) — NEVER a silent 'enforced', NEVER
+            // silently unconfined. A caller that can tolerate a partial boundary
+            // passes {"allowPartial":true} to receive an EnforcementReport with
+            // completeness=partial instead.
             "sandbox.report" => {
                 let mode = sandbox_mode_param(params, "mode")?;
 
@@ -363,7 +367,18 @@ impl Kernel {
                     &sandbox::kernel_applied_mechanisms(),
                     demand_full,
                 );
-                Ok(outcome.to_json())
+                // The probe is part of the answer, not an internal detail: a
+                // report that could not be probed says `probed:false` instead of
+                // implying enforcement, and a passing probe names the exact
+                // child-net posture (notably the WSL `on` default).
+                let mut result = outcome.to_json();
+                if let Some(object) = result.as_object_mut() {
+                    object.insert(
+                        "probe".to_string(),
+                        sandbox::probe_sandbox_exec().to_json(),
+                    );
+                }
+                Ok(result)
             }
 
             // EffectHost mirror for callers not entering the direct owner seam.

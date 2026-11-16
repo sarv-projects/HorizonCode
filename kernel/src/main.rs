@@ -832,15 +832,40 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
         }
     }
 
-    // 11. sandbox-mode ladder (FEAT-004): `sandbox.report`. Host-aware: when
-    // Landlock is usable and hz-sandbox-exec applies a ruleset, FS-confined
-    // modes report landlock/enforced; otherwise they fail closed (or partial
-    // with a residual). danger-full-access reports NO enforced dimension (S4).
+    // 11. sandbox-mode ladder (FEAT-004): `sandbox.report`. Host-aware AND
+    // probe-driven: a dimension is `enforced` only when the live
+    // `hz-sandbox-exec -- /bin/true` canary passed, so a host with Landlock but
+    // a failing helper reports SANDBOX_UNAVAILABLE (or an honest partial report)
+    // instead of a static claim. danger-full-access reports NO enforced
+    // dimension (S4).
     {
         let read_only = call(&kernel, "sandbox.report", json!({ "mode": "read-only" }));
+        let probe_present = matches!(&read_only, Ok(d)
+            if d.get("probe")
+                .and_then(|p| p.get("probed"))
+                .and_then(|v| v.as_bool())
+                .is_some());
+        checks.check(
+            "sandbox.report carries a live hz-sandbox-exec probe posture",
+            probe_present,
+        );
+        let probe_ok = matches!(&read_only, Ok(d)
+            if d.get("probe").and_then(|p| p.get("probed")).and_then(|v| v.as_bool()) == Some(true)
+                && d.get("probe").and_then(|p| p.get("ok")).and_then(|v| v.as_bool()) == Some(true));
+        let no_enforced_dimension = |value: &Result<Value, String>| -> bool {
+            matches!(value, Ok(d)
+                if d.get("dimensions").and_then(|v| v.as_array()).map(|dims| {
+                    dims.iter().all(|dim| dim.get("guarantee").and_then(|v| v.as_str()) != Some("enforced"))
+                }).unwrap_or(false))
+        };
+        checks.check(
+            "sandbox.report claims no enforced dimension without a passing probe",
+            probe_ok || no_enforced_dimension(&read_only),
+        );
+
         let landlock = matches!(&read_only, Ok(d)
             if d.get("hostCapabilities").and_then(|c| c.get("landlockFs")).and_then(|v| v.as_bool()) == Some(true));
-        let read_ok = if landlock {
+        let read_ok = if probe_ok && landlock {
             matches!(&read_only, Ok(d)
                 if d.get("status").and_then(|v| v.as_str()) == Some("report")
                     && d.get("backend").and_then(|v| v.as_str()) == Some("landlock")
@@ -856,7 +881,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
                     && d.get("reason").and_then(|v| v.as_str()).map(|r| r.contains("SANDBOX_UNAVAILABLE")).unwrap_or(false))
         };
         checks.check(
-            "sandbox.report read-only -> Landlock report or SANDBOX_UNAVAILABLE",
+            "sandbox.report read-only -> probed Landlock report or SANDBOX_UNAVAILABLE",
             read_ok,
         );
 
@@ -865,7 +890,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
             "sandbox.report",
             json!({ "mode": "workspace-write", "allowPartial": true }),
         );
-        let partial_ok = if landlock {
+        let partial_ok = if probe_ok && landlock {
             matches!(&partial, Ok(d)
                 if d.get("status").and_then(|v| v.as_str()) == Some("report")
                     && d.get("backend").and_then(|v| v.as_str()) == Some("landlock")
@@ -890,7 +915,7 @@ fn selftest_run(dir: &Path, anchor: &eventlog::AnchorConfig) -> i32 {
                     }).unwrap_or(false))
         };
         checks.check(
-            "sandbox.report workspace-write -> Landlock FS or honest partial residual",
+            "sandbox.report workspace-write -> probed Landlock FS or honest partial residual",
             partial_ok,
         );
 

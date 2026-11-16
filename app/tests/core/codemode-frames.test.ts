@@ -15,11 +15,11 @@
  * is a frame, and everything else stays output.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { ApprovalHandler, GuardAction, ToolContext } from "../../src/contracts";
+import type { ApprovalHandler, EnforcementOutcome, GuardAction, SandboxSpawnKernel, ToolContext } from "../../src/contracts";
 import { digestOf } from "../../src/core/canon";
 import type { KernelClient } from "../../src/core/kernel";
 import { GuardGate } from "../../src/core/loop";
@@ -27,6 +27,51 @@ import { STDOUT_TAIL_MAX, StdoutFramer, codemodeTool, FRAME_KEY_ENV, withInnerIn
 
 const CHILD = path.join(import.meta.dir, "../../src/tools/codemode-child.ts");
 const HEX64 = /^[0-9a-f]{64}$/;
+
+
+/* ------------------------ verified sandbox test shim ---------------------- */
+
+/**
+ * code_mode now refuses to run unless a live `hz-sandbox-exec -- /bin/true`
+ * canary passes with its exact policy. These protocol tests exercise the frame
+ * boundary, not the kernel's namespace setup, so they run behind a real
+ * subprocess wrapper that execs the target (the canary is genuinely spawned and
+ * observed). The real `unshare` path is covered by sandbox-spawn.test.ts and
+ * the host-gated real-sandbox tests, which skip on WSL.
+ */
+const SANDBOX_BIN_DIR = mkdtempSync(path.join(tmpdir(), "hz-cmf-sbx-"));
+const SANDBOX_BIN = path.join(SANDBOX_BIN_DIR, "hz-sandbox-exec");
+const SANDBOX_REPORT: EnforcementOutcome = {
+  status: "report",
+  mode: "workspace-write",
+  completeness: "partial",
+  backend: "hz-sandbox-exec",
+  dimensions: [{ dimension: "process", guarantee: "enforced", backend: "seccomp", residual: "" }],
+};
+const SANDBOX_KERNEL: SandboxSpawnKernel = {
+  mode: "trusted",
+  sandboxReport: async () => SANDBOX_REPORT,
+};
+const SANDBOX_ENV_KEYS = ["HZ_SANDBOX_EXEC_BIN", "HZ_SANDBOX_CHILD_NET", "HZ_SANDBOX_EXEC", "HZ_SANDBOX_REQUIRE"] as const;
+const savedSandboxEnv: Record<string, string | undefined> = {};
+
+beforeAll(() => {
+  writeFileSync(SANDBOX_BIN, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n", { mode: 0o755 });
+  for (const key of SANDBOX_ENV_KEYS) savedSandboxEnv[key] = process.env[key];
+  process.env.HZ_SANDBOX_EXEC_BIN = SANDBOX_BIN;
+  process.env.HZ_SANDBOX_CHILD_NET = "off";
+  delete process.env.HZ_SANDBOX_EXEC;
+  delete process.env.HZ_SANDBOX_REQUIRE;
+});
+
+afterAll(() => {
+  for (const key of SANDBOX_ENV_KEYS) {
+    const value = savedSandboxEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  rmSync(SANDBOX_BIN_DIR, { recursive: true, force: true });
+});
 
 const temps: string[] = [];
 let sessionCounter = 0;
@@ -60,6 +105,7 @@ function makeCtx(workspace: string): Ctx {
     workspace,
     sessionId: `codemode-frames-${sessionCounter}`,
     signal: new AbortController().signal,
+    kernel: SANDBOX_KERNEL,
     guard: async (action) => {
       guards.push(action);
       return { decision: "allow" };
@@ -413,7 +459,7 @@ describe("code_mode frame boundary", () => {
     const result = await codemodeTool.execute(
       {
         code: [
-          'const r = await tools.call("shell", { command: "env | grep HZ_CODEMODE_FRAME_KEY || echo (no frame key in this environment)" });',
+          'const r = await tools.call("shell", { command: "env | grep HZ_CODEMODE_FRAME_KEY || echo no-frame-key-in-this-environment" });',
           "return r.output;",
         ].join("\n"),
         timeout_ms: 20000,
@@ -424,7 +470,7 @@ describe("code_mode frame boundary", () => {
     expect(result.ok).toBe(true);
     expect(receipts).toEqual(["shell"]);
     expect(result.output).not.toContain(`${FRAME_KEY_ENV}=`);
-    expect(result.output).toContain("(no frame key in this environment)");
+    expect(result.output).toContain("no-frame-key-in-this-environment");
   });
 
   test("a program cannot read back what it wrote to fd 1", async () => {
