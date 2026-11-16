@@ -1408,6 +1408,15 @@ export class KernelClient {
   private startPromise?: Promise<KernelMode>;
   private exitHook?: () => void;
   private readonly diagnostics: string[] = [];
+  /**
+   * H9: full OwnerLog + receipt + archive verification is O(n). Running it
+   * before every mutation makes a long session quadratic. Verify fully at
+   * most once per window, and use the cheaper unresolved-only status for the
+   * mutations in between; effect.execute/receipt issuance still perform their
+   * own full owner checks under the kernel lock.
+   */
+  private lastOwnerVerifyAt = 0;
+  private readonly ownerVerifyIntervalMs = 30_000;
 
   constructor(opts: KernelClientOptions) {
     this.workspace = opts.workspace;
@@ -2346,7 +2355,9 @@ export class KernelClient {
       }
       if (this.modeValue === "trusted") {
         try {
-          const status = await this.ownerVerify();
+          const due = Date.now() - this.lastOwnerVerifyAt >= this.ownerVerifyIntervalMs;
+          const status = due ? await this.ownerVerify() : await this.ownerStatus();
+          if (due) this.lastOwnerVerifyAt = Date.now();
           if (status.blocked) {
             return {
               decision: "deny",
