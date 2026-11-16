@@ -648,6 +648,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "summary": {
+          "description": "Structural summary (imports/declarations/headings/top-level keys) for ts/js/py/md/json: shown on truncated reads by default; true forces, false suppresses.",
+          "type": "boolean"
         }
       },
       "type": "object"
