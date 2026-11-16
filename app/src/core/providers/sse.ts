@@ -4,13 +4,25 @@
  * Both Anthropic and OpenAI speak SSE over a chunked response body: blocks are
  * separated by a blank line, `data:` lines carry the payload (possibly split
  * across several lines) and comment lines are ignored. No dependencies.
+ *
+ * Reads are idle-guarded: a provider that keeps the socket open but stops
+ * sending aborts with a typed `ProviderTimeoutError` after the configured
+ * silence (HZ_PROVIDER_IDLE_TIMEOUT_MS, default 60s) instead of hanging the
+ * turn. A caller that needs no guard passes `idleTimeoutMs: 0`.
  */
+
+import { readWithIdleTimeout, resolveIdleTimeoutMs } from "./timeout";
 
 export interface SseMessage {
   /** The `event:` field when the server sent one (Anthropic does). */
   event?: string;
   /** Joined `data:` payload. */
   data: string;
+}
+
+export interface ReadSseOptions {
+  /** Longest silence between chunks; default env/60s, 0 disables. */
+  idleTimeoutMs?: number;
 }
 
 function parseBlock(raw: string): SseMessage | null {
@@ -30,13 +42,17 @@ function parseBlock(raw: string): SseMessage | null {
 }
 
 /** Iterate the SSE messages of a response body. */
-export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage, void, unknown> {
+export async function* readSse(
+  body: ReadableStream<Uint8Array>,
+  options: ReadSseOptions = {},
+): AsyncGenerator<SseMessage, void, unknown> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  const idleMs = resolveIdleTimeoutMs(options.idleTimeoutMs);
   let buffer = "";
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdleTimeout(reader, idleMs);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");

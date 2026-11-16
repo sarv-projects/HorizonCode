@@ -12,14 +12,26 @@ import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../syste
 import { maybeDumpProviderRequest } from "./request-dump";
 import { textFromOpenAiDeltaContent } from "./openai-delta-content";
 import { classifyProviderFailure } from "./failure-codes";
-import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
+import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
+import {
+  isProviderTimeoutError,
+  providerTimeoutEvent,
+  resolveProviderTimeouts,
+  withProviderDeadline,
+  type ProviderDeadline,
+  type ProviderTimeoutOptions,
+} from "./timeout";
 import { formatAssemblyCancelNotice, ToolCallAssembler } from "./tool-call-assembly";
 
 export interface OpenAiSettings {
   apiKey: string;
   baseUrl?: string;
   maxTokens?: number;
+  /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
+  timeouts?: ProviderTimeoutOptions;
+  /** Request-phase retry tuning; defaults match providers/retry.ts. */
+  retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
 }
 
 /**
@@ -40,6 +52,10 @@ export interface OpenAiWireSettings {
   getAuthorization?: () => string | undefined;
   /** On HTTP 401, return true when credentials were refreshed and the request may be retried once. */
   onUnauthorized?: () => Promise<boolean>;
+  /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
+  timeouts?: ProviderTimeoutOptions;
+  /** Request-phase retry tuning; defaults match providers/retry.ts. */
+  retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com";
@@ -112,11 +128,22 @@ export function openAiChatCompletionsUrl(baseUrl: string): string {
   return `${root}/v1/chat/completions`;
 }
 
-export async function* streamOpenAiCompatible(
+export function streamOpenAiCompatible(
   settings: OpenAiWireSettings,
   req: ProviderRequest,
 ): AsyncIterable<ProviderEvent> {
+  return withProviderDeadline(req.signal, settings.timeouts ?? {}, (deadline) =>
+    streamOpenAiCompatibleInner(settings, req, deadline),
+  );
+}
+
+async function* streamOpenAiCompatibleInner(
+  settings: OpenAiWireSettings,
+  req: ProviderRequest,
+  deadline: ProviderDeadline,
+): AsyncGenerator<ProviderEvent, void, unknown> {
   const name = settings.name;
+  const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_BASE_URL).replace(/\/+$/, "");
   const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
   const messages = toOpenAiMessages(wire.messages ?? []);
@@ -157,6 +184,7 @@ export async function* streamOpenAiCompatible(
 
   let response: Response;
   const retries: string[] = [];
+  const retryAttempts = Math.max(1, Math.floor(settings.retry?.attempts ?? DEFAULT_RETRY_ATTEMPTS));
   const post = () =>
     fetchWithRetry(
       openAiChatCompletionsUrl(baseUrl),
@@ -164,17 +192,27 @@ export async function* streamOpenAiCompatible(
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: deadline.signal,
       },
       {
+        ...settings.retry,
+        // Headers per attempt and a total cap for the request phase; the idle
+        // guard on the body is applied by readSse below.
+        timeouts: { requestMs: timeouts.requestMs, totalMs: timeouts.totalMs },
         // Ride out a rate limit or an overloaded upstream instead of failing the
         // whole turn; the notices below keep it visible rather than silent.
-        onRetry: (info) => retries.push(retryNotice(name, info, DEFAULT_RETRY_ATTEMPTS)),
+        onRetry: (info) => retries.push(retryNotice(name, info, retryAttempts)),
       },
     );
   try {
     response = await post();
+    deadline.headersReceived();
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      yield providerTimeoutEvent(name, timeout, "request");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
       return;
@@ -191,13 +229,26 @@ export async function* streamOpenAiCompatible(
       if (nextAuth && nextAuth.trim() !== "") headers.authorization = nextAuth;
       else delete headers.authorization;
       try {
-        response = await fetch(openAiChatCompletionsUrl(baseUrl), {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: req.signal,
-        });
+        response = await fetchWithRetry(
+          openAiChatCompletionsUrl(baseUrl),
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: deadline.signal,
+          },
+          {
+            attempts: 1,
+            timeouts: { requestMs: timeouts.requestMs, totalMs: 0 },
+          },
+        );
+        deadline.headersReceived();
       } catch (err) {
+        const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+        if (timeout) {
+          yield providerTimeoutEvent(name, timeout, "request");
+          return;
+        }
         if (isAbortError(err, req.signal)) {
           yield { type: "done", stopReason: "abort" };
           return;
@@ -210,6 +261,11 @@ export async function* streamOpenAiCompatible(
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    const expired = deadline.timedOut();
+    if (expired) {
+      yield providerTimeoutEvent(name, expired, "request");
+      return;
+    }
     const code = classifyProviderFailure(response.status, detail);
     yield {
       type: "error",
@@ -241,7 +297,7 @@ export async function* streamOpenAiCompatible(
   };
 
   try {
-    for await (const message of readSse(response.body)) {
+    for await (const message of readSse(response.body, { idleTimeoutMs: timeouts.idleMs })) {
       if (req.signal?.aborted) {
         aborted = true;
         break;
@@ -292,6 +348,13 @@ export async function* streamOpenAiCompatible(
       if (choice.finish_reason) finish = choice.finish_reason;
     }
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      // Never flush partial argument JSON after a cut stream.
+      yield* yieldAssemblyCancel();
+      yield providerTimeoutEvent(name, timeout, "stream");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield* yieldAssemblyCancel();
       yield { type: "done", stopReason: "abort" };
@@ -328,7 +391,14 @@ export function createOpenAiProvider(settings: OpenAiSettings): Provider {
     name: "openai",
     stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> =>
       streamOpenAiCompatible(
-        { name: "openai", baseUrl: settings.baseUrl, maxTokens: settings.maxTokens, authorization: `Bearer ${settings.apiKey}` },
+        {
+          name: "openai",
+          baseUrl: settings.baseUrl,
+          maxTokens: settings.maxTokens,
+          authorization: `Bearer ${settings.apiKey}`,
+          timeouts: settings.timeouts,
+          retry: settings.retry,
+        },
         req,
       ),
   };

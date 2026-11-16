@@ -13,13 +13,25 @@ import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { classifyProviderFailure } from "./failure-codes";
-import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice } from "./retry";
+import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
+import {
+  isProviderTimeoutError,
+  providerTimeoutEvent,
+  resolveProviderTimeouts,
+  withProviderDeadline,
+  type ProviderDeadline,
+  type ProviderTimeoutOptions,
+} from "./timeout";
 
 export interface AnthropicSettings {
   apiKey: string;
   baseUrl?: string;
   maxTokens?: number;
+  /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
+  timeouts?: ProviderTimeoutOptions;
+  /** Request-phase retry tuning; defaults match providers/retry.ts. */
+  retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
 }
 
 const API_VERSION = "2023-06-01";
@@ -94,7 +106,12 @@ interface UsageShape {
   cacheReadInputTokens?: number;
 }
 
-async function* streamAnthropic(settings: AnthropicSettings, req: ProviderRequest): AsyncIterable<ProviderEvent> {
+async function* streamAnthropic(
+  settings: AnthropicSettings,
+  req: ProviderRequest,
+  deadline: ProviderDeadline,
+): AsyncIterable<ProviderEvent> {
+  const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : "https://api.anthropic.com").replace(/\/+$/, "");
   const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
   let messages = toAnthropicMessages(wire.messages ?? []);
@@ -123,6 +140,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
 
   let response: Response;
   const retries: string[] = [];
+  const retryAttempts = Math.max(1, Math.floor(settings.retry?.attempts ?? DEFAULT_RETRY_ATTEMPTS));
   try {
     response = await fetchWithRetry(
       baseUrl + "/v1/messages",
@@ -135,15 +153,23 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
           accept: "text/event-stream",
         },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: deadline.signal,
       },
       {
+        ...settings.retry,
+        timeouts: { requestMs: timeouts.requestMs, totalMs: timeouts.totalMs },
         // 429 (rate limit) and 529 (overloaded) are routine on this API; a turn
         // must ride them out rather than die on the first one.
-        onRetry: (info) => retries.push(retryNotice("anthropic", info, DEFAULT_RETRY_ATTEMPTS)),
+        onRetry: (info) => retries.push(retryNotice("anthropic", info, retryAttempts)),
       },
     );
+    deadline.headersReceived();
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      yield providerTimeoutEvent("anthropic", timeout, "request");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
       return;
@@ -155,6 +181,11 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    const expired = deadline.timedOut();
+    if (expired) {
+      yield providerTimeoutEvent("anthropic", expired, "request");
+      return;
+    }
     const code = classifyProviderFailure(response.status, detail);
     yield {
       type: "error",
@@ -187,7 +218,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
   };
 
   try {
-    for await (const message of readSse(response.body)) {
+    for await (const message of readSse(response.body, { idleTimeoutMs: timeouts.idleMs })) {
       if (req.signal.aborted) {
         yield { type: "done", stopReason: "abort" };
         return;
@@ -266,6 +297,11 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
       }
     }
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      yield providerTimeoutEvent("anthropic", timeout, "stream");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
       return;
@@ -300,6 +336,7 @@ async function* streamAnthropic(settings: AnthropicSettings, req: ProviderReques
 export function createAnthropicProvider(settings: AnthropicSettings): Provider {
   return {
     name: "anthropic",
-    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> => streamAnthropic(settings, req),
+    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> =>
+      withProviderDeadline(req.signal, settings.timeouts ?? {}, (deadline) => streamAnthropic(settings, req, deadline)),
   };
 }

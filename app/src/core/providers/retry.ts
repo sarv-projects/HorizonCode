@@ -1,5 +1,10 @@
 import type { ProviderFailureCode } from "../../contracts";
 import { classifyProviderFailure, isRetryableFailureCode, retryAttemptsForFailureCode } from "./failure-codes";
+import {
+  createProviderDeadline,
+  resolveProviderTimeouts,
+  type ProviderTimeoutOptions,
+} from "./timeout";
 
 /**
  * retry.ts — transient-failure recovery for provider HTTP calls.
@@ -18,9 +23,10 @@ import { classifyProviderFailure, isRetryableFailureCode, retryAttemptsForFailur
  * or a duplicated tool call, so mid-stream errors are surfaced, not retried.
  *
  * Retryable: 408, 409, 425, 429, 500, 502, 503, 504, 522, 524, 529 and any
- * connection-level failure. Everything else (400, 401, 403, 404, 413, 422, …)
- * is returned to the caller untouched — retrying a malformed request only wastes
- * the user's tokens and time.
+ * connection-level failure — including a response that never sends headers
+ * within the configured `timeouts.requestMs`. Everything else (400, 401, 403,
+ * 404, 413, 422, …) is returned to the caller untouched — retrying a malformed
+ * request only wastes the user's tokens and time.
  *
  * A POST is re-sent, which the provider may have already processed. That is the
  * accepted trade for a chat-completion request with no side effects of its own;
@@ -49,6 +55,12 @@ export interface RetryPolicy {
   maxDelayMs?: number;
   /** Called before each retry, so a caller can tell the human what is happening. */
   onRetry?: (info: RetryInfo) => void;
+  /**
+   * Transport timeouts. The request budget applies per attempt (headers), the
+   * total budget spans the whole call. Unset fields come from the
+   * `HZ_PROVIDER_*` env vars; see providers/timeout.ts.
+   */
+  timeouts?: ProviderTimeoutOptions;
 }
 
 const DEFAULT_ATTEMPTS = 4;
@@ -159,37 +171,74 @@ export async function fetchWithRetry(
 ): Promise<Response> {
   const baseDelayMs = policy.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
   const maxDelayMs = policy.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
-  const signal = init.signal ?? undefined;
+  const timeouts = resolveProviderTimeouts(policy.timeouts);
+  const userSignal = init.signal ?? undefined;
+  // The total budget spans every attempt. The adapters run the returned body
+  // under their own total/idle deadline (this one is disposed on return), but
+  // it still bounds retries and a stalled error-body read.
+  const overall = createProviderDeadline(userSignal, { requestMs: 0, totalMs: timeouts.totalMs });
   let lastError: unknown;
   let attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_ATTEMPTS));
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    if (signal?.aborted === true) throw lastError ?? new Error("aborted before request");
-    try {
-      const response = await fetch(url, init);
-      if (!isRetryableStatus(response.status)) return response;
-      const detail = await response.text().catch(() => "");
-      const code = classifyProviderFailure(response.status, detail);
-      attempts = Math.min(attempts, effectiveRetryAttempts(policy, code));
-      if (!shouldRetryHttpFailure(response.status, detail) || attempt >= attempts) {
-        return new Response(detail, { status: response.status, headers: response.headers });
-      }
-      const waitMs = backoffDelay(attempt, {
-        baseDelayMs,
-        maxDelayMs,
-        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+  try {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const expired = overall.timedOut();
+      if (expired) throw expired;
+      if (userSignal?.aborted === true) throw lastError ?? new Error("aborted before request");
+      // Each attempt gets its own headers budget; merging with the overall
+      // signal keeps both the total cap and the caller's abort wired in.
+      const attemptDeadline = createProviderDeadline(overall.signal, {
+        requestMs: timeouts.requestMs,
+        totalMs: 0,
       });
-      policy.onRetry?.({ attempt, status: response.status, delayMs: waitMs });
-      await delay(waitMs, signal);
-    } catch (err) {
-      lastError = err;
-      if (signal?.aborted || attempt >= attempts) throw err;
-      const waitMs = backoffDelay(attempt, { baseDelayMs, maxDelayMs, retryAfterMs: null });
-      policy.onRetry?.({ attempt, error: err, delayMs: waitMs });
-      await delay(waitMs, signal);
+      try {
+        const response = await fetch(url, { ...init, signal: attemptDeadline.signal });
+        attemptDeadline.headersReceived();
+        attemptDeadline.dispose();
+        const lateTimeout = attemptDeadline.timedOut();
+        if (lateTimeout) {
+          try {
+            await response.body?.cancel();
+          } catch {
+            /* the body is already gone */
+          }
+          throw lateTimeout;
+        }
+        if (!isRetryableStatus(response.status)) return response;
+        const detail = await response.text().catch(() => "");
+        const expiredDuringBody = attemptDeadline.timedOut() ?? overall.timedOut();
+        if (expiredDuringBody) throw expiredDuringBody;
+        const code = classifyProviderFailure(response.status, detail);
+        attempts = Math.min(attempts, effectiveRetryAttempts(policy, code));
+        if (!shouldRetryHttpFailure(response.status, detail) || attempt >= attempts) {
+          return new Response(detail, { status: response.status, headers: response.headers });
+        }
+        const waitMs = backoffDelay(attempt, {
+          baseDelayMs,
+          maxDelayMs,
+          retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+        });
+        policy.onRetry?.({ attempt, status: response.status, delayMs: waitMs });
+        await delay(waitMs, overall.signal);
+      } catch (err) {
+        attemptDeadline.dispose();
+        const timedOut = attemptDeadline.timedOut() ?? overall.timedOut();
+        lastError = timedOut ?? err;
+        // A headers timeout is a transport failure like a reset, so it rides
+        // the same bounded backoff. An abort is never retried, and a fired
+        // total budget is final.
+        if (userSignal?.aborted) throw timedOut ?? err;
+        if (timedOut?.kind === "total") throw timedOut;
+        if (attempt >= attempts) throw lastError;
+        const waitMs = backoffDelay(attempt, { baseDelayMs, maxDelayMs, retryAfterMs: null });
+        policy.onRetry?.({ attempt, error: lastError, delayMs: waitMs });
+        await delay(waitMs, overall.signal);
+      }
     }
+    throw lastError ?? new Error("request failed after retries");
+  } finally {
+    overall.dispose();
   }
-  throw lastError ?? new Error("request failed after retries");
 }
 
 /** "retrying in 2s (attempt 2 of 4)" — the human-readable form, shared by both adapters. */

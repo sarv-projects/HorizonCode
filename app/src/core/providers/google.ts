@@ -38,6 +38,15 @@ import {
   type RetryPolicy,
 } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
+import {
+  createProviderDeadline,
+  isProviderTimeoutError,
+  providerTimeoutEvent,
+  resolveProviderTimeouts,
+  withProviderDeadline,
+  type ProviderDeadline,
+  type ProviderTimeoutOptions,
+} from "./timeout";
 import { toolArgsObject } from "./tool-args-object";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
@@ -54,7 +63,9 @@ export interface GoogleSettings {
   /** Transport override; defaults to the global `fetch`. */
   fetch?: FetchLike;
   /** Request-phase retry tuning; defaults match providers/retry.ts. */
-  retry?: Omit<RetryPolicy, "onRetry">;
+  retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
+  /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
+  timeouts?: ProviderTimeoutOptions;
 }
 
 type GooglePart =
@@ -138,6 +149,7 @@ async function requestWithRetry(
   init: RequestInit,
   policy: Omit<RetryPolicy, "onRetry">,
   onRetry: (info: RetryInfo) => void,
+  requestTimeoutMs: number,
 ): Promise<Response> {
   const attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_RETRY_ATTEMPTS));
   const signal = init.signal ?? undefined;
@@ -145,8 +157,22 @@ async function requestWithRetry(
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (signal?.aborted === true) throw lastError ?? new Error("aborted before request");
+    // One headers budget per attempt; the caller's signal (which already
+    // carries the total deadline) is merged in below.
+    const attemptDeadline = createProviderDeadline(signal, { requestMs: requestTimeoutMs, totalMs: 0 });
     try {
-      const response = await transport(url, init);
+      const response = await transport(url, { ...init, signal: attemptDeadline.signal });
+      attemptDeadline.headersReceived();
+      attemptDeadline.dispose();
+      const lateTimeout = attemptDeadline.timedOut();
+      if (lateTimeout) {
+        try {
+          await response.body?.cancel();
+        } catch {
+          /* the body is already gone */
+        }
+        throw lateTimeout;
+      }
       if (!isRetryableStatus(response.status) || attempt >= attempts) return response;
       const waitMs = backoffDelay(attempt, {
         baseDelayMs: policy.baseDelayMs,
@@ -163,17 +189,24 @@ async function requestWithRetry(
       onRetry({ attempt, status: response.status, delayMs: waitMs });
       await delay(waitMs, signal);
     } catch (err) {
-      lastError = err;
-      if (signal?.aborted || attempt >= attempts) throw err;
+      attemptDeadline.dispose();
+      const timedOut = attemptDeadline.timedOut();
+      lastError = timedOut ?? err;
+      if (signal?.aborted || attempt >= attempts) throw lastError;
       const waitMs = backoffDelay(attempt, { baseDelayMs: policy.baseDelayMs, maxDelayMs: policy.maxDelayMs, retryAfterMs: null });
-      onRetry({ attempt, error: err, delayMs: waitMs });
+      onRetry({ attempt, error: lastError, delayMs: waitMs });
       await delay(waitMs, signal);
     }
   }
   throw lastError ?? new Error("request failed after retries");
 }
 
-async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): AsyncIterable<ProviderEvent> {
+async function* streamGoogle(
+  settings: GoogleSettings,
+  req: ProviderRequest,
+  deadline: ProviderDeadline,
+): AsyncIterable<ProviderEvent> {
+  const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_GOOGLE_BASE_URL).replace(/\/+$/, "");
   const contents = toGoogleContents(req.messages ?? []);
   if (contents.length === 0) {
@@ -213,12 +246,19 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
           accept: "text/event-stream",
         },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: deadline.signal,
       },
       policy,
       (info) => retries.push(retryNotice("google", info, attempts)),
+      timeouts.requestMs,
     );
+    deadline.headersReceived();
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      yield providerTimeoutEvent("google", timeout, "request");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
       return;
@@ -230,6 +270,11 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    const expired = deadline.timedOut();
+    if (expired) {
+      yield providerTimeoutEvent("google", expired, "request");
+      return;
+    }
     const code = classifyProviderFailure(response.status, detail);
     yield {
       type: "error",
@@ -250,7 +295,7 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
   let calls = 0;
 
   try {
-    for await (const message of readSse(response.body)) {
+    for await (const message of readSse(response.body, { idleTimeoutMs: timeouts.idleMs })) {
       if (req.signal.aborted) {
         aborted = true;
         break;
@@ -300,6 +345,11 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
       }
     }
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      yield providerTimeoutEvent("google", timeout, "stream");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
       return;
@@ -321,6 +371,7 @@ async function* streamGoogle(settings: GoogleSettings, req: ProviderRequest): As
 export function createGoogleProvider(settings: GoogleSettings): Provider {
   return {
     name: "google",
-    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> => streamGoogle(settings, req),
+    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> =>
+      withProviderDeadline(req.signal, settings.timeouts ?? {}, (deadline) => streamGoogle(settings, req, deadline)),
   };
 }

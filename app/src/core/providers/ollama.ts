@@ -42,6 +42,17 @@ import {
   type RetryPolicy,
 } from "./retry";
 import { errorText, isAbortError, truncate } from "./sse";
+import {
+  createProviderDeadline,
+  isProviderTimeoutError,
+  providerTimeoutEvent,
+  readWithIdleTimeout,
+  resolveIdleTimeoutMs,
+  resolveProviderTimeouts,
+  withProviderDeadline,
+  type ProviderDeadline,
+  type ProviderTimeoutOptions,
+} from "./timeout";
 import { toolArgsObject } from "./tool-args-object";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
@@ -58,7 +69,14 @@ export interface OllamaSettings {
   /** Transport override; defaults to the global `fetch`. */
   fetch?: FetchLike;
   /** Request-phase retry tuning; defaults match providers/retry.ts. */
-  retry?: Omit<RetryPolicy, "onRetry">;
+  retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
+  /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
+  timeouts?: ProviderTimeoutOptions;
+}
+
+export interface ReadNdjsonOptions {
+  /** Longest silence between lines; default env/60s, 0 disables. */
+  idleTimeoutMs?: number;
 }
 
 export interface OllamaMessage {
@@ -110,13 +128,17 @@ export function toOllamaTools(tools: ToolSpec[]): Array<Record<string, unknown>>
 }
 
 /** Iterate the NDJSON lines of a response body; a line is one JSON document. */
-export async function* readNdjson(body: ReadableStream<Uint8Array>): AsyncGenerator<string, void, unknown> {
+export async function* readNdjson(
+  body: ReadableStream<Uint8Array>,
+  options: ReadNdjsonOptions = {},
+): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  const idleMs = resolveIdleTimeoutMs(options.idleTimeoutMs);
   let buffer = "";
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdleTimeout(reader, idleMs);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -178,6 +200,7 @@ async function* consumeOllamaStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   outcome: OllamaOutcome,
+  idleMs: number,
 ): AsyncGenerator<ProviderEvent, void, unknown> {
   const pending: PendingCall[] = [];
 
@@ -192,7 +215,7 @@ async function* consumeOllamaStream(
     return entry;
   };
 
-  for await (const line of readNdjson(body)) {
+  for await (const line of readNdjson(body, { idleTimeoutMs: idleMs })) {
     if (signal.aborted) {
       outcome.aborted = true;
       return;
@@ -276,11 +299,31 @@ async function requestOllama(
   init: RequestInit,
   policy: Omit<RetryPolicy, "onRetry">,
   onRetry: (info: RetryInfo) => void,
+  requestTimeoutMs: number,
 ): Promise<Response> {
   const attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_RETRY_ATTEMPTS));
   for (let attempt = 1; ; attempt += 1) {
-    if (init.signal?.aborted === true) throw new Error("aborted before request");
-    const response = await transport(url, init);
+    if (init.signal?.aborted) throw new Error("aborted before request");
+    const attemptDeadline = createProviderDeadline(init.signal ?? undefined, { requestMs: requestTimeoutMs, totalMs: 0 });
+    let response: Response;
+    try {
+      response = await transport(url, { ...init, signal: attemptDeadline.signal });
+    } catch (err) {
+      const timeout = attemptDeadline.timedOut();
+      attemptDeadline.dispose();
+      throw timeout ?? err;
+    }
+    attemptDeadline.headersReceived();
+    attemptDeadline.dispose();
+    const lateTimeout = attemptDeadline.timedOut();
+    if (lateTimeout) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* the body is already gone */
+      }
+      throw lateTimeout;
+    }
     if (!isRetryableStatus(response.status) || attempt >= attempts) return response;
     const waitMs = backoffDelay(attempt, {
       baseDelayMs: policy.baseDelayMs,
@@ -302,7 +345,12 @@ function unreachable(baseUrl: string, err: unknown): string {
   return `ollama request failed: cannot reach ${baseUrl} (is ollama running?): ${errorText(err)}`;
 }
 
-async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): AsyncIterable<ProviderEvent> {
+async function* streamOllama(
+  settings: OllamaSettings,
+  req: ProviderRequest,
+  deadline: ProviderDeadline,
+): AsyncIterable<ProviderEvent> {
+  const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, "");
   const messages = toOllamaMessages(req.messages ?? []);
   if (typeof req.system === "string" && req.system !== "") messages.unshift({ role: "system", content: req.system });
@@ -320,7 +368,7 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
   const url = `${baseUrl}/api/chat`;
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/x-ndjson" };
   if (settings.apiKey && settings.apiKey.trim() !== "") headers.authorization = `Bearer ${settings.apiKey}`;
-  const init: RequestInit = { method: "POST", headers, body: JSON.stringify(body), signal: req.signal };
+  const init: RequestInit = { method: "POST", headers, body: JSON.stringify(body), signal: deadline.signal };
   const transport: FetchLike = settings.fetch ?? ((target, options) => fetch(target, options));
   const policy = settings.retry ?? {};
   const attempts = Math.max(1, Math.floor(policy.attempts ?? DEFAULT_RETRY_ATTEMPTS));
@@ -328,8 +376,21 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
   let response: Response;
   const retries: string[] = [];
   try {
-    response = await requestOllama(transport, url, init, policy, (info) => retries.push(retryNotice("ollama", info, attempts)));
+    response = await requestOllama(
+      transport,
+      url,
+      init,
+      policy,
+      (info) => retries.push(retryNotice("ollama", info, attempts)),
+      timeouts.requestMs,
+    );
+    deadline.headersReceived();
   } catch (err) {
+    const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+    if (timeout) {
+      yield providerTimeoutEvent("ollama", timeout, "request");
+      return;
+    }
     if (isAbortError(err, req.signal)) {
       yield { type: "done", stopReason: "abort" };
       return;
@@ -341,6 +402,11 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    const expired = deadline.timedOut();
+    if (expired) {
+      yield providerTimeoutEvent("ollama", expired, "request");
+      return;
+    }
     const code = classifyProviderFailure(response.status, detail);
     yield {
       type: "error",
@@ -363,8 +429,13 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
     const outcome: OllamaOutcome = { sawDone: false, toolCalls: 0 };
     let failure: string | undefined;
     try {
-      for await (const event of consumeOllamaStream(response.body, req.signal, outcome)) yield event;
+      for await (const event of consumeOllamaStream(response.body, req.signal, outcome, timeouts.idleMs)) yield event;
     } catch (err) {
+      const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+      if (timeout) {
+        yield providerTimeoutEvent("ollama", timeout, "stream");
+        return;
+      }
       if (isAbortError(err, req.signal)) {
         yield { type: "done", stopReason: "abort" };
         return;
@@ -389,8 +460,14 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
     retried = true;
     yield { type: "notice", message: "ollama: stream ended before its final line; re-requesting once (earlier text may repeat)" };
     try {
-      response = await transport(url, init);
+      response = await requestOllama(transport, url, init, { ...policy, attempts: 1 }, () => undefined, timeouts.requestMs);
+      deadline.headersReceived();
     } catch (err) {
+      const timeout = deadline.timedOut() ?? (isProviderTimeoutError(err) ? err : undefined);
+      if (timeout) {
+        yield providerTimeoutEvent("ollama", timeout, "request");
+        return;
+      }
       if (isAbortError(err, req.signal)) {
         yield { type: "done", stopReason: "abort" };
         return;
@@ -400,6 +477,11 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
     }
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
+      const expired = deadline.timedOut();
+      if (expired) {
+        yield providerTimeoutEvent("ollama", expired, "request");
+        return;
+      }
       const code = classifyProviderFailure(response.status, detail);
       yield {
         type: "error",
@@ -423,6 +505,7 @@ async function* streamOllama(settings: OllamaSettings, req: ProviderRequest): As
 export function createOllamaProvider(settings: OllamaSettings): Provider {
   return {
     name: "ollama",
-    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> => streamOllama(settings, req),
+    stream: (req: ProviderRequest): AsyncIterable<ProviderEvent> =>
+      withProviderDeadline(req.signal, settings.timeouts ?? {}, (deadline) => streamOllama(settings, req, deadline)),
   };
 }
