@@ -241,6 +241,12 @@ export class AdmissionQueue {
    * Startup recovery: every `running` row found now was interrupted by the
    * process restart, so it is settled `unknown` with evidence `interrupted` —
    * never retried, never reported as done. Returns the affected ids.
+   *
+   * ONLY valid while this process holds the session-owner lease
+   * (session-owner.ts `claimSessionForRecovery`). Against a LIVE writer this
+   * transition would mark a running turn unknown and hand its followers a
+   * false interruption; the queue cannot tell a live owner from a dead one, so
+   * the open path enforces the lease before calling here.
    */
   recoverInterrupted(sessionId: string): string[] {
     requireText(sessionId, "sessionId");

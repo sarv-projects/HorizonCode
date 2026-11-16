@@ -177,6 +177,20 @@ CREATE TABLE IF NOT EXISTS admissions (
   evidence TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_admissions_session ON admissions (session_id);
+-- Cross-process exclusive ownership of a LIVE session (semantics in
+-- session-owner.ts). One row per held session; released on runtime close/exit.
+-- A crash leaves the row behind, and pid + boot id + /proc start-ticks prove
+-- whether the writer is still alive before anyone may take over. Additive and
+-- migration-safe: CREATE TABLE IF NOT EXISTS on every open.
+CREATE TABLE IF NOT EXISTS session_owners (
+  session_id TEXT PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  boot_id TEXT,
+  start_ticks INTEGER,
+  epoch TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  host TEXT
+);
 `;
 
 function parseMeta(raw: string | null): MessageMeta {
@@ -334,8 +348,9 @@ export class SessionStore {
   /**
    * The shared SQLite handle. Public so additive stores in this directory can
    * use the same database — the NF-071 admission FIFO (`admission.ts`) reads
-   * and writes the `admissions` table through it. Schema creation stays in this
-   * class, so a reopened store always migrates before anyone else touches it.
+   * and writes the `admissions` table, and `session-owner.ts` holds the
+   * `session_owners` lease, through it. Schema creation stays in this class, so
+   * a reopened store always migrates before anyone else touches it.
    */
   readonly db: Database;
 
@@ -621,6 +636,11 @@ export class SessionStore {
    * leave the pairing broken again. The affected session's rows are therefore
    * rewritten in order inside one transaction, preserving every `id`, `content`
    * and `ts` exactly — only rowids change, and `history()` orders by rowid.
+   *
+   * Concurrency: this method rewrites the session's rows, so the open path
+   * calls it ONLY while holding that session's owner lease (session-owner.ts
+   * `claimSessionForRecovery`). Never run it against a transcript another live
+   * process is writing.
    */
   repairDanglingToolCalls(sessionId: string): { repaired: number; calls: string[] } {
     const rows = this.db

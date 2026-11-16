@@ -92,6 +92,7 @@ import { makeProvider } from "./providers";
 import { loadHooks, runLifecycleHooks } from "./hooks";
 import { ensureWorkspaceHookTrust, formatUntrustedWorkspaceStartupNotice, hooksLoadOptions } from "./trust";
 import { SessionStore, type SessionInfo } from "./session";
+import { acquireOwnedSession, claimSessionForRecovery, type SessionOwnerLease } from "./session-owner";
 import { reindexSessionSearch, searchSessions as ftsSearchSessions } from "./session-search";
 import { onOAuthAccountRotated } from "./auth/refresh";
 import {
@@ -305,6 +306,11 @@ class HzRuntimeImpl implements HzRuntime {
   private anthropicCacheKeepaliveStop?: AnthropicCacheKeepaliveStop;
   /** Durable EffectHost ledger (ruling 224); shared across turns for this runtime. */
   private readonly effectHost: EffectHost;
+  /**
+   * The exclusive cross-process lease for the CURRENT session (session-owner.ts).
+   * Acquired before any crash repair; released by close() and on process exit.
+   */
+  private sessionOwner: SessionOwnerLease;
   /** Skill ids already announced via hz.skill.installed this runtime (448). */
   private readonly skillInstallAnnounced = new Set<string>();
   /** Unsubscribe OAuth rotation → hz.provider.account.rotated (449). */
@@ -348,6 +354,8 @@ class HzRuntimeImpl implements HzRuntime {
     /** createRuntime forced read-only because the kernel is untrusted. */
     untrustedReadOnly?: boolean;
     effectHost: EffectHost;
+    /** The exclusive session lease acquired before any repair or turn. */
+    sessionOwner: SessionOwnerLease;
   }) {
     if (args.untrustedReadOnly === true) {
       this.untrustedReadOnly = true;
@@ -363,6 +371,7 @@ class HzRuntimeImpl implements HzRuntime {
     this.kernel = args.kernel;
     this.budget = args.budget;
     this.effectHost = args.effectHost;
+    this.sessionOwner = args.sessionOwner;
     this.stopOAuthAccountRotated = onOAuthAccountRotated((info) => {
       void this.append(streamFor(this.session.id), EventTypes.providerAccountRotated, {
         sessionId: this.session.id,
@@ -570,9 +579,40 @@ class HzRuntimeImpl implements HzRuntime {
     const next = this.store.getSession(sessionId);
     if (!next) throw new Error(`no session ${sessionId} in this workspace`);
     const previous = this.session;
-    // Resume runs the same transcript repair createRuntime runs on open.
-    this.store.repairDanglingToolCalls(next.id);
+    // Same session: this runtime already holds the lease; just re-run the
+    // idempotent repair and keep the heartbeat/lease as-is.
+    if (next.id === previous.id) {
+      this.store.repairDanglingToolCalls(next.id);
+      // The heartbeat update also proves the lease is still ours. If the row
+      // vanished or its epoch changed, re-acquire (which fails closed if a
+      // live process took over in the meantime).
+      if (!this.sessionOwner.touch()) {
+        this.sessionOwner.release();
+        this.sessionOwner = acquireOwnedSession(this.store, next.id);
+      }
+      this.session = next;
+      if (next.permissionMode !== undefined) this.setPermissionMode(next.permissionMode);
+      this.leases.length = 0;
+      void this.logSessionEnd(previous.id);
+      void this.logSessionStart();
+      void this.attachEffectLedger();
+      return this;
+    }
+    // Ownership BEFORE repair: a session another live process is writing must
+    // never be repaired or switched to. Throwing here leaves the current
+    // session — and its lease — untouched.
+    const nextOwner = acquireOwnedSession(this.store, next.id);
+    try {
+      // Resume runs the same transcript repair createRuntime runs on open.
+      this.store.repairDanglingToolCalls(next.id);
+    } catch (err) {
+      nextOwner.release();
+      throw err;
+    }
+    const previousOwner = this.sessionOwner;
     this.session = next;
+    this.sessionOwner = nextOwner;
+    previousOwner.release();
     if (next.permissionMode !== undefined) this.setPermissionMode(next.permissionMode);
     this.leases.length = 0;
     void this.logSessionEnd(previous.id);
@@ -1680,6 +1720,9 @@ class HzRuntimeImpl implements HzRuntime {
     // any session, so no dev server outlives the runtime that started it.
     await stopAllPreviews();
     await this.logSessionEnd(this.session.id);
+    // Free the session only after the last transcript/event write above; the
+    // exit hook is the safety net when close() never runs.
+    this.sessionOwner.release();
     await this.kernel.close();
     this.store.close();
   }
@@ -1760,16 +1803,25 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   //     its followers instead of silently replaying a turn whose effect may or
   //     may not have happened.
   //
-  // They are complementary, never duplicative: one keeps the provider-replayable
-  // history valid, the other keeps the work-queue honest. recoverInterrupted was
-  // defined but called from nowhere on the live path (external audit finding 2);
-  // wiring it here, beside repairDanglingToolCalls and BEFORE the first turn can
-  // run, closes that finding — a resumed server session (FEAT-003) reuses this
-  // same entry point. Both run for a resumed session and a fresh one alike (a
-  // fresh session has no rows, so each is a no-op). Both are idempotent.
+  // EXCLUSIVITY (external audit, HIGH): both repairs MUTATE the transcript/queue,
+  // so neither may run while another live hzcode process owns the session. The
+  // owner lease is acquired FIRST (session-owner.ts). A live owner refuses the
+  // open with SessionOwnedError and touches nothing; a provably dead owner
+  // (different boot id, dead pid, reused pid start-ticks) is taken over, and
+  // only then do the two idempotent repairs run. A resumed server session
+  // (FEAT-003) and a fresh one both go through this same entry point.
   const reexecTail = process.env.HZ_REEXECUTE_UNPAIRED_TOOL_TAIL === "1";
-  const repaired = reexecTail ? { repaired: 0, calls: [] as string[] } : store.repairDanglingToolCalls(session.id);
-  const interrupted = new AdmissionQueue(store).recoverInterrupted(session.id);
+  let claim: ReturnType<typeof claimSessionForRecovery>;
+  try {
+    claim = claimSessionForRecovery(store, session.id, { reexecTail });
+  } catch (err) {
+    store.close();
+    await kernel.close().catch(() => undefined);
+    throw err;
+  }
+  const sessionOwner = claim.lease;
+  const repaired = claim.repaired;
+  const interrupted = claim.interrupted;
 
   const effectHostSandboxDefault = applyEffectHostKernelSandboxDefault(
     process.env,
@@ -1801,9 +1853,20 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
       maxWallMs: rawBudget.maxWallMs ?? 0,
     },
     effectHost,
+    sessionOwner,
   });
-  await impl.logSessionStart();
-  await impl.attachEffectLedger();
+  try {
+    await impl.logSessionStart();
+    await impl.attachEffectLedger();
+  } catch (err) {
+    // A failed bootstrap must not leave the lease (and its heartbeat) behind
+    // for a caller that survives the error; the exit hook remains the net for
+    // failures outside this block.
+    sessionOwner.release();
+    await kernel.close().catch(() => undefined);
+    store.close();
+    throw err;
+  }
   for (const message of startupNotices) impl.note(message);
   if (config.permissionModeRejected !== undefined) {
     impl.note(`config permissionMode ignored: ${config.permissionModeRejected}`);
@@ -1923,6 +1986,8 @@ export {
 export type { NegotiableSetting, RequestedSettings, NegotiateAcceptsSettingsResult } from "./catalog/accepts-settings";
 export { KernelClient, LocalKernel, resolveKernelBinary } from "./kernel";
 export { SessionStore, type SessionInfo } from "./session";
+export { SessionOwnedError } from "./session-owner";
+export type { SessionOwnerRecord } from "./session-owner";
 export { makeProvider, createMockProvider, createAnthropicProvider, createOpenAiProvider, createGoogleProvider, createOllamaProvider } from "./providers";
 export { systemPrompt, MAX_PROVIDER_CALLS, HISTORY_LIMIT, MAX_CONSECUTIVE_FORMAT_ERRORS } from "./loop";
 export { BudgetLedger, budgetCountdownLine, exitCodeFor } from "./loop";
