@@ -1,14 +1,16 @@
 /**
- * batch-run.ts — resumable JSONL batch job stub (docs/30 J-2 / J-4 reduced).
+ * batch-run.ts — resumable JSONL batch runner (docs/30 J-2 / J-4 / I-5 reduced).
  *
  *   bun run batch --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]]
  *                 [--slice start:end] [--write-config [path]] [--resume] [--config <path>]
- *                 [--dry-run] [--status]
+ *                 [--dry-run] [--status] [--live]
  *
  * `--write-config` persists launch selection flags beside the job (or at an
  * explicit path). `--resume` recovers them so long runs need not re-specify
- * filter/arm/shuffle/slice (J-4 arm report via `--status`). Execution of each
- * row through the eval runner is not wired; Ctrl-C drain remains out of scope.
+ * filter/arm/shuffle/slice (J-4 arm report via `--status`). Each pending row is
+ * executed through the guarded runtime (I-5/J-2/J-4); Ctrl-C drains the
+ * in-flight row before scheduling stops. Interactive Ctrl-C as input is a
+ * named residual.
  */
 
 import {
@@ -23,9 +25,16 @@ import {
   selectBatchRows,
   selectionFromRunnerConfig,
   writeBatchRunnerConfig,
+  createBatchDrainController,
+  executeBatchJob,
+  type BatchExecutionSummary,
+  type BatchRowExecutor,
+  type BatchSpendRail,
   type BatchSelectionOptions,
   type BatchJobRow,
 } from "./core/batch-runner";
+import type { EvalExecutor } from "./core/evals";
+import { metricContract } from "./core/metrics";
 import { formatBenchmarkManagerReport } from "./core/benchmark-manager";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
@@ -41,7 +50,50 @@ const DEFAULT_IO: BatchCliIo = {
 };
 
 const USAGE =
-  "usage: bun run src/batch-run.ts --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]] [--slice start:end] [--write-config [path]] [--resume] [--config <path>] [--dry-run] [--status]";
+  "usage: bun run src/batch-run.ts --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]] [--slice start:end] [--write-config [path]] [--resume] [--config <path>] [--dry-run] [--status] [--live]";
+
+/** Injection seams for tests: a scripted guarded executor / abort signal / spend rail. */
+export interface BatchCliOptions {
+  executor?: BatchRowExecutor;
+  signal?: AbortSignal;
+  spend?: BatchSpendRail;
+  reserveUsd?: number;
+  onDrain?: (message: string) => void;
+}
+
+/** Adapt the guarded eval-runtime executor to one batch row. No answer text is
+ * copied back: the row records only the RC-7 terminal and a tool count. */
+function guardedExecutorFrom(runtimeExecutor: EvalExecutor): BatchRowExecutor {
+  return async (row: BatchJobRow) => {
+    const result = await runtimeExecutor({
+      id: row.id,
+      from: `batch:${row.id}`,
+      task: row.task,
+      setup: { tools: [] },
+      assertions: [
+        { kind: "terminal", value: "succeeded" },
+        { kind: "no_answer_leak" },
+      ],
+    });
+    return {
+      terminal: result.terminal,
+      detail: `guarded run terminal=${result.terminal}, tools=${result.toolCalls?.length ?? 0}`,
+    };
+  };
+}
+
+/** Publish the execution summary through the metric contract (H-7). */
+function batchExecutionPublished(s: BatchExecutionSummary): string[] {
+  const population = `${s.total} selected row(s) in this batch run (bun run batch; executed through the injected guarded runtime)`;
+  const anchor = "none — first batch execution measurement (no prior run of this set to compare against)";
+  const excludes =
+    "rows already done/failed before this run are skipped; a spend-limit refusal or Ctrl-C drain leaves the rest pending, not failed";
+  return [
+    metricContract({ metric: "batch rows executed", anchor, population, excludes, value: s.executed }),
+    metricContract({ metric: "batch rows succeeded", anchor, population, excludes, value: s.done }),
+    metricContract({ metric: "batch rows failed", anchor, population, excludes, value: s.failed }),
+  ];
+}
 
 function argValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -114,7 +166,7 @@ function configPathFromArgs(argv: readonly string[], job: string): { writePath?:
   };
 }
 
-export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFAULT_IO): Promise<number> {
+export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFAULT_IO, opts: BatchCliOptions = {}): Promise<number> {
   const job = argValue(argv, "--job");
   if (job === undefined || job === "") {
     io.err(USAGE);
@@ -214,17 +266,62 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
 
   if (argv.includes("--dry-run")) {
     for (const row of pending) io.out(`would run: ${row.id} · ${summarizeTask(row)}`);
-    io.out(`batch dry-run: ${pending.length} row(s) would execute (runner wiring open)`);
+    io.out(`batch dry-run: ${pending.length} row(s) would execute through the guarded runtime`);
     return 0;
   }
 
-  // Writing config alone is a successful no-op for the execution stub.
+  // Writing config alone is a successful no-op (its own slice).
   if (paths.writePath !== undefined && !argv.includes("--status") && !argv.includes("--dry-run")) {
     return 0;
   }
 
-  io.err("batch: per-row execution is not wired — use `bun run eval` for cases or pass --dry-run");
-  return 2;
+  // I-5/J-2/J-4: drive the pending rows through the guarded runtime. The
+  // first SIGINT aborts SCHEDULING; the in-flight row is awaited to settle.
+  const drain = createBatchDrainController(opts.onDrain ?? ((message) => io.out(message)));
+  const signal = opts.signal ?? drain.signal;
+  let executor = opts.executor;
+  if (executor === undefined) {
+    try {
+      const { makeRuntimeExecutor } = await import("./core/eval-executor");
+      const handle = makeRuntimeExecutor({ mock: !argv.includes("--live") });
+      executor = guardedExecutorFrom(handle.executor);
+    } catch (err) {
+      drain.dispose();
+      io.err(`batch: could not build the guarded runtime: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+  }
+  let summary: BatchExecutionSummary;
+  try {
+    summary = await executeBatchJob({
+      file: jobPath,
+      rows: selected,
+      execute: executor!,
+      ...(opts.spend === undefined ? {} : { spend: opts.spend, reserveUsd: opts.reserveUsd ?? 0.01 }),
+      signal,
+      onEvent: (event) => {
+        if (event.kind === "row.done" || event.kind === "row.failed") {
+          const row = event.rows.find((r) => r.id === event.rowId);
+          io.out(`batch row: ${event.rowId} · ${row?.status ?? "?"} · ${event.detail ?? ""}`);
+          const progress = formatBatchProgress(event.rows, startedAt);
+          if (progress !== undefined) io.out(progress);
+        } else if (event.kind === "drain" || event.kind === "spend.limit") {
+          io.out(`batch: ${event.detail ?? event.kind}`);
+        }
+      },
+    });
+  } catch (err) {
+    io.err(`batch: execution failed: ${err instanceof Error ? err.message : String(err)}`);
+    return 2;
+  } finally {
+    drain.dispose();
+  }
+
+  for (const block of batchExecutionPublished(summary)) io.out(block);
+  io.out(
+    `batch execution: ${summary.done} done / ${summary.failed} failed of ${summary.total} selected (${summary.skipped} skipped, ${summary.remaining} remaining${summary.drained ? ", drained" : ""})`,
+  );
+  return summary.failed === 0 ? 0 : 1;
 }
 
 function summarizeTask(row: BatchJobRow): string {

@@ -8,14 +8,17 @@ import {
   ControlPipeFramer,
   OWNER_WORKER_CONTROL_PIPE_V,
   OWNER_WORKER_MAX_FRAME_BYTES,
+  RESERVE_SEQ_FIRST,
   OwnerWorkerHandshake,
   decodeBootstrap,
   decodeFrameLine,
   decodeHello,
+  decodeReserve,
   decodeTurnFrame,
   encodeFrame,
   makeBootstrap,
   makeHello,
+  makeReserve,
   makeTurnFrame,
 } from "../../src/core/owner-worker-control-pipe";
 import type { ProcessIdentity } from "../../src/core/worker-identity";
@@ -72,20 +75,30 @@ describe("owner-worker control pipe — bootstrap", () => {
   });
 });
 
+/** Construct a handshake and perform the documented publish step. */
+function publishedHandshake() {
+  const boot = sampleBootstrap();
+  const hs = new OwnerWorkerHandshake(boot, { liveProcCheck: liveOk });
+  expect(hs.publishBootstrap().ok).toBe(true);
+  return { boot, hs };
+}
+
+function goodHello(boot: ReturnType<typeof sampleBootstrap>) {
+  return makeHello({
+    executionId: boot.executionId,
+    identity,
+    secret: boot.secret,
+    epoch: boot.epoch,
+  });
+}
+
 describe("owner-worker control pipe — handshake before reserve", () => {
-  test("verified hello unlocks reserveWork", () => {
-    const boot = sampleBootstrap();
-    const hs = new OwnerWorkerHandshake(boot, { liveProcCheck: liveOk });
+  test("verified hello unlocks the single FIFO reserve", () => {
+    const { boot, hs } = publishedHandshake();
     expect(hs.mayReserveWork).toBe(false);
     expect(hs.reserveWork().ok).toBe(false);
 
-    const hello = makeHello({
-      executionId: boot.executionId,
-      identity,
-      secret: boot.secret,
-      epoch: boot.epoch,
-    });
-    const verdict = hs.acceptHello(hello);
+    const verdict = hs.acceptHello(goodHello(boot));
     expect(verdict.ok).toBe(true);
     expect(hs.state).toBe("verified");
     expect(hs.mayReserveWork).toBe(true);
@@ -93,13 +106,15 @@ describe("owner-worker control pipe — handshake before reserve", () => {
     const reserved = hs.reserveWork();
     expect(reserved.ok).toBe(true);
     if (!reserved.ok) return;
+    expect(reserved.value.kind).toBe("reserve");
     expect(reserved.value.executionId).toBe("exec_1");
-    expect(reserved.value.identity).toEqual(identity);
+    expect(reserved.value.pid).toBe(identity.pid);
+    expect(reserved.value.startTicks).toBe(identity.startTicks);
+    expect(reserved.value.seq).toBe(RESERVE_SEQ_FIRST);
   });
 
   test("stale epoch refuses and blocks reservation", () => {
-    const boot = sampleBootstrap();
-    const hs = new OwnerWorkerHandshake(boot, { liveProcCheck: liveOk });
+    const { boot, hs } = publishedHandshake();
     const hello = makeHello({
       executionId: boot.executionId,
       identity,
@@ -116,8 +131,7 @@ describe("owner-worker control pipe — handshake before reserve", () => {
   });
 
   test("secret mismatch refuses", () => {
-    const boot = sampleBootstrap();
-    const hs = new OwnerWorkerHandshake(boot, { liveProcCheck: liveOk });
+    const { boot, hs } = publishedHandshake();
     const hello = makeHello({
       executionId: boot.executionId,
       identity,
@@ -129,8 +143,7 @@ describe("owner-worker control pipe — handshake before reserve", () => {
   });
 
   test("identity mismatch against bootstrap refuses", () => {
-    const boot = sampleBootstrap();
-    const hs = new OwnerWorkerHandshake(boot, { liveProcCheck: liveOk });
+    const { boot, hs } = publishedHandshake();
     const hello = makeHello({
       executionId: boot.executionId,
       identity: { pid: 1, startTicks: 2 },
@@ -148,13 +161,8 @@ describe("owner-worker control pipe — handshake before reserve", () => {
     const hs = new OwnerWorkerHandshake(boot, {
       liveProcCheck: () => ({ ok: false, reason: "pid was reused" }),
     });
-    const hello = makeHello({
-      executionId: boot.executionId,
-      identity,
-      secret: boot.secret,
-      epoch: boot.epoch,
-    });
-    const verdict = hs.acceptHello(hello);
+    expect(hs.publishBootstrap().ok).toBe(true);
+    const verdict = hs.acceptHello(goodHello(boot));
     expect(verdict.ok).toBe(false);
     if (verdict.ok) return;
     expect(verdict.reason).toContain("reused");
@@ -173,6 +181,91 @@ describe("owner-worker control pipe — handshake before reserve", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toContain("unknown field");
+  });
+});
+
+describe("owner-worker control pipe — publish order + FIFO reserve (ruling 492)", () => {
+  test("enforces publish → hello → verify → reserve order", () => {
+    const boot = sampleBootstrap();
+    const hs = new OwnerWorkerHandshake(boot, { liveProcCheck: liveOk });
+    const hello = goodHello(boot);
+
+    // Hello before the publish step is refused, without transitioning state.
+    const early = hs.acceptHello(hello);
+    expect(early.ok).toBe(false);
+    if (!early.ok) expect(early.reason).toContain("bootstrap not published");
+    expect(hs.state).toBe("awaiting_bootstrap");
+
+    // Publish advances the state; a second publish is refused.
+    expect(hs.publishBootstrap().ok).toBe(true);
+    expect(hs.state).toBe("awaiting_hello");
+    const pub2 = hs.publishBootstrap();
+    expect(pub2.ok).toBe(false);
+    if (!pub2.ok) expect(pub2.reason).toContain("already published");
+
+    // Reserve before a verified hello is refused.
+    const earlyReserve = hs.reserveWork();
+    expect(earlyReserve.ok).toBe(false);
+    if (!earlyReserve.ok) expect(earlyReserve.reason).toContain("handshake incomplete");
+
+    // Verified hello then the single reserve; a late hello is refused.
+    expect(hs.acceptHello(hello).ok).toBe(true);
+    expect(hs.state).toBe("verified");
+    expect(hs.reserveWork().ok).toBe(true);
+    expect(hs.state).toBe("reserved");
+    const late = hs.acceptHello(hello);
+    expect(late.ok).toBe(false);
+    if (!late.ok) expect(late.reason).toContain("already accepted");
+  });
+
+  test("duplicate reserve is refused after the FIFO slot is consumed", () => {
+    const { boot, hs } = publishedHandshake();
+    expect(hs.acceptHello(goodHello(boot)).ok).toBe(true);
+    const first = hs.reserveWork();
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.value.seq).toBe(RESERVE_SEQ_FIRST);
+    expect(hs.reservedFrame).toEqual(first.value);
+
+    const second = hs.reserveWork();
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.reason).toContain("duplicate reserve");
+    expect(hs.state).toBe("reserved");
+    expect(hs.reservedFrame).toEqual(first.value); // unchanged by the refusal
+  });
+
+  test("refuses unknown protocol version on bootstrap, hello, and reserve", () => {
+    const boot = sampleBootstrap();
+    const reserve = makeReserve({ executionId: boot.executionId, identity });
+    const badFrames = [
+      { ...boot, v: 99 },
+      { ...goodHello(boot), v: 99 },
+      { ...reserve, v: 99 },
+    ];
+    for (const bad of badFrames) {
+      const result = decodeFrameLine(JSON.stringify(bad));
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain("unsupported protocol version");
+    }
+    const direct = decodeReserve({ ...reserve, v: 0 });
+    expect(direct.ok).toBe(false);
+    if (!direct.ok) expect(direct.reason).toContain("unsupported protocol version");
+  });
+
+  test("reserve frame is closed and round-trips through the framer", () => {
+    const boot = sampleBootstrap();
+    const reserve = makeReserve({ executionId: boot.executionId, identity });
+    expect(reserve.kind).toBe("reserve");
+    expect(reserve.seq).toBe(RESERVE_SEQ_FIRST);
+    const enc = encodeFrame(reserve);
+    expect(enc.ok).toBe(true);
+    if (!enc.ok) return;
+    expect(decodeFrameLine(enc.value)).toEqual({ ok: true, value: reserve });
+    expect(decodeReserve({ ...reserve, extra: 1 }).ok).toBe(false);
+
+    const framer = new ControlPipeFramer();
+    expect(framer.push(`${enc.value}\n`)).toEqual([{ ok: true, value: reserve }]);
   });
 });
 

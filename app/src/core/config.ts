@@ -1107,14 +1107,19 @@ export function loadConfig(
   const fileAutonomy = str(fromFile.autonomy);
   const autonomyParsed = fileAutonomy !== undefined ? parseAutonomyPreset(fileAutonomy) : undefined;
   const autonomyRejected =
-    fileAutonomy !== undefined && autonomyParsed === undefined ? autonomyPresetError(fileAutonomy) : undefined;
+    fileAutonomy !== undefined && autonomyParsed === undefined
+      ? documentConfigRejection("autonomy", autonomyPresetError(fileAutonomy))
+      : undefined;
   const permissionMode =
     fileMode !== undefined
       ? parsePermissionMode(fileMode)
       : autonomyParsed !== undefined
         ? autonomyParsed.permissionMode
         : undefined;
-  const permissionModeRejected = fileMode !== undefined && permissionMode === undefined ? permissionModeError(fileMode) : undefined;
+  const permissionModeRejected =
+    fileMode !== undefined && permissionMode === undefined
+      ? documentConfigRejection("permissionMode", permissionModeError(fileMode))
+      : undefined;
 
   const mcp = parseMcpConfig(fromFile.mcp);
   const lsp = parseLspConfig(fromFile.lsp);
@@ -1152,8 +1157,14 @@ export function loadConfig(
     statusLine,
     providerClass: classFields.providerClass,
     modelClass: classFields.modelClass,
-    providerClassRejected: classFields.providerClassRejected,
-    modelClassRejected: classFields.modelClassRejected,
+    providerClassRejected:
+      classFields.providerClassRejected === undefined
+        ? undefined
+        : documentConfigRejection("providerClass", classFields.providerClassRejected),
+    modelClassRejected:
+      classFields.modelClassRejected === undefined
+        ? undefined
+        : documentConfigRejection("modelClass", classFields.modelClassRejected),
     providers: registry,
     resolved,
     toolFormat,
@@ -1327,6 +1338,54 @@ export function missingKey(config: HzConfig): string | null {
 
 /* ----------------------------- config check ----------------------------- */
 
+/**
+ * I-7: every config diagnostic carries three things — the FIX, a DOC LINK and
+ * an ESCAPE HATCH — in the same text, whatever key it is about. A human reading
+ * a `config check` line or a `doctor` hint never has to go hunting through the
+ * docs to find out what to do next.
+ */
+export const CONFIG_ERROR_DOC = "docs/33-handoff.md §5 (config keys) / `hzcode config check`";
+const CONFIG_ERROR_HOWTO =
+  "escape hatch: remove the key so the default applies (or set the matching HZ_* environment variable); verify with `hzcode config check`";
+
+/** The uniform fix + doc link + escape-hatch suffix for one config key. */
+export function configErrorGuidance(key: string, fix: string): string {
+  return `fix: ${fix}; doc: ${CONFIG_ERROR_DOC}; ${CONFIG_ERROR_HOWTO.replace("the key", () => `"${key}"`)}`;
+}
+
+/** Best-effort key name for a validator's reason string (for the guidance). */
+function configKeyFromReason(reason: string): string {
+  const rules: readonly [RegExp, string][] = [
+    [/permission mode|permissionMode/i, "permissionMode"],
+    [/autonomy preset|autonomy/i, "autonomy"],
+    [/^provider(\b|\.|\[|$)/i, "provider"],
+    [/^providers(\b|\.|\[|$)/i, "providers"],
+    [/^mcp(\b|\.|$)/i, "mcp"],
+    [/^lsp(\b|\.|$)/i, "lsp"],
+    [/^lint(\b|\.|$)/i, "lint"],
+    [/^(the file|the top level)/i, "config file"],
+  ];
+  for (const [pattern, key] of rules) if (pattern.test(reason)) return key;
+  return "the offending key";
+}
+
+/** A complete, self-documenting diagnostic line for an unknown key. */
+export function unknownConfigKeyLine(key: string): string {
+  const safe = maskSecrets(key);
+  return `unknown key (ignored): ${safe} — ${configErrorGuidance(safe, `remove or correctly spell "${safe}"`)}`;
+}
+
+/** A complete, self-documenting diagnostic line for a rejected value. */
+export function rejectedConfigValueLine(reason: string): string {
+  const key = configKeyFromReason(reason);
+  return `rejected: ${maskSecrets(reason)} — ${configErrorGuidance(key, `set a valid value for "${key}"`)}`;
+}
+
+/** Wrap a raw validator rejection with the same fix/doc/escape-hatch shape. */
+export function documentConfigRejection(key: string, reason: string): string {
+  return `${reason} — ${configErrorGuidance(key, `set a valid value for "${key}"`)}`;
+}
+
 export interface ConfigCheck {
   file: string;
   exists: boolean;
@@ -1439,9 +1498,11 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
 export function renderConfigCheck(check: ConfigCheck): string {
   if (!check.exists) return `no config file at ${check.file}; defaults and environment apply`;
   const lines = [`config: ${check.file}`];
-  // Rejected values are echoed (a bad baseUrl may embed credentials): mask them.
-  for (const key of check.unknown) lines.push(`  unknown key (ignored): ${maskSecrets(key)}`);
-  for (const why of check.rejected) lines.push(`  rejected: ${maskSecrets(why)}`);
+  // I-7: every diagnostic line is self-documenting (fix + doc link + escape
+  // hatch). Rejected values are echoed (a bad baseUrl may embed credentials),
+  // so the whole line is masked before it is shown.
+  for (const key of check.unknown) lines.push(`  ${unknownConfigKeyLine(key)}`);
+  for (const why of check.rejected) lines.push(`  ${rejectedConfigValueLine(why)}`);
   if (check.unknown.length === 0 && check.rejected.length === 0) lines.push("  ok: every key is known and every value was accepted");
   return lines.join("\n");
 }

@@ -54,6 +54,7 @@ import {
   type ProviderTimeoutOptions,
 } from "./timeout";
 import { toolArgsObject } from "./tool-args-object";
+import { toolResultContent } from "./tool-result-content";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
 export const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
@@ -110,7 +111,7 @@ export function toOllamaMessages(messages: ChatMsg[]): OllamaMessage[] {
       continue;
     }
     if (!msg.toolName) continue; // a name-less result cannot be addressed
-    out.push({ role: "tool", content: msg.content && msg.content !== "" ? msg.content : "(no output)", tool_name: msg.toolName });
+    out.push({ role: "tool", content: toolResultContent(msg.content), tool_name: msg.toolName });
   }
   return out;
 }

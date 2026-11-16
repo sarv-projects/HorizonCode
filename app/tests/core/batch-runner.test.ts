@@ -11,6 +11,9 @@ import {
   loadBatchJob,
   loadBatchRunnerConfig,
   pendingBatchRows,
+  createBatchDrainController,
+  executeBatchJob,
+  safeBatchRowDetail,
   resolveBatchSelectionForResume,
   selectBatchRows,
   selectionFromRunnerConfig,
@@ -18,6 +21,7 @@ import {
   writeBatchRunnerConfig,
 } from "../../src/core/batch-runner";
 import { HARNESS_PRICE_TABLE_REVISION, usageCostEventFields } from "../../src/core/usage-cost";
+import { SpendLedger } from "../../src/core/spend-ledger";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -186,5 +190,152 @@ describe("batch runner", () => {
     writeFileSync(job, `${JSON.stringify({ id: "a", task: "t", status: "pending" })}\n`);
     const built = buildBatchRunnerConfig(job, { filter: "x" });
     expect(() => assertRunnerConfigMatchesJob(built, other)).toThrow(/job path mismatch/i);
+  });
+});
+
+
+/** helper: a fresh job file with the given rows. */
+function batchFile(rows: Record<string, unknown>[]): string {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "batch-exec-")), "job.jsonl");
+  writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  return file;
+}
+
+describe("batch guarded execution engine (I-5/J-2/J-4)", () => {
+  test("executes a small scripted batch and persists every row transition", async () => {
+    const file = batchFile([
+      { id: "a", task: "ok one", status: "pending" },
+      { id: "b", task: "fail two", status: "pending" },
+      { id: "c", task: "ok three", status: "pending" },
+    ]);
+    const seen: string[] = [];
+    const result = await executeBatchJob({
+      file,
+      execute: async (row) => {
+        seen.push(row.id);
+        return row.task.includes("fail")
+          ? { terminal: "failed", detail: "scripted failure" }
+          : { terminal: "succeeded", usage: { costMicroUsd: 100, provider: "mock", model: "m" } };
+      },
+    });
+    expect(seen).toEqual(["a", "b", "c"]);
+    expect(result).toMatchObject({ total: 3, executed: 3, done: 2, failed: 1, skipped: 0, drained: false, remaining: 0 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows.map((r) => [r.id, r.status, r.terminal])).toEqual([
+      ["a", "done", "succeeded"],
+      ["b", "failed", "failed"],
+      ["c", "done", "succeeded"],
+    ]);
+    expect(rows[0]?.usage?.costMicroUsd).toBe(100);
+    expect(rows[1]?.detail).toContain("scripted failure");
+  });
+
+  test("resume skips done/failed rows and runs pending + stale running", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "done", terminal: "succeeded" },
+      { id: "b", task: "b", status: "failed", terminal: "failed" },
+      { id: "c", task: "c", status: "running" },
+      { id: "d", task: "d", status: "pending" },
+    ]);
+    const ran: string[] = [];
+    const result = await executeBatchJob({
+      file,
+      execute: async (row) => (ran.push(row.id), { terminal: "succeeded" as const }),
+    });
+    expect(ran).toEqual(["c", "d"]);
+    expect(result).toMatchObject({ skipped: 2, executed: 2, done: 2, failed: 0, remaining: 0 });
+  });
+
+  test("Ctrl-C drain settles the in-flight row then stops scheduling", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+    ]);
+    const controller = new AbortController();
+    const drainEvents: string[] = [];
+    const seen: string[] = [];
+    const result = await executeBatchJob({
+      file,
+      signal: controller.signal,
+      onEvent: (e) => { if (e.kind === "drain") drainEvents.push(e.detail ?? "drain"); },
+      execute: async (row) => {
+        seen.push(row.id);
+        if (row.id === "a") controller.abort(); // simulate SIGINT mid-flight
+        await new Promise((r) => setTimeout(r, 2)); // in-flight work continues
+        return { terminal: "succeeded" };
+      },
+    });
+    expect(seen).toEqual(["a"]);
+    expect(result).toMatchObject({ done: 1, failed: 0, drained: true, remaining: 2 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows[0]?.status).toBe("done");
+    expect(rows.slice(1).map((r) => r.status)).toEqual(["pending", "pending"]);
+    expect(drainEvents[0]).toContain("in-flight row was allowed to settle");
+  });
+
+  test("drain controller is idempotent and disposes its SIGINT listener", () => {
+    const msgs: string[] = [];
+    const drain = createBatchDrainController((m) => msgs.push(m));
+    expect(drain.triggered).toBe(false);
+    drain.trigger();
+    drain.trigger();
+    expect(drain.triggered).toBe(true);
+    expect(drain.signal.aborted).toBe(true);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toContain("residual");
+    drain.dispose();
+  });
+
+  test("reuses SpendLedger: reserve before dispatch, settle after, refuse at ceiling", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "batch-spend-"));
+    const file = path.join(dir, "job.jsonl");
+    writeFileSync(file, [
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    // One micro-USD ceiling: row a reserves+settles it; row b is refused before
+    // dispatch; row c is never scheduled. No new budget knob — the existing
+    // SpendLedger limit override is the only ceiling.
+    const spend = new SpendLedger(dir, { limitMicroUsd: 1 });
+    const seen: string[] = [];
+    const result = await executeBatchJob({
+      file,
+      spend,
+      reserveUsd: 0.000001,
+      execute: async (row) => (seen.push(row.id), { terminal: "succeeded" as const }),
+    });
+    expect(seen).toEqual(["a"]);
+    expect(result).toMatchObject({ done: 1, failed: 1, drained: true, remaining: 1 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows[0]?.status).toBe("done");
+    expect(rows[1]?.status).toBe("failed");
+    expect(rows[1]?.terminal).toBe("budget_exhausted");
+    expect(rows[2]?.status).toBe("pending");
+    expect(spend.status().spentUsd).toBeCloseTo(0.000001, 9);
+  });
+
+  test("fail-closed grading: a throw or malformed terminal becomes a failed row, batch continues", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+    ]);
+    let call = 0;
+    const result = await executeBatchJob({
+      file,
+      execute: async () => {
+        call += 1;
+        if (call === 1) throw new Error("boom");
+        if (call === 2) return { terminal: "yolo" } as never;
+        return { terminal: "succeeded" };
+      },
+    });
+    expect(result).toMatchObject({ done: 1, failed: 2, remaining: 0 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows[0]?.detail).toContain("boom");
+    expect(rows[1]?.detail).toContain("not an RC-7 value");
+    expect(safeBatchRowDetail("  ok\u0000bad  ")).toBe("ok bad");
   });
 });

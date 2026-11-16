@@ -24,7 +24,7 @@ import { docs30SkipBacklogCount } from "./docs30-skip-backlog";
 import { oauthCredentialsDbPath } from "./auth/credential-db";
 import { readOAuthRefreshGeneration } from "./auth/oauth-refresh-notify";
 import { readOAuthToken } from "./auth/store";
-import { defaultConfigPath, loadConfig, missingKey, readConfigFile, type EnvLike } from "./config";
+import { configErrorGuidance, defaultConfigPath, loadConfig, missingKey, readConfigFile, type EnvLike } from "./config";
 import { resolveKernelBinary, resolveSandboxExecBinary } from "./kernel";
 import { verifyKernelPin, type KernelPinResult } from "./kernel-pin";
 import { hzEventCoverageReport } from "./event-catalogue";
@@ -369,7 +369,14 @@ function checkConfig(d: DoctorEnv): DoctorCheck[] {
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        out.push(fail("config.file", "config file", `${file} is not a JSON object`, "the config must be one JSON object, e.g. {\"provider\":\"anthropic\"}"));
+        out.push(
+          fail(
+            "config.file",
+            "config file",
+            `${file} is not a JSON object`,
+            configErrorGuidance("config file", 'the config must be one JSON object, e.g. {"provider":"anthropic"}'),
+          ),
+        );
       } else {
         out.push(ok("config.file", "config file", `${file} parses`));
         // An inline key readable by other users is worth a warning (never its value).
@@ -380,7 +387,17 @@ function checkConfig(d: DoctorEnv): DoctorCheck[] {
         }
       }
     } catch (err) {
-      out.push(fail("config.file", "config file", `${file} does not parse: ${err instanceof Error ? err.message : String(err)}`, "fix the JSON (a broken file is silently ignored at runtime, so your settings are NOT applied)"));
+      out.push(
+        fail(
+          "config.file",
+          "config file",
+          `${file} does not parse: ${err instanceof Error ? err.message : String(err)}`,
+          configErrorGuidance(
+            "config file",
+            "fix the JSON (a broken file is silently ignored at runtime, so your settings are NOT applied)",
+          ),
+        ),
+      );
     }
   }
   return out;
@@ -452,6 +469,15 @@ function checkProvider(d: DoctorEnv): DoctorCheck[] {
   if (config.permissionModeRejected !== undefined) {
     out.push(warn("config.permission_mode", "permission mode", "the config file's permissionMode was rejected", config.permissionModeRejected));
   }
+  // I-7: every key the config layer rejects carries the same uniform
+  // fix + doc link + escape hatch, not just permissionMode.
+  for (const [key, reason] of [
+    ["autonomy", config.autonomyRejected],
+    ["providerClass", config.providerClassRejected],
+    ["modelClass", config.modelClassRejected],
+  ] as const) {
+    if (reason !== undefined) out.push(warn(`config.${key}`, key, `the config file's ${key} was rejected`, reason));
+  }
   if (config.provider === "mock") {
     out.push(warn("provider", "provider", "mock (offline demo, no real model)", "set ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY (or HZ_PROVIDER) to use a real model"));
   } else {
@@ -483,13 +509,23 @@ function checkProvider(d: DoctorEnv): DoctorCheck[] {
   if (config.provider === "mock") {
     out.push(ok("model", "model", `${config.model} (mock)`));
   } else if (config.model === "") {
-    out.push(fail("model", "model", "no model configured for this provider", "set HZ_MODEL or `model` in the config file"));
+    out.push(
+      fail("model", "model", "no model configured for this provider", configErrorGuidance("model", "set HZ_MODEL or `model` in the config file")),
+    );
   } else {
     const entry = catalogModel(catalog, config.provider, config.model);
     out.push(
       entry !== undefined
         ? ok("model", "model", `${config.model} found in the ${catalog.source} catalog (context ${entry.limit.context})`)
-        : warn("model", "model", `${config.model} is not in the ${catalog.source} catalog for ${config.provider}`, "check the spelling; a custom or new model still works, but its context window is a guess"),
+        : warn(
+            "model",
+            "model",
+            `${config.model} is not in the ${catalog.source} catalog for ${config.provider}`,
+            configErrorGuidance(
+              "model",
+              "check the spelling; a custom or new model still works, but its context window is a guess",
+            ),
+          ),
     );
   }
   return out;

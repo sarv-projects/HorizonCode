@@ -10,6 +10,8 @@ import {
   HZ_CANONICAL_EVENTS,
   hzEventCoverageReport,
   hzNamesForShipped,
+  LOCAL_ANALYTICS_EVENTS,
+  LOCAL_ANALYTICS_FIELDS,
   RESERVED_UNEMITTED_EVENT_TYPES,
   SHIPPED_EVENT_CATALOGUE,
   SHIPPED_TO_HZ_MAP,
@@ -155,6 +157,37 @@ describe("RC-18 shipped → hz.* mapping", () => {
     expect(hzNamesForShipped("hook.decision")).toEqual(["hz.permission.answered"]);
     expect(hzNamesForShipped("hook.failure")).toEqual(["hz.error.raised"]);
     expect(hzNamesForShipped(UNVERIFIED_COMPLETION_EVENT)).toEqual(["hz.effect.unknown"]);
+  });
+});
+
+describe("I-4 local-only analytics catalogue", () => {
+  test("event names are distinct dotted local names, not kernel/hz.* log types", () => {
+    const names = LOCAL_ANALYTICS_EVENTS;
+    expect(names.length).toBeGreaterThan(3);
+    expect(new Set(names).size).toBe(names.length);
+    for (const name of names) {
+      expect(name).toMatch(/^[a-z]+(\.[a-z]+)+$/);
+      expect(name.startsWith("hz.")).toBe(false);
+    }
+    // The richer names are analytics-only, not kernel log emitters. The old
+    // three (session.start/end, cli.flag) deliberately keep their shipped names.
+    for (const localOnly of ["batch.start", "batch.row", "batch.end", "eval.completed", "provider.usage", "config.invalid", "guard.decision"]) {
+      expect(LOCAL_ANALYTICS_EVENTS).toContain(localOnly);
+      expect(SHIPPED_EVENT_CATALOGUE).not.toContain(localOnly);
+    }
+    // The kernel catalogue stays exactly the 50 shipped emitters — the local
+    // catalogue is a separate, richer, file-only set.
+    expect(SHIPPED_EVENT_CATALOGUE).toHaveLength(50);
+  });
+
+  test("field allowlist is scalar-only and carries no secret-bearing field", () => {
+    const fields = Object.entries(LOCAL_ANALYTICS_FIELDS);
+    expect(fields.length).toBeGreaterThan(8);
+    for (const [, shape] of fields) expect(["string", "number"]).toContain(shape);
+    const names = fields.map(([name]) => name);
+    for (const forbidden of ["content", "text", "task", "message", "apiKey", "key", "token", "argv", "path", "code"]) {
+      expect(names).not.toContain(forbidden);
+    }
   });
 });
 

@@ -8,6 +8,13 @@ import {
   casesContentHash,
   evalTraceCaseId,
   frozenSplitHash,
+  appendRatchetDecision,
+  assertRatchetDecisionsOnSplit,
+  buildRatchetDecisionRecord,
+  decideRatchetRound,
+  loadRatchetDecisions,
+  RatchetError,
+  splitScoresFromResults,
 } from "../../src/core/eval-approval";
 import type { PostmortemEvalCase } from "../../src/core/evals";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -209,5 +216,149 @@ describe("eval held-out leakage (G-8)", () => {
         { trainCaseIds: split.trainIds },
       ),
     ).toThrow(/corrupt|splitHash/);
+  });
+});
+
+describe("ratchet keep/revert rounds (G-8)", () => {
+  const heldOut = { passed: 2, total: 4 };
+
+  test("keep: candidate held-out pass rate improves", () => {
+    const d = decideRatchetRound({
+      baselineHeldOut: heldOut,
+      candidateHeldOut: { passed: 3, total: 4 },
+    });
+    expect(d.verdict).toBe("keep");
+    expect(d.tieBreak).toBe(false);
+    expect(d.reason).toMatch(/improved/);
+    expect(d.candidateHeldOutRate).toBe(0.75);
+  });
+
+  test("revert: candidate held-out pass rate regresses", () => {
+    const d = decideRatchetRound({
+      baselineHeldOut: heldOut,
+      candidateHeldOut: { passed: 1, total: 4 },
+    });
+    expect(d.verdict).toBe("revert");
+    expect(d.tieBreak).toBe(false);
+    expect(d.reason).toMatch(/regressed/);
+  });
+
+  test("tie: train pass rate is the documented tie-break", () => {
+    const better = decideRatchetRound({
+      baselineHeldOut: heldOut,
+      candidateHeldOut: heldOut,
+      baselineTrain: { passed: 2, total: 4 },
+      candidateTrain: { passed: 3, total: 4 },
+    });
+    expect(better.verdict).toBe("keep");
+    expect(better.tieBreak).toBe(true);
+    expect(better.reason).toMatch(/train.*>=/);
+
+    const worse = decideRatchetRound({
+      baselineHeldOut: heldOut,
+      candidateHeldOut: heldOut,
+      baselineTrain: { passed: 3, total: 4 },
+      candidateTrain: { passed: 2, total: 4 },
+    });
+    expect(worse.verdict).toBe("revert");
+    expect(worse.tieBreak).toBe(true);
+    expect(worse.reason).toMatch(/train.*</);
+  });
+
+  test("tie with no train metrics defaults to keep; rule can invert it", () => {
+    const metrics = { baselineHeldOut: heldOut, candidateHeldOut: heldOut };
+    expect(decideRatchetRound(metrics).verdict).toBe("keep");
+    expect(decideRatchetRound(metrics, { keepOnTrainNotWorse: false }).verdict).toBe("revert");
+  });
+
+  test("rejects invalid metrics (no silent divide-by-zero)", () => {
+    expect(() =>
+      decideRatchetRound({ baselineHeldOut: heldOut, candidateHeldOut: { passed: 0, total: 0 } }),
+    ).toThrow(RatchetError);
+    expect(() =>
+      decideRatchetRound({ baselineHeldOut: heldOut, candidateHeldOut: { passed: 5, total: 4 } }),
+    ).toThrow(/invalid-metrics/);
+  });
+
+  test("splitScoresFromResults scores exactly the frozen split", () => {
+    const split = buildFrozenSplit(CASES.map((c) => c.id), { heldOutFraction: 0.5, splitSeed: 3 });
+    const baseline = CASES.map((c) => ({ id: c.id, passed: true }));
+    const candidate = CASES.map((c) => ({ id: c.id, passed: split.trainIds.includes(c.id) }));
+    const metrics = splitScoresFromResults(split, baseline, candidate);
+    expect(metrics.baselineHeldOut).toEqual({ passed: split.heldOutIds.length, total: split.heldOutIds.length });
+    expect(metrics.candidateHeldOut).toEqual({ passed: 0, total: split.heldOutIds.length });
+    expect(metrics.candidateTrain?.passed).toBe(split.trainIds.length);
+    expect(() => splitScoresFromResults(split, baseline.slice(1), candidate)).toThrow(/exactly the frozen split/);
+  });
+
+  test("append-only decision log: keep, revert, no-op and never overwrite a keep", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ratchet-log-"));
+    const log = path.join(dir, "ratchet", "decisions.jsonl");
+    const split = buildFrozenSplit(CASES.map((c) => c.id), { heldOutFraction: 0.5, splitSeed: 9 });
+    const clock = { now: () => "2026-11-16T00:00:00Z" };
+    const win = buildRatchetDecisionRecord(
+      {
+        round: 0,
+        variantId: "v1",
+        split,
+        metrics: {
+          baselineHeldOut: { passed: 1, total: 4 },
+          candidateHeldOut: { passed: 3, total: 4 },
+        },
+      },
+      clock,
+    );
+    expect(win.verdict).toBe("keep");
+    expect(appendRatchetDecision(log, win).appended).toBe(true);
+
+    // Identical record is an idempotent no-op; no second line is written.
+    const again = appendRatchetDecision(log, win);
+    expect(again.appended).toBe(false);
+    expect(loadRatchetDecisions(log).records).toHaveLength(1);
+
+    // A kept result is single-assignment: a later revert for the same key refuses.
+    const flip = buildRatchetDecisionRecord(
+      {
+        round: 0,
+        variantId: "v1",
+        split,
+        metrics: {
+          baselineHeldOut: { passed: 3, total: 4 },
+          candidateHeldOut: { passed: 1, total: 4 },
+        },
+      },
+      clock,
+    );
+    expect(flip.verdict).toBe("revert");
+    expect(() => appendRatchetDecision(log, flip)).toThrow(/kept-result-overwrite/);
+    expect(loadRatchetDecisions(log).records).toHaveLength(1);
+    assertRatchetDecisionsOnSplit(log, split);
+
+    // A prior revert is not a kept result and may be re-decided/appended.
+    const log2 = path.join(dir, "ratchet2", "decisions.jsonl");
+    appendRatchetDecision(log2, flip);
+    appendRatchetDecision(log2, win);
+    expect(loadRatchetDecisions(log2).records.map((r) => r.verdict)).toEqual(["revert", "keep"]);
+  });
+
+  test("corrupt decision log fails closed on a tampered recordHash", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ratchet-corrupt-"));
+    const log = path.join(dir, "decisions.jsonl");
+    const split = buildFrozenSplit(CASES.map((c) => c.id), { heldOutFraction: 0.5, splitSeed: 4 });
+    const record = buildRatchetDecisionRecord(
+      {
+        round: 1,
+        variantId: "v2",
+        split,
+        metrics: {
+          baselineHeldOut: { passed: 1, total: 4 },
+          candidateHeldOut: { passed: 2, total: 4 },
+        },
+      },
+      { now: () => "2026-11-16T00:00:00Z" },
+    );
+    appendRatchetDecision(log, record);
+    writeFileSync(log, `${JSON.stringify({ ...record, verdict: "revert" })}\n`);
+    expect(() => loadRatchetDecisions(log)).toThrow(/hash mismatch/);
   });
 });

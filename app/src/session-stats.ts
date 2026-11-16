@@ -1,14 +1,23 @@
 /**
- * J-5 CLI: summarise post-mortem corpus tool usage.
+ * J-5 CLI: summarise the post-mortem corpus and emit read-only tool/prompt
+ * tuning suggestions over it. Never mutates sessions and never uses the network.
  *
  *   bun run src/session-stats.ts --postmortems <state-dir>
+ *   bun run src/session-stats.ts --postmortems <state-dir> --suggest
+ *   bun run src/session-stats.ts --postmortems <state-dir> --json
  */
 
 import * as path from "node:path";
 import { loadPostmortems } from "./core/postmortem";
-import { histogramFromPostmortems, renderSessionCorpusSummary } from "./core/session-corpus-stats";
+import {
+  histogramFromPostmortems,
+  renderCorpusTuningReport,
+  renderSessionCorpusSummary,
+  suggestCorpusTuning,
+} from "./core/session-corpus-stats";
 
-const USAGE = "usage: bun run src/session-stats.ts --postmortems <state-dir>";
+const USAGE =
+  "usage: bun run src/session-stats.ts --postmortems <state-dir> [--suggest|--tune] [--json]";
 
 function argValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -29,6 +38,17 @@ export async function runSessionStatsCli(argv: readonly string[]): Promise<numbe
     console.error(`session-stats: ${loaded.quarantine.length} corrupt post-mortem(s) quarantined`);
   }
   const summary = histogramFromPostmortems(loaded.postmortems);
+  const suggest = argv.includes("--suggest") || argv.includes("--tune");
+  const json = argv.includes("--json");
+  if (json) {
+    const report = suggestCorpusTuning(loaded.postmortems);
+    console.log(JSON.stringify(report, null, 2));
+    return 0;
+  }
+  if (suggest) {
+    console.log(renderCorpusTuningReport(suggestCorpusTuning(loaded.postmortems)));
+    return 0;
+  }
   console.log(renderSessionCorpusSummary(summary));
   return 0;
 }

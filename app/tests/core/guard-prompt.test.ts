@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   actionStationarityInterruptNudge,
+  budgetExhaustionInterruptNudge,
   consecutiveMistakesInterruptNudge,
   contextOverflowInterruptNudge,
   formatErrorsInterruptNudge,
   loopDetectionInterruptNudge,
+  repeatedToolErrorInterruptNudge,
   wrapSystemInterrupt,
 } from "../../src/core/guards/guard-prompt";
 
@@ -46,5 +48,24 @@ describe("guard prompts", () => {
     expect(text).toContain("emergency compaction");
     expect(text).toContain("<system-interrupt");
     expect(text).toContain("</system-interrupt>");
+  });
+
+  test("repeatedToolErrorInterruptNudge selects the class and wraps it", () => {
+    const text = repeatedToolErrorInterruptNudge(2, 3);
+    expect(text).toContain('reason="repeated_tool_error"');
+    expect(text).toContain("<system-interrupt");
+    expect(text).toContain("</system-interrupt>");
+    expect(text).toContain("2");
+    expect(text).toContain("3");
+    expect(text).toContain("Repeating the same failing call");
+  });
+
+  test("budgetExhaustionInterruptNudge selects the class and wraps it", () => {
+    const text = budgetExhaustionInterruptNudge("2 steps");
+    expect(text).toContain('reason="budget_exhaustion"');
+    expect(text).toContain("<system-interrupt");
+    expect(text).toContain("</system-interrupt>");
+    expect(text).toContain("2 steps");
+    expect(text).toContain("Wrap up");
   });
 });

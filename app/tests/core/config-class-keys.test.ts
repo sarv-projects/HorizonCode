@@ -7,7 +7,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+  CONFIG_CLASS_KEYS,
   ConfigClassResolveError,
+  FORMATTER_CLASS_ALIASES,
   MODEL_CLASS_ALIASES,
   PROVIDER_CLASS_ALIASES,
   listConfigClassShortNames,
@@ -33,6 +35,8 @@ describe("normalizeConfigClassKey", () => {
     expect(normalizeConfigClassKey("provider_class")).toBe("providerClass");
     expect(normalizeConfigClassKey("modelClass")).toBe("modelClass");
     expect(normalizeConfigClassKey("model_class")).toBe("modelClass");
+    expect(normalizeConfigClassKey("formatMessageClass")).toBe("formatMessageClass");
+    expect(normalizeConfigClassKey("format_message_class")).toBe("formatMessageClass");
     expect(normalizeConfigClassKey("other")).toBeUndefined();
   });
 });
@@ -143,5 +147,48 @@ describe("loadConfig class-name keys (H-3 reduced)", () => {
     const cfg = loadConfig({ HOME: home, USERPROFILE: home, HZ_PROVIDER: "mock" }, userFile);
     expect(cfg.providerClass).toBeUndefined();
     expect(cfg.providerClassRejected).toContain("totally-fake");
+  });
+});
+
+describe("H-4 additive formatMessageClass key (ruling 494)", () => {
+  test("is part of the closed class-key set", () => {
+    expect(CONFIG_CLASS_KEYS).toContain("formatMessageClass");
+    expect(listConfigClassShortNames("formatMessageClass")).toEqual(
+      Object.keys(FORMATTER_CLASS_ALIASES).sort(),
+    );
+  });
+
+  test("short names resolve to stable built-in dialect ids", () => {
+    for (const [short, dialect] of Object.entries(FORMATTER_CLASS_ALIASES)) {
+      const got = resolveConfigClassKey("formatMessageClass", short);
+      expect(got).toEqual({ key: "formatMessageClass", spec: short, modulePath: dialect, via: "short-name" });
+    }
+    // OpenAI-compatible dialects reuse the OpenAI formatter.
+    expect(FORMATTER_CLASS_ALIASES["openai-compatible"]).toBe("openai");
+    expect(FORMATTER_CLASS_ALIASES.mock).toBe("openai");
+  });
+
+  test("unknown formatter spec fails with a readable, closed-map error", () => {
+    expect(() => resolveConfigClassKey("formatMessageClass", "remote/plugin")).toThrow(ConfigClassResolveError);
+    try {
+      resolveConfigClassKey("formatMessageClass", "remote/plugin");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigClassResolveError);
+      expect((err as ConfigClassResolveError).knownShortNames).toEqual(
+        listConfigClassShortNames("formatMessageClass"),
+      );
+    }
+  });
+
+  test("parseConfigClassFields surfaces resolved formatter + named rejection", () => {
+    const ok = parseConfigClassFields({ format_message_class: "anthropic", providerClass: "openai" });
+    expect(ok.formatMessageClass?.modulePath).toBe("anthropic");
+    expect(ok.formatMessageClass?.via).toBe("short-name");
+    expect(ok.formatMessageClassRejected).toBeUndefined();
+    expect(ok.providerClass?.modulePath).toBe("core/providers/openai");
+
+    const bad = parseConfigClassFields({ formatMessageClass: "nope" });
+    expect(bad.formatMessageClass).toBeUndefined();
+    expect(bad.formatMessageClassRejected).toContain("Unknown formatMessageClass");
   });
 });

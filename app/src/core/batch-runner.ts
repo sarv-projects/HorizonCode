@@ -6,14 +6,17 @@
  * Deterministic --filter/--shuffle/--slice selection is available for planning.
  * A sidecar `*.runner-config.json` snapshots those launch flags (plus optional
  * J-4 `--arm`) so a later `--resume` need not re-specify them (omp metaharness
- * runner-config spirit). Actually executing rows and Ctrl-C drain remain open.
+ * runner-config spirit). This module also drives the guarded per-row execution
+ * engine (I-5/J-2/J-4): rows go through an injected guarded runtime, the existing
+ * SpendLedger rail is reused for reserve-before-dispatch when a caller supplies
+ * one, and Ctrl-C drains the in-flight row before scheduling stops.
  */
 
 import { appendFileSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { canonicalJson, sha256Hex, type Usage } from "../contracts";
+import { canonicalJson, sha256Hex, type TerminalState, type Usage } from "../contracts";
 import { HARNESS_PRICE_TABLE_REVISION, usageCostEventFields } from "./usage-cost";
 
 export type BatchJobStatus = "pending" | "running" | "done" | "failed";
@@ -481,4 +484,289 @@ export function resolveBatchSelectionForResume(
     throw new Error("batch resume: CLI --filter/--arm/--shuffle/--slice disagrees with runner-config snapshot");
   }
   return { ...snapshot };
+}
+
+/* ------------------------- guarded row execution ------------------------ */
+
+/**
+ * The slice of SpendLedger the engine reuses (reserve before dispatch, settle
+ * after). `SpendLedger` satisfies this structurally — no new budget knob and no
+ * new runtime dependency. A caller whose guarded executor already reserves
+ * its own spend (the CLI's `createRuntime` path) simply leaves `spend` unset,
+ * so the same ceiling is not charged twice.
+ */
+export interface BatchSpendRail {
+  reserve(usd: number, meta?: { note?: string; sessionId?: string; runId?: string }): { id: string };
+  settle(id: string, usd: number, note?: string): unknown;
+  release?(id: string): unknown;
+}
+
+/** The closed RC-7 terminal vocabulary a guarded row may report. */
+const BATCH_TERMINALS: readonly string[] = [
+  "succeeded",
+  "failed",
+  "denied",
+  "cancelled",
+  "unknown",
+  "budget_exhausted",
+  "timeout",
+  "interrupted",
+];
+
+/** What one guarded row execution is allowed to report back to the engine. */
+export interface BatchRowExecution {
+  terminal: TerminalState;
+  /** Short machine detail only — never the run's answer, code or a secret. */
+  detail?: string;
+  /** Optional usage for I-5 running-cost display. No answer text. */
+  usage?: BatchJobUsage;
+}
+
+/** The injected guarded runtime: the CLI supplies a `createRuntime`-backed
+ * executor; tests inject a small scripted one. Never constructed here. */
+export type BatchRowExecutor = (row: BatchJobRow, signal?: AbortSignal) => Promise<BatchRowExecution>;
+
+export type BatchExecutionEventKind =
+  | "row.started"
+  | "row.done"
+  | "row.failed"
+  | "spend.reserved"
+  | "spend.limit"
+  | "drain";
+
+export interface BatchExecutionEvent {
+  kind: BatchExecutionEventKind;
+  rowId?: string;
+  detail?: string;
+  /** Row snapshot after the transition (for progress rendering). */
+  rows: readonly BatchJobRow[];
+}
+
+export interface ExecuteBatchOptions {
+  file: string;
+  /** Pre-selected rows (e.g. after --filter/arm/shuffle/slice); defaults to all. */
+  rows?: readonly BatchJobRow[];
+  /** The guarded per-row runtime. Injected; the engine performs no I/O itself. */
+  execute: BatchRowExecutor;
+  /** Optional existing SpendLedger rail; reserve before dispatch, settle after. */
+  spend?: BatchSpendRail;
+  /** Positive USD to reserve per row when `spend` is set. */
+  reserveUsd?: number;
+  /** Ctrl-C drain: when aborted, no NEW row is scheduled; an in-flight row settles. */
+  signal?: AbortSignal;
+  onEvent?: (event: BatchExecutionEvent) => void;
+}
+
+export interface BatchExecutionSummary {
+  total: number;
+  executed: number;
+  done: number;
+  failed: number;
+  /** Rows already done/failed before this run (resume skips them). */
+  skipped: number;
+  /** True when scheduling stopped early because of Ctrl-C or the spend ceiling. */
+  drained: boolean;
+  /** Rows still pending/running when the run returned. */
+  remaining: number;
+}
+
+/** Cap and clean a row detail: a guard note, never answer text or a path. */
+export function safeBatchRowDetail(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  return clean === "" ? undefined : clean.slice(0, 400);
+}
+
+/** Fail-closed validation of what a guarded executor reported. */
+function normalizeBatchRowExecution(raw: unknown): BatchRowExecution {
+  const result = raw as Partial<BatchRowExecution> | null;
+  if (result === null || typeof result !== "object") {
+    return { terminal: "failed", detail: "executor returned a non-object result — graded as failed" };
+  }
+  if (typeof result.terminal !== "string" || !BATCH_TERMINALS.includes(result.terminal)) {
+    return {
+      terminal: "failed",
+      detail: `executor returned terminal ${JSON.stringify(result.terminal)} — not an RC-7 value; graded as failed`,
+    };
+  }
+  const detail = safeBatchRowDetail(result.detail);
+  const usage = parseBatchJobUsage(result.usage);
+  return {
+    terminal: result.terminal as TerminalState,
+    ...(detail === undefined ? {} : { detail }),
+    ...(usage === undefined ? {} : { usage }),
+  };
+}
+
+/** USD actually attributable to one execution, from its reported usage. */
+function batchExecutionCostUsd(
+  row: BatchJobRow,
+  execution: BatchRowExecution,
+  fallbackUsd: number,
+): number {
+  if (execution.usage !== undefined) {
+    const micro = batchRowCostMicroUsd({ ...row, usage: execution.usage });
+    if (micro !== undefined && Number.isFinite(micro) && micro >= 0) return micro / 1_000_000;
+  }
+  return fallbackUsd;
+}
+
+function isSpendLimit(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "limit" || /HZ_SPEND_LIMIT|spend ceiling/i.test(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * Execute the pending rows of a batch through the injected guarded runtime.
+ *
+ * Order per row: (1) honour Ctrl-C — stop scheduling when aborted, leaving the
+ * rest pending; (2) reserve on the existing SpendLedger rail BEFORE dispatch;
+ * (3) persist `running`; (4) await the guarded executor and validate its
+ * terminal fail-closed; (5) settle spend with reported usage; (6) persist
+ * `done`/`failed`. A throw from the executor is graded as a `failed` row, never
+ * re-thrown — one bad row cannot abort the batch. Resume is structural:
+ * `pendingBatchRows` runs pending rows and stale `running` rows; done/failed
+ * rows are counted in `skipped` and never re-executed.
+ */
+export async function executeBatchJob(opts: ExecuteBatchOptions): Promise<BatchExecutionSummary> {
+  if (typeof opts?.file !== "string" || opts.file.trim() === "") {
+    throw new Error("executeBatchJob: opts.file is required");
+  }
+  if (typeof opts.execute !== "function") {
+    throw new Error("executeBatchJob: opts.execute must be a function — the guarded runtime is injected");
+  }
+  if (opts.spend !== undefined) {
+    if (typeof opts.spend.reserve !== "function" || typeof opts.spend.settle !== "function") {
+      throw new Error("executeBatchJob: opts.spend must be a SpendLedger-like rail (reserve/settle)");
+    }
+    if (opts.reserveUsd === undefined || !Number.isFinite(opts.reserveUsd) || opts.reserveUsd <= 0) {
+      throw new Error("executeBatchJob: opts.reserveUsd must be a positive finite number when opts.spend is set");
+    }
+  }
+
+  const all = opts.rows ?? loadBatchJob(opts.file).rows;
+  const todo = pendingBatchRows(all);
+  const working: BatchJobRow[] = all.map((row) => ({ ...row }));
+  const patchRow = (id: string, patch: Partial<BatchJobRow>): void => {
+    const at = working.findIndex((row) => row.id === id);
+    if (at >= 0) working[at] = { ...working[at]!, ...patch };
+  };
+  const emit = (event: Omit<BatchExecutionEvent, "rows">): void => {
+    opts.onEvent?.({ ...event, rows: working.map((row) => ({ ...row })) });
+  };
+
+  let done = 0;
+  let failed = 0;
+  let drained = false;
+
+  for (const row of todo) {
+    if (opts.signal?.aborted === true) {
+      drained = true;
+      emit({ kind: "drain", detail: "Ctrl-C: stopping before the next row; the in-flight row was allowed to settle" });
+      break;
+    }
+
+    let reservation: { id: string } | undefined;
+    if (opts.spend !== undefined) {
+      try {
+        reservation = opts.spend.reserve(opts.reserveUsd!, { note: `batch row ${row.id}` });
+        emit({ kind: "spend.reserved", rowId: row.id, detail: `reserved $${opts.reserveUsd!.toFixed(4)}` });
+      } catch (err) {
+        // Budget ceiling: the row is refused BEFORE dispatch and scheduling
+        // stops — the same fail-closed posture the guarded runtime uses.
+        const terminal: TerminalState = isSpendLimit(err) ? "budget_exhausted" : "failed";
+        const detail = safeBatchRowDetail(`spend rail refused the row before dispatch: ${err instanceof Error ? err.message : String(err)}`);
+        const patch: Partial<BatchJobRow> = { status: "failed", terminal, ...(detail === undefined ? {} : { detail }) };
+        await upsertBatchJobRow(opts.file, row.id, patch);
+        patchRow(row.id, patch);
+        failed += 1;
+        drained = true;
+        emit({ kind: "spend.limit", rowId: row.id, detail });
+        break;
+      }
+    }
+
+    await upsertBatchJobRow(opts.file, row.id, { status: "running", detail: "executing" });
+    patchRow(row.id, { status: "running", detail: "executing", terminal: undefined });
+    emit({ kind: "row.started", rowId: row.id });
+
+    let execution: BatchRowExecution;
+    try {
+      execution = normalizeBatchRowExecution(await opts.execute(row, opts.signal));
+    } catch (err) {
+      execution = {
+        terminal: "failed",
+        detail: `the guarded executor threw: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    if (opts.spend !== undefined && reservation !== undefined) {
+      const actual = batchExecutionCostUsd(row, execution, opts.reserveUsd!);
+      try {
+        opts.spend.settle(reservation.id, actual, `batch row ${row.id}`);
+      } catch {
+        // Best-effort at this layer; the guarded runtime owns its own ledger.
+      }
+    }
+
+    const status = execution.terminal === "succeeded" ? "done" : "failed";
+    const patch: Partial<BatchJobRow> = {
+      status,
+      terminal: execution.terminal,
+      ...(execution.detail === undefined ? {} : { detail: execution.detail }),
+      ...(execution.usage === undefined ? {} : { usage: execution.usage }),
+    };
+    await upsertBatchJobRow(opts.file, row.id, patch);
+    patchRow(row.id, patch);
+    if (status === "done") done += 1;
+    else failed += 1;
+    emit({ kind: status === "done" ? "row.done" : "row.failed", rowId: row.id, detail: execution.terminal });
+  }
+
+  return {
+    total: all.length,
+    executed: done + failed,
+    done,
+    failed,
+    skipped: all.length - todo.length,
+    drained,
+    remaining: pendingBatchRows(working).length,
+  };
+}
+
+/**
+ * Ctrl-C drain controller. The first SIGINT (or an explicit `trigger()`, used
+ * by tests) aborts scheduling; the in-flight guarded row is awaited to settle.
+ * Interactive Ctrl-C-as-input inside a row is a named residual — this signal
+ * governs the scheduler, not the text input of an interactive session.
+ */
+export interface BatchDrainController {
+  signal: AbortSignal;
+  trigger(): void;
+  dispose(): void;
+  readonly triggered: boolean;
+}
+
+export function createBatchDrainController(onDrain?: (message: string) => void): BatchDrainController {
+  const controller = new AbortController();
+  let triggered = false;
+  const trigger = (): void => {
+    if (triggered) return;
+    triggered = true;
+    controller.abort();
+    onDrain?.(
+      "batch: Ctrl-C received — draining the in-flight row, then stopping (interactive Ctrl-C as input remains a residual)",
+    );
+  };
+  if (typeof process !== "undefined" && typeof process.on === "function") process.on("SIGINT", trigger);
+  return {
+    signal: controller.signal,
+    trigger,
+    dispose: () => {
+      if (typeof process !== "undefined" && typeof process.off === "function") process.off("SIGINT", trigger);
+    },
+    get triggered() {
+      return triggered;
+    },
+  };
 }

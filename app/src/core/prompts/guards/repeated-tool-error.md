@@ -1,0 +1,1 @@
+The last {count} tool step(s) returned errors (failure-handling limit {max}). Repeating the same failing call will not recover state. Stop and change approach: read the error, fix the underlying cause (path, arguments, permissions), switch to a different tool, or ask the user a narrow clarifying question. Do not retry the identical failing call unchanged.

@@ -13,6 +13,9 @@
  * adapts aider `commit_message_models()` / `GitRepo.get_commit_message`: try
  * `HZ_WEAK_MODEL` first, skip or fall through when the prompt will not fit or
  * the provider reports a context/token limit, then the main model.
+ * A packaged static default weak-model map (E-3 residual) supplies a weak model
+ * for known main-model families when `HZ_WEAK_MODEL` is unset; the env var
+ * always overrides it. No network / new dependency.
  */
 
 import { spawnSync } from "node:child_process";
@@ -283,6 +286,68 @@ export function resolveCommitWeakModel(
 ): string | undefined {
   const raw = String(env[COMMIT_WEAK_MODEL_ENV] ?? "").trim();
   return raw !== "" ? raw : undefined;
+}
+
+/* ----------------- aider-style default weak-model map (E-3) ---------------- */
+
+/** One packaged weak-model family rule (aider `model-settings.yml` spirit). */
+export interface WeakModelFamilyRule {
+  /** Lower-cased main-model prefixes; the longest matching alias wins. */
+  readonly aliases: readonly string[];
+  /** Cheap model to draft commit messages with before the main model. */
+  readonly weak: string;
+}
+
+/**
+ * Packaged, offline default weak-model map. Static data only — no network, no
+ * new dependency. Keyed by known model families (aliases), longest prefix wins
+ * so a specific family (e.g. `gpt-4.1`) beats a generic one (`claude-`). A
+ * deliberately small, reviewable set; an unknown family returns undefined and
+ * the main model alone is used. `HZ_WEAK_MODEL` overrides this entire map.
+ */
+export const DEFAULT_WEAK_MODEL_MAP: readonly WeakModelFamilyRule[] = [
+  { aliases: ["claude-3-7-sonnet", "claude-3.7-sonnet", "claude-sonnet-4"], weak: "claude-3-5-haiku" },
+  { aliases: ["claude-3-5-sonnet", "claude-3.5-sonnet"], weak: "claude-3-5-haiku" },
+  { aliases: ["claude-3-opus", "claude-3.opus", "claude-opus-4"], weak: "claude-3-haiku" },
+  { aliases: ["claude-"], weak: "claude-3-haiku" },
+  { aliases: ["gpt-4.1", "gpt-4-1"], weak: "gpt-4.1-mini" },
+  { aliases: ["gpt-4o"], weak: "gpt-4o-mini" },
+  { aliases: ["o1", "o3", "o4"], weak: "gpt-4o-mini" },
+  { aliases: ["gemini-2.5-pro", "gemini-2.0-pro", "gemini-1.5-pro"], weak: "gemini-1.5-flash" },
+  { aliases: ["gemini-"], weak: "gemini-1.5-flash" },
+  { aliases: ["deepseek-reasoner", "deepseek-r1"], weak: "deepseek-chat" },
+  { aliases: ["qwen"], weak: "qwen2.5-7b-instruct" },
+];
+
+/** Suffixes that mark an already-weak model id (never map weak -> weaker). */
+const WEAK_MODEL_SUFFIX_RE = /(mini|haiku|flash|nano)$/;
+
+/** Look up the packaged default weak model for a main model family. */
+export function defaultWeakModelFor(mainModel: string): string | undefined {
+  const id = String(mainModel ?? "").trim().toLowerCase();
+  if (id === "" || WEAK_MODEL_SUFFIX_RE.test(id)) return undefined;
+  let best: { alias: string; weak: string } | undefined;
+  for (const rule of DEFAULT_WEAK_MODEL_MAP) {
+    for (const alias of rule.aliases) {
+      if (id.startsWith(alias) && (best === undefined || alias.length > best.alias.length)) {
+        best = { alias, weak: rule.weak };
+      }
+    }
+  }
+  return best?.weak;
+}
+
+/**
+ * Resolve the weak commit-message model: `HZ_WEAK_MODEL` overrides the
+ * packaged map; with neither set, undefined means "main model only".
+ */
+export function resolveCommitWeakModelFor(
+  mainModel: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string | undefined {
+  const override = resolveCommitWeakModel(env);
+  if (override !== undefined) return override;
+  return defaultWeakModelFor(mainModel);
 }
 
 /**

@@ -807,7 +807,15 @@ export async function runConvoCommand(
         return true;
       }
       case "graph": {
-        renderer.notice(renderWorkspaceLearningGraph(workspace));
+        const mode = arg.trim().toLowerCase();
+        if (mode === "expanded" || mode === "full" || mode === "--expanded") {
+          renderer.notice(renderWorkspaceLearningGraph(workspace, { expanded: true }));
+        } else if (mode === "" || mode === "default" || mode === "--default") {
+          // Default chain view is byte-compatible with the reduced G-7 slice.
+          renderer.notice(renderWorkspaceLearningGraph(workspace));
+        } else {
+          renderer.notice("usage: /graph [expanded]");
+        }
         return true;
       }
       case "copy": {

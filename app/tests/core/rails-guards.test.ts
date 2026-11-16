@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { Provider, ProviderEvent } from "../../src/contracts";
+import type { Provider, ProviderEvent, ProviderRequest } from "../../src/contracts";
 import { KernelClient } from "../../src/core/kernel";
 import { exitCodeFor, runTurn, type LoopDeps } from "../../src/core/loop";
 import { SessionStore } from "../../src/core/session";
@@ -233,6 +233,75 @@ describe("mistake tracker stop (rail 2)", () => {
             (e.message ?? "").includes("Session state was preserved. Send a new prompt to resume from the latest state."),
         ),
       ).toBe(true);
+    } finally {
+      await kernel.close();
+      store.close();
+    }
+  });
+});
+
+describe("C-10 additional failure-class guard prompts (ruling 491)", () => {
+  test("repeated tool errors select the repeated_tool_error system-interrupt class", async () => {
+    const prevStationarity = process.env.HZ_ACTION_STATIONARITY;
+    process.env.HZ_ACTION_STATIONARITY = "0";
+    const events: Array<{ type: string; message?: string }> = [];
+    const systems: string[] = [];
+    let calls = 0;
+    const provider: Provider = {
+      name: "scripted",
+      async *stream(req: ProviderRequest) {
+        systems.push(req.system);
+        calls += 1;
+        if (calls === 1) {
+          yield toolCall("read", { path: "missing-1.txt" }, "c1");
+          yield { type: "done", stopReason: "tool_use" };
+        } else if (calls === 2) {
+          yield toolCall("read", { path: "missing-2.txt" }, "c2");
+          yield { type: "done", stopReason: "tool_use" };
+        } else {
+          yield { type: "text", text: "stopping" };
+          yield { type: "done", stopReason: "end" };
+        }
+      },
+    };
+    const { deps, kernel, store } = depsFor(provider, events, { budget: { maxSteps: 20 } });
+    try {
+      const result = await runTurn(deps, "two failing tool batches");
+      expect(result.exit.terminal).toBe("succeeded");
+      expect(systems.length).toBeGreaterThanOrEqual(3);
+      const rail = systems[2]!;
+      expect(rail).toContain('reason="repeated_tool_error"');
+      expect(rail).toContain("<system-interrupt");
+      expect(rail).toContain("</system-interrupt>");
+    } finally {
+      if (prevStationarity === undefined) delete process.env.HZ_ACTION_STATIONARITY;
+      else process.env.HZ_ACTION_STATIONARITY = prevStationarity;
+      await kernel.close();
+      store.close();
+    }
+  });
+
+  test("a near-exhausted budget selects the budget_exhaustion system-interrupt class", async () => {
+    const events: Array<{ type: string; message?: string }> = [];
+    const systems: string[] = [];
+    const provider: Provider = {
+      name: "scripted",
+      async *stream(req: ProviderRequest) {
+        systems.push(req.system);
+        yield { type: "text", text: "done" };
+        yield { type: "done", stopReason: "end" };
+      },
+    };
+    const { deps, kernel, store } = depsFor(provider, events, { budget: { maxSteps: 3 } });
+    try {
+      const result = await runTurn(deps, "budget nudge");
+      expect(result.exit.terminal).toBe("succeeded");
+      expect(systems.length).toBeGreaterThanOrEqual(1);
+      expect(systems[0]!).toContain('reason="budget_exhaustion"');
+      expect(systems[0]!).toContain("<system-interrupt");
+      expect(events.some((e) => e.type === "notice" && (e.message ?? "").includes("budget nearly exhausted"))).toBe(
+        true,
+      );
     } finally {
       await kernel.close();
       store.close();

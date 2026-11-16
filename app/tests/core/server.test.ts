@@ -13,11 +13,18 @@
 
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import type { ChatMsg, ServerNotification, ServerResponse } from "../../src/contracts";
+import type { ChatMsg, RuntimeEvent, ServerNotification, ServerResponse } from "../../src/contracts";
 import { HZ_PROTO, SERVER_METHODS, SESSION_EVENT_METHOD } from "../../src/contracts";
 import { MOCK_INTERJECT_SERVER_TEST } from "../../src/core/providers/mock";
 import { AdmissionQueue } from "../../src/core/admission";
-import { createServer } from "../../src/core/server";
+import {
+  APPROVAL_NOTICE_PREFIX,
+  CLARIFY_NOTICE_PREFIX,
+  SERVER_FRAME_KINDS,
+  SESSION_FRAME_METHOD,
+  createServer,
+  mapRuntimeEventToFrames,
+} from "../../src/core/server";
 import { SessionStore } from "../../src/core/session";
 import { cleanupTemps, tempDir } from "./helpers";
 
@@ -114,6 +121,15 @@ function sessionEvents(out: ReturnType<typeof makeOutput>, sessionId: string): s
     .map((n) => n.params as { sessionId: string; event: { type: string } })
     .filter((p) => p.sessionId === sessionId)
     .map((p) => p.event.type);
+}
+
+/** The additive hermes-style frame kinds streamed for a session. */
+function frameKinds(out: ReturnType<typeof makeOutput>, sessionId: string): string[] {
+  return out.notifications
+    .filter((n) => n.method === SESSION_FRAME_METHOD)
+    .map((n) => n.params as { sessionId: string; kind: string })
+    .filter((p) => p.sessionId === sessionId)
+    .map((p) => p.kind);
 }
 
 /** Read the transcript back through a fresh read-only connection. */
@@ -516,6 +532,82 @@ describe("single-attach server (FEAT-002)", () => {
     const err = (resp as { error: { code?: number; message: string } }).error;
     expect(err.code).toBe(-32601);
     expect(err.message).toContain("does.not.exist");
+
+    input.end();
+    await run;
+    await server.stop();
+  });
+});
+
+describe("D-6 canonical turn frames (ruling 492)", () => {
+  test("maps RuntimeEvents to all six frame kinds in turn order", () => {
+    const events: RuntimeEvent[] = [
+      { type: "assistant.delta", text: "hello" },
+      { type: "tool.card", callId: "c1", name: "read", args: { path: "x" }, status: "running" },
+      { type: "notice", message: `${APPROVAL_NOTICE_PREFIX} allow read?` },
+      { type: "notice", message: `${CLARIFY_NOTICE_PREFIX} which file?` },
+      { type: "tool.card", callId: "c1", name: "read", args: { path: "x" }, status: "ok" },
+      { type: "turn.done" },
+    ];
+    const frames = events.flatMap((ev) => mapRuntimeEventToFrames(ev, "sess"));
+    expect(frames.map((f) => f.kind)).toEqual([...SERVER_FRAME_KINDS]);
+    expect(new Set(frames.map((f) => f.kind)).size).toBe(6);
+    expect(frames[0]).toMatchObject({ kind: "delta", text: "hello", source: "assistant.delta" });
+    expect(frames[1]).toMatchObject({ kind: "tool.start", callId: "c1", name: "read" });
+    expect(frames[2]).toMatchObject({ kind: "approval", message: "allow read?" });
+    expect(frames[3]).toMatchObject({ kind: "clarify", message: "which file?" });
+    expect(frames[4]).toMatchObject({ kind: "result", status: "ok", callId: "c1" });
+    expect(frames[5]).toMatchObject({ kind: "finished" });
+    expect(frames.every((f) => f.sessionId === "sess")).toBe(true);
+  });
+
+  test("assistant.done/error/thinking project to result/delta; other events emit nothing", () => {
+    expect(mapRuntimeEventToFrames({ type: "assistant.thinking", text: "hmm" }, "s")[0]).toMatchObject({
+      kind: "delta",
+    });
+    expect(mapRuntimeEventToFrames({ type: "assistant.done", text: "final" }, "s")[0]).toMatchObject({
+      kind: "result",
+      text: "final",
+    });
+    expect(mapRuntimeEventToFrames({ type: "error", message: "boom" }, "s")[0]).toMatchObject({
+      kind: "result",
+      status: "error",
+    });
+    expect(mapRuntimeEventToFrames({ type: "notice", message: "just a status note" }, "s")).toEqual([]);
+    expect(mapRuntimeEventToFrames({ type: "turn.diff", turn: 1, files: 1, diff: "" }, "s")).toEqual([]);
+    expect(
+      mapRuntimeEventToFrames(
+        { type: "subagent.start", agentId: "a", name: "agent", depth: 1, task: "t" },
+        "s",
+      ),
+    ).toEqual([]);
+  });
+
+  test("server emits session.frame ADDITIVELY alongside an unchanged session.event stream", async () => {
+    const workspace = tempDir("hz-server-frames-");
+    const input = makeInput();
+    const out = makeOutput();
+    const server = createServer({ workspace, input: input.iterable, output: out.sink, mock: true });
+    const run = server.start();
+
+    input.push(JSON.stringify({ id: 1, method: "session.create" }));
+    const sessionId = resultOf(await out.waitFor(1)).sessionId as string;
+    input.push(JSON.stringify({ id: 2, method: "session.prompt", params: { sessionId, text: "hello frames" } }));
+    await out.waitFor(2);
+
+    // Revert check for existing clients: the original event stream is intact.
+    const types = sessionEvents(out, sessionId);
+    expect(types).toContain("assistant.done");
+    expect(types).toContain("turn.done");
+    // The additive frame stream carries result + finished in turn order.
+    const kinds = frameKinds(out, sessionId);
+    expect(kinds).toContain("result");
+    expect(kinds).toContain("finished");
+    expect(kinds.indexOf("result")).toBeLessThan(kinds.indexOf("finished"));
+    // Every frame rides the separate method, tagged with the owning session.
+    for (const n of out.notifications.filter((n) => n.method === SESSION_FRAME_METHOD)) {
+      expect((n.params as { sessionId: string }).sessionId).toBe(sessionId);
+    }
 
     input.end();
     await run;

@@ -48,6 +48,7 @@ import {
   type ProviderTimeoutOptions,
 } from "./timeout";
 import { toolArgsObject } from "./tool-args-object";
+import { toolResultContent } from "./tool-result-content";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
 export const DEFAULT_GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com";
@@ -117,7 +118,7 @@ export function toGoogleContents(messages: ChatMsg[]): GoogleContent[] {
       (msg.toolCallId ? callNames.get(msg.toolCallId) : undefined);
     if (!name) continue; // without a name the response cannot be addressed
     push("user", [
-      { functionResponse: { name, response: { result: msg.content && msg.content !== "" ? msg.content : "(no output)" } } },
+      { functionResponse: { name, response: { result: toolResultContent(msg.content) } } },
     ]);
   }
   return out;

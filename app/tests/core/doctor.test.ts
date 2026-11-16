@@ -21,6 +21,7 @@ import {
   type SpawnResult,
 } from "../../src/core/doctor";
 import { repoRoot } from "./helpers";
+import { CONFIG_ERROR_DOC } from "../../src/core/config";
 import { COMMITTED_CATALOG_SNAPSHOT } from "../../src/core/catalog/catalog";
 import { kernelStateDir } from "../../src/core/paths";
 import { writeOAuthToken } from "../../src/core/auth/store";
@@ -517,6 +518,55 @@ describe("config file", () => {
   test("a private file with a key raises no permission warning", () => {
     writeConfig('{"provider":"anthropic","apiKey":"sk-x"}', 0o600);
     expect(runDoctor(fakeEnv({ env: { LANG: "C.UTF-8" } })).some((c) => c.id === "config.perms")).toBe(false);
+  });
+});
+
+describe("I-7 self-documenting config errors", () => {
+  test("a malformed config file hint carries fix, doc link, escape hatch and keeps NOT applied", () => {
+    writeConfig("{ not json");
+    const c = byId(runDoctor(fakeEnv()), "config.file");
+    expect(c.status).toBe("fail");
+    expect(c.hint).toContain("fix: ");
+    expect(c.hint).toContain(CONFIG_ERROR_DOC);
+    expect(c.hint).toContain("escape hatch: ");
+    expect(c.hint).toContain("NOT applied");
+  });
+
+  test("a non-object config file hint is self-documenting too", () => {
+    writeConfig("[1,2]");
+    const c = byId(runDoctor(fakeEnv()), "config.file");
+    expect(c.hint).toContain("fix: ");
+    expect(c.hint).toContain(CONFIG_ERROR_DOC);
+    expect(c.hint).toContain("escape hatch: ");
+  });
+
+  test("rejected permissionMode carries fix, doc link and escape hatch", () => {
+    writeConfig('{"provider":"mock","permissionMode":"yolo"}');
+    const c = byId(runDoctor(fakeEnv()), "config.permission_mode");
+    expect(c.status).toBe("warn");
+    expect(c.hint).toContain("fix: ");
+    expect(c.hint).toContain(CONFIG_ERROR_DOC);
+    expect(c.hint).toContain("escape hatch: ");
+    expect(c.hint).toContain("permissionMode");
+  });
+
+  test("other rejected config keys get the same uniform diagnostic", () => {
+    writeConfig('{"provider":"mock","autonomy":"warp-speed"}');
+    const checks = runDoctor(fakeEnv());
+    const a = byId(checks, "config.autonomy");
+    expect(a.status).toBe("warn");
+    expect(a.hint).toContain("fix: ");
+    expect(a.hint).toContain(CONFIG_ERROR_DOC);
+    expect(a.hint).toContain("escape hatch: ");
+  });
+
+  test("an unknown model hint is self-documenting", () => {
+    const env = { HZ_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k", LANG: "C.UTF-8", HZ_MODEL: "claude-not-a-model-9" };
+    const c = byId(runDoctor(fakeEnv({ env })), "model");
+    expect(c.status).toBe("warn");
+    expect(c.hint).toContain("fix: ");
+    expect(c.hint).toContain(CONFIG_ERROR_DOC);
+    expect(c.hint).toContain("escape hatch: ");
   });
 });
 

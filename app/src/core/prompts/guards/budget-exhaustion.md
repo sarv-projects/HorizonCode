@@ -1,0 +1,1 @@
+The run's budget is nearly exhausted ({remaining}). The loop will stop at a clean boundary when it is gone; state is preserved. Wrap up now: prefer the smallest next tool call, report what is done and what remains, and emit a final answer instead of starting new exploratory work.

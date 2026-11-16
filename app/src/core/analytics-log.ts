@@ -10,25 +10,79 @@
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { nowIso } from "../contracts";
+import { LOCAL_ANALYTICS_EVENTS, LOCAL_ANALYTICS_FIELDS, type LocalAnalyticsField } from "./event-catalogue";
 import { appendJsonlSync } from "./jsonl-append";
 import { workspaceStateDir } from "./paths";
 
 /** Default filename under `<workspaceStateDir>/`. */
 export const ANALYTICS_LOG_FILE = "analytics.ndjson";
 
-export type AnalyticsEventName = "session.start" | "session.end" | "cli.flag";
+/** I-4: event names come from the local catalogue, not from a free-form string. */
+export type AnalyticsEventName = (typeof LOCAL_ANALYTICS_EVENTS)[number];
 
+/**
+ * One NDJSON row. The base envelope (`v`/`ts`/`event`) is always present; every
+ * other field is OPTIONAL and drawn from the allowlist in
+ * `LOCAL_ANALYTICS_FIELDS`. Nothing here can carry chat text, code, keys or
+ * secret paths — `analyticsRowFields` drops any field outside the allowlist.
+ */
 export interface AnalyticsEventV1 {
   v: 1;
   ts: string;
   event: AnalyticsEventName;
-  /** Session id when known — never transcript content. */
   sessionId?: string;
   provider?: string;
   model?: string;
   kernelMode?: string;
   /** Observability one-shot flag name (e.g. show-repo-map), never argv secrets. */
   flag?: string;
+  /** RC-7 terminal token when the observation has one (never the run's answer). */
+  terminal?: string;
+  /** Stable machine error code when the observation failed (never the message). */
+  errorCode?: string;
+  /** Wall-clock for the observation, milliseconds (finite, non-negative). */
+  durationMs?: number;
+  /** Counts only — never tool names, arguments or file paths. */
+  toolCount?: number;
+  stepCount?: number;
+  batchSize?: number;
+  batchDone?: number;
+  batchFailed?: number;
+  /** Harness micro-USD estimate (integer); never a billing invoice. */
+  costMicroUsd?: number;
+}
+
+/** The catalogue is fixed data; expose a copy for `/settings` and tooling. */
+export function analyticsEventCatalogue(): readonly AnalyticsEventName[] {
+  return [...LOCAL_ANALYTICS_EVENTS];
+}
+
+/** The field allowlist and each field's primitive shape (I-4). */
+export function analyticsFieldCatalogue(): Readonly<typeof LOCAL_ANALYTICS_FIELDS> {
+  return LOCAL_ANALYTICS_FIELDS;
+}
+
+/**
+ * Copy ONLY allowlisted, correctly-shaped fields from a caller's options into
+ * an analytics row. A field outside `LOCAL_ANALYTICS_FIELDS` (e.g. `content`,
+ * `task`, `apiKey`, `path`) is never read — this is the privacy boundary that
+ * keeps the local log free of code, chat text, keys and secret paths. Badly
+ * typed values are dropped too, so a row can never claim a number it does not
+ * have.
+ */
+export function analyticsRowFields(
+  source: Record<string, unknown>,
+): Partial<Pick<AnalyticsEventV1, LocalAnalyticsField>> {
+  const out: Record<string, string | number> = {};
+  for (const [field, shape] of Object.entries(LOCAL_ANALYTICS_FIELDS) as [LocalAnalyticsField, "string" | "number"][]) {
+    const value = source[field];
+    if (shape === "string") {
+      if (typeof value === "string" && value.trim() !== "") out[field] = value;
+    } else if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      out[field] = field === "costMicroUsd" ? Math.round(value) : value;
+    }
+  }
+  return out as Partial<Pick<AnalyticsEventV1, LocalAnalyticsField>>;
 }
 
 export type AnalyticsEnv = Record<string, string | undefined>;
@@ -70,14 +124,9 @@ export function defaultAnalyticsLogPath(workspace: string): string {
   return path.join(workspaceStateDir(workspace), ANALYTICS_LOG_FILE);
 }
 
-export interface AppendAnalyticsOptions {
+export interface AppendAnalyticsOptions extends Partial<Pick<AnalyticsEventV1, LocalAnalyticsField>> {
   workspace: string;
   event: AnalyticsEventName;
-  sessionId?: string;
-  provider?: string;
-  model?: string;
-  kernelMode?: string;
-  flag?: string;
   env?: AnalyticsEnv;
   /** CLI override: true = default path; string = explicit path; omit = env only. */
   cliPath?: string | boolean;
@@ -98,12 +147,8 @@ export function appendAnalyticsEvent(opts: AppendAnalyticsOptions): string | und
     v: 1,
     ts: (opts.now ?? nowIso)(),
     event: opts.event,
+    ...analyticsRowFields(opts as unknown as Record<string, unknown>),
   };
-  if (opts.sessionId !== undefined && opts.sessionId !== "") row.sessionId = opts.sessionId;
-  if (opts.provider !== undefined && opts.provider !== "") row.provider = opts.provider;
-  if (opts.model !== undefined && opts.model !== "") row.model = opts.model;
-  if (opts.kernelMode !== undefined && opts.kernelMode !== "") row.kernelMode = opts.kernelMode;
-  if (opts.flag !== undefined && opts.flag !== "") row.flag = opts.flag;
 
   try {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

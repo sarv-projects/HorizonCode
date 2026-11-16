@@ -12,6 +12,8 @@ import {
   commitMessageModels,
   commitPrompt,
   commitPromptFitsWindow,
+  DEFAULT_WEAK_MODEL_MAP,
+  defaultWeakModelFor,
   formatCommitConversationExcerpt,
   formatCommitModelFallbackNotices,
   formatConventionalCommitSubject,
@@ -22,6 +24,7 @@ import {
   normalizeConventionalCommitMessage,
   parseConventionalCommitSubject,
   resolveCommitWeakModel,
+  resolveCommitWeakModelFor,
   shellQuote,
   stagedDiff,
   withReceiptTrailer,
@@ -263,4 +266,67 @@ test("generateCommitMessageWithModelFallback errors when every model fails", asy
   expect("error" in err).toBe(true);
   expect("failedTokenLimit" in err && err.failedTokenLimit).toEqual(["weak", "main"]);
   expect("tried" in err && err.tried).toEqual(["weak", "main"]);
+});
+
+test("E-3 packaged default weak-model map selects by family (longest alias wins)", () => {
+  expect(DEFAULT_WEAK_MODEL_MAP.length).toBeGreaterThan(0);
+  expect(defaultWeakModelFor("gpt-4o")).toBe("gpt-4o-mini");
+  expect(defaultWeakModelFor("GPT-4O-2024-08-06")).toBe("gpt-4o-mini"); // case-insensitive
+  expect(defaultWeakModelFor("gpt-4.1-preview")).toBe("gpt-4.1-mini"); // specific family
+  expect(defaultWeakModelFor("claude-3-5-sonnet-20241022")).toBe("claude-3-5-haiku");
+  expect(defaultWeakModelFor("claude-3-7-sonnet")).toBe("claude-3-5-haiku");
+  expect(defaultWeakModelFor("claude-3-opus-latest")).toBe("claude-3-haiku");
+  expect(defaultWeakModelFor("gemini-2.5-pro")).toBe("gemini-1.5-flash");
+  expect(defaultWeakModelFor("totally-unknown-model")).toBeUndefined();
+  expect(defaultWeakModelFor("")).toBeUndefined();
+  // Never map an already-weak model to another weak model.
+  expect(defaultWeakModelFor("gpt-4o-mini")).toBeUndefined();
+});
+
+test("E-3 HZ_WEAK_MODEL overrides the packaged map", () => {
+  expect(resolveCommitWeakModelFor("gpt-4o", {})).toBe("gpt-4o-mini");
+  expect(resolveCommitWeakModelFor("gpt-4o", { HZ_WEAK_MODEL: "custom-mini" })).toBe("custom-mini");
+  expect(resolveCommitWeakModelFor("unknown-model", { HZ_WEAK_MODEL: "custom-mini" })).toBe("custom-mini");
+  expect(resolveCommitWeakModelFor("unknown-model", {})).toBeUndefined();
+  expect(resolveCommitWeakModelFor("gpt-4o", { HZ_WEAK_MODEL: "   " })).toBe("gpt-4o-mini");
+});
+
+test("E-3 mapped weak model is weak-first and falls back on token-limit failure", async () => {
+  const main = "gpt-4o";
+  const weak = resolveCommitWeakModelFor(main, {});
+  const models = commitMessageModels(main, weak);
+  expect(models).toEqual(["gpt-4o-mini", "gpt-4o"]);
+
+  const calls: string[] = [];
+  const ok = await generateCommitMessageWithModelFallback({
+    models,
+    prompt: "draft me",
+    attempt: async (model) => {
+      calls.push(model);
+      if (model === weak) {
+        return { text: "", failureCode: "CONTEXT_WINDOW_EXCEEDED", errorText: "context window exceeded" };
+      }
+      return { text: "feat: shipped via main" };
+    },
+  });
+  expect(calls).toEqual(["gpt-4o-mini", "gpt-4o"]);
+  expect("message" in ok && ok.model).toBe("gpt-4o");
+  expect("failedTokenLimit" in ok && ok.failedTokenLimit).toEqual(["gpt-4o-mini"]);
+});
+
+test("E-3 mapped weak model stops on a successful weak draft", async () => {
+  const main = "claude-3-5-sonnet-20241022";
+  const models = commitMessageModels(main, defaultWeakModelFor(main));
+  expect(models).toEqual(["claude-3-5-haiku", "claude-3-5-sonnet-20241022"]);
+  const calls: string[] = [];
+  const ok = await generateCommitMessageWithModelFallback({
+    models,
+    prompt: "p",
+    attempt: async (model) => {
+      calls.push(model);
+      return { text: "fix: drafted by weak" };
+    },
+  });
+  expect(calls).toEqual(["claude-3-5-haiku"]);
+  expect("model" in ok && ok.model).toBe("claude-3-5-haiku");
 });

@@ -49,18 +49,34 @@
  * this module adds no serializer of its own and there is no import cycle
  * (curator -> review -> canon).
  *
- * Curator archive-as-maximum is NOT in this slice: docs/30 §2 G-4 (archive
- * never delete, pre-run snapshots, pins) needs the library this store is the
- * seed of. The v1 curator is append-only by construction — it has no delete,
- * prune, snapshot or pin operation at all — so it cannot lose a stored proposal,
- * and acceptance item #67's "the curator archives (never deletes)" is met only
- * in that weaker, stated sense (a residual, recorded).
+ * Curator archive-as-maximum (docs/30 §2 G-4): the stronger form lives in
+ * `core/curator-archive.ts` — an append-only, immutable archive with a pre-run
+ * content+time snapshot and named pins, and NO delete or prune operation.
+ * `archiveProposalBatch` here is the thin, pure helper that snapshots a batch
+ * and archives it; neither the store nor the archive ever writes a skill,
+ * memory, prompt or session (ADR-010).
+ *
+ * Untrusted-source hygiene (docs/30 §2 G-6, Trojan-Source): text entering the
+ * editorial standard is stripped of invisible/bidi controls by
+ * `core/distill-sanitize.ts` BEFORE the widening/do-not-capture scans. Without
+ * that, a zero-width character inside a token (`a\u200Bllow`) hides it from the
+ * word scan and a bidi override makes the reviewed text read differently from
+ * its bytes. The sanitizer removes only format controls — never whitespace.
  */
 
 import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { appendJsonlSync } from "./jsonl-append";
 import * as path from "node:path";
 import { canonicalJson, digestOf } from "./canon";
+import { sanitizeForDistill } from "./distill-sanitize";
+import {
+  appendProposals,
+  emptyArchive,
+  pin as pinArchivedProposal,
+  resolvePin as resolveArchivedProposalPin,
+  snapshotForProposals,
+  type CuratorArchive,
+} from "./curator-archive";
 import { notifyLearnProposalCreated } from "./learn-events";
 import {
   BODY_MAX_CHARS,
@@ -248,13 +264,16 @@ export function validateProposal(proposal: unknown, transcript: ProposalEvidence
   }
   const kind = candidate.kind as ProposalKind;
 
-  const title = typeof candidate.title === "string" ? candidate.title : "";
+  // G-6: sanitize before the length/budget checks AND before the word scans —
+  // a zero-width character must not pad a title past its budget or split a
+  // widening token into pieces the scan cannot see.
+  const title = sanitizeForDistill(candidate.title);
   if (title.trim() === "") return refuse("empty-title", "title must be a non-empty string");
   if (title.length > TITLE_MAX_CHARS) {
     return refuse("title-too-long", `title is ${title.length} chars; the budget is ${TITLE_MAX_CHARS}`);
   }
 
-  const body = typeof candidate.body === "string" ? candidate.body : "";
+  const body = sanitizeForDistill(candidate.body);
   if (body.trim() === "") return refuse("empty-body", "body must be a non-empty string");
   if (body.length > BODY_MAX_CHARS) {
     return refuse("body-too-long", `body is ${body.length} chars; the budget is ${BODY_MAX_CHARS}`);
@@ -284,18 +303,25 @@ export function validateProposal(proposal: unknown, transcript: ProposalEvidence
     return refuse("missing-evidence", "evidence must name at least one transcript event id or workspace-relative path");
   }
   const transcriptIds = new Set(transcript.transcriptIds ?? []);
+  const cleanEvidence: string[] = [];
   for (const entry of evidence) {
     if (typeof entry !== "string" || entry.trim() === "") {
       return refuse("missing-evidence", `every evidence entry must be a non-empty string (got ${JSON.stringify(entry)})`);
     }
-    if (transcriptIds.has(entry) || isWorkspacePathShape(entry)) continue;
+    const clean = sanitizeForDistill(entry);
+    if (transcriptIds.has(clean) || isWorkspacePathShape(clean)) {
+      cleanEvidence.push(clean);
+      continue;
+    }
     return refuse("missing-evidence", `evidence ${JSON.stringify(entry)} references neither the transcript nor the workspace`);
   }
 
   // Read-before-write. The exemption for `prompt` proposals is exactly the rule
   // the catalog states ("a skill/memory proposal that claims a path it did not
   // list in reads"); the check itself still runs for their evidence.
-  const reads = Array.isArray(candidate.reads) ? (candidate.reads as unknown[]).filter((r): r is string => typeof r === "string") : [];
+  const reads = (
+    Array.isArray(candidate.reads) ? (candidate.reads as unknown[]).filter((r): r is string => typeof r === "string") : []
+  ).map((read) => sanitizeForDistill(read));
   if (kind !== "prompt") {
     const cited = [...claimedPathsIn(title), ...claimedPathsIn(body)];
     for (const citedPath of cited) {
@@ -309,8 +335,8 @@ export function validateProposal(proposal: unknown, transcript: ProposalEvidence
     kind,
     title,
     body,
-    evidence: evidence as string[],
-    reads: reads as string[],
+    evidence: cleanEvidence,
+    reads,
   };
   return { ok: true, proposal: normalized, digest: proposalDigest(normalized) };
 }
@@ -591,3 +617,32 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
   }
   return result;
 }
+
+/* --------------------------- archive-as-maximum --------------------------- */
+
+/**
+ * G-4 wiring: snapshot a batch BEFORE curation and archive it in the pure,
+ * append-only archive. No filesystem writes, nothing applied — the archive is
+ * the maximum set of everything ever proposed. Shape-valid candidates are
+ * archived (the editorial standard still runs separately in `curate`).
+ */
+export function archiveProposalBatch(proposals: readonly unknown[], now?: () => string): CuratorArchive {
+  const snapshot = snapshotForProposals(proposals, now);
+  const inputs = (Array.isArray(proposals) ? proposals : []).flatMap((candidate) => {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const partial = candidate as Partial<ReviewProposalV1>;
+    if (typeof partial.kind !== "string" || typeof partial.title !== "string" || typeof partial.body !== "string") return [];
+    return [
+      {
+        digest: proposalDigest(partial as Pick<ReviewProposalV1, "kind" | "title" | "body">),
+        kind: partial.kind,
+        title: partial.title,
+      },
+    ];
+  });
+  return appendProposals(emptyArchive(), inputs, snapshot);
+}
+
+// Re-export the pin/resolve surface so callers have one curator entry point.
+export { pinArchivedProposal, resolveArchivedProposalPin };
+export type { CuratorArchive };

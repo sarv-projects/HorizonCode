@@ -116,7 +116,7 @@ import {
   isContextWindowExceededCode,
 } from "./compaction-context-window";
 import { appendCompactionRecord, type CompactionTrigger } from "./compaction-journal";
-import { ProviderHistorySync } from "./sync-messages";
+import { freezeStablePrefix, ProviderHistorySync, resolveHistorySyncGate } from "./sync-messages";
 import { sessionKernelReconcileNotice } from "./session-kernel-reconcile";
 // The project-memory hierarchy (docs/10 R121-R123): discovery, caps, skip
 // refusal and rendering live in instructions.ts; the loop only carries it.
@@ -167,10 +167,12 @@ import { buildRunCompletePayload, RUN_COMPLETE_EVENT } from "./receipt-run-termi
 // never the reverse.
 import {
   actionStationarityInterruptNudge,
+  budgetExhaustionInterruptNudge,
   consecutiveMistakesInterruptNudge,
   contextOverflowInterruptNudge,
   formatErrorsInterruptNudge,
   loopDetectionInterruptNudge,
+  repeatedToolErrorInterruptNudge,
   thinkingLoopInterruptNudge,
 } from "./guards/guard-prompt";
 import { ActionStationarityTracker, LoopDetectionTracker, stepSignature } from "./guards/loop-detection";
@@ -217,6 +219,7 @@ import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from ".
 import type { SessionStore } from "./session";
 import { drainFormatted, formatInterjection, type InterjectionBuffer } from "./interjection";
 import { interjectionLiveSteeringQueue, LiveSteeringChannel } from "./live-steering";
+import { backgroundSteerNotice } from "./shell-auto-background";
 import { recordHookAuditLine } from "./hook-handoff-capture";
 
 // The symlink-aware resolution moved to paths.ts (the single state-path
@@ -1594,12 +1597,16 @@ export function drainInterjectionsAtSafePoint(deps: LoopDeps, faults: RunFaults)
     }
   }
   if (delivered) {
+    // C-7 / 490: a steer racing an auto-backgrounded command is admitted here,
+    // at the next step boundary, with a notice that says the process is still
+    // running. backgroundSteerNotice never signals/kills the child.
     emit(deps.callbacks, {
       type: "notice",
       message:
-        drained.length === 1
+        backgroundSteerNotice() ??
+        (drained.length === 1
           ? "mid-turn steer: delivered your message at a step boundary"
-          : `mid-turn steer: delivered ${drained.length} messages at a step boundary`,
+          : `mid-turn steer: delivered ${drained.length} messages at a step boundary`),
     });
   }
   return delivered;
@@ -2130,9 +2137,13 @@ async function collectAssistant(
         const modelText = formatInterjection(entry.text);
         deps.store.appendMessage(deps.sessionId, { role: "user", content: modelText });
         emit(deps.callbacks, { type: "interjection.admitted", text: entry.text });
+        // C-7 / 490: if a command was auto-backgrounded, say so and confirm it
+        // is left running; the live steer never signals the background child.
         emit(deps.callbacks, {
           type: "notice",
-          message: "mid-turn steer: delivered your message into the in-flight response (live)",
+          message:
+            backgroundSteerNotice() ??
+            "mid-turn steer: delivered your message into the in-flight response (live)",
         });
       } catch (err) {
         faults.noteTranscript("interjection", err);
@@ -3363,6 +3374,13 @@ export async function runTurn(
     // so the format-error corrective reset cannot clear it. It rides the next
     // step's system rail alongside `corrective`.
     let loopNudge: string | undefined;
+    // C-10 / 491: consecutive failing tool batches (repeated-tool-error rail)
+    // and a one-shot near-budget nudge. Both ride the system rail like loopNudge.
+    let consecutiveToolErrorBatches = 0;
+    let budgetNudgeSent = false;
+    const appendLoopNudge = (note: string): void => {
+      loopNudge = loopNudge !== undefined && loopNudge !== "" ? `${loopNudge}\n${note}` : note;
+    };
     // T-3: the end-of-turn pending-todos reminder fires at most once per run.
     let todoReminderSent = false;
     // Ruling 74: the reminder fires only if this run modified the todo list.
@@ -3374,12 +3392,24 @@ export async function runTurn(
     let contextWindowRecoveryUsed = false;
     let pendingCompactionTrigger: CompactionTrigger | undefined;
     const compactionHold = compactionHoldEnabled() ? new CompactionHoldBuffer() : undefined;
-    // B-5 / ruling 482: provider-facing history sync cursor (omp syncMessages).
-    // After compactHistory (and after steer appends land in the store), keep the
-    // longest byte-stable prefix of the prior dispatch instead of handing the
-    // provider a fully fresh array. Frozen StablePrefix / per-provider `auto`
-    // remain OPEN.
-    const historySync = new ProviderHistorySync();
+    // B-5 / rulings 482, 489: provider-facing history sync cursor (omp
+    // syncMessages) with a frozen system+tools StablePrefix and a per-provider
+    // gate resolved from LOCAL data only (no live calls). After compactHistory
+    // (and after steer appends land in the store), keep the longest byte-stable
+    // prefix of the prior dispatch instead of handing the provider a fully
+    // fresh array. A change in the frozen prefix rebuilds the log.
+    const syncGate = resolveHistorySyncGate(deps.provider.name);
+    const prefixParts = (): { system: string; tools: readonly unknown[] } => ({
+      system: deps.systemOverride ?? "",
+      tools: toolSpecs(deps.sessionId).map((spec) => spec.name),
+    });
+    const initialParts = prefixParts();
+    const historySync = new ProviderHistorySync({
+      gate: syncGate,
+      stablePrefix: freezeStablePrefix(initialParts.system, initialParts.tools),
+      currentPrefix: prefixParts,
+    });
+    let prefixInvalidationReported = false;
     // NF-074(a): the newest provider usage anchor and the locally counted tail.
     let anchorBase: number | undefined;
     let appendedTokens = 0;
@@ -3428,6 +3458,21 @@ export async function runTurn(
       // Charged before the call: a billed-but-failed turn still spends its step.
       await ledger.chargeStep();
 
+      // C-10 / 491: budget-exhaustion class — one soft nudge when the ledger
+      // reports the run nearly out (≤2 steps or ≤30s wall), before the hard
+      // `budget_exhausted` stop at the next sentinel. No extra deps, no live call.
+      if (!budgetNudgeSent) {
+        const countdown = ledger.countdown();
+        const lowSteps = countdown.steps !== undefined && countdown.steps > 0 && countdown.steps <= 2;
+        const lowWall = countdown.wallMs !== undefined && countdown.wallMs > 0 && countdown.wallMs <= 30_000;
+        if (lowSteps || lowWall) {
+          budgetNudgeSent = true;
+          const remaining = budgetCountdownLine(countdown).replace(/^Budget remaining: /, "");
+          appendLoopNudge(budgetExhaustionInterruptNudge(remaining));
+          emit(deps.callbacks, { type: "notice", message: "budget nearly exhausted: nudging the model to wrap up" });
+        }
+      }
+
       if (drainInterjectionsAtSafePoint(deps, faults)) continue;
 
       // The window is compacted, not sliced: the turn that stated the task, the
@@ -3446,6 +3491,15 @@ export async function runTurn(
       // the previous dispatch (compact / emergency shrink / steer append).
       const synced = historySync.sync(view.history);
       const history = synced.messages;
+      // B-5 / 489: a drifted frozen prefix (system/tools changed, e.g. a tool
+      // was discovered mid-run) rebuilt the append-only log. Report it once.
+      if (!prefixInvalidationReported && historySync.prefixInvalidations() > 0) {
+        prefixInvalidationReported = true;
+        emit(deps.callbacks, {
+          type: "notice",
+          message: "provider prefix fingerprint changed (system/tools); rebuilt append-only history log",
+        });
+      }
       if (view.compacted && !compactionAnnounced) {
         // The elision is reported, never silent: a notice for the human of this
         // run, and an audit-trail event with the counts for the log.
@@ -3951,8 +4005,15 @@ export async function runTurn(
         if (mistakes.remaining === 1) {
           corrective = consecutiveMistakesInterruptNudge(mistakes.value, mistakes.value + 1);
         }
+        // C-10 / 491: repeated-tool-error class — a distinct failure-handling
+        // nudge when tool failures recur, before the mistake cap hard-stops.
+        consecutiveToolErrorBatches += 1;
+        if (consecutiveToolErrorBatches >= 2) {
+          appendLoopNudge(repeatedToolErrorInterruptNudge(consecutiveToolErrorBatches, 3));
+        }
       } else if (batchHadToolSuccess) {
         mistakes.reset();
+        consecutiveToolErrorBatches = 0;
       }
 
       // NF-073(c): a batch in which no call carried parseable JSON is a

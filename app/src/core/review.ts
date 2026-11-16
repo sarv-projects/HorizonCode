@@ -59,6 +59,7 @@
 import * as path from "node:path";
 import type { ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../contracts";
 import { sha256Hex } from "./canon";
+import { sanitizeForDistill } from "./distill-sanitize";
 import type { CurateRefusal } from "./curator";
 import { estimateStepCostUsd, enrichUsageCost } from "./usage-cost";
 
@@ -220,12 +221,16 @@ function freezeTranscript(transcript: unknown): ReviewTranscriptEvent[] {
   const list = Array.isArray(transcript) ? transcript : [];
   return list.map((event, index) => {
     const record = event as Partial<ReviewTranscriptEvent> | null;
-    if (record === null || typeof record !== "object" || typeof record.id !== "string" || record.id === "") {
+    // G-6: strip invisible/bidi controls BEFORE freezing the transcript into
+    // the fork spec. A summary is prompt context only (never authority), but a
+    // bidi override in it would still change what a human reviewer sees.
+    const id = sanitizeForDistill(record !== null && typeof record === "object" ? record.id : undefined);
+    if (id === "") {
       throw new ReviewForkError("invalid-scope", `transcript[${index}].id must be a non-empty string`);
     }
-    const copy: ReviewTranscriptEvent = { id: record.id };
-    if (typeof record.type === "string") copy.type = record.type;
-    if (typeof record.summary === "string") copy.summary = record.summary;
+    const copy: ReviewTranscriptEvent = { id };
+    if (typeof record?.type === "string") copy.type = sanitizeForDistill(record.type);
+    if (typeof record?.summary === "string") copy.summary = sanitizeForDistill(record.summary);
     return copy;
   });
 }
@@ -353,11 +358,13 @@ export function reviewRequestTail(spec: ReviewForkSpec): string {
     throw new ReviewForkError("invalid-scope", "reviewRequestTail requires a fork spec with a transcript");
   }
   const shown = spec.transcript.slice(0, MAX_TRANSCRIPT_CONTEXT_EVENTS).map((event) => {
-    const type = typeof event.type === "string" && event.type !== "" ? ` (${event.type})` : "";
-    const summary = typeof event.summary === "string" && event.summary !== ""
-      ? `: ${event.summary.slice(0, MAX_SUMMARY_CHARS)}`
-      : "";
-    return `- ${event.id}${type}${summary}`;
+    // Defense in depth: a hand-built spec might bypass freezeTranscript.
+    const id = sanitizeForDistill(event.id);
+    const rawType = sanitizeForDistill(event.type);
+    const rawSummary = sanitizeForDistill(event.summary);
+    const type = rawType !== "" ? ` (${rawType})` : "";
+    const summary = rawSummary !== "" ? `: ${rawSummary.slice(0, MAX_SUMMARY_CHARS)}` : "";
+    return `- ${id}${type}${summary}`;
   });
   const omitted =
     spec.transcript.length > MAX_TRANSCRIPT_CONTEXT_EVENTS
@@ -501,7 +508,10 @@ export function verifyReviewForkSpec(spec: ReviewForkSpec): void {
 
 /** Parse the model's JSON array. Empty text is a valid "nothing learned" `[]`. */
 export function parseReviewProposals(text: string): unknown[] | undefined {
-  const raw = typeof text === "string" ? text.trim() : "";
+  // G-6: strip bidi/zero-width controls from model output before parsing, so a
+  // hidden character cannot split a key or smuggle an instruction past the
+  // curator's scans (the curator sanitizes again — no single point of failure).
+  const raw = sanitizeForDistill(text).trim();
   if (raw === "") return [];
   let body = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   const start = body.indexOf("[");

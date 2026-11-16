@@ -5,6 +5,7 @@ import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { anchorAt } from "./hashline";
 import { noteRead } from "./read-ledger";
+import { renderStructuralSummary, structuralSummary } from "./read-summary";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 200 * 1024;
@@ -75,6 +76,10 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
       if (isBinary(buf)) return fail(`binary file (contains a NUL byte): ${rel}`);
 
       const text = buf.toString("utf8");
+      // B-7: compute the structural summary from the FULL text, before any
+      // line/byte truncation below (and before the loop's output cap/spill).
+      // Unknown file types return undefined and leave the output unchanged.
+      const summary = structuralSummary(text, rel);
       if (text === "") {
         noteRead(ctx, resolved); // an empty file is a fact worth remembering too
         return { ok: true, output: `(empty file) ${rel}` };
@@ -138,6 +143,14 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
       } else if (shown < all.length) {
         body += `\n[truncated: lines ${start + 1}-${shown} of ${all.length}; use offset/limit to continue]`;
       }
+      // Show the summary beside the truncation marker so a truncated read still
+      // carries the file's shape (imports/declarations/headings/top-level keys).
+      // `summary: true` forces it; `summary: false` suppresses it. On a full,
+      // unwindowed read the output stays byte-identical to before.
+      const wasTruncated = cutMid || byteLimited || shown < all.length || start > 0;
+      if (summary !== undefined && (args.summary === true || (args.summary !== false && wasTruncated))) {
+        body += `\n${renderStructuralSummary(summary)}`;
+      }
       // Only the read tool writes the ledger: whatever the model does next with
       // this file (`write` over it, `edit` with a fuzzy rung), it has now seen it.
       noteRead(ctx, resolved);
@@ -168,6 +181,11 @@ export const readTool: Tool = {
       anchors: {
         type: "boolean",
         description: "Prefix each line with a LINE:abc:def anchor usable by edit start_anchor/end_anchor (default false).",
+      },
+      summary: {
+        type: "boolean",
+        description:
+          "Structural summary (imports/declarations/headings/top-level keys) for ts/js/py/md/json: shown on truncated reads by default; true forces, false suppresses.",
       },
     },
     // Either `path` or `paths` (batch); execute fails closed if both or neither.

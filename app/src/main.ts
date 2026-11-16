@@ -65,7 +65,12 @@ import {
 } from "./core/analytics-log";
 import { buildShowPromptsRequest, renderShowPrompts } from "./core/show-prompts";
 import { buildShowRepoMap } from "./core/show-repo-map";
-import { appendAttributionToMessage, parseCommitAttributeArgs } from "./core/commit-attribution";
+import {
+  appendAttributionToMessage,
+  resolveCommitAttribution,
+  type AttributionCell,
+  type CommitAttribution,
+} from "./core/commit-attribution";
 import {
   commitCommand,
   commitMessageModels,
@@ -73,7 +78,7 @@ import {
   formatCommitModelFallbackNotices,
   generateCommitMessageWithModelFallback,
   latestCommitConversationExcerpt,
-  resolveCommitWeakModel,
+  resolveCommitWeakModelFor,
   stagedDiff,
   withReceiptTrailer,
 } from "./core/commit";
@@ -1017,13 +1022,21 @@ async function runSuggestCommand(args: string[]): Promise<number> {
 
 /** `hzcode commit [--preview] [--receipt] [--attribute-*] [--workspace <path>] [context...]` (T-16). */
 async function runCommitCommand(rawArgs: string[]): Promise<number> {
-  let attribution;
+  let attribution: CommitAttribution;
   let args: string[];
+  let conflicts: AttributionCell[] = [];
   try {
-    ({ attribution, rest: args } = parseCommitAttributeArgs(rawArgs));
+    const resolved = resolveCommitAttribution(rawArgs);
+    ({ attribution, rest: args, conflicts } = resolved);
   } catch (err) {
     process.stderr.write(`hzcode: commit: ${err instanceof Error ? err.message : String(err)}\n`);
     return 2;
+  }
+  // E-2: surface resolved CLI-over-env conflicts so provenance stays reviewable.
+  for (const cell of conflicts) {
+    process.stderr.write(
+      `hzcode: commit: attribution conflict for ${cell.trailer}: CLI value overrides ${cell.envKey}=${cell.envValue}\n`,
+    );
   }
   let preview = false;
   let receipt = false;
@@ -1079,7 +1092,8 @@ async function runCommitCommand(rawArgs: string[]): Promise<number> {
     installApprovalHandler(ui);
     // E-3 reduced (ruling 480): weak-model-first then main on token/context limit.
     const prompt = commitPrompt(staged.diff, staged.truncated, context.join(" "), conversationExcerpt);
-    const models = commitMessageModels(runtime.model, resolveCommitWeakModel());
+    // E-3: HZ_WEAK_MODEL overrides the packaged default weak-model map.
+    const models = commitMessageModels(runtime.model, resolveCommitWeakModelFor(runtime.model));
     const catalog = loadCatalog();
     const providerName = runtime.providerName;
     const drafted = await generateCommitMessageWithModelFallback({

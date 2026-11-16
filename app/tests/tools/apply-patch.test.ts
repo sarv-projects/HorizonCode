@@ -467,4 +467,66 @@ describe("apply_patch guard & preimage discipline", () => {
       clearLintedPaths();
     }
   });
+
+  test("E-1: opt-in dirty checkpoint commits pre-existing dirt before apply_patch", async () => {
+    const prev = process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = "1";
+    try {
+      const ws = initGitWorkspace();
+      const rel = "c.txt";
+      writeFileSync(path.join(ws, rel), "committed line\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+
+      // Uncommitted dirt that the patch overwrite would otherwise destroy.
+      writeFileSync(path.join(ws, rel), "dirty draft\n");
+      const ctx = await ctxHavingRead(ws, [rel]);
+      const r = await applyPatchTool.execute(
+        { input: wrap(`*** Update File: ${rel}\n@@\n-dirty draft\n+patched line`) },
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      expect(r.output).toContain("checkpoint commit before editing");
+      expect(readFixture(ws, rel)).toBe("patched line\n");
+
+      const subjects = spawnSync("git", ["log", "-2", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout
+        .trim()
+        .split("\n");
+      expect(subjects[0]).toContain("checkpoint before edit");
+      expect(subjects[1]).toBe("init");
+      const blob = spawnSync("git", ["show", `HEAD:${rel}`], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(blob).toBe("dirty draft\n");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+      else process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = prev;
+    }
+  });
+
+  test("E-1: apply_patch is a no-op for the checkpoint when the opt-in is off", async () => {
+    const prev = process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    try {
+      const ws = initGitWorkspace();
+      const rel = "d.txt";
+      writeFileSync(path.join(ws, rel), "committed line\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+      writeFileSync(path.join(ws, rel), "dirty draft\n");
+      const ctx = await ctxHavingRead(ws, [rel]);
+      const r = await applyPatchTool.execute(
+        { input: wrap(`*** Update File: ${rel}\n@@\n-dirty draft\n+patched line`) },
+        ctx,
+      );
+      expect(r.ok).toBe(true);
+      expect(r.output).not.toContain("checkpoint commit before editing");
+      expect(r.output).toContain("Patch applied with fuzz factor 0");
+      expect(readFixture(ws, rel)).toBe("patched line\n");
+      const log = spawnSync("git", ["log", "-1", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(log).toContain("init");
+      expect(log).not.toContain("checkpoint before edit");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+      else process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = prev;
+    }
+  });
 });

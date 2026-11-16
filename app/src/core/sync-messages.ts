@@ -1,6 +1,7 @@
 /**
- * sync-messages.ts — B-5 reduced: longest byte-stable prefix truncation
- * (omp `AppendOnlyContextManager.syncMessages` spirit; docs/28 rulings 470, 482).
+ * sync-messages.ts — B-5: frozen fingerprinted StablePrefix + append-only log +
+ * byte-stable `syncMessages` (omp `AppendOnlyContextManager` spirit; docs/28
+ * rulings 470, 482, 489).
  *
  * When rewritten history would otherwise clear the whole log (forcing a full
  * provider re-prefill), keep the longest prefix whose per-message digests still
@@ -9,9 +10,10 @@
  * Ruling **470**: pure `syncMessages` helper.
  * Ruling **482**: `ProviderHistorySync` cursor + main-loop wire after
  * compact/steer rewrite paths; `syncForkedHistory` for in-memory fork truncation.
- *
- * NOT in this slice: frozen StablePrefix fingerprint of system+tools,
- * full append-only log class, per-provider gate from data (`auto`).
+ * Ruling **489**: frozen fingerprinted StablePrefix (system+tools), the full
+ * `AppendOnlyLog` class, and a per-provider gate resolved from LOCAL data
+ * (`auto`) — no live calls. `syncMessages`/`ProviderHistorySync` stay
+ * backward compatible (default gate `on`, no StablePrefix configured).
  */
 
 import type { ChatMsg } from "../contracts";
@@ -100,16 +102,208 @@ export function syncForkedHistory(
   return syncMessages(parent, parent.slice(0, n));
 }
 
+/* ------------------------ Ruling 489: B-5 residual ------------------------ */
+
+/** The wire-relevant inputs whose byte-stability the frozen prefix guarantees. */
+export interface StablePrefixParts {
+  system: string;
+  tools: readonly unknown[];
+}
+
+/** A frozen (immutable, fingerprinted) system+tools prefix — omp `StablePrefix`. */
+export interface StablePrefix {
+  /** sha256 of canonical `{ system, tools }` — the fast-path drift check. */
+  readonly fingerprint: string;
+  readonly system: string;
+  readonly tools: readonly unknown[];
+  readonly toolCount: number;
+}
+
+/** Canonical sha256 fingerprint over the stable-prefix inputs (no live calls). */
+export function stablePrefixFingerprint(parts: StablePrefixParts): string {
+  return digestOf({ system: parts.system ?? "", tools: parts.tools ?? [] });
+}
+
+/** Freeze system+tools into an immutable, fingerprinted prefix. */
+export function freezeStablePrefix(system: string, tools: readonly unknown[]): StablePrefix {
+  const parts: StablePrefixParts = { system: system ?? "", tools: tools ?? [] };
+  return Object.freeze({
+    fingerprint: stablePrefixFingerprint(parts),
+    system: parts.system,
+    tools: Object.freeze([...parts.tools]),
+    toolCount: parts.tools.length,
+  });
+}
+
+/** True when current system+tools still hash to the frozen prefix. */
+export function stablePrefixMatches(
+  prefix: StablePrefix,
+  system: string,
+  tools: readonly unknown[],
+): boolean {
+  return prefix.fingerprint === stablePrefixFingerprint({ system, tools });
+}
+
+/** Whether the append-only prefix optimization is applied for a provider. */
+export type HistorySyncGateMode = "on" | "off";
+/** The user-facing gate setting; `auto` resolves from local provider data. */
+export type HistorySyncGate = "auto" | HistorySyncGateMode;
+
+/**
+ * LOCAL data fact: whether a provider benefits from a byte-stable wire prefix
+ * (a server-side prompt/KV cache). One small committed record; never fetched.
+ */
+export interface ProviderSyncCapabilities {
+  prefixCaching: boolean;
+}
+
+/**
+ * Local provider-capability table (data, not model-name regexes). Unknown
+ * providers keep the harmless local optimization (`on`) — absence of a
+ * negative fact is not a reason to re-prefill. Providers explicitly recorded
+ * with `prefixCaching: false` opt out.
+ */
+export const PROVIDER_SYNC_CAPABILITIES: Readonly<Record<string, ProviderSyncCapabilities>> =
+  Object.freeze({
+    anthropic: { prefixCaching: true },
+    openai: { prefixCaching: true },
+    gemini: { prefixCaching: true },
+    deepseek: { prefixCaching: true },
+    ollama: { prefixCaching: false },
+  });
+
+export interface ResolveGateOptions {
+  env?: Record<string, string | undefined>;
+  capabilities?: Readonly<Record<string, ProviderSyncCapabilities>>;
+}
+
+/**
+ * Resolve the per-provider gate from local data + env ONLY. `HZ_HISTORY_SYNC`
+ * forces `on`/`off`; `auto` (default) derives from the local capability table.
+ * No provider/network calls — the decision is pure data.
+ */
+export function resolveHistorySyncGate(
+  provider: string,
+  opts: ResolveGateOptions = {},
+): HistorySyncGateMode {
+  const env = opts.env ?? process.env;
+  const explicit = env.HZ_HISTORY_SYNC?.toLowerCase();
+  if (explicit === "on" || explicit === "off") return explicit;
+  const key = provider.toLowerCase();
+  const data = opts.capabilities?.[key] ?? PROVIDER_SYNC_CAPABILITIES[key];
+  return data?.prefixCaching === false ? "off" : "on";
+}
+
+export interface AppendOnlySyncResult extends SyncMessagesResult {
+  /** True when the frozen prefix drifted and forced a full rebuild this sync. */
+  prefixInvalidated: boolean;
+}
+
+export interface AppendOnlyLogOptions {
+  /** When false, syncs pass desired history through as fresh copies (no reuse). */
+  enabled?: boolean;
+  /** Frozen system+tools prefix; drift invalidates the whole log. */
+  stablePrefix?: StablePrefix;
+}
+
+/**
+ * Full append-only log (omp `AppendOnlyLog`): a byte-stable prefix that is kept
+ * across rewrites, an append-only tail, and a frozen system+tools fingerprint
+ * whose drift rebuilds the log. Pure — no I/O, no provider calls.
+ */
+export class AppendOnlyLog {
+  readonly enabled: boolean;
+  readonly #stablePrefix?: StablePrefix;
+  #messages: ChatMsg[] = [];
+  #prefixInvalidations = 0;
+
+  constructor(opts: AppendOnlyLogOptions = {}) {
+    this.enabled = opts.enabled ?? true;
+    this.#stablePrefix = opts.stablePrefix;
+  }
+
+  prefix(): StablePrefix | undefined {
+    return this.#stablePrefix;
+  }
+
+  messages(): readonly ChatMsg[] {
+    return this.#messages;
+  }
+
+  prefixInvalidations(): number {
+    return this.#prefixInvalidations;
+  }
+
+  /** Append to the tail; the existing prefix is never rewritten. */
+  append(messages: readonly ChatMsg[]): ChatMsg[] {
+    this.#messages = [...this.#messages, ...messages];
+    return this.#messages;
+  }
+
+  /** True unless current system+tools drifted from the frozen prefix. */
+  prefixMatches(current: StablePrefixParts | undefined): boolean {
+    if (this.#stablePrefix === undefined || current === undefined) return true;
+    return stablePrefixMatches(this.#stablePrefix, current.system, current.tools);
+  }
+
+  /**
+   * Sync desired provider-facing history. Enabled + intact prefix → keep the
+   * longest byte-stable prefix; drift → rebuild from empty; disabled → pass
+   * desired through as fresh copies (no object-identity reuse).
+   */
+  sync(desired: readonly ChatMsg[], current?: StablePrefixParts): AppendOnlySyncResult {
+    const prefixInvalidated = !this.prefixMatches(current);
+    if (prefixInvalidated) this.#prefixInvalidations += 1;
+
+    if (!this.enabled) {
+      const fresh = desired.map((m) => ({ ...m }));
+      this.#messages = fresh;
+      return {
+        messages: fresh,
+        stablePrefixLength: 0,
+        kind: fresh.length === 0 ? "identical" : "rewrite",
+        prefixInvalidated,
+      };
+    }
+    const base = prefixInvalidated ? [] : this.#messages;
+    const result = syncMessages(base, desired);
+    this.#messages = result.messages;
+    return { ...result, prefixInvalidated };
+  }
+
+  reset(): void {
+    this.#messages = [];
+  }
+}
+
+export interface ProviderHistorySyncOptions {
+  /** Resolved gate; default `on` keeps ruling 482 behavior. */
+  gate?: HistorySyncGateMode;
+  stablePrefix?: StablePrefix;
+  /** Re-derived per sync to detect system+tools drift (frozen-prefix check). */
+  currentPrefix?: () => StablePrefixParts | undefined;
+}
+
 /**
  * Stateful sync cursor for the main loop (omp `AppendOnlyContextManager`
- * `syncMessages` call pattern without frozen StablePrefix).
+ * `syncMessages` call pattern). Backed by {@link AppendOnlyLog}.
  *
  * Across dispatches, compact / steer / fork-shaped rewrites preserve prior
- * prefix object identity where digests still match.
+ * prefix object identity where digests still match — unless the provider gate
+ * is `off` or the frozen system+tools prefix has drifted.
  */
 export class ProviderHistorySync {
-  #previous: ChatMsg[] = [];
+  readonly #log: AppendOnlyLog;
+  readonly #currentPrefix?: () => StablePrefixParts | undefined;
   #last: SyncMessagesResult | null = null;
+
+  constructor(opts: ProviderHistorySyncOptions = {}) {
+    this.#log = new AppendOnlyLog({
+      enabled: (opts.gate ?? "on") !== "off",
+      stablePrefix: opts.stablePrefix,
+    });
+    this.#currentPrefix = opts.currentPrefix;
+  }
 
   /** Last sync result, if any. */
   last(): SyncMessagesResult | null {
@@ -118,21 +312,32 @@ export class ProviderHistorySync {
 
   /** Messages from the previous successful sync (empty before the first). */
   previous(): readonly ChatMsg[] {
-    return this.#previous;
+    return this.#log.messages();
+  }
+
+  /** Resolved gate mode for this cursor. */
+  gate(): HistorySyncGateMode {
+    return this.#log.enabled ? "on" : "off";
+  }
+
+  /** Number of syncs that rebuilt the log after a frozen-prefix drift. */
+  prefixInvalidations(): number {
+    return this.#log.prefixInvalidations();
   }
 
   /** Seed the cursor (e.g. inherited fork prefix) without classifying a rewrite. */
   seed(messages: readonly ChatMsg[]): void {
-    this.#previous = [...messages];
+    this.#log.reset();
+    this.#log.append(messages);
     this.#last = {
-      messages: this.#previous,
-      stablePrefixLength: this.#previous.length,
+      messages: [...messages],
+      stablePrefixLength: messages.length,
       kind: "identical",
     };
   }
 
   reset(): void {
-    this.#previous = [];
+    this.#log.reset();
     this.#last = null;
   }
 
@@ -141,8 +346,7 @@ export class ProviderHistorySync {
    * Updates the cursor to the synced messages.
    */
   sync(desired: readonly ChatMsg[]): SyncMessagesResult {
-    const result = syncMessages(this.#previous, desired);
-    this.#previous = result.messages;
+    const result = this.#log.sync(desired, this.#currentPrefix?.());
     this.#last = result;
     return result;
   }

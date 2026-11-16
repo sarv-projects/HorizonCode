@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ANALYTICS_LOG_FILE,
+  analyticsEventCatalogue,
+  analyticsFieldCatalogue,
   analyticsLogEnabled,
+  analyticsRowFields,
   appendAnalyticsEvent,
   applyAnalyticsLogCliFlag,
   defaultAnalyticsLogPath,
@@ -105,6 +108,70 @@ describe("analytics-log (I-4 / ruling 468)", () => {
     expect(rows[0]!.event).toBe("cli.flag");
     expect(rows[0]!.flag).toBe("show-repo-map");
     expect(rows[1]!.event).toBe("session.end");
+  });
+
+  test("I-4 catalogue: local event names and scalar fields are fixed data", () => {
+    const events = analyticsEventCatalogue();
+    expect(events.length).toBeGreaterThan(3);
+    expect(events).toContain("session.start");
+    expect(events).toContain("batch.row");
+    expect(events).toContain("eval.completed");
+    const fields = analyticsFieldCatalogue();
+    expect(fields.sessionId).toBe("string");
+    expect(fields.costMicroUsd).toBe("number");
+    expect(fields.batchDone).toBe("number");
+    // Never a content/key/path field.
+    for (const forbidden of ["content", "task", "apiKey", "message", "path"]) {
+      expect(fields).not.toHaveProperty(forbidden);
+    }
+  });
+
+  test("I-4 richer rows: scalar facts are recorded, unknown fields are dropped", () => {
+    const ws = freshWorkspace();
+    const env = { HZ_ANALYTICS_LOG: "1", HZ_JSONL_FSYNC: "0" };
+    // A caller cannot declare these in the typed options; spread a plain map so
+    // the runtime allowlist is what stands between them and the log.
+    const smuggled: Record<string, unknown> = { content: "the secret chat text", apiKey: "sk-LEAK" };
+    const written = appendAnalyticsEvent({
+      ...smuggled,
+      workspace: ws,
+      event: "batch.row",
+      sessionId: "s9",
+      terminal: "succeeded",
+      toolCount: 3,
+      stepCount: 7,
+      batchSize: 10,
+      batchDone: 4,
+      batchFailed: 1,
+      durationMs: 1234,
+      costMicroUsd: 1500.6,
+      env,
+      now: () => "2026-11-16T00:00:00.000Z",
+    });
+    expect(written).toBeDefined();
+    const row = JSON.parse(readFileSync(written!, "utf8").trim());
+    expect(row).toEqual({
+      v: 1,
+      ts: "2026-11-16T00:00:00.000Z",
+      event: "batch.row",
+      sessionId: "s9",
+      terminal: "succeeded",
+      toolCount: 3,
+      stepCount: 7,
+      batchSize: 10,
+      batchDone: 4,
+      batchFailed: 1,
+      durationMs: 1234,
+      costMicroUsd: 1501,
+    });
+    expect(row).not.toHaveProperty("content");
+    expect(row).not.toHaveProperty("apiKey");
+  });
+
+  test("I-4 allowlist rejects badly typed values and blank strings", () => {
+    expect(analyticsRowFields({ toolCount: -1, stepCount: Number.NaN, durationMs: Infinity })).toEqual({});
+    expect(analyticsRowFields({ sessionId: "  ", flag: "" })).toEqual({});
+    expect(analyticsRowFields({ provider: "mock", costMicroUsd: 12 })).toEqual({ provider: "mock", costMicroUsd: 12 });
   });
 
   test("/settings reports analytics log off or path", () => {

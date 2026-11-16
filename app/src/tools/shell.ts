@@ -7,7 +7,12 @@ import { getExecutionCapability } from "../core/execution-capability";
 import { sha256Hex } from "../core/canon";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
-import { shellAutoBackgroundMs, shellAutoBackgroundNotice } from "../core/shell-auto-background";
+import {
+  clearAutoBackground,
+  noteAutoBackground,
+  shellAutoBackgroundMs,
+  shellAutoBackgroundNotice,
+} from "../core/shell-auto-background";
 import { shellCompoundRefusal } from "../core/shell-split";
 import { invisibleUnicodeError, resolvePath, scrubEnv, truncate } from "./helpers";
 import { formatExecOutputForModel } from "./exec-output-format";
@@ -745,6 +750,14 @@ export const shellTool: Tool = {
           const minimised = minimiseShellOutput(out);
           const truncatedBody = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "");
           let body = truncatedBody + shellAutoBackgroundNotice(proc.pid, elapsed);
+          // C-7 / 490: record the live background process so a steer arriving
+          // now can be admitted at the next step boundary with a clear notice.
+          // This is observation only — the child is NOT killed here.
+          noteAutoBackground({ pid: proc.pid, backgroundedAtMs: elapsed, notice: body });
+          void proc.exited.then(
+            () => clearAutoBackground(proc.pid),
+            () => clearAutoBackground(proc.pid),
+          );
           ctx.signal.removeEventListener("abort", onAbort);
           return {
             ok: true,

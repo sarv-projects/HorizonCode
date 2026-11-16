@@ -9,11 +9,14 @@
  * the model must not be able to argue with the split).
  *
  * `assertHeldOutLeakage` refuses train-side case ids / traces that name a
- * frozen held-out id (omp: traces are train-only). Full keep/revert rounds
- * remain out of scope for this module.
+ * frozen held-out id (omp: traces are train-only). The ratchet section below
+ * adds full keep/revert rounds: a documented decision per round driven by the
+ * frozen-split metrics (held-out pass rate first, train as the tie-break),
+ * persisted to an append-only decision log that never overwrites a kept result.
  */
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import * as path from "node:path";
 import { canonicalJson, sha256Hex } from "../contracts";
 import type { PostmortemEvalCase } from "./evals";
 
@@ -317,6 +320,389 @@ export function assertEvalApprovalFresh(cases: readonly PostmortemEvalCase[], ap
     } catch (err) {
       throw new Error(
         `${approvalPath}: ${err instanceof Error ? err.message : String(err)} — re-approve before hillclimb`,
+      );
+    }
+  }
+}
+
+/* ============================ ratchet keep/revert (G-8) ============================ */
+
+/**
+ * Full keep/revert rounds. The decision is a pure function of the frozen-split
+ * metrics so it is reproducible from an approval + case results:
+ *
+ *   1. Held-out pass rate is the PRIMARY signal (the unbiased split).
+ *      Candidate > baseline → keep; candidate < baseline → revert.
+ *   2. TIE-BREAK (documented, deterministic): when held-out rates are exactly
+ *      equal, keep iff the candidate's train pass rate is >= baseline's.
+ *      With no train metrics the default is KEEP ("no regression on the
+ *      unbiased split"): a simplification that does not hurt held-out is kept.
+ *      Set `keepOnTrainNotWorse: false` to invert the train tie-break / default.
+ *
+ * All comparisons use integer cross-multiplication (no float rounding). A
+ * decision is recorded append-only and a previously KEPT result is never
+ * silently overwritten (see `appendRatchetDecision`).
+ */
+
+export type RatchetVerdict = "keep" | "revert";
+
+export type RatchetErrorReason =
+  | "invalid-metrics"
+  | "invalid-record"
+  | "corrupt-log"
+  | "split-mismatch"
+  | "kept-result-overwrite";
+
+export class RatchetError extends Error {
+  readonly reason: RatchetErrorReason;
+  readonly detail: string;
+
+  constructor(reason: RatchetErrorReason, detail: string) {
+    super(`${reason}: ${detail}`);
+    this.name = "RatchetError";
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
+/** Pass/total on one side of the frozen split. */
+export interface EvalSplitScore {
+  passed: number;
+  total: number;
+}
+
+export interface RatchetRoundMetrics {
+  baselineHeldOut: EvalSplitScore;
+  candidateHeldOut: EvalSplitScore;
+  /** Optional train-side scores, used only for the documented tie-break. */
+  baselineTrain?: EvalSplitScore;
+  candidateTrain?: EvalSplitScore;
+}
+
+export interface RatchetTieBreakRule {
+  /** Default true: on a held-out tie, keep iff candidate train >= baseline train. */
+  keepOnTrainNotWorse?: boolean;
+}
+
+export interface RatchetDecision {
+  verdict: RatchetVerdict;
+  reason: string;
+  /** True when the held-out rates tied and the train rule decided. */
+  tieBreak: boolean;
+  baselineHeldOutRate: number;
+  candidateHeldOutRate: number;
+  baselineTrainRate?: number;
+  candidateTrainRate?: number;
+}
+
+function checkScore(score: EvalSplitScore | undefined, label: string): void {
+  if (score === undefined) return;
+  if (
+    score === null ||
+    typeof score !== "object" ||
+    !Number.isInteger(score.total) ||
+    !Number.isInteger(score.passed) ||
+    score.total < 1 ||
+    score.passed < 0 ||
+    score.passed > score.total
+  ) {
+    throw new RatchetError(
+      "invalid-metrics",
+      `${label} must be { passed, total } integers with 0 <= passed <= total and total >= 1`,
+    );
+  }
+}
+
+function rate(score: EvalSplitScore): number {
+  return score.passed / score.total;
+}
+
+/** Compare passed/total exactly (avoids floating-point tie drift). */
+function compareScore(a: EvalSplitScore, b: EvalSplitScore): -1 | 0 | 1 {
+  const left = a.passed * b.total;
+  const right = b.passed * a.total;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Pure, documented keep/revert decision for one ratchet round. */
+export function decideRatchetRound(
+  metrics: RatchetRoundMetrics,
+  rule: RatchetTieBreakRule = {},
+): RatchetDecision {
+  checkScore(metrics?.baselineHeldOut, "baselineHeldOut");
+  checkScore(metrics?.candidateHeldOut, "candidateHeldOut");
+  checkScore(metrics?.baselineTrain, "baselineTrain");
+  checkScore(metrics?.candidateTrain, "candidateTrain");
+  if (metrics === null || typeof metrics !== "object") {
+    throw new RatchetError("invalid-metrics", "metrics must be an object");
+  }
+
+  const heldOutCmp = compareScore(metrics.candidateHeldOut, metrics.baselineHeldOut);
+  const base: RatchetDecision = {
+    verdict: "keep",
+    reason: "",
+    tieBreak: false,
+    baselineHeldOutRate: rate(metrics.baselineHeldOut),
+    candidateHeldOutRate: rate(metrics.candidateHeldOut),
+    ...(metrics.baselineTrain !== undefined ? { baselineTrainRate: rate(metrics.baselineTrain) } : {}),
+    ...(metrics.candidateTrain !== undefined ? { candidateTrainRate: rate(metrics.candidateTrain) } : {}),
+  };
+  if (heldOutCmp > 0) return { ...base, verdict: "keep", reason: "held-out pass rate improved" };
+  if (heldOutCmp < 0) return { ...base, verdict: "revert", reason: "held-out pass rate regressed" };
+
+  // Tie on the frozen held-out split → documented train tie-break.
+  const keepOnTrainNotWorse = rule.keepOnTrainNotWorse ?? true;
+  const trainTie =
+    metrics.baselineTrain === undefined ||
+    metrics.candidateTrain === undefined ||
+    compareScore(metrics.candidateTrain, metrics.baselineTrain) === 0;
+  const trainNotWorse =
+    metrics.baselineTrain !== undefined &&
+    metrics.candidateTrain !== undefined &&
+    compareScore(metrics.candidateTrain, metrics.baselineTrain) >= 0;
+  const keep = trainTie ? keepOnTrainNotWorse : keepOnTrainNotWorse && trainNotWorse;
+  const reason = trainTie
+    ? keepOnTrainNotWorse
+      ? "held-out tie; no train regression, default keep"
+      : "held-out tie; train rule inverted, default revert"
+    : trainNotWorse
+      ? "held-out tie; candidate train pass rate >= baseline"
+      : "held-out tie; candidate train pass rate < baseline";
+  return { ...base, verdict: keep ? "keep" : "revert", tieBreak: true, reason };
+}
+
+/** One graded case on a split side; `id` is a frozen-split case id. */
+export interface CasePassRow {
+  id: string;
+  passed: boolean;
+}
+
+/**
+ * Derive ratchet metrics from graded baseline/candidate case results on the
+ * FROZEN split. Both lists must cover exactly the recorded train ∪ held-out
+ * ids, so a round cannot quietly score a different case set.
+ */
+export function splitScoresFromResults(
+  split: EvalFrozenSplitV1,
+  baseline: readonly CasePassRow[],
+  candidate: readonly CasePassRow[],
+): RatchetRoundMetrics {
+  const expected = frozenSplitHash(split.trainIds, split.heldOutIds);
+  if (split.splitHash !== expected) {
+    throw new RatchetError("split-mismatch", `frozen split corrupt (splitHash ${split.splitHash} ≠ ${expected})`);
+  }
+  const union = new Set<string>([...split.trainIds, ...split.heldOutIds]);
+  for (const [label, rows] of [
+    ["baseline", baseline],
+    ["candidate", candidate],
+  ] as const) {
+    const ids = rows.map((row) => row.id);
+    if (ids.length !== new Set(ids).size) throw new RatchetError("invalid-metrics", `${label} results contain duplicate ids`);
+    if (ids.length !== union.size || ids.some((id) => !union.has(id))) {
+      throw new RatchetError("invalid-metrics", `${label} results must cover exactly the frozen split ids`);
+    }
+  }
+  const scoreFor = (rows: readonly CasePassRow[], ids: readonly string[]): EvalSplitScore => {
+    const wanted = new Set(ids);
+    const picked = rows.filter((row) => wanted.has(row.id));
+    return { passed: picked.filter((row) => row.passed).length, total: picked.length };
+  };
+  return {
+    baselineHeldOut: scoreFor(baseline, split.heldOutIds),
+    candidateHeldOut: scoreFor(candidate, split.heldOutIds),
+    baselineTrain: scoreFor(baseline, split.trainIds),
+    candidateTrain: scoreFor(candidate, split.trainIds),
+  };
+}
+
+/** The persisted, append-only decision record. */
+export interface RatchetDecisionRecord {
+  schemaVersion: 1;
+  round: number;
+  variantId: string;
+  decidedAt: string;
+  /** Binds the decision to the frozen split that produced the metrics. */
+  splitHash: string;
+  /** `casesContentHash` of the approved case set (when supplied by the caller). */
+  approvalHash?: string;
+  verdict: RatchetVerdict;
+  reason: string;
+  tieBreak: boolean;
+  baselineHeldOut: EvalSplitScore;
+  candidateHeldOut: EvalSplitScore;
+  baselineTrain?: EvalSplitScore;
+  candidateTrain?: EvalSplitScore;
+  /** sha256 of canonical JSON of every field above (integrity, no engine clock). */
+  recordHash: string;
+}
+
+export interface BuildRatchetDecisionInput {
+  round: number;
+  variantId: string;
+  split: EvalFrozenSplitV1;
+  metrics: RatchetRoundMetrics;
+  rule?: RatchetTieBreakRule;
+  approvalHash?: string;
+}
+
+export interface RatchetClock {
+  now?: () => string;
+}
+
+function ratchetRecordHash(record: Omit<RatchetDecisionRecord, "recordHash">): string {
+  return sha256Hex(canonicalJson(record));
+}
+
+/** Build a decision record: validate the split + metrics, decide, hash. */
+export function buildRatchetDecisionRecord(
+  input: BuildRatchetDecisionInput,
+  clock: RatchetClock = {},
+): RatchetDecisionRecord {
+  const expected = frozenSplitHash(input.split?.trainIds ?? [], input.split?.heldOutIds ?? []);
+  if (input.split?.splitHash !== expected) {
+    throw new RatchetError("split-mismatch", `frozen split corrupt (splitHash ${String(input.split?.splitHash)} ≠ ${expected})`);
+  }
+  const decision = decideRatchetRound(input.metrics, input.rule);
+  if (!Number.isInteger(input.round) || input.round < 0) {
+    throw new RatchetError("invalid-record", `round must be a non-negative integer (got ${input.round})`);
+  }
+  if (typeof input.variantId !== "string" || input.variantId.trim() === "") {
+    throw new RatchetError("invalid-record", "variantId must be a non-empty string");
+  }
+  const record: Omit<RatchetDecisionRecord, "recordHash"> = {
+    schemaVersion: 1,
+    round: input.round,
+    variantId: input.variantId,
+    decidedAt: typeof clock.now === "function" ? clock.now() : new Date().toISOString(),
+    splitHash: input.split.splitHash,
+    ...(input.approvalHash !== undefined ? { approvalHash: input.approvalHash } : {}),
+    verdict: decision.verdict,
+    reason: decision.reason,
+    tieBreak: decision.tieBreak,
+    baselineHeldOut: input.metrics.baselineHeldOut,
+    candidateHeldOut: input.metrics.candidateHeldOut,
+    ...(input.metrics.baselineTrain !== undefined ? { baselineTrain: input.metrics.baselineTrain } : {}),
+    ...(input.metrics.candidateTrain !== undefined ? { candidateTrain: input.metrics.candidateTrain } : {}),
+  };
+  return { ...record, recordHash: ratchetRecordHash(record) };
+}
+
+function isSplitScore(value: unknown): value is EvalSplitScore {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Partial<EvalSplitScore>;
+  return Number.isInteger(row.passed) && Number.isInteger(row.total);
+}
+
+/** Parse + integrity-check one decision line. Never silently skips a bad row. */
+export function parseRatchetDecisionRecord(text: string, file: string): RatchetDecisionRecord {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new RatchetError(
+      "corrupt-log",
+      `${file}: decision line is not JSON (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  const row = parsed as Partial<RatchetDecisionRecord>;
+  if (row === null || typeof row !== "object" || Array.isArray(row) || row.schemaVersion !== 1) {
+    throw new RatchetError("corrupt-log", `${file}: decision line is not a v1 record`);
+  }
+  if (!Number.isInteger(row.round) || typeof row.variantId !== "string" || typeof row.decidedAt !== "string") {
+    throw new RatchetError("corrupt-log", `${file}: decision record has an invalid round/variantId/decidedAt`);
+  }
+  if (typeof row.splitHash !== "string" || !/^[0-9a-f]{64}$/.test(row.splitHash)) {
+    throw new RatchetError("corrupt-log", `${file}: decision record splitHash is not a sha256 digest`);
+  }
+  if (row.verdict !== "keep" && row.verdict !== "revert") {
+    throw new RatchetError("corrupt-log", `${file}: decision record verdict must be keep|revert`);
+  }
+  if (typeof row.reason !== "string" || typeof row.tieBreak !== "boolean") {
+    throw new RatchetError("corrupt-log", `${file}: decision record reason/tieBreak are required`);
+  }
+  if (!isSplitScore(row.baselineHeldOut) || !isSplitScore(row.candidateHeldOut)) {
+    throw new RatchetError("corrupt-log", `${file}: decision record held-out scores are invalid`);
+  }
+  const { recordHash, ...rest } = row as RatchetDecisionRecord;
+  if (typeof recordHash !== "string" || recordHash !== ratchetRecordHash(rest)) {
+    throw new RatchetError("corrupt-log", `${file}: decision record hash mismatch (tampered record)`);
+  }
+  return row as RatchetDecisionRecord;
+}
+
+export interface RatchetDecisionLog {
+  path: string;
+  missing: boolean;
+  records: RatchetDecisionRecord[];
+}
+
+/** Read the append-only log. A missing file is healthy; unreadable/corrupt is a refusal. */
+export function loadRatchetDecisions(logPath: string): RatchetDecisionLog {
+  let text: string;
+  try {
+    text = readFileSync(logPath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      return { path: logPath, missing: true, records: [] };
+    }
+    throw new RatchetError("corrupt-log", `decision log is unreadable (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const records: RatchetDecisionRecord[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    records.push(parseRatchetDecisionRecord(trimmed, logPath));
+  }
+  return { path: logPath, missing: false, records };
+}
+
+export interface AppendRatchetDecisionResult {
+  path: string;
+  appended: boolean;
+  /** Set when the write was a no-op (identical record already present). */
+  note?: string;
+}
+
+/**
+ * Append a decision to the log. The file is only ever appended to, never
+ * rewritten. A KEPT result for the same (round, variantId) is single-assignment:
+ * any further decision for that key REFUSES (never silently overwritten).
+ * An identical record is an idempotent no-op; a prior `revert` may be re-decided.
+ */
+export function appendRatchetDecision(logPath: string, record: RatchetDecisionRecord): AppendRatchetDecisionResult {
+  // Re-validate before touching disk (callers may hand us a hand-built record).
+  parseRatchetDecisionRecord(JSON.stringify(record), logPath);
+  const log = loadRatchetDecisions(logPath);
+  const prior = log.records.find((r) => r.round === record.round && r.variantId === record.variantId);
+  if (prior !== undefined) {
+    // Identical replay is an idempotent no-op (even for a kept result).
+    if (prior.recordHash === record.recordHash) {
+      return { path: logPath, appended: false, note: "identical decision already recorded" };
+    }
+    // Any DIFFERENT decision for a kept key is refused: never overwrite a keep.
+    if (prior.verdict === "keep") {
+      throw new RatchetError(
+        "kept-result-overwrite",
+        `round ${record.round} variant ${record.variantId} already kept (recordHash ${prior.recordHash}); refusing to overwrite a kept result`,
+      );
+    }
+  }
+  mkdirSync(path.dirname(logPath), { recursive: true });
+  appendFileSync(logPath, `${canonicalJson(record)}\n`, "utf8");
+  return { path: logPath, appended: true };
+}
+
+/** Verify every persisted decision was made on the given frozen split. */
+export function assertRatchetDecisionsOnSplit(logPath: string, split: EvalFrozenSplitV1): void {
+  const expected = frozenSplitHash(split.trainIds, split.heldOutIds);
+  if (split.splitHash !== expected) {
+    throw new RatchetError("split-mismatch", `frozen split corrupt (splitHash ${split.splitHash} ≠ ${expected})`);
+  }
+  for (const record of loadRatchetDecisions(logPath).records) {
+    if (record.splitHash !== expected) {
+      throw new RatchetError(
+        "split-mismatch",
+        `round ${record.round} variant ${record.variantId} was decided on split ${record.splitHash}, not ${expected}`,
       );
     }
   }

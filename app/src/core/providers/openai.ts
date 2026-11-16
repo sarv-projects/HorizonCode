@@ -11,6 +11,7 @@ import { applyQuirks } from "./quirks";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { maybeDumpProviderRequest } from "./request-dump";
 import { textFromOpenAiDeltaContent } from "./openai-delta-content";
+import { toolResultContent } from "./tool-result-content";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
@@ -90,7 +91,7 @@ export function toOpenAiMessages(messages: ChatMsg[]): Array<Record<string, unkn
     const toolEntry: Record<string, unknown> = {
       role: "tool",
       tool_call_id: msg.toolCallId,
-      content: msg.content && msg.content !== "" ? msg.content : "(no output)",
+      content: toolResultContent(msg.content),
     };
     if (msg.toolName) toolEntry.name = msg.toolName;
     out.push(toolEntry);

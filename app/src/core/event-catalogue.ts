@@ -68,6 +68,60 @@ export const SHIPPED_EVENT_CATALOGUE: readonly string[] = [
 /** Reserved in contracts but not emitted yet (docs/33 §6.3). */
 export const RESERVED_UNEMITTED_EVENT_TYPES: readonly string[] = [EventTypes.messageDelta];
 
+/* ------------------------- local analytics catalogue ---------------------- */
+
+/**
+ * I-4: the LOCAL-ONLY analytics event catalogue (`analytics.ndjson`).
+ *
+ * These are privacy-bounded observation names, NOT kernel log types and NOT the
+ * canonical `hz.*` facts above. A row is written to a file under workspace
+ * state and never sent anywhere — `analytics-log.ts` opens no socket. The
+ * names describe *what happened* (session/batch/eval boundaries, a CLI flag, a
+ * guard/config fact); the field allowlist below carries only scalar counts and
+ * stable ids, never code, chat text, API keys or secret paths.
+ */
+export const LOCAL_ANALYTICS_EVENTS = [
+  "session.start",
+  "session.end",
+  "cli.flag",
+  "batch.start",
+  "batch.row",
+  "batch.end",
+  "eval.completed",
+  "provider.usage",
+  "config.invalid",
+  "guard.decision",
+] as const;
+
+export type LocalAnalyticsEvent = (typeof LOCAL_ANALYTICS_EVENTS)[number];
+
+/**
+ * The only optional fields an analytics row may carry, with their primitive
+ * shape. `analytics-log.ts` copies a field into a row ONLY when it appears here
+ * AND its value matches the declared shape; anything else (including a string
+ * that looks like a key or a path) is silently dropped. Counts/costs are
+ * integers, terminal/errorCode are closed-vocabulary-ish short tokens, and
+ * `flag` is an observability flag name — never argv or a secret.
+ */
+export const LOCAL_ANALYTICS_FIELDS = {
+  sessionId: "string",
+  provider: "string",
+  model: "string",
+  kernelMode: "string",
+  flag: "string",
+  terminal: "string",
+  errorCode: "string",
+  durationMs: "number",
+  toolCount: "number",
+  stepCount: "number",
+  batchSize: "number",
+  batchDone: "number",
+  batchFailed: "number",
+  costMicroUsd: "number",
+} as const;
+
+export type LocalAnalyticsField = keyof typeof LOCAL_ANALYTICS_FIELDS;
+
 /**
  * The 44 canonical `hz.*` names from docs/_conventions.md §6 (RC-1, RC-10).
  * Order matches the conventions list.

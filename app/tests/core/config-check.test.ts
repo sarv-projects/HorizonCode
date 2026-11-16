@@ -1,8 +1,15 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { checkConfigFile, renderConfigCheck } from "../../src/core/config";
+import {
+  CONFIG_ERROR_DOC,
+  checkConfigFile,
+  configErrorGuidance,
+  renderConfigCheck,
+  rejectedConfigValueLine,
+  unknownConfigKeyLine,
+} from "../../src/core/config";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -53,4 +60,49 @@ import { test as __t, expect as __e } from "bun:test";
 __t("config check masks credentials in a rejected baseUrl", () => {
   const out = __render({ file: "f", exists: true, unknown: [], rejected: ['providers[0].baseUrl must be an http(s) URL (got "ftp://user:hunter2secret@host/x")'] });
   __e(out).not.toContain("hunter2secret");
+});
+
+describe("I-7 self-documenting config errors", () => {
+  const fix = "fix: ";
+  const escape = "escape hatch: ";
+  test("the shared helper always names fix, doc link and escape hatch", () => {
+    const text = configErrorGuidance("permissionMode", "set a valid permission mode");
+    expect(text).toContain(fix);
+    expect(text).toContain("set a valid permission mode");
+    expect(text).toContain(CONFIG_ERROR_DOC);
+    expect(text).toContain(escape);
+    expect(text).toContain('"permissionMode"');
+  });
+
+  test("unknown key lines are self-documenting and mask secrets", () => {
+    const line = unknownConfigKeyLine("sk-super-secret-key");
+    expect(line).toContain("unknown key (ignored)");
+    expect(line).toContain(fix);
+    expect(line).toContain(CONFIG_ERROR_DOC);
+    expect(line).toContain(escape);
+    expect(line).not.toContain("sk-super-secret-key");
+  });
+
+  test("rejected value lines are self-documenting, per-key, and mask secrets", () => {
+    const line = rejectedConfigValueLine('providers[0].baseUrl must be an http(s) URL (got "ftp://user:hunter2@host/x")');
+    expect(line).toContain("rejected:");
+    expect(line).toContain(fix);
+    expect(line).toContain(CONFIG_ERROR_DOC);
+    expect(line).toContain(escape);
+    expect(line).toContain('"providers"');
+    expect(line).not.toContain("hunter2");
+  });
+
+  test("renderConfigCheck output is uniform across unknown and rejected keys", () => {
+    const out = renderConfigCheck(
+      checkConfigFile(cfg(JSON.stringify({ provider: "nope", modle: "x", permissionMode: "yolo" }))),
+    );
+    const diagnostics = out.split("\n").filter((l) => l.includes("unknown key") || l.includes("rejected:"));
+    expect(diagnostics.length).toBeGreaterThanOrEqual(2);
+    for (const line of diagnostics) {
+      expect(line).toContain(fix);
+      expect(line).toContain(CONFIG_ERROR_DOC);
+      expect(line).toContain(escape);
+    }
+  });
 });

@@ -3,16 +3,31 @@
  * (docs/30 C-12 / NF-071 remainder after ruling 22).
  *
  * Pure protocol only: closed versioned bootstrap, worker hello / identity
- * handshake, and NDJSON turn frames. Owner verifies identity BEFORE any work
- * reservation. No spawnOwned wiring, no loop.ts dispatch, no real OS pipe —
- * callers drive encode/decode over bytes they already own.
+ * handshake, a documented publish step, a FIFO reserve gate, and NDJSON turn
+ * frames. The owner PUBLISHES the bootstrap first, verifies the worker hello /
+ * identity BEFORE any work is reserved, and admits AT MOST ONE reserve (the
+ * FIFO head); a duplicate reserve is refused. No spawnOwned wiring, no loop.ts
+ * dispatch, no real OS pipe — callers drive encode/decode over bytes they own.
+ *
+ * PUBLISH STEP (ruling 492): `OwnerWorkerHandshake.publishBootstrap()` is the
+ * one owner-side publish action. It serializes the closed bootstrap frame to
+ * an NDJSON line and advances `awaiting_bootstrap -> awaiting_hello`. No work
+ * may be reserved until a verified hello follows it (handshake order is
+ * enforced: hello before publish, or reserve before verify, are refused).
+ *
+ * FIFO RESERVE GATE (ruling 492): `reserveWork()` emits a closed versioned
+ * `reserve` frame (seq = 1, the FIFO head) exactly once per verified
+ * handshake. A second call is refused as a duplicate, preserving single-slot
+ * FIFO order. This is a pure gate — there is no real OS pipe, admission queue,
+ * or loop.ts dispatch here.
  *
  * ADAPT (idea only) from hermes-agent managed_worker bootstrap/hello framing
  * (audit/pass3/audit-hermes-report.md U2/U3 items 13–14; repo not cloned).
  * Birth identity uses ruling-22 `{pid, startTicks}` vocabulary.
  *
- * Residuals (named): product owner↔worker spawn + stdio pipe; ancestor-chain
- * proving; full D-6 RuntimeEvent publish path; FIFO reserve wiring.
+ * Residuals (named, externally blocked): product owner↔worker spawn + stdio
+ * pipe; ancestor-chain proving; full D-6 RuntimeEvent publish path. The FIFO
+ * reserve gate itself now ships (pure form) — only its product wiring is open.
  */
 
 import type { ProcessIdentity } from "./worker-identity";
@@ -78,6 +93,24 @@ export interface OwnerWorkerHello {
   epoch: number;
 }
 
+/**
+ * Closed reserve field set (owner → worker). Emitted once by the FIFO reserve
+ * gate after a verified hello; `seq` is the single FIFO head position.
+ */
+export const RESERVE_KEYS = ["v", "kind", "executionId", "pid", "startTicks", "seq"] as const;
+
+/** The only FIFO position a handshake admits (single-slot reserve). */
+export const RESERVE_SEQ_FIRST = 1 as const;
+
+export interface OwnerWorkerReserve {
+  v: typeof OWNER_WORKER_CONTROL_PIPE_V;
+  kind: "reserve";
+  executionId: string;
+  pid: number;
+  startTicks: number;
+  seq: typeof RESERVE_SEQ_FIRST;
+}
+
 /** Closed turn-frame kinds (D-6 / hermes U3 reduced set). */
 export const TURN_FRAME_KINDS = [
   "delta",
@@ -99,7 +132,11 @@ export interface OwnerWorkerTurnFrame {
   payload?: unknown;
 }
 
-export type OwnerWorkerFrame = OwnerWorkerBootstrap | OwnerWorkerHello | OwnerWorkerTurnFrame;
+export type OwnerWorkerFrame =
+  | OwnerWorkerBootstrap
+  | OwnerWorkerHello
+  | OwnerWorkerReserve
+  | OwnerWorkerTurnFrame;
 
 export type DecodeOk<T> = { ok: true; value: T };
 export type DecodeErr = { ok: false; reason: string };
@@ -212,6 +249,21 @@ export function makeTurnFrame(input: {
   };
 }
 
+/** Build the single FIFO `reserve` frame (FIFO head, seq = 1). */
+export function makeReserve(input: {
+  executionId: string;
+  identity: ProcessIdentity;
+}): OwnerWorkerReserve {
+  return {
+    v: OWNER_WORKER_CONTROL_PIPE_V,
+    kind: "reserve",
+    executionId: input.executionId,
+    pid: input.identity.pid,
+    startTicks: input.identity.startTicks,
+    seq: RESERVE_SEQ_FIRST,
+  };
+}
+
 /** Encode one frame as a single NDJSON line (no trailing newline in return). */
 export function encodeFrame(frame: OwnerWorkerFrame): DecodeResult<string> {
   const line = JSON.stringify(frame);
@@ -296,6 +348,36 @@ export function decodeHello(raw: unknown): DecodeResult<OwnerWorkerHello> {
   };
 }
 
+/** Decode a closed versioned `reserve` frame; unknown version is refused. */
+export function decodeReserve(raw: unknown): DecodeResult<OwnerWorkerReserve> {
+  if (!isPlainObject(raw)) return { ok: false, reason: "reserve must be an object" };
+  const unknown = refuseUnknownKeys(raw, RESERVE_KEYS);
+  if (unknown) return unknown;
+  const version = checkVersion(raw);
+  if (version) return version;
+  if (raw.kind !== "reserve") return { ok: false, reason: `expected kind reserve, got ${String(raw.kind)}` };
+
+  const executionId = requireNonEmptyString(raw, "executionId");
+  if (typeof executionId !== "string") return executionId;
+  const pid = requirePositiveInt(raw, "pid");
+  if (typeof pid !== "number") return pid;
+  const startTicks = requirePositiveInt(raw, "startTicks");
+  if (typeof startTicks !== "number") return startTicks;
+  if (raw.seq !== RESERVE_SEQ_FIRST) return { ok: false, reason: "missing or invalid seq" };
+
+  return {
+    ok: true,
+    value: {
+      v: OWNER_WORKER_CONTROL_PIPE_V,
+      kind: "reserve",
+      executionId,
+      pid,
+      startTicks,
+      seq: RESERVE_SEQ_FIRST,
+    },
+  };
+}
+
 const TURN_KIND_SET = new Set<string>(TURN_FRAME_KINDS);
 const TURN_KEYS = ["v", "kind", "executionId", "payload"] as const;
 
@@ -337,10 +419,16 @@ export function decodeFrameLine(line: string): DecodeResult<OwnerWorkerFrame> {
   if (!isPlainObject(parsed)) return { ok: false, reason: "frame must be an object" };
   if (parsed.kind === "bootstrap") return decodeBootstrap(parsed);
   if (parsed.kind === "hello") return decodeHello(parsed);
+  if (parsed.kind === "reserve") return decodeReserve(parsed);
   return decodeTurnFrame(parsed);
 }
 
-export type HandshakeState = "awaiting_hello" | "verified" | "refused";
+export type HandshakeState =
+  | "awaiting_bootstrap"
+  | "awaiting_hello"
+  | "verified"
+  | "reserved"
+  | "refused";
 
 export interface HandshakeVerdict {
   ok: boolean;
@@ -350,17 +438,21 @@ export interface HandshakeVerdict {
 }
 
 /**
- * Owner-side handshake: after bootstrap is issued, accept ONE hello and verify
- * identity + secret + epoch BEFORE any work may be reserved.
+ * Owner-side handshake with an enforced publish → hello → verify → reserve
+ * order. The owner must `publishBootstrap()` first; only then is ONE hello
+ * accepted, verified for identity + secret + epoch, and only then may a single
+ * FIFO `reserve` be emitted. Hello before publish, or reserve before verify,
+ * are refused (ruling 492 handshake order).
  *
  * `liveProcCheck` defaults to `/proc` verifyIdentity (ruling 22). Tests may
  * inject a stub when /proc is unavailable or identity is synthetic.
  */
 export class OwnerWorkerHandshake {
   readonly bootstrap: OwnerWorkerBootstrap;
-  #state: HandshakeState = "awaiting_hello";
+  #state: HandshakeState = "awaiting_bootstrap";
   #reason?: string;
   #verified?: ProcessIdentity;
+  #reserved?: OwnerWorkerReserve;
   readonly #liveProcCheck: (identity: ProcessIdentity) => { ok: boolean; reason?: string };
 
   constructor(
@@ -381,13 +473,39 @@ export class OwnerWorkerHandshake {
     return this.#reason;
   }
 
-  /** True only after a verified hello — the C-12 "before work is reserved" gate. */
+  /** The single FIFO reserve frame, once emitted. */
+  get reservedFrame(): OwnerWorkerReserve | undefined {
+    return this.#reserved;
+  }
+
+  /**
+   * The documented publish step: serialize the closed bootstrap frame to one
+   * NDJSON line and advance `awaiting_bootstrap -> awaiting_hello`. Refuses a
+   * second publish (single bootstrap per handshake) and a publish after refusal.
+   */
+  publishBootstrap(): DecodeResult<string> {
+    if (this.#state === "refused") {
+      return { ok: false, reason: this.#reason ?? "handshake refused" };
+    }
+    if (this.#state !== "awaiting_bootstrap") {
+      return { ok: false, reason: "bootstrap already published" };
+    }
+    const encoded = encodeFrame(this.bootstrap);
+    if (!encoded.ok) return encoded;
+    this.#state = "awaiting_hello";
+    return encoded;
+  }
+
+  /** True only after a verified hello and BEFORE the single reserve is consumed. */
   get mayReserveWork(): boolean {
     return this.#state === "verified";
   }
 
   acceptHello(raw: unknown): HandshakeVerdict {
-    if (this.#state === "verified") {
+    if (this.#state === "awaiting_bootstrap") {
+      return { ok: false, state: this.#state, reason: "bootstrap not published" };
+    }
+    if (this.#state === "verified" || this.#state === "reserved") {
       return { ok: false, state: this.#state, reason: "hello already accepted" };
     }
     if (this.#state === "refused") {
@@ -423,18 +541,28 @@ export class OwnerWorkerHandshake {
     return { ok: true, state: "verified", identity };
   }
 
-  /** Explicit reserve gate used by tests / future owner wiring. */
-  reserveWork(): DecodeResult<{ executionId: string; identity: ProcessIdentity }> {
+  /**
+   * FIFO reserve gate: emit the single closed versioned `reserve` frame only
+   * after a verified hello, then close the gate. A second call is refused as a
+   * duplicate, so at most one reserve (the FIFO head) is ever admitted.
+   */
+  reserveWork(): DecodeResult<OwnerWorkerReserve> {
+    if (this.#state === "reserved") {
+      return { ok: false, reason: "duplicate reserve: FIFO slot already reserved" };
+    }
     if (!this.mayReserveWork || this.#verified === undefined) {
       return {
         ok: false,
         reason: this.#reason ?? "identity handshake incomplete; work not reserved",
       };
     }
-    return {
-      ok: true,
-      value: { executionId: this.bootstrap.executionId, identity: this.#verified },
-    };
+    const frame = makeReserve({
+      executionId: this.bootstrap.executionId,
+      identity: this.#verified,
+    });
+    this.#reserved = frame;
+    this.#state = "reserved";
+    return { ok: true, value: frame };
   }
 
   #refuse(reason: string): HandshakeVerdict {

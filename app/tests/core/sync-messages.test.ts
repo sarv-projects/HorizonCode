@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatMsg } from "../../src/contracts";
 import {
+  AppendOnlyLog,
   chatMessageDigest,
+  freezeStablePrefix,
   longestStablePrefixLength,
+  PROVIDER_SYNC_CAPABILITIES,
   ProviderHistorySync,
+  resolveHistorySyncGate,
+  stablePrefixFingerprint,
+  stablePrefixMatches,
   syncForkedHistory,
   syncMessages,
 } from "../../src/core/sync-messages";
@@ -198,5 +204,114 @@ describe("ProviderHistorySync", () => {
     expect(r.kind).toBe("append");
     expect(r.messages[0]).toBe(seeded[0]);
     expect(r.messages[1]).toBe(seeded[1]);
+  });
+});
+
+describe("frozen StablePrefix (B-5 / 489)", () => {
+  test("fingerprint is a stable canonical sha256 over system+tools", () => {
+    const a = stablePrefixFingerprint({ system: "S", tools: [{ name: "read" }] });
+    const b = stablePrefixFingerprint({ system: "S", tools: [{ name: "read" }] });
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(stablePrefixFingerprint({ system: "S2", tools: [{ name: "read" }] }));
+    expect(a).not.toBe(stablePrefixFingerprint({ system: "S", tools: [{ name: "write" }] }));
+  });
+
+  test("freeze is immutable and matches only the same system+tools", () => {
+    const prefix = freezeStablePrefix("S", [{ name: "read" }, { name: "grep" }]);
+    expect(Object.isFrozen(prefix)).toBe(true);
+    expect(Object.isFrozen(prefix.tools)).toBe(true);
+    expect(prefix.toolCount).toBe(2);
+    expect(stablePrefixMatches(prefix, "S", [{ name: "read" }, { name: "grep" }])).toBe(true);
+    expect(stablePrefixMatches(prefix, "S", [{ name: "read" }])).toBe(false);
+    expect(stablePrefixMatches(prefix, "CHANGED", [{ name: "read" }, { name: "grep" }])).toBe(false);
+  });
+});
+
+describe("per-provider gate from data (B-5 / 489)", () => {
+  test("auto reads the local capability table — no live calls", () => {
+    expect(resolveHistorySyncGate("anthropic", { env: {} })).toBe("on");
+    expect(resolveHistorySyncGate("ollama", { env: {} })).toBe("off");
+    // Unknown provider keeps the harmless local optimization.
+    expect(resolveHistorySyncGate("some-new-host", { env: {} })).toBe("on");
+    expect(PROVIDER_SYNC_CAPABILITIES["ollama"]?.prefixCaching).toBe(false);
+  });
+
+  test("injected local data drives auto; env overrides", () => {
+    const caps = { vendorx: { prefixCaching: false }, vendory: { prefixCaching: true } };
+    expect(resolveHistorySyncGate("vendorx", { env: {}, capabilities: caps })).toBe("off");
+    expect(resolveHistorySyncGate("vendory", { env: {}, capabilities: caps })).toBe("on");
+    expect(resolveHistorySyncGate("vendorx", { env: { HZ_HISTORY_SYNC: "on" }, capabilities: caps })).toBe("on");
+    expect(resolveHistorySyncGate("anthropic", { env: { HZ_HISTORY_SYNC: "off" } })).toBe("off");
+  });
+});
+
+describe("AppendOnlyLog (B-5 / 489)", () => {
+  test("keeps the byte-stable prefix and appends the tail", () => {
+    const log = new AppendOnlyLog();
+    const first = [msg("user", "a"), msg("assistant", "b")];
+    const r1 = log.sync(first);
+    expect(r1.messages[0]).toBe(first[0]);
+    const next = [...first, msg("user", "c")];
+    const r2 = log.sync(next);
+    expect(r2.kind).toBe("append");
+    expect(r2.messages[0]).toBe(first[0]);
+    expect(r2.messages[2]).toBe(next[2]);
+    expect(log.messages()).toHaveLength(3);
+  });
+
+  test("frozen prefix drift invalidates the whole log and rebuilds from empty", () => {
+    const prefix = freezeStablePrefix("S", [{ name: "read" }]);
+    const log = new AppendOnlyLog({ stablePrefix: prefix });
+    const first = [msg("user", "a"), msg("assistant", "b")];
+    log.sync(first, { system: "S", tools: [{ name: "read" }] });
+    expect(log.prefixInvalidations()).toBe(0);
+
+    const drifted = log.sync([msg("user", "a2"), msg("assistant", "b")], {
+      system: "S",
+      tools: [{ name: "write" }],
+    });
+    expect(drifted.prefixInvalidated).toBe(true);
+    expect(drifted.stablePrefixLength).toBe(0);
+    expect(drifted.messages[0]).not.toBe(first[0]);
+    expect(log.prefixInvalidations()).toBe(1);
+  });
+
+  test("disabled gate passes desired through as fresh copies (no reuse)", () => {
+    const log = new AppendOnlyLog({ enabled: false });
+    const first = [msg("user", "a")];
+    const r1 = log.sync(first);
+    expect(r1.messages[0]).not.toBe(first[0]);
+    const next = [...first, msg("user", "c")];
+    const r2 = log.sync(next);
+    expect(r2.messages[0]).not.toBe(r1.messages[0]);
+    expect(r2.messages).toEqual(next);
+  });
+});
+
+describe("ProviderHistorySync gate + prefix wiring (B-5 / 489)", () => {
+  test("resolved off gate disables prefix reuse but keeps the sync API", () => {
+    const cursor = new ProviderHistorySync({ gate: "off" });
+    expect(cursor.gate()).toBe("off");
+    const first = [msg("user", "a")];
+    const r1 = cursor.sync(first);
+    expect(r1.messages[0]).not.toBe(first[0]);
+    expect(cursor.last()?.kind).toBe("rewrite");
+  });
+
+  test("currentPrefix callback invalidates the cursor on system/tools drift", () => {
+    let system = "S";
+    const cursor = new ProviderHistorySync({
+      gate: "on",
+      stablePrefix: freezeStablePrefix("S", [{ name: "read" }]),
+      currentPrefix: () => ({ system, tools: [{ name: "read" }] }),
+    });
+    const first = [msg("user", "a")];
+    cursor.sync(first);
+    expect(cursor.prefixInvalidations()).toBe(0);
+    system = "CHANGED";
+    const r = cursor.sync([msg("user", "a2")]);
+    expect(cursor.prefixInvalidations()).toBe(1);
+    expect(r.messages[0]).not.toBe(first[0]);
   });
 });

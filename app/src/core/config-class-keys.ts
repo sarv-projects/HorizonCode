@@ -1,15 +1,25 @@
 /**
- * H-3 residual (ruling **484**): config keys that name a class via short name
- * or documented import path (mini-swe item 17; aider-style alias map).
+ * H-3 residual (ruling **484**) + H-4 (ruling **494**): config keys that name a
+ * class via short name or documented import path (mini-swe item 17; aider-style
+ * alias map).
  *
  * Closed maps only — no dynamic import of arbitrary paths, no plugin registry.
  * Unknown specs fail with a readable error that lists the known short names.
+ *
+ * `formatMessageClass` is the additive H-4 key: its map values are built-in
+ * FORMATTER DIALECT IDS (not module paths). A static selector in
+ * `providers/message-formatter.ts` maps those ids to built-in implementations;
+ * nothing is imported dynamically and no new dependency is introduced.
  */
 
-/** The two known class-name config keys (camelCase; snake_case accepted at parse). */
-export type ConfigClassKey = "providerClass" | "modelClass";
+/** Known class-name config keys (camelCase; snake_case accepted at parse). */
+export type ConfigClassKey = "providerClass" | "modelClass" | "formatMessageClass";
 
-export const CONFIG_CLASS_KEYS: readonly ConfigClassKey[] = ["providerClass", "modelClass"];
+export const CONFIG_CLASS_KEYS: readonly ConfigClassKey[] = [
+  "providerClass",
+  "modelClass",
+  "formatMessageClass",
+];
 
 /**
  * Short name → stable module path under `app/src` (slash form).
@@ -36,9 +46,26 @@ export const MODEL_CLASS_ALIASES: Readonly<Record<string, string>> = Object.free
   mock: "core/providers/mock",
 });
 
+/**
+ * H-4 format_message class-key map: short name → BUILT-IN FORMATTER DIALECT ID.
+ * Unlike the two maps above, values are dialect ids, not import paths: the
+ * formatter is selected statically from `providers/message-formatter.ts` and no
+ * module is loaded dynamically. `mock` and `openai-compatible` reuse the OpenAI
+ * chat dialect because their wire shape is OpenAI-compatible.
+ */
+export const FORMATTER_CLASS_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  openai: "openai",
+  "openai-compatible": "openai",
+  anthropic: "anthropic",
+  google: "google",
+  ollama: "ollama",
+  mock: "openai",
+});
+
 const ALIAS_BY_KEY: Record<ConfigClassKey, Readonly<Record<string, string>>> = {
   providerClass: PROVIDER_CLASS_ALIASES,
   modelClass: MODEL_CLASS_ALIASES,
+  formatMessageClass: FORMATTER_CLASS_ALIASES,
 };
 
 export interface ResolvedConfigClass {
@@ -74,6 +101,7 @@ export function normalizeConfigClassKey(raw: string): ConfigClassKey | undefined
   const t = raw.trim();
   if (t === "providerClass" || t === "provider_class") return "providerClass";
   if (t === "modelClass" || t === "model_class") return "modelClass";
+  if (t === "formatMessageClass" || t === "format_message_class") return "formatMessageClass";
   return undefined;
 }
 
@@ -133,14 +161,18 @@ export function listConfigClassShortNames(key: ConfigClassKey): string[] {
 export function parseConfigClassFields(raw: Record<string, unknown>): {
   providerClass?: ResolvedConfigClass;
   modelClass?: ResolvedConfigClass;
+  formatMessageClass?: ResolvedConfigClass;
   providerClassRejected?: string;
   modelClassRejected?: string;
+  formatMessageClassRejected?: string;
 } {
   const out: {
     providerClass?: ResolvedConfigClass;
     modelClass?: ResolvedConfigClass;
+    formatMessageClass?: ResolvedConfigClass;
     providerClassRejected?: string;
     modelClassRejected?: string;
+    formatMessageClassRejected?: string;
   } = {};
 
   const providerRaw = pickClassSpec(raw, "providerClass", "provider_class");
@@ -158,6 +190,15 @@ export function parseConfigClassFields(raw: Record<string, unknown>): {
       out.modelClass = resolveConfigClassKey("modelClass", modelRaw);
     } catch (err) {
       out.modelClassRejected = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  const formatterRaw = pickClassSpec(raw, "formatMessageClass", "format_message_class");
+  if (formatterRaw !== undefined) {
+    try {
+      out.formatMessageClass = resolveConfigClassKey("formatMessageClass", formatterRaw);
+    } catch (err) {
+      out.formatMessageClassRejected = err instanceof Error ? err.message : String(err);
     }
   }
 

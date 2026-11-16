@@ -11,6 +11,7 @@ import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolCall, ToolS
 import { anthropicSystemField } from "./anthropic-cache";
 import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
+import { toolResultContent } from "./tool-result-content";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
@@ -79,7 +80,7 @@ export function toAnthropicMessages(messages: ChatMsg[]): AnthropicMessage[] {
     // tool result
     if (!msg.toolCallId) continue; // unusable without the id it answers
     push("user", [
-      { type: "tool_result", tool_use_id: msg.toolCallId, content: msg.content && msg.content !== "" ? msg.content : "(no output)" },
+      { type: "tool_result", tool_use_id: msg.toolCallId, content: toolResultContent(msg.content) },
     ]);
   }
   return out;

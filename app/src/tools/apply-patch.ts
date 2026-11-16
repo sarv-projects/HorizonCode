@@ -49,7 +49,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
-import { formatLintFixCommitSuffixes } from "../core/git-dirty-checkpoint";
+import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffixes } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { acquireLock, targetLockPath } from "../core/file-lock";
@@ -65,6 +65,18 @@ function fail(error: string): ToolResult {
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * E-1: the same opt-in dirty checkpoint `edit` takes before its write, applied
+ * to each path a patch op is about to mutate (add / update / delete / move
+ * destination). No flag → no-op; no dirt → no commit. Mirrors edit.ts exactly.
+ */
+function dirtyCheckpointPrefix(ctx: ToolContext, rel: string): string {
+  const cp = checkpointDirtyPathBeforeEdit(ctx.workspace, rel);
+  if (cp.committed && cp.notice) return `${cp.notice}\n`;
+  if (cp.error) return `[git checkpoint failed: ${cp.error}]\n`;
+  return "";
 }
 
 /* --------------------------- local line endings --------------------------- */
@@ -362,7 +374,7 @@ async function applyOp(
   ctx: ToolContext,
   summary: { added: string[]; updated: string[]; deleted: string[]; moved: string[] },
   warnings: PatchWarning[],
-): Promise<{ ok: true; fuzz: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; fuzz: number; checkpointNote: string } | { ok: false; error: string }> {
   const held: Array<() => void> = [];
   try {
     return await applyOpLocked(op, ctx, summary, warnings, held);
@@ -377,7 +389,7 @@ async function applyOpLocked(
   summary: { added: string[]; updated: string[]; deleted: string[]; moved: string[] },
   warnings: PatchWarning[],
   held: Array<() => void>,
-): Promise<{ ok: true; fuzz: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; fuzz: number; checkpointNote: string } | { ok: false; error: string }> {
   if (op.kind === "add") {
     const target = resolveRealTarget(ctx.cwd, op.path, ctx.workspace);
     const resolved = target.requested;
@@ -396,13 +408,16 @@ async function applyOpLocked(
     }
     const guarded = await guardAndPreimage(target, rel, "Add", false, ctx, held);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
+    // E-1: Add creates a new file (no pre-existing dirt), so this is a no-op,
+    // but call the same opt-in hook for uniform coverage of every op.
+    const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
     const outcome = await writeAtomic(real, content, ctx, real);
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
     recordChange(ctx.sessionId, { path: resolved, rel, before: null, afterSha256: sha256Hex(content), at: Date.now(), tool: "write" });
     noteRead(ctx, real);
     summary.added.push(rel);
-    return { ok: true, fuzz: 0 };
+    return { ok: true, fuzz: 0, checkpointNote };
   }
 
   if (op.kind === "delete") {
@@ -412,6 +427,7 @@ async function applyOpLocked(
     if (escapesCwd(ctx.cwd, resolved)) return { ok: false, error: `apply_patch: path escapes the workspace: ${op.path}` };
     const guarded = await guardAndPreimage(target, rel, "Delete", true, ctx, held);
     if (guarded.ok !== true) return { ok: false, error: guarded.error };
+    const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     // The removal only runs after the full guard + approval + protectedTarget +
     // preimage checks above; the preimage is journaled so the delete can undo.
     // `rm` on the requested path removes a symlink itself rather than its target;
@@ -423,7 +439,7 @@ async function applyOpLocked(
     }
     recordChange(ctx.sessionId, { path: resolved, rel, before: guarded.before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
     summary.deleted.push(rel);
-    return { ok: true, fuzz: 0 };
+    return { ok: true, fuzz: 0, checkpointNote };
   }
 
   // update (optionally with a move)
@@ -441,12 +457,13 @@ async function applyOpLocked(
   warnings.push(...w);
 
   if (op.movePath === undefined) {
+    const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     const outcome = await writeAtomic(real, after, ctx, real);
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
     recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
     noteRead(ctx, real);
     summary.updated.push(rel);
-    return { ok: true, fuzz };
+    return { ok: true, fuzz, checkpointNote };
   }
 
   // Move: the destination is its own guarded write target; the source is then
@@ -465,6 +482,9 @@ async function applyOpLocked(
   const destGuarded = await guardAndPreimage(destTarget, destRel, "Create", destExists, ctx, held);
   if (destGuarded.ok !== true) return { ok: false, error: destGuarded.error };
   const destBefore = destGuarded.before; // the clobbered file's real preimage, or null for a new file
+  // E-1: both the move destination (possibly overwritten) and the source
+  // (about to be removed) get the same opt-in checkpoint before either effect.
+  const checkpointNote = dirtyCheckpointPrefix(ctx, destRel) + dirtyCheckpointPrefix(ctx, rel);
   const outcome = await writeAtomic(destReal, after, ctx, destReal);
   if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
   try {
@@ -476,7 +496,7 @@ async function applyOpLocked(
   recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
   noteRead(ctx, destReal);
   summary.moved.push(`${rel} -> ${destRel}`);
-  return { ok: true, fuzz };
+  return { ok: true, fuzz, checkpointNote };
 }
 
 /** A compact "added X; updated Y; …" list of ops that already landed, for the error. */
@@ -518,6 +538,7 @@ export const applyPatchTool: Tool = {
       const summary = { added: [] as string[], updated: [] as string[], deleted: [] as string[], moved: [] as string[] };
       const warnings: PatchWarning[] = [];
       let fuzz = 0;
+      let checkpointNotes = "";
 
       // Ops apply in source order. There is NO cross-op rollback (named residual
       // in this module's header), so on a mid-patch failure the ops that already
@@ -531,6 +552,7 @@ export const applyPatchTool: Tool = {
           return fail(`${r.error} (${note})`);
         }
         fuzz = Math.max(fuzz, r.fuzz);
+        checkpointNotes += r.checkpointNote;
       }
 
       const parts: string[] = [];
@@ -540,6 +562,8 @@ export const applyPatchTool: Tool = {
       if (summary.moved.length > 0) parts.push(`moved ${summary.moved.length} (${summary.moved.join(", ")})`);
 
       const lines = [`Patch applied with fuzz factor ${fuzz}`];
+      // E-1: surface any opt-in dirty-checkpoint notices from the mutated paths.
+      if (checkpointNotes !== "") lines.push(checkpointNotes.trimEnd());
       if (parts.length > 0) lines.push(parts.join("; "));
       for (const w of warnings) {
         lines.push(`WARNING ${w.path} chunk ${w.chunkIndex}: ${w.message}\n${w.context}`);

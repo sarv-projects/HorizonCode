@@ -159,4 +159,62 @@ describe("write tool", () => {
       clearLintedPaths();
     }
   });
+
+  test("E-1: opt-in dirty checkpoint commits pre-existing dirt before the write", async () => {
+    const prev = process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = "1";
+    try {
+      const ws = initGitWorkspace();
+      const rel = "f.txt";
+      writeFileSync(path.join(ws, rel), "committed\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+
+      // Uncommitted dirt that a naive overwrite would destroy.
+      writeFileSync(path.join(ws, rel), "dirty draft\n");
+      const ctx = mockToolContext({ cwd: ws, workspace: ws });
+      expect((await readTool.execute({ path: rel }, ctx)).ok).toBe(true);
+      const r = await writeTool.execute({ path: rel, content: "replacement\n" }, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.output).toContain("checkpoint commit before editing");
+      expect(readFixture(ws, rel)).toBe("replacement\n");
+
+      const subjects = spawnSync("git", ["log", "-2", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout
+        .trim()
+        .split("\n");
+      expect(subjects[0]).toContain("checkpoint before edit");
+      expect(subjects[1]).toBe("init");
+      // The checkpoint preserved the DIRTY pre-write content, not the replacement.
+      const blob = spawnSync("git", ["show", `HEAD:${rel}`], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(blob).toBe("dirty draft\n");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+      else process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = prev;
+    }
+  });
+
+  test("E-1: write is a no-op for the checkpoint when the opt-in is off", async () => {
+    const prev = process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    try {
+      const ws = initGitWorkspace();
+      const rel = "g.txt";
+      writeFileSync(path.join(ws, rel), "committed\n");
+      spawnSync("git", ["add", rel], { cwd: ws });
+      spawnSync("git", ["commit", "-m", "init"], { cwd: ws });
+      writeFileSync(path.join(ws, rel), "dirty draft\n");
+      const ctx = mockToolContext({ cwd: ws, workspace: ws });
+      expect((await readTool.execute({ path: rel }, ctx)).ok).toBe(true);
+      const r = await writeTool.execute({ path: rel, content: "replacement\n" }, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.output).not.toContain("checkpoint commit before editing");
+      expect(r.output).toBe("Wrote 1 lines (12 bytes) to g.txt");
+      const log = spawnSync("git", ["log", "-1", "--pretty=%s"], { cwd: ws, encoding: "utf8" }).stdout;
+      expect(log).toContain("init");
+      expect(log).not.toContain("checkpoint before edit");
+    } finally {
+      if (prev === undefined) delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+      else process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = prev;
+    }
+  });
 });

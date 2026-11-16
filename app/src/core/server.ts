@@ -122,6 +122,132 @@ class ServerError extends Error {
   }
 }
 
+/**
+ * D-6 / ruling 492 — canonical hermes-style turn frames (ADDITIVE).
+ *
+ * The existing `session.event` notification carries the RuntimeEvent verbatim
+ * and is UNCHANGED: existing single-attach clients keep working byte-for-byte.
+ * In addition, every RuntimeEvent is mapped to zero or more canonical frames
+ * published on a SEPARATE `session.frame` notification method. A client that
+ * does not know that method ignores it; a client that opts in sees the hermes
+ * U3 frame vocabulary (delta / tool.start / approval / clarify / result /
+ * finished) instead of having to infer turn structure from raw RuntimeEvents.
+ *
+ * Mapping table (pure, deterministic, one pass per event):
+ *
+ *   RuntimeEvent                     frame kind(s)
+ *   -------------------------------- | ----------------------------------
+ *   assistant.delta                  delta       — streamed assistant text
+ *   assistant.thinking               delta       — display-only reasoning stream
+ *   tool.card {status:running}       tool.start  — a tool invocation began
+ *   tool.card {status:ok|error}      result      — that tool's outcome
+ *   notice "approval: …"            approval    — approval question to the user
+ *   notice "clarify: …"             clarify     — clarification question to the user
+ *   assistant.done                   result      — final assistant text of the turn
+ *   error                            result      — status "error"
+ *   turn.done                        finished    — the turn boundary
+ *   every other event                (no frame)
+ *
+ * There is NO dedicated approval/clarify RuntimeEvent today: those user-input
+ * prompts surface as plain `notice` events. The frame layer therefore applies
+ * a conservative message-prefix convention (constants below); an ordinary
+ * notice emits no frame. Nothing here mutates contracts, providers, or the
+ * RuntimeEvent stream — the frame set is a derived, additive projection.
+ */
+export const SESSION_FRAME_METHOD = "session.frame" as const;
+export const SERVER_FRAME_KINDS = [
+  "delta",
+  "tool.start",
+  "approval",
+  "clarify",
+  "result",
+  "finished",
+] as const;
+export type ServerFrameKind = (typeof SERVER_FRAME_KINDS)[number];
+
+/** `notice` message prefixes that project to the user-input frame kinds. */
+export const APPROVAL_NOTICE_PREFIX = "approval:";
+export const CLARIFY_NOTICE_PREFIX = "clarify:";
+
+export interface ServerTurnFrame {
+  kind: ServerFrameKind;
+  sessionId: string;
+  /** Originating RuntimeEvent type (provenance for additive consumers). */
+  source: RuntimeEvent["type"];
+  /** delta / result: streamed or final text. */
+  text?: string;
+  /** tool.start / result: tool identity. */
+  callId?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+  /** approval / clarify: the user-facing prompt. */
+  message?: string;
+  /** result: outcome status ("ok" | "error"). */
+  status?: string;
+}
+
+/** Project one RuntimeEvent into zero or more canonical hermes-style frames. */
+export function mapRuntimeEventToFrames(ev: RuntimeEvent, sessionId: string): ServerTurnFrame[] {
+  switch (ev.type) {
+    case "assistant.delta":
+    case "assistant.thinking":
+      return [{ kind: "delta", sessionId, source: ev.type, text: ev.text }];
+    case "tool.card":
+      return ev.status === "running"
+        ? [
+            {
+              kind: "tool.start",
+              sessionId,
+              source: ev.type,
+              callId: ev.callId,
+              name: ev.name,
+              args: ev.args,
+            },
+          ]
+        : [
+            {
+              kind: "result",
+              sessionId,
+              source: ev.type,
+              callId: ev.callId,
+              name: ev.name,
+              status: ev.status,
+              ...(ev.summary !== undefined ? { text: ev.summary } : {}),
+            },
+          ];
+    case "notice":
+      if (ev.message.startsWith(APPROVAL_NOTICE_PREFIX)) {
+        return [
+          {
+            kind: "approval",
+            sessionId,
+            source: ev.type,
+            message: ev.message.slice(APPROVAL_NOTICE_PREFIX.length).trim(),
+          },
+        ];
+      }
+      if (ev.message.startsWith(CLARIFY_NOTICE_PREFIX)) {
+        return [
+          {
+            kind: "clarify",
+            sessionId,
+            source: ev.type,
+            message: ev.message.slice(CLARIFY_NOTICE_PREFIX.length).trim(),
+          },
+        ];
+      }
+      return [];
+    case "assistant.done":
+      return [{ kind: "result", sessionId, source: ev.type, text: ev.text }];
+    case "error":
+      return [{ kind: "result", sessionId, source: ev.type, text: ev.message, status: "error" }];
+    case "turn.done":
+      return [{ kind: "finished", sessionId, source: ev.type }];
+    default:
+      return [];
+  }
+}
+
 export function createServer(opts: ServerOptions): ServerHandle {
   const writeLine: (line: string) => void =
     typeof opts.output === "function" ? opts.output : (line: string) => opts.output && (opts.output as LineSink).write(line);
@@ -159,6 +285,13 @@ export function createServer(opts: ServerOptions): ServerHandle {
     // fan-out on; it deliberately does not gate notification in single-attach.
     const params = { sessionId, event: ev };
     send({ method: SESSION_EVENT_METHOD, params } satisfies ServerNotification);
+    // ADDITIVE (D-6 / ruling 492): publish the canonical frame projection on a
+    // separate method. The `session.event` line above is byte-identical to the
+    // pre-existing stream, so single-attach clients that only read it are
+    // unaffected; `session.frame` is opt-in by simply reading that method.
+    for (const frame of mapRuntimeEventToFrames(ev, sessionId)) {
+      send({ method: SESSION_FRAME_METHOD, params: frame } satisfies ServerNotification);
+    }
   }
 
   /** Open a FRESH session (session.create). Resume-by-id lives in runtimeFor. */

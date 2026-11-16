@@ -34,7 +34,7 @@ import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { withFileLock, targetLockPath } from "../core/file-lock";
-import { formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
+import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChange } from "./change-journal";
@@ -53,6 +53,19 @@ function fail(error: string): ToolResult {
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * E-1: the same opt-in dirty checkpoint `edit` takes before its write. When
+ * `HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=1`, any pre-existing dirt on this path is
+ * committed first so an overwrite cannot destroy unrecoverable work. No flag →
+ * no-op (byte-identical output); no dirt → no commit. Mirrors edit.ts exactly.
+ */
+function dirtyCheckpointPrefix(ctx: ToolContext, rel: string): string {
+  const cp = checkpointDirtyPathBeforeEdit(ctx.workspace, rel);
+  if (cp.committed && cp.notice) return `${cp.notice}\n`;
+  if (cp.error) return `[git checkpoint failed: ${cp.error}]\n`;
+  return "";
 }
 
 /** Lines in `content`, not counting the trailing newline of the final line. */
@@ -174,6 +187,7 @@ export const writeTool: Tool = {
       // changed the file first is reported by the snapshot check, never clobbered.
       let outLines = 0;
       let outBytes = 0;
+      let checkpointNote = "";
       const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
         // Staleness across the window in which the user was deciding (docs/09 §8.2's
         // rule, extended to `write`): a concurrent change is a Conflict, not a
@@ -246,6 +260,10 @@ export const writeTool: Tool = {
         outLines = countLines(toWrite);
         outBytes = Buffer.byteLength(toWrite, "utf8");
 
+        // E-1 dirty checkpoint: commit the dirt this overwrite would replace
+        // while the per-file lock is held, before any byte is written.
+        checkpointNote = dirtyCheckpointPrefix(ctx, rel);
+
         await mkdir(path.dirname(real), { recursive: true });
         const outcome = await writeAtomic(real, toWrite, ctx, real);
         if (isRefused(outcome)) return fail(outcome.refusal);
@@ -272,7 +290,7 @@ export const writeTool: Tool = {
       const lintFixNote = formatLintFixCommitSuffix(ctx.sessionId, ctx.workspace, rel);
       return {
         ok: true,
-        output: `Wrote ${outLines} lines (${outBytes} bytes) to ${rel}${lintFixNote}`,
+        output: `${checkpointNote}Wrote ${outLines} lines (${outBytes} bytes) to ${rel}${lintFixNote}`,
       };
     } catch (e) {
       return fail(msg(e));

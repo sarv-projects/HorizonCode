@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readTool } from "../../src/tools/read";
+import { renderStructuralSummary, structuralSummary, summaryLanguageForPath } from "../../src/tools/read-summary";
 import { makeWorkspace, mockToolContext, numberedLines, tempRoot, writeFixture } from "./helpers";
 
 describe("read tool", () => {
@@ -161,5 +162,128 @@ describe("read tool", () => {
     const r = await readTool.execute({ path: "a.txt", paths: ["a.txt"] }, mockToolContext({ cwd: ws }));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("either path or paths");
+  });
+});
+
+/** B-7 — structural read summaries (ruling draft 499). */
+describe("structural read summary", () => {
+  test("recognizes only structured languages", () => {
+    expect(summaryLanguageForPath("src/a.ts")).toBe("ts");
+    expect(summaryLanguageForPath("a.mjs")).toBe("js");
+    expect(summaryLanguageForPath("a.pyi")).toBe("py");
+    expect(summaryLanguageForPath("README.md")).toBe("md");
+    expect(summaryLanguageForPath("a.json")).toBe("json");
+    expect(summaryLanguageForPath("a.txt")).toBeUndefined();
+    expect(summaryLanguageForPath("a")).toBeUndefined();
+  });
+
+  test("ts/js: imports and top-level declarations, not indented bodies", () => {
+    const src = [
+      'import { x } from "./x";',
+      "export class Widget {",
+      "  method() { const hidden = 1; }",
+      "}",
+      "export function build() { return 1; }",
+      "const topConst = 2;",
+    ].join("\n");
+    const s = structuralSummary(src, "a.ts")!;
+    expect(s.language).toBe("ts");
+    expect(s.lines.join("\n")).toContain('import { x } from "./x";');
+    expect(s.lines.join("\n")).toContain("export class Widget {");
+    expect(s.lines.join("\n")).toContain("export function build() { return 1; }");
+    expect(s.lines.join("\n")).not.toContain("hidden");
+    expect(s.lines.map((l) => l)).toHaveLength(4);
+  });
+
+  test("py: imports, defs, classes and decorators at column 0", () => {
+    const src = ["import os", "from x import y", "@dataclass", "class Thing:", "  def inner(self):", "    pass", "def build():", "  return 1"].join("\n");
+    const s = structuralSummary(src, "a.py")!;
+    expect(s.language).toBe("py");
+    const text = s.lines.join("\n");
+    expect(text).toContain("import os");
+    expect(text).toContain("from x import y");
+    expect(text).toContain("@dataclass");
+    expect(text).toContain("class Thing:");
+    expect(text).toContain("def build():");
+    expect(text).not.toContain("inner");
+  });
+
+  test("md: headings (or first non-empty line as a title)", () => {
+    const src = ["# Title", "body", "## Section", "### Deep", "plain"].join("\n");
+    expect(structuralSummary(src, "a.md")!.lines.join("\n")).toContain("# Title");
+    expect(structuralSummary(src, "a.md")!.lines.join("\n")).toContain("## Section");
+    expect(structuralSummary("no headings here\nsecond", "a.md")!.lines.join("\n")).toContain("no headings here");
+  });
+
+  test("json: top-level keys only", () => {
+    const src = ['{', '  "name": "x",', '  "nested": {', '    "hidden": 1', '  }', '  "count": 2', '}'].join("\n");
+    const s = structuralSummary(src, "a.json")!;
+    expect(s.language).toBe("json");
+    const text = s.lines.join("\n");
+    expect(text).toContain('"name"');
+    expect(text).toContain('"nested"');
+    expect(text).toContain('"count"');
+    expect(text).not.toContain('"hidden"');
+  });
+
+  test("enforces line and byte caps and reports omissions", () => {
+    const src = Array.from({ length: 200 }, (_, i) => `export const key${i} = ${i};`).join("\n");
+    const s = structuralSummary(src, "a.ts", { maxLines: 3, maxBytes: 160, lineChars: 40 })!;
+    expect(s.lines.length).toBeLessThanOrEqual(3);
+    expect(s.total).toBe(200);
+    expect(s.omitted).toBe(200 - s.lines.length);
+    expect(s.omitted).toBeGreaterThan(0);
+    expect(Buffer.byteLength(renderStructuralSummary(s), "utf8")).toBeLessThanOrEqual(300);
+    for (const line of s.lines) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(60);
+  });
+
+  test("computed from full text before truncation: a truncated read still carries the shape", async () => {
+    const big = ["export function head() { return 1; }", "export class Tail {}", ...numberedLines(2100)].join("\n");
+    const ws = makeWorkspace({ "big.ts": big });
+    const r = await readTool.execute({ path: "big.ts", limit: 3 }, mockToolContext({ cwd: ws }));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[truncated:");
+    expect(r.output).toContain("[structural summary: ts;");
+    expect(r.output).toContain("export function head()");
+    expect(r.output).toContain("export class Tail");
+
+    // A full, unwindowed read stays byte-identical (no summary section).
+    const smallWs = makeWorkspace({ "small.ts": "export const x = 1;\nexport const y = 2;\n" });
+    const full = await readTool.execute({ path: "small.ts" }, mockToolContext({ cwd: smallWs }));
+    expect(full.ok).toBe(true);
+    expect(full.output).toBe("     1| export const x = 1;\n     2| export const y = 2;");
+    expect(full.output).not.toContain("[structural summary:");
+  });
+
+  test("summary arg forces or suppresses the section", async () => {
+    const ws = makeWorkspace({ "small.ts": "export const x = 1;\n" });
+    const forced = await readTool.execute({ path: "small.ts", summary: true }, mockToolContext({ cwd: ws }));
+    expect(forced.output).toContain("[structural summary: ts;");
+    const off = await readTool.execute({ path: "small.ts", summary: false }, mockToolContext({ cwd: ws }));
+    expect(off.output).not.toContain("[structural summary:");
+    const txt = makeWorkspace({ "small.txt": "export const x = 1;\n" });
+    const forcedTxt = await readTool.execute({ path: "small.txt", summary: true }, mockToolContext({ cwd: txt }));
+    expect(forcedTxt.output).not.toContain("[structural summary:");
+  });
+
+  test("never executes file content and strips bidi controls from headlines", async () => {
+    const src = 'export class We\u200Bird { throw new Error("boom"); }\n';
+    const ws = makeWorkspace({ "evil.ts": src });
+    const r = await readTool.execute({ path: "evil.ts", summary: true }, mockToolContext({ cwd: ws }));
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("export class Weird");
+    // The rendered file body is byte-exact (zero-width stays), but the SUMMARY
+    // headline is sanitized so a hidden character cannot alter what is shown.
+    const summaryPart = r.output.slice(r.output.indexOf("[structural summary:"));
+    expect(summaryPart).not.toContain("\u200b");
+    expect(r.output).toContain('throw new Error("boom")');
+  });
+
+  test("a batch read also carries summaries per structured item", async () => {
+    const ws = makeWorkspace({ "a.ts": "export const a = 1;\n", "b.txt": "hello\n" });
+    const r = await readTool.execute({ paths: ["a.ts", "b.txt"], summary: true }, mockToolContext({ cwd: ws }));
+    const items = JSON.parse(r.output) as Array<{ path: string; output: string }>;
+    expect(items[0]!.output).toContain("[structural summary: ts;");
+    expect(items[1]!.output).not.toContain("[structural summary:");
   });
 });
