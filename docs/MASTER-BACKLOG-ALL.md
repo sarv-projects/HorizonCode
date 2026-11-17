@@ -148,4 +148,4 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 
 ---
 
-*Last refreshed: 2026-11-16. Rulings through **536**; tree committed on `audit-remediation` @ `ddc8ef8`. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*
+*Last refreshed: 2026-11-16. Rulings through **537**; tree committed on `audit-remediation` @ `ddc8ef8`. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*

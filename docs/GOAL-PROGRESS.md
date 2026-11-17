@@ -4,7 +4,7 @@
 >
 > **Next agent:** [`../AGENTS.md`](../AGENTS.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). **LICENSE deferred** — [`LICENSE-STATUS.md`](LICENSE-STATUS.md).
 >
-> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **536**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`.
+> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **537**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`.
 
 ## Wave summary (honest)
 
