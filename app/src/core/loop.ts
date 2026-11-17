@@ -1066,6 +1066,23 @@ export function streamFor(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
+/**
+ * D-6: the one "clarify" path the harness actually has — the final assistant
+ * text of a turn that asks the user a question. Pure and bounded: a short text
+ * ending in `?` (the last line) yields a display-only prompt for the additive
+ * `clarify` RuntimeEvent; everything else yields undefined. This is NOT a
+ * kernel event and never changes the durable transcript — it only lets the
+ * canonical frame layer avoid re-deriving a question from `assistant.done`.
+ */
+export function clarifyPromptFor(text: string): string | undefined {
+  if (typeof text !== "string") return undefined;
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > 2000) return undefined;
+  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1).trim();
+  if (!lastLine.endsWith("?")) return undefined;
+  return lastLine;
+}
+
 /** lstat that answers undefined for "nothing there", throwing on anything else. */
 function lstatOrUndefined(file: string): ReturnType<typeof lstatSync> | undefined {
   try {
@@ -1580,6 +1597,13 @@ export interface LoopDeps {
   effectHost?: EffectHost;
   /** NF-071 durable admission row for the current user turn (when set). */
   admissionId?: string;
+  /**
+   * C-13 (ruling 363 residual): the session that OWNS `admissionId`. A delegated
+   * child turn runs under its own `sessionId` but must be admitted into the
+   * PARENT's FIFO, so the dispatch refusal checks the id against this session
+   * instead of `deps.sessionId`. Defaults to `deps.sessionId` when omitted.
+   */
+  admissionOwnerSessionId?: string;
 }
 
 /** Drain pending interjections into the transcript at a safe step boundary. */
@@ -2337,7 +2361,7 @@ async function executeTool(
   if (deps.admissionId !== undefined) {
     const admissionRefusal = admissionToolDispatchRefusal(
       new AdmissionQueue(deps.store),
-      deps.sessionId,
+      deps.admissionOwnerSessionId ?? deps.sessionId,
       deps.admissionId,
     );
     if (admissionRefusal !== undefined) {
@@ -2508,7 +2532,29 @@ async function executeTool(
           { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
           { kind: "system", id: "hz-guard" },
         );
+        // D-6: a typed, additive `approval` RuntimeEvent for the canonical turn
+        // frame layer. The durable hz.guard.approval.* append above is unchanged;
+        // an older consumer ignores this variant and the session.event stream
+        // keeps its byte-identical shape.
+        emit(deps.callbacks, {
+          type: "approval",
+          message: request.title,
+          callId: call.id,
+          tool: call.name,
+        });
         const approved = await gate.approve(asked, action);
+        // I-4 / ruling 506 residual: `guard.decision` local analytics (terminal
+        // is the closed decision token). No tool name / path / preview text is
+        // copied — only scalar, content-free fields. Lazy import avoids a module
+        // cycle (analytics-log -> event-catalogue -> loop).
+        const { appendAnalyticsEvent } = await import("./analytics-log");
+        appendAnalyticsEvent({
+          workspace: deps.workspace,
+          event: "guard.decision",
+          sessionId: deps.sessionId,
+          terminal: approved ? "approved" : "declined",
+          errorCode: action.kind,
+        });
         await logEvent(
           deps,
           faults,
@@ -3658,6 +3704,20 @@ export async function runTurn(
           for (const call of turn.toolCalls) appendedTokens += estimateTokens(call.arguments);
         }
         const costFields = usageCostEventFields(turn.usage, deps.provider.name, deps.model);
+        // I-4 / ruling 506 residual: emit the allowlisted `provider.usage` local
+        // analytics name from the provider-turn call site. Only scalar,
+        // non-content fields cross into the NDJSON log (no text/keys/paths).
+        // Lazy import avoids a module cycle (analytics-log -> event-catalogue -> loop).
+        const { appendAnalyticsEvent } = await import("./analytics-log");
+        appendAnalyticsEvent({
+          workspace: deps.workspace,
+          event: "provider.usage",
+          sessionId: deps.sessionId,
+          provider: deps.provider.name,
+          model: deps.model,
+          stepCount: calls,
+          ...(costFields?.costMicroUsd !== undefined ? { costMicroUsd: costFields.costMicroUsd } : {}),
+        });
         await logEvent(deps, faults, EventTypes.usageRecorded, {
           sessionId: deps.sessionId,
           provider: deps.provider.name,
@@ -3724,6 +3784,13 @@ export async function runTurn(
         ...(turn.quirks !== undefined && turn.quirks.length > 0 ? { quirks: turn.quirks } : {}),
       });
       emit(deps.callbacks, { type: "assistant.done", text: turn.text });
+      // D-6: a final assistant question is the harness's real clarification
+      // path. Emit a typed, additive `clarify` event so the frame layer does not
+      // have to guess; the assistant.done above is unchanged for old consumers.
+      const clarify = clarifyPromptFor(turn.text);
+      if (clarify !== undefined) {
+        emit(deps.callbacks, { type: "clarify", message: clarify });
+      }
 
       if (turn.error) {
         if (

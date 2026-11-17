@@ -104,8 +104,16 @@ import {
 import { appendAnalyticsEvent } from "./analytics-log";
 import { stateRoot, workspaceStateDir } from "./paths";
 // G-1: opt-in post-turn review fork (spec builder + runnable, fail-closed runner).
-import { buildReviewFork, maybeRunReviewFork, parentPrefixRecord, reviewForkEnabled } from "./review";
+import {
+  buildReviewFork,
+  detachedReviewForkEnabled,
+  maybeRunReviewFork,
+  parentPrefixRecord,
+  reviewForkEnabled,
+  spawnDetachedReviewFork,
+} from "./review";
 import { SpendLedger, spendLimitMicroFromEnv } from "./spend-ledger";
+import { runOwnerWorkerForTurn } from "./owner-worker-spawn";
 import {
   appendMarkdownTranscriptEvent,
   markdownTranscriptCursor,
@@ -1455,6 +1463,26 @@ class HzRuntimeImpl implements HzRuntime {
       if (this.turnInterjection === interjection) this.turnInterjection = undefined;
       return { text: "", aborted: false, exit: { terminal: "failed", detail: "internal_error" } };
     }
+    // C-12: opt-in owner↔worker OS pipe (HZ_OWNER_WORKER_PIPE=1). Gate OFF =
+    // no spawn. When ON, the worker proves identity + FIFO reserve over NDJSON
+    // stdio before the turn; a refusal is a notice, never a turn failure. macOS/
+    // Windows ancestor proving and full R170 remain external residuals.
+    if (process.env.HZ_OWNER_WORKER_PIPE === "1") {
+      try {
+        const ow = await runOwnerWorkerForTurn({
+          workspace: this.workspace,
+          stateDir: workspaceStateDir(this.workspace),
+          sessionId: this.session.id,
+        });
+        if (ow.status === "ok") {
+          emit(cb, { type: "notice", message: `owner-worker pipe: verified worker pid ${ow.pid} (FIFO reserved)` });
+        } else if (ow.status === "refused") {
+          emit(cb, { type: "notice", message: `owner-worker pipe: ${ow.reason ?? "refused"}` });
+        }
+      } catch (err) {
+        emit(cb, { type: "notice", message: `owner-worker pipe: ${errorMessage(err)}` });
+      }
+    }
     try {
       // RC-18 literal canonical fact: only emit after SQLite admitted AND
       // began the turn. No plaintext prompt is duplicated in the kernel log.
@@ -1600,6 +1628,9 @@ class HzRuntimeImpl implements HzRuntime {
           delegate: (task, maxSteps, profile) =>
             runNested({
               parentSessionId: this.session.id,
+              // C-13 (ruling 363 residual): the child's tool calls join the same
+              // durable FIFO admission as the parent turn.
+              admissionId,
               workspace: this.workspace,
               task,
               maxSteps,
@@ -1668,37 +1699,57 @@ class HzRuntimeImpl implements HzRuntime {
       if (reviewForkEnabled()) {
         try {
           const limitMicroUsd = spendLimitMicroFromEnv();
+          const stateDir = workspaceStateDir(this.workspace);
           const transcript = this.store.history(this.session.id).map((msg, index) => {
             const content = typeof msg.content === "string" ? msg.content.replace(/\s+/g, " ").slice(0, 200) : "";
             return { id: `msg_${index + 1}`, type: msg.role, ...(content !== "" ? { summary: content } : {}) };
           });
-          await maybeRunReviewFork(
-            () =>
-              buildReviewFork({
-                parentPrefix: parentPrefixRecord(
-                  systemPrompt(this.workspace, new Date(), {
-                    tools: toolSpecs(this.session.id).map((spec) => spec.name),
-                    kernelMode:
-                      typeof (this.kernel as { mode?: unknown }).mode === "string"
-                        ? ((this.kernel as { mode?: unknown }).mode as string)
-                        : "untrusted",
-                    planMode: this.planOn,
-                  }),
-                ),
-                transcript,
+          const buildSpec = () =>
+            buildReviewFork({
+              parentPrefix: parentPrefixRecord(
+                systemPrompt(this.workspace, new Date(), {
+                  tools: toolSpecs(this.session.id).map((spec) => spec.name),
+                  kernelMode:
+                    typeof (this.kernel as { mode?: unknown }).mode === "string"
+                      ? ((this.kernel as { mode?: unknown }).mode as string)
+                      : "untrusted",
+                  planMode: this.planOn,
+                }),
+              ),
+              transcript,
+              workspace: this.workspace,
+              stateDir,
+            });
+          // No configured HZ_SPEND_LIMIT_USD -> no ledger -> both paths refuse
+          // before dispatch with a clear notice (never surprise spend).
+          const spend = limitMicroUsd > 0 ? new SpendLedger(this.workspace, { limitMicroUsd }) : undefined;
+          const onNotice = (message: string): void => emit(cb, { type: "notice", message });
+          if (detachedReviewForkEnabled()) {
+            // G-1: detached, fire-and-forget scheduling. Reserve in the parent,
+            // spawn the worker, and return to the turn without awaiting a call.
+            // HZ_REVIEW_FORK=1 alone keeps ruling 488's awaited path below.
+            if (spend !== undefined) {
+              spawnDetachedReviewFork({
+                spec: buildSpec(),
+                model: this.currentModel,
+                providerName: this.provider.name,
                 workspace: this.workspace,
-                stateDir: workspaceStateDir(this.workspace),
-              }),
-            {
+                stateDir,
+                spend,
+                onNotice,
+              });
+            } else {
+              onNotice("review fork: detached worker refused before spawn: no HZ_SPEND_LIMIT_USD ledger (no surprise spend)");
+            }
+          } else {
+            await maybeRunReviewFork(buildSpec, {
               provider: this.provider,
               model: this.currentModel,
-              // No configured HZ_SPEND_LIMIT_USD -> no ledger -> the runner
-              // refuses before dispatch with a clear notice.
-              spend: limitMicroUsd > 0 ? new SpendLedger(this.workspace, { limitMicroUsd }) : undefined,
+              spend,
               signal: controller.signal,
-              onNotice: (message) => emit(cb, { type: "notice", message }),
-            },
-          );
+              onNotice,
+            });
+          }
         } catch (err) {
           emit(cb, { type: "notice", message: `review fork: ${errorMessage(err)}` });
         }

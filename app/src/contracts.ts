@@ -806,6 +806,21 @@ export type RuntimeEvent =
       receiptSeq?: number;
     }
   | { type: "notice"; message: string }
+  // ADDITIVE (D-6 / ruling 492 residual): typed user-input prompts. The frame
+  // layer used to infer these from `notice` prefixes ("approval:"/"clarify:");
+  // a real approval ask now emits `approval`, and a final assistant question
+  // emits `clarify`. Both are harness-side facade events (NOT kernel events —
+  // the 44-name catalogue is unchanged). The loop ALSO keeps the durable
+  // `hz.guard.approval.*` event appends, so this is purely additive: an older
+  // consumer ignores these variants and the `session.event` stream is unchanged.
+  | {
+      type: "approval";
+      /** The user-facing question, already rendered (never raw argv/secrets). */
+      message: string;
+      callId?: string;
+      tool?: string;
+    }
+  | { type: "clarify"; message: string; callId?: string }
   // ADDITIVE (docs/28 ruling 235): EffectHost unknown/reconciled for TUI status.
   // Harness-side facade events only; the kernel catalogue is unchanged.
   | { type: "effect.unknown"; effectId: string; tool: string; receiptId?: string; callId?: string }

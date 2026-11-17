@@ -561,6 +561,33 @@ describe("D-6 canonical turn frames (ruling 492)", () => {
     expect(frames.every((f) => f.sessionId === "sess")).toBe(true);
   });
 
+  test("typed approval/clarify RuntimeEvents project directly and keep legacy prefix compatibility", () => {
+    const approval = mapRuntimeEventToFrames(
+      { type: "approval", message: "allow write?", callId: "c9", tool: "write" },
+      "s",
+    );
+    expect(approval).toHaveLength(1);
+    expect(approval[0]).toMatchObject({
+      kind: "approval",
+      source: "approval",
+      message: "allow write?",
+      callId: "c9",
+      name: "write",
+    });
+    const clarify = mapRuntimeEventToFrames({ type: "clarify", message: "which path?" }, "s");
+    expect(clarify).toHaveLength(1);
+    expect(clarify[0]).toMatchObject({ kind: "clarify", source: "clarify", message: "which path?" });
+    // Legacy notice-prefix producers still project (additive compatibility).
+    expect(mapRuntimeEventToFrames({ type: "notice", message: `${APPROVAL_NOTICE_PREFIX} allow?` }, "s")[0]).toMatchObject({
+      kind: "approval",
+      source: "notice",
+    });
+    expect(mapRuntimeEventToFrames({ type: "notice", message: `${CLARIFY_NOTICE_PREFIX} which?` }, "s")[0]).toMatchObject({
+      kind: "clarify",
+      source: "notice",
+    });
+  });
+
   test("assistant.done/error/thinking project to result/delta; other events emit nothing", () => {
     expect(mapRuntimeEventToFrames({ type: "assistant.thinking", text: "hmm" }, "s")[0]).toMatchObject({
       kind: "delta",

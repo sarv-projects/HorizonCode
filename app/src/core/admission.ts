@@ -114,6 +114,18 @@ export class AdmissionIdCollisionError extends Error {
   }
 }
 
+/** One tool-call input admitted as part of an atomic C-13 batch. */
+export interface AdmissionBatchCall {
+  /** Durable admission id (dedupe key, scoped to the session). */
+  id: string;
+  /** Stable description of the call (input text, never raw secrets). */
+  input: string;
+}
+
+export type AdmissionBatchResult =
+  | { ok: true; ids: string[] }
+  | { ok: false; reason: "empty-batch" | "duplicate-in-batch" | "invalid-call" | "id-collision"; detail?: string; collision?: AdmissionIdCollisionError };
+
 /**
  * The admission FIFO over one SessionStore. Construct it with a store —
  * `new AdmissionQueue(store)` — and construct a new one after reopening the
@@ -314,6 +326,95 @@ export class AdmissionQueue {
       .query("SELECT id, session_id, input, state, created_at, updated_at, evidence FROM admissions WHERE id = ?")
       .get(id) as AdmissionDbRow | null | undefined;
     return raw ? toRow(raw) : null;
+  }
+
+/* ------------------------- C-13 atomic batch apply ----------------------- */
+
+/**
+ * C-13 incremental (ruling 363 residual): atomically admit a GROUP of tool
+ * calls in one transaction. All-or-nothing: the rows are inserted inside a
+ * single SQLite transaction; if ANY id is already owned by a DIFFERENT session
+ * (collision), is duplicated within the batch, or has invalid input, the whole
+ * batch is rolled back — no partial admission survives. Re-applying the same
+ * ids for the SAME session is the documented idempotent no-op (`admit` semantics).
+ *
+ * This is QUEUE-LEVEL atomicity for a batch of admission rows. It is NOT full
+ * R170 atomicity (no cross-process/kernel/SQLite-WAL fencing claim).
+ */
+admitBatch(sessionId: string, calls: readonly AdmissionBatchCall[]): AdmissionBatchResult {
+  requireText(sessionId, "sessionId");
+  if (!Array.isArray(calls) || calls.length === 0) return { ok: false, reason: "empty-batch" };
+  const seen = new Set<string>();
+  for (const call of calls) {
+    if (call === null || typeof call !== "object") return { ok: false, reason: "invalid-call" };
+    if (typeof call.id !== "string" || call.id === "") return { ok: false, reason: "invalid-call", detail: "id" };
+    if (typeof call.input !== "string") return { ok: false, reason: "invalid-call", detail: "input" };
+    if (seen.has(call.id)) return { ok: false, reason: "duplicate-in-batch", detail: call.id };
+    seen.add(call.id);
+  }
+  // Pre-check collisions so the refusal names the exact id and both sessions,
+  // exactly like the single-row `admit` path.
+  for (const call of calls) {
+    const existing = this.byId(call.id);
+    if (existing && existing.sessionId !== sessionId) {
+      return {
+        ok: false,
+        reason: "id-collision",
+        collision: new AdmissionIdCollisionError(call.id, existing.sessionId, sessionId),
+      };
+    }
+  }
+  const ids = calls.map((call) => call.id);
+  const now = nowIso();
+  const runTx = this.db.transaction(() => {
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO admissions (id, session_id, input, state, created_at, updated_at, evidence) " +
+        "VALUES (?, ?, ?, 'queued', ?, ?, NULL)",
+    );
+    for (const call of calls) insert.run(call.id, sessionId, call.input, now, now);
+  });
+  try {
+    runTx();
+  } catch (err) {
+    return { ok: false, reason: "invalid-call", detail: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, ids };
+}
+
+/**
+ * C-13 atomic batch settle: move a group of admission rows to one terminal
+ * settlement in a single transaction — all-or-nothing. Every id must currently
+ * be `queued`/`running` and belong to `sessionId`; if any id fails that check
+ * the WHOLE batch is rolled back (no partial settle). An `unknown` settle here
+ * halts the followers exactly as the single-row `settle` does.
+ *
+ * Queue-level atomicity only — NOT full R170.
+ */
+settleBatch(sessionId: string, ids: readonly string[], state: AdmissionSettlement): boolean {
+  requireText(sessionId, "sessionId");
+  if (state !== "done" && state !== "failed" && state !== "unknown") {
+    throw new Error(`admission: ${String(state)} is not a settlement state`);
+  }
+  if (!Array.isArray(ids) || ids.length === 0) return false;
+  const runTx = this.db.transaction(() => {
+    for (const id of ids) {
+      requireText(id, "id");
+      const row = this.byId(id);
+      if (!row || row.sessionId !== sessionId || (row.state !== "queued" && row.state !== "running")) {
+        throw new Error(`admission: batch settle refused for ${id}`);
+      }
+    }
+    const update = this.db.prepare(
+      "UPDATE admissions SET state = ?, updated_at = ? WHERE id = ? AND state IN ('queued','running')",
+    );
+    for (const id of ids) update.run(state, nowIso(), id);
+  });
+  try {
+    runTx();
+    return true;
+  } catch {
+    return false;
+  }
   }
 }
 

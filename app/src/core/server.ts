@@ -141,18 +141,21 @@ class ServerError extends Error {
  *   assistant.thinking               delta       — display-only reasoning stream
  *   tool.card {status:running}       tool.start  — a tool invocation began
  *   tool.card {status:ok|error}      result      — that tool's outcome
- *   notice "approval: …"            approval    — approval question to the user
- *   notice "clarify: …"             clarify     — clarification question to the user
+ *   approval                         approval    — typed approval question (D-6)
+ *   clarify                          clarify     — typed clarification question (D-6)
+ *   notice "approval: …"            approval    — legacy prefix projection (compat)
+ *   notice "clarify: …"             clarify     — legacy prefix projection (compat)
  *   assistant.done                   result      — final assistant text of the turn
  *   error                            result      — status "error"
  *   turn.done                        finished    — the turn boundary
  *   every other event                (no frame)
  *
- * There is NO dedicated approval/clarify RuntimeEvent today: those user-input
- * prompts surface as plain `notice` events. The frame layer therefore applies
- * a conservative message-prefix convention (constants below); an ordinary
- * notice emits no frame. Nothing here mutates contracts, providers, or the
- * RuntimeEvent stream — the frame set is a derived, additive projection.
+ * D-6 adds dedicated `approval` / `clarify` RuntimeEvent variants (contracts.ts)
+ * emitted from the real loop paths; those map directly below. The legacy
+ * `notice` prefix projection (constants below) is KEPT for additive
+ * compatibility with older producers: an ordinary notice still emits no frame.
+ * Nothing here mutates providers or the RuntimeEvent stream — the frame set is
+ * a derived, additive projection.
  */
 export const SESSION_FRAME_METHOD = "session.frame" as const;
 export const SERVER_FRAME_KINDS = [
@@ -215,6 +218,21 @@ export function mapRuntimeEventToFrames(ev: RuntimeEvent, sessionId: string): Se
               ...(ev.summary !== undefined ? { text: ev.summary } : {}),
             },
           ];
+    case "approval":
+      return [
+        {
+          kind: "approval",
+          sessionId,
+          source: ev.type,
+          message: ev.message,
+          ...(ev.callId !== undefined ? { callId: ev.callId } : {}),
+          ...(ev.tool !== undefined ? { name: ev.tool } : {}),
+        },
+      ];
+    case "clarify":
+      return [
+        { kind: "clarify", sessionId, source: ev.type, message: ev.message },
+      ];
     case "notice":
       if (ev.message.startsWith(APPROVAL_NOTICE_PREFIX)) {
         return [

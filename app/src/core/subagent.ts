@@ -128,6 +128,13 @@ export function boundChildEvent(ev: RuntimeEvent): RuntimeEvent | null {
 export interface NestedRunOptions {
   /** Parent session id — when set, `hz.agent.spawned` / `hz.agent.completed` append here (RC-18). */
   parentSessionId?: string;
+  /**
+   * C-13 (ruling 363 residual): the parent turn's durable FIFO admission id.
+   * Forwarded to the child `LoopDeps` so the delegated tool calls are admitted
+   * into the SAME per-session FIFO (the child writes to the parent's store).
+   * When absent the child has no admission gate, matching the old behavior.
+   */
+  admissionId?: string;
   /** Receives bounded child events wrapped as `subagent.event` (parent stream). */
   onEvent?: (ev: RuntimeEvent) => void;
   workspace: string;
@@ -215,6 +222,14 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
   const deps: LoopDeps = {
     workspace: opts.workspace,
     sessionId: session.id,
+    // C-13 (ruling 363 residual): admit the child's tool calls into the same
+    // durable per-session FIFO as the parent turn. An absent admissionId keeps
+    // the pre-363 behavior (child ungated).
+    admissionId: opts.admissionId,
+    // The child writes to its own session, but the admission row belongs to the
+    // parent — check the parent's FIFO so a child tool is not refused for a
+    // session/id mismatch.
+    admissionOwnerSessionId: opts.admissionId !== undefined ? parentSessionId : undefined,
     model,
     provider: opts.provider,
     kernel: opts.kernel,

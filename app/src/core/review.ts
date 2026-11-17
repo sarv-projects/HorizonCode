@@ -57,6 +57,8 @@
  */
 
 import * as path from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import type { ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../contracts";
 import { sha256Hex } from "./canon";
 import { sanitizeForDistill } from "./distill-sanitize";
@@ -457,6 +459,10 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function randomHex(bytes: number): string {
+  return randomBytes(bytes).toString("hex");
+}
+
 function isSpendLimit(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code ?? (err as { name?: unknown } | null)?.name;
   return code === "limit" || code === "SpendLimitError";
@@ -700,4 +706,183 @@ export async function maybeRunReviewFork(
   const result = await runReviewFork(spec, deps);
   deps.onNotice?.(formatReviewForkNotice(result));
   return result;
+}
+
+/* --------------------------- detached worker (G-1) ------------------------- */
+
+/**
+ * G-1: the detached, fire-and-forget scheduling gate. `HZ_REVIEW_FORK=1` alone
+ * keeps the original AWAITED post-turn path (ruling 488); the detached worker
+ * additionally requires `HZ_REVIEW_FORK_DETACHED=1`. Gate off = zero change.
+ */
+export const REVIEW_FORK_DETACHED_ENV = "HZ_REVIEW_FORK_DETACHED";
+
+export function detachedReviewForkEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[REVIEW_FORK_DETACHED_ENV] === "1" && reviewForkEnabled(env);
+}
+
+/** The closed NDJSON job handed to a detached worker process. */
+export interface ReviewForkWorkerJob {
+  v: 1;
+  kind: "review-fork-worker-job";
+  jobId: string;
+  spec: ReviewForkSpec;
+  model: string;
+  providerName: string;
+  workspace: string;
+  stateDir: string;
+  /** Parent-side reservation amount, reserved BEFORE the worker is spawned. */
+  reserveUsd: number;
+  /** The parent's reservation id; the worker settles this, never re-reserves. */
+  reservationId: string;
+}
+
+/** A spawned worker handle — only `pid` is needed for the parent's notice. */
+export interface SpawnedReviewForkWorker {
+  pid?: number;
+}
+
+/** Injectable spawn seam. Tests pass a fake that records the job (no provider, no network). */
+export type ReviewForkWorkerSpawner = (job: ReviewForkWorkerJob, jobPath: string) => SpawnedReviewForkWorker;
+
+export interface DetachedReviewForkDeps {
+  spec: ReviewForkSpec;
+  model: string;
+  providerName: string;
+  workspace: string;
+  stateDir: string;
+  /** The parent's spend rail. A reservation is taken here BEFORE spawn. */
+  spend: ReviewForkSpend;
+  reserveUsd?: number;
+  /** Injectable; defaults to re-execing this app with the hidden worker subcommand. */
+  spawnWorker?: ReviewForkWorkerSpawner;
+  now?: () => string;
+  onNotice?: (message: string) => void;
+}
+
+export type DetachedReviewForkOutcome =
+  | { status: "spawned"; jobId: string; reservationId: string; pid?: number }
+  | { status: "refused"; reason: ReviewForkFailReason; detail?: string };
+
+/**
+ * Reserve spend in the PARENT and spawn a detached worker — fire and forget.
+ * The worker inherits the reservation id and settles it against the same
+ * file-backed SpendLedger; no second reserve happens in the child. A missing
+ * ledger or an exhausted ceiling refuses BEFORE any spawn. The `spawnWorker`
+ * seam lets tests prove the whole path with a fake subprocess (no real
+ * provider/network); the real default re-execs `main.ts __review-fork-worker`.
+ *
+ * This is NOT a claim of durable crash recovery for the fork: if the detached
+ * worker dies before settling, the reservation expires on its TTL.
+ */
+export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedReviewForkOutcome {
+  const jobId = `rfj-${randomHex(8)}-${deps.now ? Date.parse(deps.now()) : Date.now()}`;
+  const reserveUsd =
+    deps.reserveUsd !== undefined && Number.isFinite(deps.reserveUsd) && deps.reserveUsd > 0
+      ? deps.reserveUsd
+      : estimateReviewForkCostUsd(deps.spec, deps.providerName, deps.model);
+  let reservationId: string;
+  try {
+    reservationId = deps.spend.reserve(reserveUsd, { note: `review-fork detached ${deps.providerName}/${deps.model}` }).id;
+  } catch (err) {
+    deps.onNotice?.(
+      `review fork: detached worker refused before spawn (${isSpendLimit(err) ? "spend-limit" : "spend-unavailable"}): ${errorMessage(err)}`,
+    );
+    return {
+      status: "refused",
+      reason: isSpendLimit(err) ? "spend-limit" : "spend-unavailable",
+      detail: errorMessage(err),
+    };
+  }
+
+  const job: ReviewForkWorkerJob = {
+    v: 1,
+    kind: "review-fork-worker-job",
+    jobId,
+    spec: deps.spec,
+    model: deps.model,
+    providerName: deps.providerName,
+    workspace: deps.workspace,
+    stateDir: deps.stateDir,
+    reserveUsd,
+    reservationId,
+  };
+  const jobsDir = path.join(deps.stateDir, "review-fork-jobs");
+  mkdirSync(jobsDir, { recursive: true, mode: 0o700 });
+  const jobPath = path.join(jobsDir, `${jobId}.ndjson`);
+  writeFileSync(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
+
+  try {
+    const spawned = (deps.spawnWorker ?? defaultReviewForkWorkerSpawner)(job, jobPath);
+    deps.onNotice?.(`review fork: detached worker ${jobId} spawned (pid ${spawned.pid ?? "?"}); no provider call in parent`);
+    return { status: "spawned", jobId, reservationId, pid: spawned.pid };
+  } catch (err) {
+    // Spawn failed: release the reservation so the ceiling is not held.
+    try {
+      deps.spend.release(reservationId);
+    } catch {
+      /* best effort */
+    }
+    deps.onNotice?.(`review fork: detached worker spawn failed: ${errorMessage(err)}`);
+    return { status: "refused", reason: "provider-error", detail: errorMessage(err) };
+  }
+}
+
+/** Default spawner: re-exec this app as a detached, unref'd worker subprocess. */
+function defaultReviewForkWorkerSpawner(job: ReviewForkWorkerJob, jobPath: string): SpawnedReviewForkWorker {
+  const entry = process.argv[1] ?? "";
+  const proc = Bun.spawn([process.execPath, entry, REVIEW_FORK_WORKER_SUBCOMMAND, jobPath], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+    detached: true,
+  });
+  // Do not keep the parent event loop alive for the fork (fire and forget).
+  (proc as { unref?: () => void }).unref?.();
+  return { pid: proc.pid };
+}
+
+/** Hidden subcommand the detached worker re-execs (main.ts dispatches it). */
+export const REVIEW_FORK_WORKER_SUBCOMMAND = "__review-fork-worker";
+
+/** Decode a worker job file written by `spawnDetachedReviewFork`. */
+export function decodeReviewForkWorkerJob(raw: string): ReviewForkWorkerJob | undefined {
+  let parsed:unknown;
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== "object") return undefined;
+  const job = parsed as Partial<ReviewForkWorkerJob>;
+  if (job.v !== 1 || job.kind !== "review-fork-worker-job") return undefined;
+  if (typeof job.jobId !== "string" || typeof job.reservationId !== "string") return undefined;
+  if (typeof job.model !== "string" || typeof job.providerName !== "string") return undefined;
+  if (typeof job.workspace !== "string" || typeof job.stateDir !== "string") return undefined;
+  if (typeof job.reserveUsd !== "number" || !Number.isFinite(job.reserveUsd) || job.reserveUsd <= 0) return undefined;
+  if (job.spec === undefined || job.spec.origin !== REVIEW_FORK_ORIGIN) return undefined;
+  return job as ReviewForkWorkerJob;
+}
+
+/**
+ * Run a decoded worker job in the CHILD process: settle the parent's
+ * reservation (never re-reserve), verify prefix parity again, and execute the
+ * fork. Provider construction is injected so tests need no network.
+ */
+export async function runReviewForkWorker(
+  job: ReviewForkWorkerJob,
+  deps: { provider: ReviewForkRunDeps["provider"]; spend: ReviewForkSpend; now?: () => string },
+): Promise<ReviewForkRunResult> {
+  const settledSpend: ReviewForkSpend = {
+    reserve: () => ({ id: job.reservationId }),
+    settle: (id, actualUsd, note) => deps.spend.settle(id === "" ? job.reservationId : id, actualUsd, note),
+    release: (id) => deps.spend.release(id === "" ? job.reservationId : id),
+  };
+  return runReviewFork(job.spec, {
+    provider: deps.provider,
+    model: job.model,
+    spend: settledSpend,
+    reserveUsd: job.reserveUsd,
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+  });
 }

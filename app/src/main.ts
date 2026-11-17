@@ -65,6 +65,13 @@ import {
   appendAnalyticsEvent,
   applyAnalyticsLogCliFlag,
 } from "./core/analytics-log";
+import {
+  REVIEW_FORK_WORKER_SUBCOMMAND,
+  decodeReviewForkWorkerJob,
+  runReviewForkWorker,
+} from "./core/review";
+import { SpendLedger } from "./core/spend-ledger";
+import { makeProvider } from "./core/providers";
 import { buildShowPromptsRequest, renderShowPrompts } from "./core/show-prompts";
 import { buildShowRepoMap } from "./core/show-repo-map";
 import {
@@ -136,6 +143,7 @@ const HELP = [
   "  --show-prompts       dump the rendered provider request and exit (no API)",
   "  --show-repo-map      dump the repo_map render and exit (no API)",
   "  --analytics-log [path]  opt-in local NDJSON analytics under state (no network)",
+  "  --review-fork           opt-in detached post-turn review fork (needs HZ_SPEND_LIMIT_USD; no network claim)",
   "  --mock               offline demo, no key   --version    print the version",
   "  -p, --print [text]   one non-interactive turn, print the answer (prompt from stdin if no text)",
   "  --output-format <f>  with -p: text (default) | json | stream-json",
@@ -169,6 +177,8 @@ interface CliOptions {
   listModelsFilter?: string;
   showPrompts: boolean;
   showRepoMap: boolean;
+  /** G-1: opt into detached post-turn review-fork scheduling. */
+  reviewFork: boolean;
   /** false = unset; true = default state path; string = explicit path */
   analyticsLog?: boolean | string;
   /** false = unset; true = default transcript path; string = explicit path */
@@ -195,6 +205,7 @@ function parseArgs(argv: string[]): CliOptions {
     listModels: false,
     showPrompts: false,
     showRepoMap: false,
+    reviewFork: false,
     allowUntrusted: false,
     errors: [],
   };
@@ -295,6 +306,9 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case "--show-repo-map":
         opts.showRepoMap = true;
+        break;
+      case "--review-fork":
+        opts.reviewFork = true;
         break;
       case "--analytics-log": {
         // Optional path: bare flag → default under state; next token if not a flag.
@@ -707,7 +721,18 @@ function runConfigCommand(args: string[]): number {
   }
   const check = args[1] !== undefined ? checkConfigFile(path.resolve(args[1])) : checkConfigFile();
   process.stdout.write(renderConfigCheck(check) + "\n");
-  return check.unknown.length > 0 || check.rejected.length > 0 ? 1 : 0;
+  // I-4 / ruling 506 residual: `config.invalid` local analytics from the config
+  // call site. Only the observed error-code token crosses into the log — never
+  // the rejected key/value text, the file path, or any secret.
+  const invalid = check.unknown.length > 0 || check.rejected.length > 0;
+  if (invalid) {
+    appendAnalyticsEvent({
+      workspace: process.cwd(),
+      event: "config.invalid",
+      errorCode: check.rejected.length > 0 ? "rejected" : "unknown-key",
+    });
+  }
+  return invalid ? 1 : 0;
 }
 
 /** Re-run this entry with `--workspace` after creating a worktree. */
@@ -1164,7 +1189,53 @@ async function runCommitCommand(rawArgs: string[]): Promise<number> {
   }
 }
 
+/**
+ * G-1 hidden worker entry. Re-exec'd detached by `spawnDetachedReviewFork`.
+ * Reads the closed NDJSON job, rebuilds a provider from the workspace config,
+ * and settles the parent's spend reservation via a file-backed SpendLedger.
+ * Failures are swallowed (exit 0) — a fork must never fail a turn it already
+ * finished. No shell-net egress enforcement is claimed.
+ */
+async function runReviewForkWorkerEntry(jobPath: string): Promise<number> {
+  try {
+    const raw = fs.readFileSync(jobPath, "utf8");
+    const job = decodeReviewForkWorkerJob(raw);
+    if (job === undefined) return 0;
+    const limitMicroUsd = process.env.HZ_SPEND_LIMIT_USD !== undefined ? Number(process.env.HZ_SPEND_LIMIT_USD) : 0;
+    const ledger = new SpendLedger(job.workspace, {
+      limitMicroUsd: Number.isFinite(limitMicroUsd) && limitMicroUsd > 0 ? limitMicroUsd : undefined,
+    });
+    const config = cliConfig(job.workspace, {
+      workspace: job.workspace,
+      continueSession: false,
+      mock: false,
+      help: false,
+      version: false,
+      print: false,
+      listModels: false,
+      showPrompts: false,
+      showRepoMap: false,
+      reviewFork: false,
+      allowUntrusted: false,
+      errors: [],
+    });
+    const provider = makeProvider({ ...config, model: job.model }, {});
+    await runReviewForkWorker(job, { provider, spend: ledger });
+    fs.rmSync(jobPath, { force: true });
+  } catch {
+    /* a detached worker must never surface an error into a finished turn */
+  }
+  return 0;
+}
+
 async function main(): Promise<number> {
+  // G-1: the hidden detached-worker subcommand is dispatched before every other
+  // path (including the user-env trust check) — it is an internal, file-driven
+  // worker, never a user-facing command.
+  const argv = process.argv.slice(2);
+  if (argv[0] === REVIEW_FORK_WORKER_SUBCOMMAND) {
+    return runReviewForkWorkerEntry(argv[1] ?? "");
+  }
   // The trust boundary is decided by the USER environment, never by a file a
   // cloned workspace can ship. Bun's auto-loaded `.env` is disabled by the
   // launcher (`bin/hzcode --no-env-file`); the only env file read here is the
@@ -1270,6 +1341,15 @@ async function main(): Promise<number> {
 
   // I-4 / ruling 468: opt-in local analytics before any runtime or one-shot dump.
   applyAnalyticsLogCliFlag(process.env, opts.analyticsLog);
+
+  // G-1: `--review-fork` (and `grow --review-fork`) set the same two env gates
+  // the post-turn hook reads; `HZ_REVIEW_FORK=1` alone still honours the original
+  // awaited path, the CLI opts into the detached worker as well.
+  if (opts.reviewFork) {
+    process.env.HZ_REVIEW_FORK = "1";
+    process.env.HZ_REVIEW_FORK_DETACHED = "1";
+    appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "review-fork" });
+  }
 
   if (opts.showPrompts) {
     const config = cliConfig(workspace, opts);
