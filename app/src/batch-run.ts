@@ -3,14 +3,16 @@
  *
  *   bun run batch --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]]
  *                 [--slice start:end] [--write-config [path]] [--resume] [--config <path>]
- *                 [--dry-run] [--status] [--live]
+ *                 [--dry-run] [--status] [--live] [--concurrency N]
  *
  * `--write-config` persists launch selection flags beside the job (or at an
  * explicit path). `--resume` recovers them so long runs need not re-specify
  * filter/arm/shuffle/slice (J-4 arm report via `--status`). Each pending row is
  * executed through the guarded runtime (I-5/J-2/J-4); Ctrl-C drains the
- * in-flight row before scheduling stops. Interactive Ctrl-C as input is a
- * named residual.
+ * in-flight row before scheduling stops. One workspace-scoped `SpendLedger`
+ * (C-5, honouring `HZ_SPEND_LIMIT_USD`) is shared by every row so the ceiling is
+ * batch-wide. `--concurrency N` (default 1) bounds rows in flight (J-2).
+ * Interactive Ctrl-C as input is a named residual.
  */
 
 import {
@@ -27,12 +29,14 @@ import {
   writeBatchRunnerConfig,
   createBatchDrainController,
   executeBatchJob,
+  normalizeBatchConcurrency,
   type BatchExecutionSummary,
   type BatchRowExecutor,
   type BatchSpendRail,
   type BatchSelectionOptions,
   type BatchJobRow,
 } from "./core/batch-runner";
+import { SpendLedger, spendLimitMicroFromEnv } from "./core/spend-ledger";
 import type { EvalExecutor } from "./core/evals";
 import { metricContract } from "./core/metrics";
 import { formatBenchmarkManagerReport } from "./core/benchmark-manager";
@@ -50,14 +54,24 @@ const DEFAULT_IO: BatchCliIo = {
 };
 
 const USAGE =
-  "usage: bun run src/batch-run.ts --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]] [--slice start:end] [--write-config [path]] [--resume] [--config <path>] [--dry-run] [--status] [--live]";
+  "usage: bun run src/batch-run.ts --job <file.jsonl> [--filter text] [--arm prefix] [--shuffle [seed]] [--slice start:end] [--write-config [path]] [--resume] [--config <path>] [--dry-run] [--status] [--live] [--concurrency N]";
+
+/** Default per-row spend reservation when a batch-wide ceiling is configured. */
+export const DEFAULT_BATCH_RESERVE_USD = 0.01;
 
 /** Injection seams for tests: a scripted guarded executor / abort signal / spend rail. */
 export interface BatchCliOptions {
   executor?: BatchRowExecutor;
   signal?: AbortSignal;
+  /** Explicit rail wins over the CLI-constructed workspace ledger (test seam). */
   spend?: BatchSpendRail;
   reserveUsd?: number;
+  /** Workspace the batch-wide SpendLedger is scoped to (default process.cwd()). */
+  workspace?: string;
+  /** J-2: rows in flight (default 1); explicit option overrides `--concurrency`. */
+  concurrency?: number;
+  /** Env used to resolve `HZ_SPEND_LIMIT_USD` (default process.env). */
+  spendEnv?: Record<string, string | undefined>;
   onDrain?: (message: string) => void;
 }
 
@@ -190,13 +204,16 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
 
   let cliSelection: { opts: BatchSelectionOptions; active: boolean };
   let paths: { writePath?: string; resumePath?: string };
+  let cliConcurrency: number;
   try {
     cliSelection = selectionFromArgs(argv);
     paths = configPathFromArgs(argv, jobPath);
+    cliConcurrency = normalizeBatchConcurrency(argValue(argv, "--concurrency"));
   } catch (err) {
     io.err(`batch: ${err instanceof Error ? err.message : String(err)}`);
     return 2;
   }
+  const concurrency = normalizeBatchConcurrency(opts.concurrency ?? cliConcurrency);
 
   let selectedOpts = cliSelection.opts;
   let selectionActive = cliSelection.active;
@@ -291,14 +308,28 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
       return 2;
     }
   }
+  // C-5: construct ONE workspace-scoped SpendLedger for the whole batch, so
+  // every row draws from the same ceiling. `HZ_SPEND_LIMIT_USD` sets the limit;
+  // 0/absent = unlimited (no rail constructed, so no per-row reservation). An
+  // injected rail (tests) wins. The TTL reservation rail is wall-clock based and
+  // lives inside SpendLedger, so the batch inherits it unchanged.
+  const limitMicroUsd = spendLimitMicroFromEnv(opts.spendEnv ?? process.env);
+  const spendRail: BatchSpendRail | undefined =
+    opts.spend ??
+    (limitMicroUsd > 0
+      ? new SpendLedger(path.resolve(opts.workspace ?? process.cwd()), { limitMicroUsd })
+      : undefined);
+  const reserveUsd = opts.reserveUsd ?? DEFAULT_BATCH_RESERVE_USD;
+
   let summary: BatchExecutionSummary;
   try {
     summary = await executeBatchJob({
       file: jobPath,
       rows: selected,
       execute: executor!,
-      ...(opts.spend === undefined ? {} : { spend: opts.spend, reserveUsd: opts.reserveUsd ?? 0.01 }),
+      ...(spendRail === undefined ? {} : { spend: spendRail, reserveUsd }),
       signal,
+      concurrency,
       onEvent: (event) => {
         if (event.kind === "row.done" || event.kind === "row.failed") {
           const row = event.rows.find((r) => r.id === event.rowId);

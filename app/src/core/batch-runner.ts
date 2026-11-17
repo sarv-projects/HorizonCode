@@ -9,7 +9,10 @@
  * runner-config spirit). This module also drives the guarded per-row execution
  * engine (I-5/J-2/J-4): rows go through an injected guarded runtime, the existing
  * SpendLedger rail is reused for reserve-before-dispatch when a caller supplies
- * one, and Ctrl-C drains the in-flight row before scheduling stops.
+ * one, and Ctrl-C drains the in-flight row before scheduling stops. A bounded
+ * worker pool (`concurrency`, default 1) allows several rows in flight while
+ * keeping per-row transition persistence, fail-closed terminals and
+ * deterministic (status-based) resume.
  */
 
 import { appendFileSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -554,7 +557,33 @@ export interface ExecuteBatchOptions {
   reserveUsd?: number;
   /** Ctrl-C drain: when aborted, no NEW row is scheduled; an in-flight row settles. */
   signal?: AbortSignal;
+  /**
+   * J-2: maximum rows in flight at once. Default 1 (strictly sequential, the
+   * historical behaviour). Values above 1 run a bounded worker pool; the cap
+   * keeps a mistyped flag from spawning an unbounded number of guarded runtimes.
+   */
+  concurrency?: number;
   onEvent?: (event: BatchExecutionEvent) => void;
+}
+
+/** Upper bound on in-flight batch rows (fail-closed CLI validation). */
+export const MAX_BATCH_CONCURRENCY = 32;
+
+/**
+ * Normalize a `--concurrency` value: absent → 1, else an integer in
+ * [1, MAX_BATCH_CONCURRENCY]. Throws a readable error on anything else so a
+ * bad flag never silently degrades to a different execution posture.
+ */
+export function normalizeBatchConcurrency(raw: unknown): number {
+  if (raw === undefined) return 1;
+  const n =
+    typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_BATCH_CONCURRENCY) {
+    throw new Error(
+      `batch: --concurrency must be an integer between 1 and ${MAX_BATCH_CONCURRENCY} (default 1)`,
+    );
+  }
+  return n;
 }
 
 export interface BatchExecutionSummary {
@@ -626,7 +655,9 @@ function isSpendLimit(err: unknown): boolean {
  * `done`/`failed`. A throw from the executor is graded as a `failed` row, never
  * re-thrown — one bad row cannot abort the batch. Resume is structural:
  * `pendingBatchRows` runs pending rows and stale `running` rows; done/failed
- * rows are counted in `skipped` and never re-executed.
+ * rows are counted in `skipped` and never re-executed. With `concurrency > 1`
+ * a bounded worker pool runs that same one-row pipeline in parallel; a drain
+ * stops claiming new rows and `Promise.all` awaits every in-flight row.
  */
 export async function executeBatchJob(opts: ExecuteBatchOptions): Promise<BatchExecutionSummary> {
   if (typeof opts?.file !== "string" || opts.file.trim() === "") {
@@ -644,6 +675,8 @@ export async function executeBatchJob(opts: ExecuteBatchOptions): Promise<BatchE
     }
   }
 
+  const concurrency = normalizeBatchConcurrency(opts.concurrency);
+
   const all = opts.rows ?? loadBatchJob(opts.file).rows;
   const todo = pendingBatchRows(all);
   const working: BatchJobRow[] = all.map((row) => ({ ...row }));
@@ -658,31 +691,42 @@ export async function executeBatchJob(opts: ExecuteBatchOptions): Promise<BatchE
   let done = 0;
   let failed = 0;
   let drained = false;
+  /** A spend refusal (or a corrupt ledger) stops scheduling, as does Ctrl-C. */
+  let stopScheduling = false;
 
-  for (const row of todo) {
-    if (opts.signal?.aborted === true) {
-      drained = true;
-      emit({ kind: "drain", detail: "Ctrl-C: stopping before the next row; the in-flight row was allowed to settle" });
-      break;
-    }
+  const noteDrain = (detail: string): void => {
+    if (drained) return;
+    drained = true;
+    emit({ kind: "drain", detail });
+  };
 
+  /**
+   * Run one row end-to-end: reserve, persist `running`, await the guarded
+   * executor, settle spend, persist the fail-closed terminal. Used verbatim by
+   * both the sequential loop and the worker pool so per-row transition
+   * persistence and terminal validation never diverge.
+   */
+  const runOne = async (row: BatchJobRow): Promise<void> => {
     let reservation: { id: string } | undefined;
     if (opts.spend !== undefined) {
       try {
         reservation = opts.spend.reserve(opts.reserveUsd!, { note: `batch row ${row.id}` });
         emit({ kind: "spend.reserved", rowId: row.id, detail: `reserved $${opts.reserveUsd!.toFixed(4)}` });
       } catch (err) {
-        // Budget ceiling: the row is refused BEFORE dispatch and scheduling
-        // stops — the same fail-closed posture the guarded runtime uses.
+        // Budget ceiling (or a corrupt ledger): the row is refused BEFORE
+        // dispatch and scheduling stops — the same fail-closed posture the
+        // guarded runtime uses. A corrupt ledger is a typed SpendLedger refusal,
+        // never a silent reset to zero (no `limit` code ⇒ graded `failed`).
         const terminal: TerminalState = isSpendLimit(err) ? "budget_exhausted" : "failed";
         const detail = safeBatchRowDetail(`spend rail refused the row before dispatch: ${err instanceof Error ? err.message : String(err)}`);
         const patch: Partial<BatchJobRow> = { status: "failed", terminal, ...(detail === undefined ? {} : { detail }) };
         await upsertBatchJobRow(opts.file, row.id, patch);
         patchRow(row.id, patch);
         failed += 1;
+        stopScheduling = true;
         drained = true;
         emit({ kind: "spend.limit", rowId: row.id, detail });
-        break;
+        return;
       }
     }
 
@@ -721,6 +765,37 @@ export async function executeBatchJob(opts: ExecuteBatchOptions): Promise<BatchE
     if (status === "done") done += 1;
     else failed += 1;
     emit({ kind: status === "done" ? "row.done" : "row.failed", rowId: row.id, detail: execution.terminal });
+  };
+
+  if (concurrency === 1) {
+    // Historical sequential path: one row at a time, drain checked before each
+    // new dispatch so the in-flight row is the only one allowed to settle.
+    for (const row of todo) {
+      if (stopScheduling) break;
+      if (opts.signal?.aborted === true) {
+        noteDrain("Ctrl-C: stopping before the next row; the in-flight row was allowed to settle");
+        break;
+      }
+      await runOne(row);
+    }
+  } else {
+    // Bounded worker pool. Rows are claimed in stable `todo` order (deterministic
+    // resume), but up to `concurrency` may be in flight. A drain stops claims;
+    // every in-flight row is awaited to a fail-closed terminal before returning.
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (stopScheduling) return;
+        if (opts.signal?.aborted === true) {
+          noteDrain("Ctrl-C: stopping before the next row; in-flight rows were allowed to settle");
+          return;
+        }
+        if (next >= todo.length) return;
+        const row = todo[next++]!;
+        await runOne(row);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, () => worker()));
   }
 
   return {

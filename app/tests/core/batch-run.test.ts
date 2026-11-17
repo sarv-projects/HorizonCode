@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { runBatchCli } from "../../src/batch-run";
+import { runBatchCli, DEFAULT_BATCH_RESERVE_USD } from "../../src/batch-run";
 import { assertPublishedNumber } from "../../src/core/metrics";
-import { defaultBatchRunnerConfigPath, loadBatchRunnerConfig } from "../../src/core/batch-runner";
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { defaultBatchRunnerConfigPath, loadBatchJob, loadBatchRunnerConfig } from "../../src/core/batch-runner";
+import { SpendLedger, spendLedgerPath } from "../../src/core/spend-ledger";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -246,5 +247,107 @@ describe("batch-run CLI guarded execution (I-5/J-2/J-4)", () => {
     expect(out.some((l) => l.includes("drained"))).toBe(true);
     const statuses = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l).status);
     expect(statuses).toEqual(["done", "pending", "pending"]);
+  });
+});
+
+describe("batch-run CLI batch-wide spend ceiling (C-5)", () => {
+  const jobOf = (dir: string, rows: Record<string, unknown>[]): string => {
+    const file = path.join(dir, "job.jsonl");
+    writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    return file;
+  };
+  const envOf = (usd: string): Record<string, string> => ({ HZ_SPEND_LIMIT_USD: usd });
+
+  test("two rows share one ceiling; exhaustion stops the batch before dispatch", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "batch-c5-"));
+    const workspace = path.join(dir, "ws");
+    const file = jobOf(dir, [
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+    ]);
+    const ran: string[] = [];
+    const out: string[] = [];
+    // Limit $0.015; each row reserves the $0.01 default and settles its reported
+    // $0.01 cost. Row a spends $0.01; row b's reservation ($0.01 + $0.01 spent)
+    // would exceed the ceiling → refused before dispatch; row c never scheduled.
+    const exit = await runBatchCli(["--job", file], { out: (l) => out.push(l), err: () => undefined }, {
+      workspace,
+      spendEnv: envOf("0.015"),
+      executor: async (row) => (ran.push(row.id), { terminal: "succeeded" as const, usage: { costMicroUsd: 10_000 } }),
+    });
+    expect(exit).toBe(1);
+    expect(ran).toEqual(["a"]);
+    const rows = loadBatchJob(file).rows;
+    expect(rows.map((r) => r.status)).toEqual(["done", "failed", "pending"]);
+    expect(rows[1]?.terminal).toBe("budget_exhausted");
+    expect(out.some((l) => l.includes("drained"))).toBe(true);
+    // One workspace-scoped ledger recorded exactly one row's spend.
+    expect(DEFAULT_BATCH_RESERVE_USD).toBe(0.01);
+    const shared = new SpendLedger(workspace, { limitMicroUsd: 15_000 });
+    expect(shared.status().spentUsd).toBeCloseTo(0.01, 9);
+    expect(existsSync(spendLedgerPath(workspace))).toBe(true);
+  });
+
+  test("0 = unlimited: no ledger is constructed and every row runs", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "batch-c5-off-"));
+    const workspace = path.join(dir, "ws");
+    const file = jobOf(dir, [
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+    ]);
+    const ran: string[] = [];
+    const exit = await runBatchCli(["--job", file], { out: () => undefined, err: () => undefined }, {
+      workspace,
+      spendEnv: envOf("0"),
+      executor: async (row) => (ran.push(row.id), { terminal: "succeeded" as const }),
+    });
+    expect(exit).toBe(0);
+    expect(ran).toEqual(["a", "b"]);
+    expect(existsSync(spendLedgerPath(workspace))).toBe(false);
+  });
+
+  test("a corrupt workspace ledger fails closed: no row dispatched, one failed terminal", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "batch-c5-corrupt-"));
+    const workspace = path.join(dir, "ws");
+    const file = jobOf(dir, [
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+    ]);
+    const ledgerPath = spendLedgerPath(workspace);
+    mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, "{ not json");
+    const ran: string[] = [];
+    const out: string[] = [];
+    const exit = await runBatchCli(["--job", file], { out: (l) => out.push(l), err: () => undefined }, {
+      workspace,
+      spendEnv: envOf("0.02"),
+      executor: async (row) => (ran.push(row.id), { terminal: "succeeded" as const }),
+    });
+    expect(exit).toBe(1);
+    expect(ran).toEqual([]); // never dispatched against a corrupt ceiling
+    const rows = loadBatchJob(file).rows;
+    expect(rows[0]?.status).toBe("failed");
+    expect(rows[0]?.detail).toContain("corrupt");
+    expect(rows[1]?.status).toBe("pending");
+    // The corrupt bytes are preserved, never silently reset to a clean zero.
+    expect(readFileSync(ledgerPath, "utf8")).toBe("{ not json");
+  });
+
+  test("--concurrency N is accepted; invalid values exit 2", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "batch-c5-conc-"));
+    const file = jobOf(dir, [{ id: "a", task: "a", status: "pending" }]);
+    const ran: string[] = [];
+    const ok = await runBatchCli(["--job", file, "--concurrency", "2"], {
+      out: () => undefined, err: () => undefined,
+    }, { executor: async (row) => (ran.push(row.id), { terminal: "succeeded" as const }) });
+    expect(ok).toBe(0);
+    expect(ran).toEqual(["a"]);
+    const errors: string[] = [];
+    const bad = await runBatchCli(["--job", file, "--concurrency", "0"], {
+      out: () => undefined, err: (l) => errors.push(l),
+    }, { executor: async () => ({ terminal: "succeeded" as const }) });
+    expect(bad).toBe(2);
+    expect(errors.some((l) => /--concurrency/i.test(l))).toBe(true);
   });
 });

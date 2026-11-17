@@ -153,6 +153,40 @@ export function onboardingNoticeLines(): readonly string[] {
   ];
 }
 
+/* ------------------------- interactive Ctrl-C (I-5) ------------------------ */
+
+/**
+ * What a Ctrl-C / SIGINT means in an interactive session, as a PURE decision.
+ * Factored out of `runInteractive` so it can be unit-tested without a TTY (the
+ * harness cannot drive readline keypress events portably).
+ *
+ *   - an approval is open ⇒ DENY it (answer "n"); never leave the session;
+ *   - a turn is in flight and this is the FIRST Ctrl-C ⇒ CANCEL it cleanly
+ *     (abort the turn, keep the chat bar, do not exit);
+ *   - a turn is in flight but an abort was already requested ⇒ EXIT (the
+ *     second Ctrl-C is the explicit "get me out" gesture);
+ *   - idle ⇒ EXIT (readline Ctrl-C on an idle prompt has always left the chat).
+ *
+ * Only the scrollback interactive surface uses this; headless / print / server
+ * surfaces keep their own signal handling (non-TTY behaviour is unchanged).
+ */
+export type InterruptAction = "deny" | "cancel" | "exit";
+
+export interface InterruptState {
+  /** True while a `runtime.send` turn is in flight. */
+  busy: boolean;
+  /** True once a cancel has been requested in the current turn. */
+  abortRequested: boolean;
+  /** True while an approval question is awaiting an answer. */
+  approvalOpen: boolean;
+}
+
+export function interruptAction(state: InterruptState): InterruptAction {
+  if (state.approvalOpen) return "deny";
+  if (state.busy) return state.abortRequested ? "exit" : "cancel";
+  return "exit";
+}
+
 /** What the TUI needs from one staged change; a core `StagedChange` fits as-is. */
 export interface StagedChangeView {
   rel: string;
@@ -1802,12 +1836,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     void handleUserLine(text);
   };
 
+  /** Cancel the in-flight turn cleanly (no exit). The approval-deny branch of
+   * Ctrl-C is handled by `handleInterrupt`, not here, so Esc-cancel keeps its
+   * "no approval open" guard in the keymap listener below. */
   const abortTurn = (): void => {
-    if (answerWaiter) {
-      const waiter = answerWaiter;
-      answerWaiter = null;
-      waiter("n");
-    }
     const drafting = String((rl as unknown as { line?: string }).line ?? "");
     if (drafting.trim() !== "") saveAbortedComposerDraft(workspace, runtime.sessionId, drafting);
     if (abortRequested) return;
@@ -1821,13 +1853,32 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     renderer.line(dim("(aborted)"));
   };
 
-  rl.on("SIGINT", () => {
-    if (busy) {
-      abortTurn();
-      return;
+  /** I-5: one Ctrl-C cancels the turn; a second (or Ctrl-C while idle) exits;
+   * Ctrl-C with an approval open denies it. The decision itself is the pure
+   * `interruptAction` above — this function only applies it. */
+  const handleInterrupt = (): void => {
+    const action = interruptAction({
+      busy,
+      abortRequested,
+      approvalOpen: answerWaiter !== null,
+    });
+    switch (action) {
+      case "deny": {
+        const waiter = answerWaiter;
+        answerWaiter = null;
+        waiter?.("n");
+        return;
+      }
+      case "cancel":
+        abortTurn();
+        return;
+      case "exit":
+        finish(0);
+        return;
     }
-    finish(0);
-  });
+  };
+
+  rl.on("SIGINT", handleInterrupt);
 
   // Dim ghost text after the cursor: the rest of the first completion. It is
   // erased BEFORE readline handles Enter (prepended listener) and redrawn after

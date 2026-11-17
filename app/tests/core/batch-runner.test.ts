@@ -13,6 +13,8 @@ import {
   pendingBatchRows,
   createBatchDrainController,
   executeBatchJob,
+  normalizeBatchConcurrency,
+  MAX_BATCH_CONCURRENCY,
   safeBatchRowDetail,
   resolveBatchSelectionForResume,
   selectBatchRows,
@@ -337,5 +339,119 @@ describe("batch guarded execution engine (I-5/J-2/J-4)", () => {
     expect(rows[0]?.detail).toContain("boom");
     expect(rows[1]?.detail).toContain("not an RC-7 value");
     expect(safeBatchRowDetail("  ok\u0000bad  ")).toBe("ok bad");
+  });
+});
+
+describe("batch worker pool (J-2 concurrency)", () => {
+  test("concurrency 2 overlaps rows while persisting every terminal", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+      { id: "d", task: "d", status: "pending" },
+    ]);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const ran: string[] = [];
+    const result = await executeBatchJob({
+      file,
+      concurrency: 2,
+      execute: async (row) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        ran.push(row.id);
+        await new Promise((r) => setTimeout(r, 8));
+        inFlight -= 1;
+        return { terminal: "succeeded" };
+      },
+    });
+    expect(maxInFlight).toBe(2);
+    expect(ran.slice().sort()).toEqual(["a", "b", "c", "d"]);
+    expect(result).toMatchObject({ done: 4, failed: 0, remaining: 0 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows.every((r) => r.status === "done" && r.terminal === "succeeded")).toBe(true);
+  });
+
+  test("a failed terminal in one worker does not kill unrelated rows", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+      { id: "d", task: "d", status: "pending" },
+    ]);
+    const result = await executeBatchJob({
+      file,
+      concurrency: 2,
+      execute: async (row) =>
+        row.id === "b"
+          ? { terminal: "failed", detail: "scripted failure" }
+          : row.id === "c"
+            ? ({ terminal: "yolo" } as never)
+            : { terminal: "succeeded" },
+    });
+    expect(result).toMatchObject({ done: 2, failed: 2, remaining: 0 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows.map((r) => r.status)).toEqual(["done", "failed", "failed", "done"]);
+    expect(rows[1]?.detail).toContain("scripted failure");
+    expect(rows[2]?.detail).toContain("not an RC-7 value");
+  });
+
+  test("resume with concurrency only runs pending/stale, skipping done/failed", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "done", terminal: "succeeded" },
+      { id: "b", task: "b", status: "failed", terminal: "failed" },
+      { id: "c", task: "c", status: "running" },
+      { id: "d", task: "d", status: "pending" },
+    ]);
+    const ran: string[] = [];
+    const result = await executeBatchJob({
+      file,
+      concurrency: 3,
+      execute: async (row) => (ran.push(row.id), { terminal: "succeeded" as const }),
+    });
+    expect(ran.slice().sort()).toEqual(["c", "d"]);
+    expect(result).toMatchObject({ skipped: 2, executed: 2, done: 2, failed: 0, remaining: 0 });
+  });
+
+  test("drain stops new claims and awaits all in-flight rows to a fail-closed terminal", async () => {
+    const file = batchFile([
+      { id: "a", task: "a", status: "pending" },
+      { id: "b", task: "b", status: "pending" },
+      { id: "c", task: "c", status: "pending" },
+      { id: "d", task: "d", status: "pending" },
+    ]);
+    const controller = new AbortController();
+    let resolveRelease!: () => void;
+    const release = new Promise<void>((resolve) => { resolveRelease = resolve; });
+    const ran: string[] = [];
+    const running = executeBatchJob({
+      file,
+      concurrency: 2,
+      signal: controller.signal,
+      execute: async (row) => {
+        ran.push(row.id);
+        await release; // hold the two in-flight rows until released
+        return { terminal: "succeeded" };
+      },
+    });
+    // Let a and b get dispatched and held in flight.
+    await new Promise((r) => setTimeout(r, 12));
+    expect(ran.slice().sort()).toEqual(["a", "b"]);
+    controller.abort(); // stop claiming c/d while a,b are in flight
+    resolveRelease(); // let the in-flight rows settle
+    const result = await running;
+    expect(result).toMatchObject({ done: 2, failed: 0, drained: true, remaining: 2 });
+    const rows = loadBatchJob(file).rows;
+    expect(rows.slice(0, 2).map((r) => r.status)).toEqual(["done", "done"]);
+    expect(rows.slice(2).map((r) => r.status)).toEqual(["pending", "pending"]);
+  });
+
+  test("concurrency validation rejects 0, negatives, non-integers and values above the cap", () => {
+    expect(normalizeBatchConcurrency(undefined)).toBe(1);
+    expect(normalizeBatchConcurrency("4")).toBe(4);
+    expect(normalizeBatchConcurrency(2)).toBe(2);
+    for (const bad of [0, -1, 1.5, "oops", MAX_BATCH_CONCURRENCY + 1]) {
+      expect(() => normalizeBatchConcurrency(bad)).toThrow(/--concurrency/i);
+    }
   });
 });
