@@ -63,7 +63,20 @@ import type { ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../contrac
 import { sha256Hex } from "./canon";
 import { sanitizeForDistill } from "./distill-sanitize";
 import type { CurateRefusal } from "./curator";
+import { closeReviewForkJob, openReviewForkJob } from "./review-fork-journal";
 import { estimateStepCostUsd, enrichUsageCost } from "./usage-cost";
+
+// G-1 durable settlement: opt-in recovery + journal readers are re-exported
+// from this single G-1 entry module. Nothing calls recovery automatically.
+export {
+  recoverReviewForkJournal,
+  readJournal as readReviewForkJournal,
+  reviewForkJobId,
+  ReviewForkJournalError,
+  type JournalRecoveryResult,
+  type ReviewForkJournalEvent,
+  type ReviewForkTransition,
+} from "./review-fork-journal";
 
 /** The origin stamped on every review-fork record (spec and curated rows). */
 export const REVIEW_FORK_ORIGIN = "review-fork" as const;
@@ -735,6 +748,8 @@ export interface ReviewForkWorkerJob {
   reserveUsd: number;
   /** The parent's reservation id; the worker settles this, never re-reserves. */
   reservationId: string;
+  /** Content-addressed durable-journal id, when the job was journaled. */
+  journalJobId?: string;
 }
 
 /** A spawned worker handle — only `pid` is needed for the parent's notice. */
@@ -772,8 +787,13 @@ export type DetachedReviewForkOutcome =
  * seam lets tests prove the whole path with a fake subprocess (no real
  * provider/network); the real default re-execs `main.ts __review-fork-worker`.
  *
- * This is NOT a claim of durable crash recovery for the fork: if the detached
- * worker dies before settling, the reservation expires on its TTL.
+ * G-1 durable settlement (ruling 488/522 residual): the reservation is also
+ * recorded in a content-addressed JSONL journal (`review-fork-journal.ts`) with
+ * `reserved`/`settled`/`failed` transitions. An EXPLICIT recovery function
+ * (`recoverReviewForkJournal`) reconciles a crashed worker's open reservation
+ * exactly once on parent restart. Recovery is opt-in; default behavior is
+ * unchanged. The journal settles at the RESERVED amount — this is NOT a claim
+ * of live-provider cost capture or invoice reconciliation.
  */
 export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedReviewForkOutcome {
   const jobId = `rfj-${randomHex(8)}-${deps.now ? Date.parse(deps.now()) : Date.now()}`;
@@ -795,6 +815,22 @@ export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedR
     };
   }
 
+  // G-1: record the reservation in the durable journal BEFORE spawning, so a
+  // worker crash is recoverable. The id is content-addressed; no random state.
+  const journalRef = openReviewForkJob(
+    deps.stateDir,
+    {
+      reservationId,
+      workspace: deps.workspace,
+      stateDir: deps.stateDir,
+      model: deps.model,
+      providerName: deps.providerName,
+      reserveUsd,
+      systemPrefixSha256: sha256Hex(deps.spec.systemPrefix),
+    },
+    deps.now,
+  );
+
   const job: ReviewForkWorkerJob = {
     v: 1,
     kind: "review-fork-worker-job",
@@ -806,6 +842,7 @@ export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedR
     stateDir: deps.stateDir,
     reserveUsd,
     reservationId,
+    journalJobId: journalRef.jobId,
   };
   const jobsDir = path.join(deps.stateDir, "review-fork-jobs");
   mkdirSync(jobsDir, { recursive: true, mode: 0o700 });
@@ -817,7 +854,10 @@ export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedR
     deps.onNotice?.(`review fork: detached worker ${jobId} spawned (pid ${spawned.pid ?? "?"}); no provider call in parent`);
     return { status: "spawned", jobId, reservationId, pid: spawned.pid };
   } catch (err) {
-    // Spawn failed: release the reservation so the ceiling is not held.
+    // Spawn failed: close the journal as failed and release the reservation
+    // so the ceiling is not held. A later recovery sees the terminal row and
+    // will not try to settle an already-released reservation.
+    closeReviewForkJob(deps.stateDir, journalRef, { kind: "failed", reason: errorMessage(err) }, deps.now);
     try {
       deps.spend.release(reservationId);
     } catch {
@@ -860,6 +900,7 @@ export function decodeReviewForkWorkerJob(raw: string): ReviewForkWorkerJob | un
   if (typeof job.model !== "string" || typeof job.providerName !== "string") return undefined;
   if (typeof job.workspace !== "string" || typeof job.stateDir !== "string") return undefined;
   if (typeof job.reserveUsd !== "number" || !Number.isFinite(job.reserveUsd) || job.reserveUsd <= 0) return undefined;
+  if (job.journalJobId !== undefined && typeof job.journalJobId !== "string") return undefined;
   if (job.spec === undefined || job.spec.origin !== REVIEW_FORK_ORIGIN) return undefined;
   return job as ReviewForkWorkerJob;
 }
@@ -878,11 +919,31 @@ export async function runReviewForkWorker(
     settle: (id, actualUsd, note) => deps.spend.settle(id === "" ? job.reservationId : id, actualUsd, note),
     release: (id) => deps.spend.release(id === "" ? job.reservationId : id),
   };
-  return runReviewFork(job.spec, {
+  const result = await runReviewFork(job.spec, {
     provider: deps.provider,
     model: job.model,
     spend: settledSpend,
     reserveUsd: job.reserveUsd,
     ...(deps.now !== undefined ? { now: deps.now } : {}),
   });
+  // G-1: close the durable journal with the real outcome. If the worker dies
+  // before this line, the `reserved` row stays open and explicit recovery will
+  // reconcile it exactly once. No live-provider cost capture is attempted.
+  if (job.journalJobId !== undefined) {
+    try {
+      closeReviewForkJob(
+        job.stateDir,
+        { jobId: job.journalJobId, reservationId: job.reservationId, reserveUsd: job.reserveUsd },
+        result.spend.settled
+          ? { kind: "settled", actualUsd: result.spend.actualUsd ?? job.reserveUsd }
+          : { kind: "failed", reason: result.reason ?? result.detail ?? "worker did not settle the reservation" },
+        deps.now,
+      );
+    } catch {
+      /* a journal write failure must never fail an already-finished fork;
+         if it leaves the row open, recovery sees an already-settled reservation
+         and refuses a duplicate settle (no double charge). */
+    }
+  }
+  return result;
 }

@@ -13,8 +13,13 @@ import type { ChatMsg } from "../contracts";
 import { parseMarkdownTranscript } from "./markdown-transcript";
 import { metricContract } from "./metrics";
 import { sessionDbPath, workspaceStateDir } from "./paths";
-import { loadPostmortems, type PostmortemRecord } from "./postmortem";
+import { readPostmortemsReadonly } from "./postmortem-readonly";
+import type { PostmortemRecord } from "./postmortem";
 import { rowToChatMsg } from "./session";
+
+// Re-exported so callers/tests reach the read-only post-mortem loader from the
+// single J-5 entry module (the implementation lives in postmortem-readonly.ts).
+export { readPostmortemsReadonly } from "./postmortem-readonly";
 
 /**
  * H-7 / ruling 510 — metric contract (docs/16 §2.4.3) for this module's
@@ -562,7 +567,11 @@ export async function buildWorkspaceCorpusReport(
   workspace: string,
   stateDir: string = workspaceStateDir(workspace),
 ): Promise<FullCorpusTuningReport> {
-  const loaded = await loadPostmortems(stateDir);
+  // J-5 read-only residual (ruling 515): load post-mortems with a bounded,
+  // side-effect-free reader. Unlike loadPostmortems it never renames/quarantines
+  // a corrupt file; malformed files are skipped and counted. Public output and
+  // determinism are unchanged for a healthy corpus.
+  const loaded = readPostmortemsReadonly(stateDir);
   const sessionDb = readSessionDbCorpus(workspace);
   const transcripts = readMarkdownTranscriptCorpus(workspace);
 
@@ -595,7 +604,7 @@ export async function buildWorkspaceCorpusReport(
     failureClasses: failureClassCounts(loaded.postmortems),
     population,
   });
-  const skipped = sessionDb.skipped + transcripts.skipped + loaded.quarantine.length;
+  const skipped = sessionDb.skipped + transcripts.skipped + loaded.skipped;
   const truncated = sessionDb.truncated || transcripts.truncated;
   const published = [
     ...summary.published,

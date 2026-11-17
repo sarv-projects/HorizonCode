@@ -370,7 +370,12 @@ function isNullishOrInteger(value: unknown): boolean {
   return value === null || (typeof value === "number" && Number.isInteger(value));
 }
 
-function isPostmortemRecord(value: unknown): value is PostmortemRecord {
+/**
+ * Pure on-disk shape check. Exported so read-only corpus readers (J-5) can
+ * apply the EXACT same validation as the quarantine loader without copying it
+ * (no reads/writes/quarantine happen here — this is a pure predicate).
+ */
+export function isPostmortemRecord(value: unknown): value is PostmortemRecord {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Partial<PostmortemRecord>;
   const transcript = row.transcript as Partial<PostmortemTranscript> | undefined;

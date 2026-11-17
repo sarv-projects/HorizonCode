@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { recordPostmortem, type PostmortemRecord } from "../../src/core/postmortem";
@@ -18,6 +18,7 @@ import {
   renderFullCorpusSummary,
   renderFullCorpusTuningReport,
   renderSessionCorpusSummary,
+  readPostmortemsReadonly,
   suggestCorpusTuning,
   toolCountsFromMessages,
   TUNING_DOMINANT_TOOL_RATE,
@@ -416,5 +417,67 @@ describe("full-corpus optimiser (J-5, rows over the session DB + transcripts)", 
       { role: "tool" as const, content: "ok" }, // no toolName — skipped
     ];
     expect(toolCountsFromMessages(msgs as never)).toEqual({ read: 1, shell: 1 });
+  });
+});
+
+describe("J-5 read-only post-mortem loading (ruling 515 residual)", () => {
+  test("a corrupt post-mortem file is NOT renamed/deleted and is counted as skipped", async () => {
+    const ws = mkdtempSync(path.join(os.tmpdir(), "j5-ro-pm-"));
+    try {
+      const state = workspaceStateDir(ws);
+      const dir = path.join(state, "postmortems");
+      mkdirSync(dir, { recursive: true });
+      await recordPostmortem({
+        stateDir: state,
+        sessionId: "p-ok",
+        terminal: "failed",
+        failureClass: "tool_error",
+        transcript: "task",
+        toolCalls: { read: 1 },
+        now: 1_700_000_000_000,
+      });
+      const corruptName = "corrupt.json";
+      const corruptPath = path.join(dir, corruptName);
+      writeFileSync(corruptPath, "{ this is not JSON", { encoding: "utf8", mode: 0o600 });
+
+      // Direct read-only loader: valid record returned, corrupt file only counted.
+      const direct = readPostmortemsReadonly(state);
+      expect(direct.postmortems).toHaveLength(1);
+      expect(direct.skipped).toBe(1);
+
+      const report = await buildWorkspaceCorpusReport(ws, state);
+      expect(report.sources.postmortems).toBe(1);
+      expect(report.counts.skipped).toBeGreaterThanOrEqual(1);
+      expect(renderFullCorpusSummary(report)).toContain("skipped=1");
+
+      // THE key regression assertion: the corrupt file survives under its
+      // ORIGINAL name — never renamed to *.corrupt-* and never deleted, even
+      // after two independent full-corpus reads.
+      expect(existsSync(corruptPath)).toBe(true);
+      const names = readdirSync(dir);
+      expect(names).toContain(corruptName);
+      expect(names.some((n) => n.includes(".corrupt-"))).toBe(false);
+      expect(names.filter((n) => n.endsWith(".json"))).toHaveLength(2);
+      await buildWorkspaceCorpusReport(ws, state);
+      expect(existsSync(corruptPath)).toBe(true);
+      expect(readdirSync(dir)).toContain(corruptName);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("readPostmortemsReadonly is bounded and skips a wrong-shape JSON file without writing", () => {
+    const state = mkdtempSync(path.join(os.tmpdir(), "j5-ro-bound-"));
+    try {
+      const dir = path.join(state, "postmortems");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "shape.json"), JSON.stringify({ id: "x" }), { mode: 0o600 });
+      const corpus = readPostmortemsReadonly(state, { maxFiles: 1, maxBytes: 1 });
+      expect(corpus.postmortems).toHaveLength(0);
+      expect(corpus.skipped).toBe(1); // over the 1-byte cap; file left untouched
+      expect(existsSync(path.join(dir, "shape.json"))).toBe(true);
+    } finally {
+      rmSync(state, { recursive: true, force: true });
+    }
   });
 });
