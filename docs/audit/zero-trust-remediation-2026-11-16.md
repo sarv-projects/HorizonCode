@@ -45,6 +45,13 @@ confined** and the UI/doctor say so. `HZ_SANDBOX_REQUIRE=1` refuses this posture
 `code_mode` requires network-off, so it refuses to run on this host rather than
 running unsandboxed.
 
+## Verification record (final tree after experimental additions, 2026-11-17)
+
+`bash ops/gates.sh` at `04980ae` → **8/8 green**, `GATES_EXIT=0`
+(`/tmp/gates-527-3.log`): rust 391 s, selftest 9444 ms, typecheck 9665 ms,
+ts-suite 951 s, e2e 2448/2176/768 ms, startup 20 s. Standalone suite at
+`b91efca`: 3704 pass / 6 skip / 0 fail (`/tmp/ts-527.log`).
+
 ## Verification record (final integrated tree, 2026-11-17)
 
 `bash ops/gates.sh` on the COMPLETE tree (`771d5c6`, all rulings 485–522 landed)
