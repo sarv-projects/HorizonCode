@@ -509,9 +509,10 @@ describe("config and factory", () => {
     };
   }
 
-  test("google and ollama are provider names with their own defaults", () => {
-    expect([...PROVIDER_NAMES]).toEqual(["anthropic", "openai", "google", "ollama", "mock"]);
+  test("google, nvidia and ollama are provider names with their own defaults", () => {
+    expect([...PROVIDER_NAMES]).toEqual(["anthropic", "openai", "google", "nvidia", "ollama", "mock"]);
     expect(DEFAULT_MODELS.google).toBe("gemini-2.5-flash");
+    expect(DEFAULT_MODELS.nvidia).toBe("minimaxai/minimax-m3.1-flash");
     expect(DEFAULT_MODELS.ollama).toBe("llama3.1");
 
     const google = loadConfig({ HZ_PROVIDER: "google" }, missingConfig());
@@ -530,6 +531,20 @@ describe("config and factory", () => {
     expect(ollama.baseUrl).toBe("http://127.0.0.1:11434");
     expect(missingKey(ollama)).toBeNull();
     expect(describeConfig(ollama)).toBe("ollama \u00b7 llama3.1");
+
+    // NVIDIA NIM: a first-class OpenAI-chat provider; its base already carries
+    // /v1, so openAiChatCompletionsUrl appends only /chat/completions.
+    const nvidia = loadConfig({ HZ_PROVIDER: "NVIDIA" }, missingConfig());
+    expect(nvidia.provider).toBe("nvidia");
+    expect(nvidia.model).toBe("minimaxai/minimax-m3.1-flash");
+    expect(nvidia.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
+    expect(missingKey(nvidia)).toBe("NVIDIA_API_KEY");
+    expect(describeConfig(nvidia)).toBe("nvidia \u00b7 minimaxai/minimax-m3.1-flash");
+
+    const detectedNvidia = loadConfig({ NVIDIA_API_KEY: "nvapi-test" }, missingConfig());
+    expect(detectedNvidia.provider).toBe("nvidia");
+    expect(detectedNvidia.apiKey).toBe("nvapi-test");
+    expect(detectedNvidia.sources.provider).toBe("detected");
   });
 
   test("google takes GEMINI_API_KEY or GOOGLE_API_KEY, and either one detects the provider", () => {

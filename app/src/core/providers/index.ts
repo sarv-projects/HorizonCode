@@ -166,6 +166,19 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
           : missingKeyProvider("google", "GEMINI_API_KEY or GOOGLE_API_KEY"),
         config,
       );
+    case "nvidia":
+      // NVIDIA NIM: OpenAI-chat compatible, authenticated by NVIDIA_API_KEY.
+      // The base URL already carries /v1; openAiChatCompletionsUrl detects it.
+      return withToolFormat(
+        config.apiKey
+          ? createOpenAiCompatibleProvider({
+              name: "nvidia",
+              baseUrl: config.baseUrl ?? "https://integrate.api.nvidia.com/v1",
+              credential: { kind: "apiKey", value: config.apiKey },
+            })
+          : missingKeyProvider("nvidia", "NVIDIA_API_KEY"),
+        config,
+      );
     case "ollama":
       // No key required: a local server (a key only fronts a proxy deployment).
       return withToolFormat(createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl }), config);

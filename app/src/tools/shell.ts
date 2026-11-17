@@ -505,7 +505,13 @@ export function minimiseShellOutput(raw: string): { text: string; changed: boole
 }
 
 function fail(error: string): ToolResult {
-  return { ok: false, output: "", error };
+  // D-5: even a pre-execution failure carries the uniform observation envelope.
+  return {
+    ok: false,
+    output: "",
+    error,
+    observation: { output: "", returncode: -1, exception_info: error },
+  };
 }
 
 function msg(e: unknown): string {
@@ -772,6 +778,12 @@ export const shellTool: Tool = {
               out,
               minimised.changed,
             ),
+            observation: {
+              output: out,
+              returncode: -1,
+              exception_info: "",
+              extra: { backgrounded: true, pid: proc.pid, elapsed_ms: elapsed },
+            },
           };
         }
         // The pipes normally close as the child exits. A process that outlived it — a
@@ -814,6 +826,12 @@ export const shellTool: Tool = {
             }),
           ),
           error: "aborted",
+          observation: {
+            output: out,
+            returncode: proc.exitCode ?? -1,
+            exception_info: "aborted",
+            extra: { signal: proc.signalCode, aborted: true },
+          },
         };
       }
       if (timedOut) {
@@ -830,6 +848,12 @@ export const shellTool: Tool = {
             }),
           ),
           error: `timed out after ${timeoutMs}ms`,
+          observation: {
+            output: out,
+            returncode: proc.exitCode ?? -1,
+            exception_info: `timed out after ${timeoutMs}ms`,
+            extra: { exception_type: "Timeout", timeout_ms: timeoutMs, signal: proc.signalCode },
+          },
         };
       }
 
@@ -840,7 +864,16 @@ export const shellTool: Tool = {
         body,
         outputTruncated,
       });
-      return { ok: true, output: modelText(formatted) };
+      return {
+        ok: true,
+        output: modelText(formatted),
+        observation: {
+          output: out,
+          returncode: proc.exitCode ?? (proc.signalCode ? -1 : 0),
+          exception_info: "",
+          ...(proc.signalCode ? { extra: { signal: proc.signalCode } } : {}),
+        },
+      };
     } catch (e) {
       return fail(msg(e));
     }

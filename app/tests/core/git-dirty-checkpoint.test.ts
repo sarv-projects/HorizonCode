@@ -27,10 +27,11 @@ function gitLogOneline(ws: string, n = 5): string {
   return spawnSync("git", ["log", `-${n}`, "--oneline"], { cwd: ws, encoding: "utf8" }).stdout;
 }
 
-describe("dirty commit before edit (E-1 reduced)", () => {
-  test("off by default", () => {
-    expect(dirtyCommitBeforeEditEnabled({})).toBe(false);
+describe("dirty commit before edit (E-1 default-on)", () => {
+  test("on by default; 0 opts out", () => {
+    expect(dirtyCommitBeforeEditEnabled({})).toBe(true);
     expect(dirtyCommitBeforeEditEnabled({ HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT: "1" })).toBe(true);
+    expect(dirtyCommitBeforeEditEnabled({ HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT: "0" })).toBe(false);
   });
 
   test("commits dirty file when enabled", () => {

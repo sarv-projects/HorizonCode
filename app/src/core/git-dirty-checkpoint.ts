@@ -1,18 +1,25 @@
 /**
- * E-1 reduced (docs/30): optional dirty checkpoint commit before a file edit
- * (opt-in via `HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=1`), plus a separate lint-fix
- * commit after a successful mutation (`edit` / `write` / `apply_patch`) that
- * follows `lint` on the same path (`HZ_GIT_LINT_FIX_COMMIT=1`). ADAPT aider
- * `need_commit_before_edits` / post-`lint_edited` second commit — one file at
- * a time, harness-initiated. Default-off; never auto-commit without the flag.
+ * E-1 (default-on, opt-out): commit dirty pre-edit state before a file edit so
+ * every mutation has a revertible checkpoint (`HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=0`
+ * opts out), plus a separate lint-fix commit after a successful mutation
+ * (`edit` / `write` / `apply_patch`) that follows `lint` on the same path
+ * (`HZ_GIT_LINT_FIX_COMMIT=1`). ADAPT aider `need_commit_before_edits` /
+ * post-`lint_edited` second commit — one file at a time, harness-initiated.
+ * The lint-fix commit remains opt-in: it is a second, independently revertible
+ * unit, not part of the edit safety net.
  */
 
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { insideGitRepo } from "./prompt/environment";
 
+/**
+ * E-1 (default-on, opt-out): commit dirty pre-edit state so every edit has a
+ * revertible checkpoint. `HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=0` opts out; the
+ * workspace must already be a git repo (checked before any commit).
+ */
 export function dirtyCommitBeforeEditEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT === "1";
+  return env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT !== "0";
 }
 
 /** Opt-in: commit post-edit dirt as an independently revertible lint-fix unit. */

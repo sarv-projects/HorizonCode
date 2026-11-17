@@ -37,9 +37,9 @@ import {
   type ResolvedConfigClass,
 } from "./config-class-keys";
 
-export type ProviderName = "anthropic" | "openai" | "google" | "ollama" | "mock";
+export type ProviderName = "anthropic" | "openai" | "google" | "nvidia" | "ollama" | "mock";
 
-export const PROVIDER_NAMES: readonly ProviderName[] = ["anthropic", "openai", "google", "ollama", "mock"];
+export const PROVIDER_NAMES: readonly ProviderName[] = ["anthropic", "openai", "google", "nvidia", "ollama", "mock"];
 
 /**
  * Model used when nothing else is configured, per provider.
@@ -57,6 +57,8 @@ export const DEFAULT_MODELS: Record<ProviderName, string> = {
   anthropic: "claude-sonnet-4-5",
   openai: "gpt-4o-mini",
   google: "gemini-2.5-flash",
+  // models.dev's current NVIDIA default; the catalog snapshot also carries it.
+  nvidia: "minimaxai/minimax-m3.1-flash",
   ollama: "llama3.1",
   mock: "mock-1",
 };
@@ -75,6 +77,9 @@ export const DEFAULT_BASE_URLS: Record<Exclude<ProviderName, "mock">, string> = 
   anthropic: "https://api.anthropic.com",
   openai: "https://api.openai.com",
   google: "https://generativelanguage.googleapis.com",
+  // NVIDIA NIM is OpenAI-chat compatible; openai.ts appends /chat/completions
+  // to a base that already ends in /v1 (openAiChatCompletionsUrl).
+  nvidia: "https://integrate.api.nvidia.com/v1",
   ollama: "http://127.0.0.1:11434",
 };
 
@@ -558,7 +563,7 @@ export function persistNotifyConfig(notify: NotifyConfig, home: string = homedir
 function normalizeProvider(value: string | undefined): ProviderName | undefined {
   if (!value) return undefined;
   const lower = value.toLowerCase();
-  return lower === "anthropic" || lower === "openai" || lower === "google" || lower === "ollama" || lower === "mock"
+  return lower === "anthropic" || lower === "openai" || lower === "google" || lower === "nvidia" || lower === "ollama" || lower === "mock"
     ? lower
     : undefined;
 }
@@ -959,6 +964,7 @@ function detectProvider(env: EnvLike): ProviderName | undefined {
   if (str(env.ANTHROPIC_API_KEY)) return "anthropic";
   if (str(env.OPENAI_API_KEY)) return "openai";
   if (str(env.GEMINI_API_KEY) || str(env.GOOGLE_API_KEY)) return "google";
+  if (str(env.NVIDIA_API_KEY)) return "nvidia";
   return undefined;
 }
 
@@ -966,6 +972,7 @@ function providerKey(provider: ProviderName, env: EnvLike): string | undefined {
   if (provider === "anthropic") return str(env.ANTHROPIC_API_KEY);
   if (provider === "openai") return str(env.OPENAI_API_KEY);
   if (provider === "google") return str(env.GEMINI_API_KEY) ?? str(env.GOOGLE_API_KEY);
+  if (provider === "nvidia") return str(env.NVIDIA_API_KEY);
   return undefined;
 }
 
@@ -1333,7 +1340,13 @@ export function missingKey(config: HzConfig): string | null {
   }
   if (config.provider === "mock" || config.provider === "ollama") return null;
   if (config.apiKey) return null;
-  return config.provider === "anthropic" ? "ANTHROPIC_API_KEY" : config.provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY";
+  return config.provider === "anthropic"
+    ? "ANTHROPIC_API_KEY"
+    : config.provider === "openai"
+      ? "OPENAI_API_KEY"
+      : config.provider === "nvidia"
+        ? "NVIDIA_API_KEY"
+        : "GEMINI_API_KEY";
 }
 
 /* ----------------------------- config check ----------------------------- */

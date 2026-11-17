@@ -520,10 +520,27 @@ export interface SandboxSpawnKernel {
   sandboxReport(mode: SandboxMode, opts?: { allowPartial?: boolean }): Promise<EnforcementOutcome>;
 }
 
+/**
+ * D-5 uniform observation contract (ADAPT mini-swe-agent `environments/local.py`
+ * and `docker.py`): every execution backend returns these keys, including on
+ * failure, so the agent/prompt layers never branch on transport type.
+ * `output` is combined stdout/stderr; `returncode` is -1 when no exit code
+ * exists (still running / killed without a status); `exception_info` is "" on
+ * a clean execution; `extra` carries typed failure detail.
+ */
+export interface ObservationV1 {
+  output: string;
+  returncode: number;
+  exception_info: string;
+  extra?: Record<string, unknown>;
+}
+
 export interface ToolResult {
   ok: boolean;
   output: string;
   error?: string;
+  /** D-5: the uniform 4-key observation envelope (shell/exec backends). */
+  observation?: ObservationV1;
   /** Child effect ids spawned during this tool (e.g. `agent` / subagent; R172). */
   childEffectIds?: string[];
 }

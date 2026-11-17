@@ -198,3 +198,28 @@ describe("shell tool: invisible Unicode", () => {
     }
   });
 });
+
+describe("shell tool: D-5 uniform observation contract", () => {
+  test("success returns output/returncode/exception_info", async () => {
+    const r = await shellTool.execute({ command: "echo observation-ok" }, mockToolContext());
+    expect(r.ok).toBe(true);
+    expect(r.observation).toBeDefined();
+    expect(r.observation!.output).toContain("observation-ok");
+    expect(r.observation!.returncode).toBe(0);
+    expect(r.observation!.exception_info).toBe("");
+  });
+
+  test("non-zero exit still carries the same keys and the real code", async () => {
+    const r = await shellTool.execute({ command: "exit 3" }, mockToolContext());
+    expect(r.observation).toBeDefined();
+    expect(r.observation!.returncode).toBe(3);
+    expect(r.observation!.exception_info).toBe("");
+    expect(typeof r.observation!.output).toBe("string");
+  });
+
+  test("pre-execution refusal carries the envelope too", async () => {
+    const r = await shellTool.execute({ command: "echo a\u202eb" }, mockToolContext());
+    expect(r.ok).toBe(false);
+    expect(r.observation).toEqual({ output: "", returncode: -1, exception_info: r.error ?? "" });
+  });
+});
