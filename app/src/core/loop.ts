@@ -56,6 +56,8 @@ import {
 import { memoryDbPath, memoryDbPathForBank, memorySearchReadTargets } from "./memory/store";
 import { previewQuirks } from "./providers/quirks";
 import { enrichUsageCost, estimateStepCostUsd, usageCostEventFields } from "./usage-cost";
+import { loadConfig } from "./config";
+import { createPostEditDiagnosticsNotice } from "./post-edit-diagnostics";
 import { SpendLedger, SpendLimitError, spendLimitMicroFromEnv } from "./spend-ledger";
 import { negotiateReasoningEffort } from "./catalog/accepts-settings";
 import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
@@ -2690,6 +2692,23 @@ async function executeTool(
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
     delegate: deps.delegate,
     kernel: deps.kernel,
+    // Opt-in POST-EDIT notice for apply_patch (diagnostics run only after the
+    // edit is on disk; never reject/block). Installed only under the flag so a
+    // default run has no hook and no chance to load config or spawn a server.
+    postEditDiagnosticsNotice:
+      process.env.HZ_APPLY_PATCH_LSP_NOTICE === "1"
+        ? createPostEditDiagnosticsNotice({
+            sessionId: deps.sessionId,
+            workspace: deps.workspace,
+            cwd: deps.workspace,
+            hooks: {
+              guard: (a: GuardAction) => gate.check(a, admitted),
+              approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
+            },
+            signal: deps.signal,
+            configLoader: () => loadConfig().lsp,
+          })
+        : undefined,
   };
 
   try {

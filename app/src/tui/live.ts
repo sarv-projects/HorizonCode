@@ -19,6 +19,7 @@ import { formatUnknownStatusChip } from "./unknown-chip";
 import type { EffectReconcileBlockLatchView } from "../core/effect-reconcile-block";
 import { formatReconcileBlockStatusChip } from "./reconcile-block-chip";
 import { formatBusyStatusAnnouncement, formatIdleStatusAnnouncement, reduceMotion, screenReaderMode, spinnerIntervalMs } from "./a11y";
+import type { CacheWarmthDecision } from "../core/providers/cache-warmth";
 
 /* ------------------------------ capability ------------------------------ */
 
@@ -277,6 +278,37 @@ export interface StatusInfo {
   unknownReceiptId?: string;
   /** `HZ_EFFECT_RECONCILE_BLOCK` latch for this session (ruling **304**). */
   reconcileBlock?: EffectReconcileBlockLatchView;
+  /**
+   * Optional cache-warmth state. Supplied by the caller (computed with
+   * `core/providers/cache-warmth.ts`); never computed here. The segment is
+   * rendered only when this is present AND `HZ_CACHE_WARMTH=1`.
+   */
+  cacheWarmth?: CacheWarmthStatus;
+}
+
+/** Compact view of cache warmth for the status bar (state comes from the caller). */
+export interface CacheWarmthStatus {
+  /** Fraction of the provider TTL still remaining, 0..1. */
+  warmthFraction: number;
+  /** Seconds until the cache entry expires. */
+  remainingSeconds: number;
+  decision: CacheWarmthDecision;
+}
+
+/** Display opt-in: the warmth segment is hidden unless `HZ_CACHE_WARMTH=1`. */
+export function cacheWarmthDisplayEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.HZ_CACHE_WARMTH === "1";
+}
+
+/**
+ * Compact `warm 73%/1m30s+` segment: percent remaining / time left, with a
+ * trailing decision marker (`+` profitable, `-` freeze, `?` unknown).
+ */
+export function formatCacheWarmthStatus(w: CacheWarmthStatus): string {
+  const pct = Math.round(Math.max(0, Math.min(1, w.warmthFraction)) * 100);
+  const remaining = Math.max(0, Number.isFinite(w.remainingSeconds) ? w.remainingSeconds : 0);
+  const marker = w.decision === "ping_profitable" ? "+" : w.decision === "freeze" ? "-" : "?";
+  return `warm ${pct}%/${formatElapsed(remaining * 1000)}${marker}`;
 }
 
 /**
@@ -341,10 +373,13 @@ export function composeStatusBar(info: StatusInfo, width: number): string {
       : "";
   const reconcileBlock =
     info.reconcileBlock !== undefined ? formatReconcileBlockStatusChip(info.reconcileBlock) : "";
+  const warmth =
+    info.cacheWarmth !== undefined && cacheWarmthDisplayEnabled() ? dim(formatCacheWarmthStatus(info.cacheWarmth)) : "";
   const parts: Record<string, string> = {
     mode,
     unknown,
     reconcileBlock,
+    warmth,
     model: info.model,
     provider: dim(info.provider),
     ctx: info.contextPercent === undefined ? "" : dim("\u25d1 ") + `${Math.max(0, Math.min(999, Math.round(info.contextPercent)))}%`,
@@ -352,8 +387,8 @@ export function composeStatusBar(info: StatusInfo, width: number): string {
     path: dim(info.path),
     branch: info.branch ? dim("\u2442 ") + info.branch : "",
   };
-  const dropOrder = ["path", "provider", "branch", "usage", "ctx"];
-  const order = ["mode", "unknown", "reconcileBlock", "model", "provider", "ctx", "usage", "path", "branch"];
+  const dropOrder = ["path", "provider", "branch", "usage", "ctx", "warmth"];
+  const order = ["mode", "unknown", "reconcileBlock", "warmth", "model", "provider", "ctx", "usage", "path", "branch"];
   const dropped = new Set<string>();
   const build = (): string =>
     order

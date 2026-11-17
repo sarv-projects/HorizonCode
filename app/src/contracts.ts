@@ -492,6 +492,16 @@ export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
  */
 export type DelegateRunner = (task: string, maxSteps?: number, profile?: string) => Promise<ToolResult>;
 
+/**
+ * Opt-in post-edit LSP notice for `apply_patch` (POST-EDIT ONLY — the edit is
+ * already on disk; this can never reject or block it). The runtime supplies a
+ * bound caller that has resolved the LSP config, a per-session diagnostics
+ * ledger and the guard hooks; it returns an already-formatted
+ * `<lsp-diagnostics>` block, or "" when there is nothing fresh to report.
+ * Absent means "no notice" and keeps existing tool output byte-identical.
+ */
+export type PostEditDiagnosticsNotice = (absPaths: readonly string[]) => Promise<string>;
+
 export interface ToolContext {
   cwd: string;
   workspace: string;
@@ -517,6 +527,8 @@ export interface ToolContext {
    * model authority.
    */
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Optional opt-in post-edit LSP notice hook (apply_patch). Absent = no notice. */
+  postEditDiagnosticsNotice?: PostEditDiagnosticsNotice;
 }
 
 /** Minimal kernel surface for spawn sandbox routing (avoids a contracts → core import). */

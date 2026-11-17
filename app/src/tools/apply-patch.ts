@@ -584,6 +584,29 @@ export const applyPatchTool: Tool = {
       ];
       const lintFixNote = formatLintFixCommitSuffixes(ctx.sessionId, ctx.workspace, lintTargets);
       if (lintFixNote !== "") lines.push(lintFixNote.trimStart());
+
+      // POST-EDIT NOTICE ONLY: every op has already landed on disk. Opt-in via
+      // HZ_APPLY_PATCH_LSP_NOTICE=1; default off keeps existing output byte-
+      // identical. This can NEVER reject or block the edit — a missing hook, a
+      // failed query, or an absent config all reduce to "no notice". Deleted
+      // paths are excluded (there is nothing on disk to diagnose).
+      if (process.env.HZ_APPLY_PATCH_LSP_NOTICE === "1" && ctx.postEditDiagnosticsNotice !== undefined) {
+        try {
+          const mutatedRels: string[] = [
+            ...summary.added,
+            ...summary.updated,
+            ...summary.moved.map((m) => {
+              const arrow = m.lastIndexOf(" -> ");
+              return arrow === -1 ? m : m.slice(arrow + 4);
+            }),
+          ];
+          const notice = await ctx.postEditDiagnosticsNotice(mutatedRels.map((rel) => path.resolve(ctx.cwd, rel)));
+          if (notice !== "") lines.push(notice);
+        } catch {
+          /* a post-edit diagnostic failure must never sink a successful patch */
+        }
+      }
+
       return { ok: true, output: lines.join("\n") };
     } catch (e) {
       return fail(msg(e));
