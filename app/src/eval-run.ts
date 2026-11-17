@@ -46,7 +46,7 @@ import {
   submitWithOfficialHarness,
   type OfficialHarnessExec,
 } from "./core/swebench-official-harness";
-import { parseRatchetGateSpec, runRatchetGate } from "./core/eval-ratchet";
+import { parseRatchetGateSpec, runAutoRatchet, runRatchetGate } from "./core/eval-ratchet";
 import { metricContract } from "./core/metrics";
 import { casesFromCorpusJsonl, runIndexedBench } from "./core/bench-runner";
 
@@ -75,7 +75,7 @@ interface CaseFileEntry {
 }
 
 const USAGE =
-  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir> | --bench-corpus <file.jsonl>) --forbidden <text-or-file> [--preds-out <preds.json>] [--submit] [--submit-cmd <cmd>] [--harness swebench-official] [--dataset <name>] [--split <split>] [--instances <id1,id2,...>] [--metrics-out <metrics.json>] [--max-suite-wall-ms <ms>] [--max-suite-cost-usd <usd>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--ratchet <spec.json>] [--keep] [--live]";
+  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir> | --bench-corpus <file.jsonl>) --forbidden <text-or-file> [--preds-out <preds.json>] [--submit] [--submit-cmd <cmd>] [--harness swebench-official] [--dataset <name>] [--split <split>] [--instances <id1,id2,...>] [--metrics-out <metrics.json>] [--max-suite-wall-ms <ms>] [--max-suite-cost-usd <usd>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--ratchet <spec.json>] [--ratchet-auto <spec.json>] [--keep] [--live]";
 
 /** The value of `--flag`, or `undefined` when absent (an empty string when bare). */
 function argValue(argv: readonly string[], flag: string): string | undefined {
@@ -208,7 +208,13 @@ export async function runEvalCli(
   // the frozen split, and persist an append-only decision log. No case source
   // or --forbidden is needed in this mode. Exit 0 = keep, 1 = revert, 2 = refusal.
   const ratchetSpec = argValue(argv, "--ratchet");
-  if (ratchetSpec !== undefined) {
+  const ratchetAutoSpec = argValue(argv, "--ratchet-auto");
+  // Additive G-8 post-run feed: opt-in via --ratchet-auto <spec.json> or
+  // HZ_RATCHE_AUTO=1 (an existing --ratchet spec is then fed AFTER the run).
+  // With neither set, the gate-only --ratchet mode below is byte-identical.
+  const ratchetAutoViaEnv = process.env.HZ_RATCHE_AUTO === "1" || process.env.HZ_RATCHET_AUTO === "1";
+  const autoSpecPath = ratchetAutoSpec ?? (ratchetAutoViaEnv ? ratchetSpec : undefined);
+  if (ratchetSpec !== undefined && autoSpecPath === undefined) {
     if (ratchetSpec === "") {
       io.err(`--ratchet needs a spec JSON path\n${USAGE}`);
       return 2;
@@ -350,6 +356,16 @@ export async function runEvalCli(
   }
   if (submitRequested && (predsOut === undefined || predsOut === "")) {
     io.err(`--submit requires --preds-out <preds.json> — nothing to submit otherwise\n${USAGE}`);
+    return 2;
+  }
+  // The auto feed consumes the run's own result file; without one there is
+  // nothing honest to feed, so refuse before executing any case.
+  if (autoSpecPath !== undefined && autoSpecPath === "") {
+    io.err(`--ratchet-auto needs a spec JSON path\n${USAGE}`);
+    return 2;
+  }
+  if (autoSpecPath !== undefined && (metricsOut === undefined || metricsOut === "")) {
+    io.err(`--ratchet-auto requires --metrics-out <file.json> (the run's own result file)\n${USAGE}`);
     return 2;
   }
   const handle = makeRuntimeExecutor({ mock: !live, keepWorkspaces: keep });
@@ -515,6 +531,25 @@ export async function runEvalCli(
     io.out(
       `wrote approval: ${writeApprovalPath} (casesContentHash ${approval.casesContentHash}${splitNote})`,
     );
+  }
+
+  // G-8 additive post-run feed: after the normal run (and its result file) is
+  // complete, feed the run's own result file into the SAME ratchet decision as
+  // `--ratchet`. Default (no --ratchet-auto / env) never reaches this block, so
+  // output above is byte-identical. A refusal fails closed with exit 2.
+  if (autoSpecPath !== undefined) {
+    try {
+      const spec = parseRatchetGateSpec(readFileSync(autoSpecPath, "utf8"), autoSpecPath);
+      const report = runAutoRatchet({ spec, resultFile: metricsOut! });
+      io.out(`ratchet-auto: ${report.verdict} · variant=${report.variantId} · round=${report.round} · ${report.reason}`);
+      io.out(
+        `ratchet decision: ${report.append.appended ? "appended" : `no-op (${report.append.note})`} → ${spec.decisionLog}`,
+      );
+      for (const block of report.published) io.out(block);
+    } catch (err) {
+      io.err(`ratchet-auto refused: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
   }
 
   return passed === run.results.length && run.aggregate.suiteFailures.length === 0 ? 0 : 1;

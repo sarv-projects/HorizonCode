@@ -70,17 +70,24 @@ import * as path from "node:path";
 import { canonicalJson, digestOf } from "./canon";
 import { sanitizeForDistill } from "./distill-sanitize";
 import {
+  appendArchiveArtifacts,
   appendProposals,
+  archiveLockPath,
   archiveReadView,
   curatorArchivePath,
   emptyArchive,
+  loadArchiveLog,
   loadCuratorArchive,
   pin as pinArchivedProposal,
   resolvePin as resolveArchivedProposalPin,
   saveCuratorArchive,
   serializeArchive,
   snapshotForProposals,
+  type ArchiveAppendDelta,
+  type ArchiveAppendResult,
+  type ArchiveLogView,
   type ArchiveReadView,
+  type ArchiveRefusal,
   type CuratorArchive,
   type PreRunSnapshot,
 } from "./curator-archive";
@@ -631,7 +638,14 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
   // later proposals append failure can only leave extra archive rows, which is
   // the safe direction for an archive-as-maximum.
   const archiveAfter = appendProposals(archiveBefore, shapeValidArchiveInputs(list), snapshot);
-  const archivePath = saveCuratorArchive(store.stateDir, archiveAfter);
+  // G-4 append log: persist the run's pre-run snapshot (even for a batch of
+  // only refusals) and every editorial refusal as immutable artifact lines.
+  const archiveRefusals = result.refused.map((entry) => ({
+    digest: digestOf(list[entry.index]),
+    reason: entry.reason,
+    detail: entry.detail,
+  }));
+  const archivePath = saveCuratorArchive(store.stateDir, archiveAfter, { snapshot, refusals: archiveRefusals });
   result.archive = {
     snapshot,
     archivedCount: archiveAfter.seq - archiveBefore.seq,
@@ -693,5 +707,14 @@ export function archiveProposalBatch(proposals: readonly unknown[], now?: () => 
 
 // Re-export the pin/resolve + persistence surface so callers have one curator entry point.
 export { pinArchivedProposal, resolveArchivedProposalPin };
-export { archiveReadView, curatorArchivePath, loadCuratorArchive, saveCuratorArchive, serializeArchive };
-export type { ArchiveReadView, CuratorArchive, PreRunSnapshot };
+export {
+  archiveLockPath,
+  archiveReadView,
+  appendArchiveArtifacts,
+  curatorArchivePath,
+  loadArchiveLog,
+  loadCuratorArchive,
+  saveCuratorArchive,
+  serializeArchive,
+};
+export type { ArchiveAppendDelta, ArchiveAppendResult, ArchiveLogView, ArchiveReadView, ArchiveRefusal, CuratorArchive, PreRunSnapshot };

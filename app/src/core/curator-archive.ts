@@ -27,22 +27,16 @@
  * prompt, session or workspace file.
  */
 
-import { randomBytes } from "node:crypto";
 import {
   chmodSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  renameSync,
   statSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import { canonicalJson, sha256Hex } from "./canon";
+import { withFileLockSync } from "./file-lock";
+import { appendJsonlSync } from "./jsonl-append";
 
 /** The immutable content+time record taken before a run touches anything. */
 export interface PreRunSnapshot {
@@ -179,13 +173,14 @@ export function resolvePin(archive: CuratorArchive, name: string): ArchivedPropo
 /* -------------------------------------------------------------------------- */
 /*
  * The pure archive above is the in-memory model. The functions below make it
- * DURABLE under a workspace state dir without changing any of its semantics:
- *  - one canonical-JSON snapshot file `<stateDir>/curator-archive.json`;
- *  - written atomically (0600 temp in a 0700 dir, fsync, rename, parent fsync);
- *  - loaded fresh on every `curate` call (a new process sees the same archive);
- *  - bounded READ path: a file larger than MAX_ARCHIVE_BYTES is a typed refusal
- *    (never silently truncated), and `archiveReadView` bounds the returned rows
- *    without mutating the stored archive — history is never rewritten or pruned.
+ * DURABLE under a workspace state dir without changing any of its semantics.
+ * The file `<stateDir>/curator-archive.json` is an NDJSON append log (one
+ * immutable artifact line per snapshot/pin/refusal) written with durable
+ * O_APPEND; legacy v1 canonical-JSON snapshot files are read as a base and
+ * never rewritten. Writes are serialized by a cross-process lock. The read path
+ * is bounded: a file larger than MAX_ARCHIVE_BYTES is a typed refusal (never a
+ * silent truncation), and `archiveReadView` bounds returned rows without
+ * mutating the stored log — history is never rewritten or pruned.
  * No delete/prune/overwrite API is exported: the archive stays the maximum set.
  */
 
@@ -219,7 +214,10 @@ function storeMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Absolute path of the persisted archive for a state directory. */
+/**
+ * Absolute path of the persisted archive for a state directory. The file is
+ * NDJSON (despite the historical `.json` name kept for v1 migration).
+ */
 export function curatorArchivePath(stateDir: string): string {
   return path.join(stateDir, ARCHIVE_FILE);
 }
@@ -347,84 +345,31 @@ export function parseArchive(text: string): CuratorArchive {
  * archive without any in-memory cache.
  */
 export function loadCuratorArchive(stateDir: string): CuratorArchive {
-  const dir = requireStateDir(stateDir);
-  const file = curatorArchivePath(dir);
-  let text: string;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return emptyArchive();
-    throw new ArchiveStoreError("archive-corrupt", `archive is unreadable (${storeMessage(err)})`);
-  }
-  if (Buffer.byteLength(text, "utf8") > MAX_ARCHIVE_BYTES) {
-    throw new ArchiveStoreError(
-      "archive-corrupt",
-      `archive exceeds the bounded read limit of ${MAX_ARCHIVE_BYTES} bytes; refusing rather than truncating history`,
-    );
-  }
-  return parseArchive(text);
-}
-
-/** Best-effort fsync of a file descriptor opened for a just-written file. */
-function fsyncFile(file: string): void {
-  let fd: number | undefined;
-  try {
-    fd = openSync(file, "r");
-    fsyncSync(fd);
-  } catch {
-    /* some platforms/filesystems refuse fsync */
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-/** Best-effort fsync of the parent directory so the rename survives a crash. */
-function fsyncParentDir(dir: string): void {
-  let fd: number | undefined;
-  try {
-    fd = openSync(dir, "r");
-    fsyncSync(fd);
-  } catch {
-    /* best effort */
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
+  return loadArchiveLog(stateDir).archive;
 }
 
 /**
- * Persist an archive atomically: 0700 dir, 0600 temp file, fsync, rename over
- * the target, parent fsync. The prior bytes are replaced in one rename, never
- * truncated; a crash leaves either the old archive or the whole new one.
+ * Persist the DELTA of `archive` that is not already on disk: new rows become
+ * immutable snapshot lines, new pins become pin lines. Earlier bytes are never
+ * rewritten — there is no temp+rename of the whole file any more. Returns the
+ * (unchanged) archive file path for the caller's report.
+ *
+ * `options.refusals` and `options.snapshot` let `curate` also record editorial
+ * refusals and always persist its pre-run snapshot, even for a batch with no
+ * new rows.
  */
-export function saveCuratorArchive(stateDir: string, archive: CuratorArchive): string {
-  const dir = requireStateDir(stateDir);
-  mkdirSync(dir, { recursive: true });
-  if (isUnix) {
-    try {
-      chmodSync(dir, statSync(dir).mode & 0o700);
-    } catch {
-      /* best effort */
-    }
-  }
-  const file = curatorArchivePath(dir);
-  const content = serializeArchive(archive);
-  const tmp = path.join(dir, `.${ARCHIVE_FILE}.hz-tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
-  try {
-    writeFileSync(tmp, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    fsyncFile(tmp);
-    if (isUnix) chmodSync(tmp, 0o600);
-    renameSync(tmp, file);
-    if (isUnix) chmodSync(file, 0o600);
-    fsyncParentDir(dir);
-    return file;
-  } catch (err) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      /* best effort */
-    }
-    throw new ArchiveStoreError("archive-write-failed", `cannot persist archive to ${file} (${storeMessage(err)})`);
-  }
+export function saveCuratorArchive(
+  stateDir: string,
+  archive: CuratorArchive,
+  options: { refusals?: readonly ArchiveRefusal[]; snapshot?: PreRunSnapshot } = {},
+): string {
+  appendArchiveArtifacts(stateDir, {
+    rows: archive.proposals,
+    pins: archive.pins,
+    ...(options.snapshot !== undefined ? { snapshots: [options.snapshot] } : {}),
+    ...(options.refusals !== undefined ? { refusals: options.refusals } : {}),
+  });
+  return curatorArchivePath(stateDir);
 }
 
 export interface ArchiveReadView {
@@ -450,4 +395,364 @@ export function archiveReadView(archive: CuratorArchive, maxRows: number = MAX_A
     pins: archive.pins,
     truncated: rows.length < archive.proposals.length,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* NDJSON append log (G-4 residual — physically append-only)                    */
+/* -------------------------------------------------------------------------- */
+/*
+ * The v1 snapshot replace above was append-only only LOGICALLY: every run
+ * rewrote the whole file with a temp+rename. This section makes the archive a
+ * real append log. The archive file is NDJSON: one IMMUTABLE line per artifact:
+ *   - "snapshot": a pre-run snapshot plus the rows archived under it (one run),
+ *   - "pin":      a named pin binding,
+ *   - "refusal":  a shape-valid but editorially refused proposal.
+ * Each line carries a content address (`id` = sha256 of canonical JSON of the
+ * line) and a `prev` hash chain (jsonl-chain-head style). Replay verifies seq
+ * contiguity, chain linkage and id integrity — a single corrupt or forged line
+ * fails the whole load closed. Legacy v1 canonical-JSON snapshot files are read
+ * as a base (line 0) and NEVER rewritten; new lines simply append after them.
+ * Nothing here can delete, prune or overwrite an earlier line, and all writes
+ * are serialized by a cross-process advisory lock (core/file-lock.ts).
+ */
+
+/** Version stamped on every NDJSON log line (the legacy snapshot is v1). */
+export const ARCHIVE_LOG_VERSION = 2;
+export type ArchiveLogLineType = "snapshot" | "pin" | "refusal";
+
+/** A shape-valid proposal the editorial standard refused (maximum set). */
+export interface ArchiveRefusal {
+  /** Content-addressed id of the refused artifact (sha256 of its canonical JSON). */
+  digest: string;
+  reason: string;
+  detail: string;
+}
+
+/** A row carried by a snapshot line; `seq` is derived deterministically on replay. */
+interface ArchiveRowInput {
+  digest: string;
+  kind: string;
+  title: string;
+}
+
+type LogPayload =
+  | { type: "snapshot"; snapshot: PreRunSnapshot; rows: ArchiveRowInput[] }
+  | { type: "pin"; name: string; digest: string }
+  | { type: "refusal"; digest: string; reason: string; detail: string };
+
+export type ArchiveLogLine = LogPayload & {
+  v: number;
+  seq: number;
+  /** sha256 of canonical JSON of this line without `id` (content address). */
+  id: string;
+  /** sha256 `id` of the preceding log line; all-zero for the first line. */
+  prev: string;
+};
+
+const GENESIS_HASH = "0".repeat(64);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function corrupt(file: string, what: string): ArchiveStoreError {
+  return new ArchiveStoreError("archive-corrupt", `${file}: ${what}`);
+}
+
+function lineId(line: Omit<ArchiveLogLine, "id">): string {
+  return sha256Hex(canonicalJson(line));
+}
+
+function parseRowInput(raw: unknown, file: string, where: string): ArchiveRowInput {
+  if (
+    !isRecord(raw) ||
+    typeof raw.digest !== "string" ||
+    !HEX64.test(raw.digest) ||
+    typeof raw.kind !== "string" ||
+    typeof raw.title !== "string"
+  ) {
+    throw corrupt(file, `${where} is not a v2 archive row`);
+  }
+  return { digest: raw.digest, kind: raw.kind, title: raw.title };
+}
+
+/** Parse + validate one NDJSON log line: shape, seq order, chain link and id. */
+export function parseArchiveLogLine(text: string, file: string, expectedSeq: number, prev: string): ArchiveLogLine {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (err) {
+    throw corrupt(file, `log line ${expectedSeq} is not JSON (${storeMessage(err)})`);
+  }
+  if (!isRecord(value)) throw corrupt(file, `log line ${expectedSeq} is not an object`);
+  if (value.v !== ARCHIVE_LOG_VERSION) {
+    throw corrupt(file, `log line ${expectedSeq} has unsupported v ${JSON.stringify(value.v)}`);
+  }
+  if (value.seq !== expectedSeq) {
+    throw corrupt(file, `log line ${expectedSeq} has seq ${JSON.stringify(value.seq)} (ordering/gap)`);
+  }
+  if (typeof value.prev !== "string" || !HEX64.test(value.prev) || value.prev !== prev) {
+    throw corrupt(file, `log line ${expectedSeq} has a broken hash-chain link`);
+  }
+
+  let payload: LogPayload;
+  if (value.type === "snapshot") {
+    if (!isSnapshot(value.snapshot) || !Array.isArray(value.rows)) {
+      throw corrupt(file, `log line ${expectedSeq} has an invalid snapshot payload`);
+    }
+    payload = {
+      type: "snapshot",
+      snapshot: { contentDigest: value.snapshot.contentDigest, takenAt: value.snapshot.takenAt },
+      rows: value.rows.map((row, i) => parseRowInput(row, file, `log line ${expectedSeq} rows[${i}]`)),
+    };
+  } else if (value.type === "pin") {
+    if (
+      typeof value.name !== "string" ||
+      !PIN_NAME_RE.test(value.name) ||
+      typeof value.digest !== "string" ||
+      !HEX64.test(value.digest)
+    ) {
+      throw corrupt(file, `log line ${expectedSeq} has an invalid pin payload`);
+    }
+    payload = { type: "pin", name: value.name, digest: value.digest };
+  } else if (value.type === "refusal") {
+    if (
+      typeof value.digest !== "string" ||
+      !HEX64.test(value.digest) ||
+      typeof value.reason !== "string" ||
+      typeof value.detail !== "string"
+    ) {
+      throw corrupt(file, `log line ${expectedSeq} has an invalid refusal payload`);
+    }
+    payload = { type: "refusal", digest: value.digest, reason: value.reason, detail: value.detail };
+  } else {
+    throw corrupt(file, `log line ${expectedSeq} has unknown type ${JSON.stringify(value.type)}`);
+  }
+
+  const { id, v: _v, seq: _seq, prev: _prev, ...rest } = value;
+  const withoutId = { ...rest, v: ARCHIVE_LOG_VERSION, seq: expectedSeq, prev };
+  if (typeof id !== "string" || id !== lineId(withoutId as Omit<ArchiveLogLine, "id">)) {
+    throw corrupt(file, `log line ${expectedSeq} has a bad content address (tampered)`);
+  }
+  return Object.freeze({ ...withoutId, id }) as ArchiveLogLine;
+}
+
+function isLegacySnapshot(value: unknown): boolean {
+  return isRecord(value) && value.schemaVersion === ARCHIVE_SCHEMA_VERSION && Array.isArray(value.proposals) && isRecord(value.pins as unknown);
+}
+
+export interface ArchiveLogView {
+  /** The reconstructed maximum archive (legacy base + every append line). */
+  archive: CuratorArchive;
+  /** Every recorded editorial refusal, in log order. */
+  refusals: readonly ArchiveRefusal[];
+  /** Every v2 log line, in order. */
+  lines: readonly ArchiveLogLine[];
+  /** True when a legacy v1 snapshot file was the base (never rewritten). */
+  legacyBase: boolean;
+}
+
+/** Parse a whole archive file (legacy base + NDJSON lines) into a view. */
+export function parseArchiveLog(text: string, file: string): ArchiveLogView {
+  let archive = emptyArchive();
+  const refusals: ArchiveRefusal[] = [];
+  const lines: ArchiveLogLine[] = [];
+  let legacyBase = false;
+  let seq = 1;
+  let prev = GENESIS_HASH;
+  const physical = text.split("\n");
+  for (let i = 0; i < physical.length; i += 1) {
+    const trimmed = physical[i]!.trim();
+    if (trimmed === "") continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(trimmed);
+    } catch (err) {
+      throw corrupt(file, `line ${i + 1} is not JSON (${storeMessage(err)})`);
+    }
+    if (!legacyBase && lines.length === 0 && isLegacySnapshot(value)) {
+      // Legacy v1 full-snapshot file: read as the base, NEVER rewritten.
+      archive = parseArchive(trimmed);
+      legacyBase = true;
+      continue;
+    }
+    const line = parseArchiveLogLine(trimmed, file, seq, prev);
+    if (line.type === "snapshot") {
+      archive = appendProposals(archive, line.rows, line.snapshot);
+    } else if (line.type === "pin") {
+      try {
+        archive = pin(archive, line.name, line.digest);
+      } catch (err) {
+        throw corrupt(file, `log line ${seq} pin is invalid (${storeMessage(err)})`);
+      }
+    } else {
+      refusals.push({ digest: line.digest, reason: line.reason, detail: line.detail });
+    }
+    lines.push(line);
+    seq += 1;
+    prev = line.id;
+  }
+  return { archive, refusals, lines, legacyBase };
+}
+
+/** Load the full append log from disk. Missing file is a healthy empty log. */
+export function loadArchiveLog(stateDir: string): ArchiveLogView {
+  const dir = requireStateDir(stateDir);
+  const file = curatorArchivePath(dir);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      return { archive: emptyArchive(), refusals: [], lines: [], legacyBase: false };
+    }
+    throw new ArchiveStoreError("archive-corrupt", `archive is unreadable (${storeMessage(err)})`);
+  }
+  if (Buffer.byteLength(text, "utf8") > MAX_ARCHIVE_BYTES) {
+    throw new ArchiveStoreError(
+      "archive-corrupt",
+      `archive exceeds the bounded read limit of ${MAX_ARCHIVE_BYTES} bytes; refusing rather than truncating history`,
+    );
+  }
+  return parseArchiveLog(text, file);
+}
+
+/**
+ * Cross-process lock path for the archive, in the state dir. The lock file is
+ * created O_EXCL and removed on release, so it leaves no residual file (the
+ * state dir still holds only the archive and the proposals store).
+ */
+export function archiveLockPath(stateDir: string): string {
+  return path.join(stateDir, `${ARCHIVE_FILE}.lock`);
+}
+
+export interface ArchiveAppendDelta {
+  /** New archived rows (already deduped by digest by the caller is optional). */
+  rows?: readonly ArchivedProposal[];
+  /** Desired pins; only absent names are appended, a different digest is refused. */
+  pins?: Readonly<Record<string, string>>;
+  /** Editorial refusals to record as immutable lines. */
+  refusals?: readonly ArchiveRefusal[];
+  /** Pre-run snapshots to persist even when a run adds no rows. */
+  snapshots?: readonly PreRunSnapshot[];
+}
+
+export interface ArchiveAppendResult {
+  path: string;
+  appendedLines: number;
+  archive: CuratorArchive;
+  refusals: readonly ArchiveRefusal[];
+}
+
+/**
+ * Append the new artifacts of `delta` to the NDJSON log, serialized by a
+ * cross-process lock so two concurrent curators cannot race a read-modify-write.
+ * Every line is content-addressed and hash-chained; earlier lines are never
+ * deleted, rewritten or reordered. The write is a single `appendJsonlSync`
+ * (durable O_APPEND + fsync), so a crash leaves either the prior log or the log
+ * plus all of this batch's lines — never a half line.
+ */
+export function appendArchiveArtifacts(stateDir: string, delta: ArchiveAppendDelta): ArchiveAppendResult {
+  const dir = requireStateDir(stateDir);
+  mkdirSync(dir, { recursive: true });
+  if (isUnix) {
+    try {
+      chmodSync(dir, statSync(dir).mode & 0o700);
+    } catch {
+      /* best effort */
+    }
+  }
+  const file = curatorArchivePath(dir);
+  const lock = archiveLockPath(dir);
+  return withFileLockSync(lock, () => {
+    const before = loadArchiveLog(dir);
+    const existingDigests = new Set(before.archive.proposals.map((row) => row.digest));
+    const newRows = (delta.rows ?? []).filter(
+      (row) => row !== null && typeof row === "object" && typeof row.digest === "string" && HEX64.test(row.digest) && !existingDigests.has(row.digest),
+    );
+
+    const groups = new Map<string, { snapshot: PreRunSnapshot; rows: ArchiveRowInput[] }>();
+    const keyOf = (snapshot: PreRunSnapshot): string => `${snapshot.contentDigest}\n${snapshot.takenAt}`;
+    const addSnapshot = (snapshot: PreRunSnapshot | undefined): void => {
+      if (!isSnapshot(snapshot)) return;
+      const key = keyOf(snapshot);
+      if (!groups.has(key)) {
+        groups.set(key, { snapshot: { contentDigest: snapshot.contentDigest, takenAt: snapshot.takenAt }, rows: [] });
+      }
+    };
+    for (const snapshot of delta.snapshots ?? []) addSnapshot(snapshot);
+    for (const row of newRows) {
+      addSnapshot(row.snapshot);
+      groups.get(keyOf(row.snapshot))!.rows.push({ digest: row.digest, kind: row.kind, title: row.title });
+    }
+
+    const newPins: LogPayload[] = [];
+    for (const name of Object.keys(delta.pins ?? {})) {
+      const digest = (delta.pins as Readonly<Record<string, string>>)[name] as string;
+      const existing = before.archive.pins[name];
+      if (existing === digest) continue;
+      if (existing !== undefined) {
+        throw new ArchiveStoreError("archive-corrupt", `pin ${JSON.stringify(name)} already bound to ${existing}; refusing to rebind`);
+      }
+      if (!PIN_NAME_RE.test(name) || typeof digest !== "string" || !HEX64.test(digest)) {
+        throw new ArchiveStoreError("archive-corrupt", `invalid pin ${JSON.stringify(name)}=${JSON.stringify(digest)}`);
+      }
+      newPins.push({ type: "pin", name, digest });
+    }
+
+    const refusalKey = (refusal: ArchiveRefusal): string =>
+      sha256Hex(canonicalJson({ type: "refusal", digest: refusal.digest, reason: refusal.reason, detail: refusal.detail }));
+    const seenRefusals = new Set(before.refusals.map(refusalKey));
+    const newRefusals: LogPayload[] = [];
+    for (const refusal of delta.refusals ?? []) {
+      if (
+        refusal === null ||
+        typeof refusal !== "object" ||
+        typeof refusal.digest !== "string" ||
+        !HEX64.test(refusal.digest) ||
+        typeof refusal.reason !== "string" ||
+        typeof refusal.detail !== "string"
+      ) {
+        continue;
+      }
+      const key = refusalKey(refusal);
+      if (seenRefusals.has(key)) continue;
+      seenRefusals.add(key);
+      newRefusals.push({ type: "refusal", digest: refusal.digest, reason: refusal.reason, detail: refusal.detail });
+    }
+
+    const payloads: LogPayload[] = [];
+    for (const group of groups.values()) {
+      payloads.push({ type: "snapshot", snapshot: group.snapshot, rows: group.rows });
+    }
+    payloads.push(...newPins, ...newRefusals);
+    if (payloads.length === 0) {
+      return { path: file, appendedLines: 0, archive: before.archive, refusals: before.refusals };
+    }
+
+    const parts: string[] = [];
+    let seq = before.lines.length + 1;
+    let prev = before.lines.length > 0 ? before.lines[before.lines.length - 1]!.id : GENESIS_HASH;
+    for (const payload of payloads) {
+      const withoutId = { v: ARCHIVE_LOG_VERSION, seq, prev, ...payload } as Omit<ArchiveLogLine, "id">;
+      const id = lineId(withoutId);
+      parts.push(`${canonicalJson({ ...withoutId, id })}\n`);
+      seq += 1;
+      prev = id;
+    }
+    try {
+      appendJsonlSync(file, parts.join(""));
+      if (isUnix) {
+        try {
+          chmodSync(file, 0o600);
+        } catch {
+          /* best effort */
+        }
+      }
+    } catch (err) {
+      throw new ArchiveStoreError("archive-write-failed", `cannot append archive artifacts to ${file} (${storeMessage(err)})`);
+    }
+    const after = loadArchiveLog(dir);
+    return { path: file, appendedLines: payloads.length, archive: after.archive, refusals: after.refusals };
+  });
 }

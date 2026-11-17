@@ -16,7 +16,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { CasePassRow } from "./eval-approval";
+import { canonicalJson, sha256Hex } from "./canon";
+import type { CasePassRow, EvalFrozenSplitV1 } from "./eval-approval";
 import {
   appendRatchetDecision,
   buildRatchetDecisionRecord,
@@ -129,48 +130,160 @@ export interface RatchetGateReport {
   published: string[];
 }
 
+interface DecideAndAppendInput {
+  frozenSplit: EvalFrozenSplitV1;
+  approvalHash: string;
+  baseline: CasePassRow[];
+  candidate: CasePassRow[];
+  round: number;
+  variantId: string;
+  decisionLog: string;
+  decidedAt?: string;
+  keepOnTrainNotWorse?: boolean;
+}
+
+/**
+ * The single decision+append path shared by the on-disk gate and the automatic
+ * post-run feed. Everything here is unchanged from the shipped `--ratchet` gate:
+ * pure split scoring, a hashed decision record, and an append-only log that is
+ * idempotent on an identical record and refuses to overwrite a kept result.
+ */
+function decideAndAppend(input: DecideAndAppendInput): RatchetGateReport {
+  const metrics = splitScoresFromResults(input.frozenSplit, input.baseline, input.candidate);
+  const rule = input.keepOnTrainNotWorse !== undefined ? { keepOnTrainNotWorse: input.keepOnTrainNotWorse } : {};
+  const decision = decideRatchetRound(metrics, rule);
+  const record = buildRatchetDecisionRecord(
+    {
+      round: input.round,
+      variantId: input.variantId,
+      split: input.frozenSplit,
+      metrics,
+      rule,
+      approvalHash: input.approvalHash,
+    },
+    input.decidedAt !== undefined ? { now: () => input.decidedAt! } : {},
+  );
+  const append = appendRatchetDecision(input.decisionLog, record);
+  const population = `${input.baseline.length} baseline + ${input.candidate.length} candidate result row(s) on the frozen split (approval ${input.approvalHash})`;
+  const published = [
+    metricContract({ metric: "ratchet baseline held-out pass rate", anchor: GATE_ANCHOR, population, excludes: GATE_EXCLUDES, value: decision.baselineHeldOutRate.toFixed(4) }),
+    metricContract({ metric: "ratchet candidate held-out pass rate", anchor: GATE_ANCHOR, population, excludes: GATE_EXCLUDES, value: decision.candidateHeldOutRate.toFixed(4) }),
+    metricContract({ metric: "ratchet round", anchor: GATE_ANCHOR, population, excludes: GATE_EXCLUDES, value: input.round }),
+  ];
+  return {
+    verdict: decision.verdict,
+    reason: decision.reason,
+    tieBreak: decision.tieBreak,
+    variantId: input.variantId,
+    round: input.round,
+    record,
+    append,
+    published,
+  };
+}
+
+/** Load an approval from disk and require the frozen split the gate needs. */
+function approvalForGate(approvalPath: string): ReturnType<typeof parseEvalApproval> {
+  const approval = parseEvalApproval(readFileSync(approvalPath, "utf8"), approvalPath);
+  if (approval.frozenSplit === undefined) {
+    throw new Error(`${approvalPath}: ratchet gate needs an approval with a frozenSplit (re-approve with --held-out-fraction)`);
+  }
+  return approval;
+}
+
 /**
  * Run the on-disk gate: validate spec + approval + results, decide, persist.
  * Idempotent: a byte-identical record already in the log is a no-op; a
  * different decision for a KEPT key is refused by `appendRatchetDecision`.
  */
 export function runRatchetGate(spec: RatchetGateSpec): RatchetGateReport {
-  const approvalText = readFileSync(spec.approval, "utf8");
-  const approval = parseEvalApproval(approvalText, spec.approval);
-  if (approval.frozenSplit === undefined) {
-    throw new Error(`${spec.approval}: ratchet gate needs an approval with a frozenSplit (re-approve with --held-out-fraction)`);
-  }
+  const approval = approvalForGate(spec.approval);
   const baseline = loadVariantResults(spec.baseline);
   const candidate = loadVariantResults(spec.candidate);
-  const metrics = splitScoresFromResults(approval.frozenSplit, baseline, candidate);
-  const rule = spec.keepOnTrainNotWorse !== undefined ? { keepOnTrainNotWorse: spec.keepOnTrainNotWorse } : {};
-  const decision = decideRatchetRound(metrics, rule);
-  const record = buildRatchetDecisionRecord(
-    {
-      round: spec.round,
-      variantId: spec.variantId,
-      split: approval.frozenSplit,
-      metrics,
-      rule,
-      approvalHash: approval.casesContentHash,
-    },
-    spec.decidedAt !== undefined ? { now: () => spec.decidedAt! } : {},
-  );
-  const append = appendRatchetDecision(spec.decisionLog, record);
-  const population = `${baseline.length} baseline + ${candidate.length} candidate result row(s) on the frozen split (approval ${approval.casesContentHash})`;
-  const published = [
-    metricContract({ metric: "ratchet baseline held-out pass rate", anchor: GATE_ANCHOR, population, excludes: GATE_EXCLUDES, value: decision.baselineHeldOutRate.toFixed(4) }),
-    metricContract({ metric: "ratchet candidate held-out pass rate", anchor: GATE_ANCHOR, population, excludes: GATE_EXCLUDES, value: decision.candidateHeldOutRate.toFixed(4) }),
-    metricContract({ metric: "ratchet round", anchor: GATE_ANCHOR, population, excludes: GATE_EXCLUDES, value: spec.round }),
-  ];
-  return {
-    verdict: decision.verdict,
-    reason: decision.reason,
-    tieBreak: decision.tieBreak,
-    variantId: spec.variantId,
+  return decideAndAppend({
+    frozenSplit: approval.frozenSplit!,
+    approvalHash: approval.casesContentHash,
+    baseline,
+    candidate,
     round: spec.round,
-    record,
-    append,
-    published,
-  };
+    variantId: spec.variantId,
+    decisionLog: spec.decisionLog,
+    ...(spec.decidedAt !== undefined ? { decidedAt: spec.decidedAt } : {}),
+    ...(spec.keepOnTrainNotWorse !== undefined ? { keepOnTrainNotWorse: spec.keepOnTrainNotWorse } : {}),
+  });
+}
+
+/* ------------------------- automatic post-run feed (G-8) ------------------------- */
+
+/**
+ * Load the result file a normal eval run just produced. Accepts the `{cases:[...]}`
+ * wrapper written by `--metrics-out`, a flat `{caseId, passed}` array, or the
+ * plain `{id, passed}` array the on-disk gate already accepts. Anything else (missing, non-JSON, wrong shape,
+ * non-boolean passed) fails closed — a corrupt result is never "all failed".
+ */
+export function loadRunResults(file: string): CasePassRow[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    throw new Error(`${file}: eval run result file is missing or not valid JSON (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const rows: unknown = Array.isArray(raw)
+    ? raw
+    : isRecord(raw) && Array.isArray(raw.cases)
+      ? raw.cases
+      : undefined;
+  if (!Array.isArray(rows)) {
+    throw new Error(`${file}: eval run result file must be an array of {caseId, passed} or a {cases:[...]} report`);
+  }
+  return rows.map((entry, index) => {
+    const row = entry as { id?: unknown; caseId?: unknown; passed?: unknown } | null;
+    if (row === null || typeof row !== "object") {
+      throw new Error(`${file}[${index}]: result row is not an object`);
+    }
+    const id = typeof row.caseId === "string" ? row.caseId : typeof row.id === "string" ? row.id : "";
+    if (id.trim() === "") throw new Error(`${file}[${index}]: result row has no caseId/id`);
+    if (typeof row.passed !== "boolean") {
+      throw new Error(`${file}[${index}] (${id}): passed must be a boolean`);
+    }
+    return { id, passed: row.passed };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export interface AutoRatchetRunInput {
+  /** The gate spec (approval, baseline, decisionLog, variantId, round). */
+  spec: RatchetGateSpec;
+  /** The run's own result file (metrics-out), fed as the candidate. */
+  resultFile: string;
+}
+
+/**
+ * Automatic post-run feed: after a normal eval run, feed the run's own result
+ * file into the SAME ratchet decision as `--ratchet` (no new decision logic).
+ * The spec's `candidate` field is ignored; the run result file is the candidate.
+ * When the spec pins no `decidedAt`, the decision timestamp is derived from the
+ * PASS/FAIL rows (not the volatile per-case timing/cost fields) so replaying a
+ * run with the same outcomes is idempotent by construction.
+ */
+export function runAutoRatchet(input: AutoRatchetRunInput): RatchetGateReport {
+  const candidate = loadRunResults(input.resultFile);
+  const approval = approvalForGate(input.spec.approval);
+  const baseline = loadVariantResults(input.spec.baseline);
+  const decidedAt =
+    input.spec.decidedAt ?? `auto:${sha256Hex(canonicalJson(candidate))}`;
+  return decideAndAppend({
+    frozenSplit: approval.frozenSplit!,
+    approvalHash: approval.casesContentHash,
+    baseline,
+    candidate,
+    round: input.spec.round,
+    variantId: input.spec.variantId,
+    decisionLog: input.spec.decisionLog,
+    decidedAt,
+    ...(input.spec.keepOnTrainNotWorse !== undefined ? { keepOnTrainNotWorse: input.spec.keepOnTrainNotWorse } : {}),
+  });
 }
