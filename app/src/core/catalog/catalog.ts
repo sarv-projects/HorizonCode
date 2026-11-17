@@ -47,7 +47,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalJson } from "../canon";
+import { canonicalJson, sha256Hex } from "../canon";
 import { userConfigDir } from "../paths";
 import curatedSnapshot from "./models-dev.curated.json";
 
@@ -153,6 +153,8 @@ export function catalogCachePath(home: string = homedir()): string {
 
 export interface CatalogCacheMeta {
   etag?: string;
+  /** SHA-256 of the raw fetched body; a 200 with identical bytes is not a change. */
+  digest?: string;
   fetchedAt: string;
   source: string;
   providerCount: number;
@@ -163,6 +165,7 @@ export interface CatalogFetchResult {
   catalog: Catalog;
   notModified: boolean;
   etag?: string;
+  digest?: string;
 }
 
 export interface LoadedCatalog extends Catalog {
@@ -403,7 +406,12 @@ export async function fetchLiveCatalog(
     throw new Error("models catalog fetch returned non-JSON");
   }
   const catalog = validateCatalog(decodeCatalog(parsed), { minProviders: opts.minProviders });
-  return { catalog, notModified: false, etag: res.etag ?? opts.etag };
+  return {
+    catalog,
+    notModified: false,
+    etag: res.etag ?? opts.etag,
+    digest: sha256Hex(res.body),
+  };
 }
 
 export function countCatalogModels(catalog: Catalog): number {
@@ -431,6 +439,22 @@ export function summarizeCatalogDiff(before: Catalog, after: Catalog): string {
     parts.push(`-providers: ${shown}${removed.length > 5 ? ` (+${removed.length - 5} more)` : ""}`);
   }
   return parts.join("; ");
+}
+
+/**
+ * Pure staleness check for notices/refresh eligibility. A stale cache is still
+ * USED — this never triggers a network call on boot. Default TTL is opencode's
+ * five minutes.
+ */
+export function isCatalogCacheStale(
+  meta: Pick<CatalogCacheMeta, "fetchedAt"> | undefined,
+  now: number = Date.now(),
+  ttlMs: number = 5 * 60_000,
+): boolean {
+  if (meta === undefined) return true;
+  const fetched = Date.parse(meta.fetchedAt);
+  if (!Number.isFinite(fetched)) return true;
+  return now - fetched >= ttlMs;
 }
 
 /** Bumped on every successful user-cache write (poll or `models refresh`). */
@@ -488,6 +512,7 @@ export function readCatalogCache(home: string = homedir()): { catalog: Catalog; 
     fetchedAt: metaRaw.fetchedAt,
     source: typeof metaRaw.source === "string" ? metaRaw.source : DEFAULT_CATALOG_SOURCE,
     etag: typeof metaRaw.etag === "string" ? metaRaw.etag : undefined,
+    digest: typeof metaRaw.digest === "string" ? metaRaw.digest : undefined,
     providerCount: typeof metaRaw.providerCount === "number" ? metaRaw.providerCount : Object.keys(catalog.providers).length,
     modelCount: typeof metaRaw.modelCount === "number" ? metaRaw.modelCount : countCatalogModels(catalog),
   };

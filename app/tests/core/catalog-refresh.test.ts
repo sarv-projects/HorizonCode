@@ -7,6 +7,8 @@ import {
   decodeCatalog,
   fetchLiveCatalog,
   getCatalogCacheRevision,
+  isCatalogCacheStale,
+  readCatalogCache,
   loadCatalog,
   summarizeCatalogDiff,
   writeCatalogCache,
@@ -100,5 +102,37 @@ describe("catalog refresh", () => {
     const line = summarizeCatalogDiff(a, b);
     expect(line).toContain("providers 2→3");
     expect(line).toContain("+providers:");
+  });
+});
+
+
+describe("catalog cache digest + TTL (explicit refresh only)", () => {
+  test("fetchLiveCatalog returns the body digest on a 200", async () => {
+    const body = JSON.stringify(fixtureProviders(MINIMUM_PROVIDERS));
+    const res = await fetchLiveCatalog("https://example.test", {
+      fetcher: async () => ({ status: 200, body, etag: '"v2"' }),
+    });
+    expect(res.notModified).toBe(false);
+    expect(res.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.etag).toBe('"v2"');
+  });
+
+  test("isCatalogCacheStale is pure and never triggers a fetch", () => {
+    const now = Date.parse("2026-11-17T12:00:00Z");
+    expect(isCatalogCacheStale({ fetchedAt: "2026-11-17T11:58:00Z" }, now)).toBe(false);
+    expect(isCatalogCacheStale({ fetchedAt: "2026-11-17T11:50:00Z" }, now)).toBe(true);
+    expect(isCatalogCacheStale(undefined, now)).toBe(true);
+    expect(isCatalogCacheStale({ fetchedAt: "not-a-date" }, now)).toBe(true);
+  });
+
+  test("writeCatalogCache round-trips the digest", () => {
+    home = mkdtempSync(path.join(tmpdir(), "hz-cat-digest-"));
+    const digest = "a".repeat(64);
+    writeCatalogCache(
+      decodeCatalog(fixtureProviders(MINIMUM_PROVIDERS)),
+      { fetchedAt: new Date().toISOString(), source: "test", digest },
+      home,
+    );
+    expect(readCatalogCache(home)?.meta.digest).toBe(digest);
   });
 });

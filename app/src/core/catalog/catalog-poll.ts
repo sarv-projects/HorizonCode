@@ -78,7 +78,17 @@ export async function runModelsCatalogPollOnce(opts: ModelsCatalogPollOpts = {})
       return;
     }
     const before = cached?.catalog;
-    writeCatalogCache(res.catalog, { fetchedAt: new Date().toISOString(), source: "poll", etag: res.etag }, home);
+    if (res.digest !== undefined && res.digest === cached?.meta.digest) {
+      // Same bytes under a new ETag: refresh the timestamp in memory only, no
+      // rewrite and no cache-revision bump (opencode digest-equality policy).
+      opts.onNotice?.("models catalog poll: body unchanged (same digest)");
+      return;
+    }
+    writeCatalogCache(
+      res.catalog,
+      { fetchedAt: new Date().toISOString(), source: "poll", etag: res.etag, digest: res.digest },
+      home,
+    );
     const count = Object.keys(res.catalog.providers).length;
     const diff = before !== undefined ? summarizeCatalogDiff(before, res.catalog) : undefined;
     const revision = getCatalogCacheRevision();

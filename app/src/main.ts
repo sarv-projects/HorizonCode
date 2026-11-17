@@ -969,10 +969,15 @@ async function runModelsCommand(args: string[]): Promise<number> {
       process.stdout.write(`models cache unchanged (304) at ${catalogCachePath()}\n`);
       return 0;
     }
+    if (fetched.digest !== undefined && fetched.digest === prev?.meta.digest) {
+      process.stdout.write(`models cache unchanged (same digest) at ${catalogCachePath()}\n`);
+      return 0;
+    }
     const file = writeCatalogCache(fetched.catalog, {
       fetchedAt: new Date().toISOString(),
       source: DEFAULT_CATALOG_SOURCE,
       etag: fetched.etag,
+      digest: fetched.digest,
     });
     const n = Object.keys(fetched.catalog.providers).length;
     const diffLine = prev !== undefined ? summarizeCatalogDiff(prev.catalog, fetched.catalog) : undefined;
