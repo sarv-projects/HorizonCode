@@ -68,6 +68,9 @@ export function classifyProviderFailure(status: number, body?: string): Provider
   if (status === 429) {
     if (ACCOUNT_QUOTA.test(text)) return "ACCOUNT_QUOTA";
     if (QUOTA.test(text)) return "QUOTA";
+    // An explicit overload body keeps the historical OVERLOADED taxonomy;
+    // throttle phrasing (including "too many tokens") stays RATE_LIMIT.
+    if (OVERLOAD.test(text)) return "OVERLOADED";
     return "RATE_LIMIT";
   }
   const fromMsg = text !== "" ? scanMessage(text) : undefined;

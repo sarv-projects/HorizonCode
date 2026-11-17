@@ -98,11 +98,11 @@ describe("parseProviderRegistry", () => {
     expect(rejected).toContain("duplicates provider id");
   });
 
-  test("a registered id may never shadow a built-in (PROVIDER_NAMES stays the 5)", () => {
-    expect([...PROVIDER_NAMES]).toEqual(["anthropic", "openai", "google", "ollama", "mock"]);
+  test("a registered id may never shadow a built-in (PROVIDER_NAMES stays the 6)", () => {
+    expect([...PROVIDER_NAMES]).toEqual(["anthropic", "openai", "google", "nvidia", "ollama", "mock"]);
     // Even with a registry present, the constant is untouched.
     parseProviderRegistry([{ id: "groq", baseUrl: "https://api.groq.com/openai" }]);
-    expect([...PROVIDER_NAMES]).toEqual(["anthropic", "openai", "google", "ollama", "mock"]);
+    expect([...PROVIDER_NAMES]).toEqual(["anthropic", "openai", "google", "nvidia", "ollama", "mock"]);
   });
 });
 

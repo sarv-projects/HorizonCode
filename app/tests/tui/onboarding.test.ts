@@ -57,7 +57,11 @@ const FRESH_ENV: Record<string, string | undefined> = {
   ANTHROPIC_API_KEY: undefined,
   GEMINI_API_KEY: undefined,
   GOOGLE_API_KEY: undefined,
+  NVIDIA_API_KEY: undefined,
   HZ_API_KEY: undefined,
+  // The developer's user config may select a real provider (e.g. nvidia); a
+  // genuinely fresh session must be forced back to the offline mock.
+  HZ_PROVIDER: "mock",
 };
 
 /* ------------------------- pure decision helpers ------------------------- */

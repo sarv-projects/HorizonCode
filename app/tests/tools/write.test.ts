@@ -193,9 +193,9 @@ describe("write tool", () => {
     }
   });
 
-  test("E-1: write is a no-op for the checkpoint when the opt-in is off", async () => {
+  test("E-1: write is a no-op for the checkpoint when opted out with =0", async () => {
     const prev = process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
-    delete process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT;
+    process.env.HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT = "0";
     try {
       const ws = initGitWorkspace();
       const rel = "g.txt";

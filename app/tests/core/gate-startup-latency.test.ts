@@ -18,7 +18,7 @@ const gates = path.join(root, "ops", "gates.sh");
 function runGate(env: Record<string, string>) {
   const r = Bun.spawnSync(
     ["bash", "-c", `source "${gates}"; if run_gate 0 startup-latency gate_startup_latency; then echo rc=0; else echo rc=1; fi`],
-    { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env }, stdout: "pipe", stderr: "pipe" },
+    { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", HZ_PROVIDER: "mock", ...env }, stdout: "pipe", stderr: "pipe" },
   );
   return { out: r.stdout.toString(), err: r.stderr.toString(), code: r.exitCode };
 }

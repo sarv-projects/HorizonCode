@@ -28,6 +28,8 @@ const ALLOWLIST: Record<string, string> = {
   "core/owned-spawn.ts": "the single spawn path itself — the one Bun.spawn call every other spawn in app/src routes through",
   "core/sandbox-spawn.ts":
     "the pre-wrap canary: it spawns `hz-sandbox-exec -- /bin/true` to PROVE confinement before spawnOwned wraps; it is a bounded probe with no ledger/supervisor, and the actual child (when any) still goes through spawnOwned",
+  "core/review.ts":
+    "the detached review-fork worker deliberately survives its parent turn: spawnOwned's supervisor would kill the fork with the parent, so G-1 uses a named detached spawn after a SpendLedger reservation; the worker settles that reservation on completion",
 };
 
 const BUN_SPAWN = /Bun\s*\.\s*spawn\s*\(/;
