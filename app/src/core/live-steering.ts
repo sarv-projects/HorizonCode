@@ -9,8 +9,9 @@
  * deferred, later claims must wait — delivering them live would reorder user
  * messages.
  *
- * This slice is the claim/accept/reject ordering seam only. Real Responses
- * WebSocket `response.steer` wire remains OPEN.
+ * This module owns the claim/accept/reject ordering seam. The real Responses
+ * WebSocket `response.steer` wire lives in `providers/responses-steer-wire.ts`
+ * (ruling 512); `pumpResponsesSteering` bridges a claimed steer to that wire.
  */
 
 import type { LiveSteerClaim, LiveSteering } from "../contracts";
