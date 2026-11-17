@@ -64,7 +64,10 @@ Every item below is in this tree (pull requests #1 to #29, all merged into `main
 - **Repo map**: a ranked structural map of the repository.
 - **Tolerant tool arguments**: malformed tool-call JSON is repaired when the repair is syntax-only and refused for side-effecting tools when the arguments were truncated.
 - **Skills and custom commands**: `SKILL.md` folders with resources (plus read-only `~/.claude/skills` and `~/.agents/skills` sources), a built-in `execute-plan` skill for `.hz/plans/` files, and markdown prompt templates as slash commands.
-- **Structured compaction**: older turns are summarised with files touched (last operation), commands run (secret-like values masked) and todo changes.
+- **Structured compaction**: older turns are summarised with files touched (last operation), commands run (secret-like values masked) and todo changes. `/tokens` can cross-check the rendered compaction summary against the durable `compactions.jsonl` elision ledger.
+- **Edit checkpointing**: in a git repo, dirty pre-edit state is committed before a mutation by default (`HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=0` opts out); a separate lint-fix commit stays opt-in.
+- **Batch execution**: `bun run batch --job …` runs a resumable job with a bounded `--concurrency`, one shared spend ceiling, fail-closed terminal states and SIGINT drain; interactive Ctrl-C cancels a busy turn (second Ctrl-C exits).
+- **Cache measurement**: a stable-prefix probe reports provider-observed cached tokens; the OpenAI Responses `response.steer` WebSocket wire is implemented with hermetic protocol tests (product opt-in wiring remains).
 
 **Interfaces**
 
@@ -77,7 +80,7 @@ Every item below is in this tree (pull requests #1 to #29, all merged into `main
 
 **Providers**
 
-- **Provider adapters**: Anthropic, OpenAI, Google, Ollama, any OpenAI-compatible endpoint, and an offline mock; an unknown provider id fails loud instead of falling back.
+- **Provider adapters**: Anthropic, OpenAI, Google, NVIDIA NIM (first-class, `NVIDIA_API_KEY`), Ollama, any OpenAI-compatible endpoint, and an offline mock; an unknown provider id fails loud instead of falling back. Provider usage/cost is parsed from all common cache/reasoning token dialects, with catalog prices preferred when registered.
 - **User provider registry**: endpoints are declared as data in `config.json`, not code.
 
 ## How it works
