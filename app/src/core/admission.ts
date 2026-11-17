@@ -30,6 +30,7 @@
 import type { Database } from "bun:sqlite";
 import { newId, nowIso } from "../contracts";
 import type { SessionStore } from "./session";
+import { acquireLockSync, targetLockPath } from "./file-lock";
 
 /** The six RC-7 admission states, lowercase (the table's CHECK constraint). */
 export type AdmissionState = "queued" | "running" | "done" | "unknown" | "failed" | "cancelled";
@@ -133,9 +134,16 @@ export type AdmissionBatchResult =
  */
 export class AdmissionQueue {
   private readonly db: Database;
+  private readonly workspace: string;
 
   constructor(store: SessionStore) {
     this.db = store.db;
+    this.workspace = store.workspace;
+  }
+
+  /** Cross-process fence for atomic batch transitions (incremental R170 hardening). */
+  private batchLock(): () => void {
+    return acquireLockSync(targetLockPath(this.workspace, "admission-batch"), { timeoutMs: 5_000 });
   }
 
   /**
@@ -338,8 +346,10 @@ export class AdmissionQueue {
  * batch is rolled back — no partial admission survives. Re-applying the same
  * ids for the SAME session is the documented idempotent no-op (`admit` semantics).
  *
- * This is QUEUE-LEVEL atomicity for a batch of admission rows. It is NOT full
- * R170 atomicity (no cross-process/kernel/SQLite-WAL fencing claim).
+ * This is QUEUE-LEVEL atomicity for a batch of admission rows, now fenced by a
+ * cross-process lock around the SQLite transaction (WAL journal is enforced by
+ * SessionStore). It is NOT full R170 atomicity: the Rust kernel still does not
+ * execute these transitions under a universal mandatory barrier.
  */
 admitBatch(sessionId: string, calls: readonly AdmissionBatchCall[]): AdmissionBatchResult {
   requireText(sessionId, "sessionId");
@@ -373,10 +383,18 @@ admitBatch(sessionId: string, calls: readonly AdmissionBatchCall[]): AdmissionBa
     );
     for (const call of calls) insert.run(call.id, sessionId, call.input, now, now);
   });
+  let release: () => void;
+  try {
+    release = this.batchLock();
+  } catch (err) {
+    return { ok: false, reason: "lock-timeout", detail: err instanceof Error ? err.message : String(err) };
+  }
   try {
     runTx();
   } catch (err) {
     return { ok: false, reason: "invalid-call", detail: err instanceof Error ? err.message : String(err) };
+  } finally {
+    release();
   }
   return { ok: true, ids };
 }
@@ -388,7 +406,7 @@ admitBatch(sessionId: string, calls: readonly AdmissionBatchCall[]): AdmissionBa
  * the WHOLE batch is rolled back (no partial settle). An `unknown` settle here
  * halts the followers exactly as the single-row `settle` does.
  *
- * Queue-level atomicity only — NOT full R170.
+ * Queue-level atomicity with a cross-process lock — NOT full R170 kernel fencing.
  */
 settleBatch(sessionId: string, ids: readonly string[], state: AdmissionSettlement): boolean {
   requireText(sessionId, "sessionId");
@@ -409,11 +427,19 @@ settleBatch(sessionId: string, ids: readonly string[], state: AdmissionSettlemen
     );
     for (const id of ids) update.run(state, nowIso(), id);
   });
+  let release: () => void;
+  try {
+    release = this.batchLock();
+  } catch {
+    return false;
+  }
   try {
     runTx();
     return true;
   } catch {
     return false;
+  } finally {
+    release();
   }
   }
 }

@@ -164,3 +164,22 @@ describe("C-13 — atomic batch apply / settle (queue-level, not R170)", () => {
     expect(queue.begin("q2")).toBe(false);
   });
 });
+
+describe("C-13 — cross-process batch fence (incremental R170 hardening)", () => {
+  test("two queue instances over one workspace serialize batches; a held lock fails closed", async () => {
+    const { acquireLockSync, targetLockPath } = await import("../../src/core/file-lock");
+    const store = new SessionStore(workspace);
+    const q1 = new AdmissionQueue(store);
+    const q2 = new AdmissionQueue(new SessionStore(workspace));
+    expect(q1.admitBatch("s", [{ id: "adm-fence-1", input: "one" }]).ok).toBe(true);
+    expect(q2.admitBatch("s", [{ id: "adm-fence-2", input: "two" }]).ok).toBe(true);
+    const release = acquireLockSync(targetLockPath(workspace, "admission-batch"), { timeoutMs: 100 });
+    try {
+      const blocked = q1.admitBatch("s", [{ id: "adm-fence-3", input: "three" }]);
+      expect(blocked.ok).toBe(false);
+      expect(blocked.reason).toBe("lock-timeout");
+    } finally {
+      release();
+    }
+  });
+});
