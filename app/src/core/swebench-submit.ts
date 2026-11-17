@@ -29,6 +29,8 @@ export type SubmitErrorReason =
   | "missing-command"
   | "missing-preds"
   | "invalid-preds"
+  /** J-1 official-harness adapter: interpreter/harness module absent (fail closed). */
+  | "missing-harness"
   | "spawn-failed"
   | "harness-failed";
 

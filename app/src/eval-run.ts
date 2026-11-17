@@ -42,6 +42,10 @@ import {
 } from "./core/eval-approval";
 import { upsertPredsRecord, type PredsRecordV1 } from "./core/preds-writer";
 import { resolveSubmitCommand, submitPredictions } from "./core/swebench-submit";
+import {
+  submitWithOfficialHarness,
+  type OfficialHarnessExec,
+} from "./core/swebench-official-harness";
 import { parseRatchetGateSpec, runRatchetGate } from "./core/eval-ratchet";
 import { metricContract } from "./core/metrics";
 import { casesFromCorpusJsonl, runIndexedBench } from "./core/bench-runner";
@@ -49,6 +53,14 @@ import { casesFromCorpusJsonl, runIndexedBench } from "./core/bench-runner";
 export interface EvalCliIo {
   out(line: string): void;
   err(line: string): void;
+}
+
+/** Additive injection seam for hermetic J-1 official-harness tests. */
+export interface EvalCliExtras {
+  /** When set, `--harness swebench-official` uses this instead of spawnOwned. */
+  officialHarnessExec?: OfficialHarnessExec;
+  /** Explicit interpreter path (defaults to HZ_SWEBENCH_PYTHON / python3). */
+  officialHarnessPython?: string;
 }
 
 const DEFAULT_IO: EvalCliIo = {
@@ -63,7 +75,7 @@ interface CaseFileEntry {
 }
 
 const USAGE =
-  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir> | --bench-corpus <file.jsonl>) --forbidden <text-or-file> [--preds-out <preds.json>] [--submit] [--submit-cmd <cmd>] [--metrics-out <metrics.json>] [--max-suite-wall-ms <ms>] [--max-suite-cost-usd <usd>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--ratchet <spec.json>] [--keep] [--live]";
+  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir> | --bench-corpus <file.jsonl>) --forbidden <text-or-file> [--preds-out <preds.json>] [--submit] [--submit-cmd <cmd>] [--harness swebench-official] [--dataset <name>] [--split <split>] [--instances <id1,id2,...>] [--metrics-out <metrics.json>] [--max-suite-wall-ms <ms>] [--max-suite-cost-usd <usd>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--ratchet <spec.json>] [--keep] [--live]";
 
 /** The value of `--flag`, or `undefined` when absent (an empty string when bare). */
 function argValue(argv: readonly string[], flag: string): string | undefined {
@@ -186,7 +198,11 @@ export function evalRunPublication(run: Awaited<ReturnType<typeof runEvalSet>>, 
   ];
 }
 
-export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAULT_IO): Promise<number> {
+export async function runEvalCli(
+  argv: readonly string[],
+  io: EvalCliIo = DEFAULT_IO,
+  extras: EvalCliExtras = {},
+): Promise<number> {
   // G-8: on-disk ratchet gate. An alternative to running cases: load an
   // approval + baseline/candidate result files from disk, decide keep/revert on
   // the frozen split, and persist an append-only decision log. No case source
@@ -288,7 +304,14 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
   const keep = argv.includes("--keep");
   const predsOut = argValue(argv, "--preds-out");
   const submitCmd = argValue(argv, "--submit-cmd");
-  const submitRequested = argv.includes("--submit") || submitCmd !== undefined;
+  const harness = argValue(argv, "--harness");
+  const dataset = argValue(argv, "--dataset");
+  const split = argValue(argv, "--split");
+  const instancesRaw = argValue(argv, "--instances");
+  // `--harness swebench-official` is a `--submit` variant: selecting it opts
+  // into submission (there is no other reason to build the official argv).
+  const submitRequested =
+    argv.includes("--submit") || submitCmd !== undefined || harness !== undefined;
   const metricsOut = argValue(argv, "--metrics-out");
   const maxSuiteWallMs = numericOption(argv, "--max-suite-wall-ms", io);
   const maxSuiteCostUsd = numericOption(argv, "--max-suite-cost-usd", io);
@@ -299,6 +322,30 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
   }
   if (submitCmd === "") {
     io.err(`--submit-cmd needs a command (or use HZ_SWEBENCH_HARNESS)\n${USAGE}`);
+    return 2;
+  }
+  // J-1: --harness selects an ADAPTER, never a built-in harness. Only the
+  // official argv adapter ships; the harness/dataset/credentials are external.
+  if (harness !== undefined && harness !== "swebench-official") {
+    io.err(`--harness ${JSON.stringify(harness)} is unsupported (use swebench-official)\n${USAGE}`);
+    return 2;
+  }
+  if (harness !== undefined && submitCmd !== undefined) {
+    io.err(`--harness and --submit-cmd are mutually exclusive\n${USAGE}`);
+    return 2;
+  }
+  if (harness === undefined && (dataset !== undefined || split !== undefined || instancesRaw !== undefined)) {
+    io.err(`--dataset/--split/--instances require --harness swebench-official\n${USAGE}`);
+    return 2;
+  }
+  if (dataset === "" || split === "" || instancesRaw === "") {
+    io.err(`--dataset/--split/--instances need non-empty values\n${USAGE}`);
+    return 2;
+  }
+  const instanceIds =
+    instancesRaw === undefined ? undefined : instancesRaw.split(",").map((id) => id.trim()).filter((id) => id !== "");
+  if (instanceIds !== undefined && instanceIds.length === 0) {
+    io.err(`--instances needs at least one id\n${USAGE}`);
     return 2;
   }
   if (submitRequested && (predsOut === undefined || predsOut === "")) {
@@ -353,9 +400,22 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
   // typed refusal (never a pretend "submitted" line).
   if (submitRequested) {
     try {
-      const command = resolveSubmitCommand(submitCmd !== undefined ? { submitCmd } : {});
-      const submitted = submitPredictions({ predsFile: predsOut!, command });
-      io.out(`swebench submit: OK · ${submitted.predictionCount} prediction(s) · harness=${command}`);
+      if (harness === "swebench-official") {
+        const submitted = await submitWithOfficialHarness({
+          predsFile: predsOut!,
+          ...(dataset !== undefined ? { dataset } : {}),
+          ...(split !== undefined ? { split } : {}),
+          ...(instanceIds !== undefined ? { instanceIds } : {}),
+          ...(extras.officialHarnessPython !== undefined ? { python: extras.officialHarnessPython } : {}),
+          ...(extras.officialHarnessExec !== undefined ? { exec: extras.officialHarnessExec } : {}),
+        });
+        io.out(`swebench submit: OK · ${submitted.predictionCount} prediction(s) · harness=swebench-official`);
+        io.out(`swebench harness argv: ${submitted.argv.join(" ")}`);
+      } else {
+        const command = resolveSubmitCommand(submitCmd !== undefined ? { submitCmd } : {});
+        const submitted = submitPredictions({ predsFile: predsOut!, command });
+        io.out(`swebench submit: OK · ${submitted.predictionCount} prediction(s) · harness=${command}`);
+      }
     } catch (err) {
       io.err(`swebench submit refused: ${err instanceof Error ? err.message : String(err)}`);
       return 2;
