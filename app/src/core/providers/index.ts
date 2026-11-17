@@ -127,8 +127,8 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
   // H-4: select the message formatter from config data ONLY. When the class
   // key is unset this is `undefined` and each adapter keeps its native
   // converter (byte-identical default); when set it is a built-in dialect,
-  // statically selected — no dynamic import, no new dependency. Anthropic is
-  // deliberately NOT wired here (it keeps its own message builder).
+  // statically selected — no dynamic import, no new dependency. Every adapter,
+  // including Anthropic, consumes this same resolved formatter.
   const formatter = formatterFromResolvedConfig(config.formatMessageClass);
   const resolved = config.resolved;
   if (resolved) {
@@ -156,7 +156,7 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
     case "anthropic":
       return withToolFormat(
         config.apiKey
-          ? createAnthropicProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+          ? createAnthropicProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, messageFormatter: formatter })
           : missingKeyProvider("anthropic", "ANTHROPIC_API_KEY"),
         config,
       );

@@ -5,12 +5,73 @@
  * when a mid-stream steer/abort cuts the provider request, in-flight argument
  * JSON must be discarded before any `tool_call` event is emitted (C-9 /
  * assembly-cancel). OpenAI chat-completions uses this; other providers may.
+ *
+ * H-5 (ruling 517 residual): FINAL assembled argument JSON is validated here,
+ * outside every adapter's SSE loop. Syntax-only repairs (trailing commas,
+ * single quotes, code fences, ...) are admitted; a blob that is still malformed
+ * or truncated past what the syntax rules can safely close is REFUSED with a
+ * structured tool-input error instead of being silently fed downstream.
+ * `cancel()` and the assembly-cancel notices are unchanged.
  */
+
+import type { ProviderEvent } from "../../contracts";
+import { parseToolArguments } from "../json-repair";
+import { isCompleteToolArgsObject } from "./tool-args-object";
 
 export interface AssembledToolCall {
   id: string;
   name: string;
   arguments: string;
+}
+
+/** Structured refusal when a FINAL assembled tool call's arguments are broken. */
+export interface ToolInputRefusal {
+  id: string;
+  name: string;
+  reason: string;
+}
+
+/** Outcome of validating one FINAL assembled tool call's argument JSON. */
+export type AssembledArgumentResult =
+  | { ok: true; arguments: string }
+  | { ok: false; refusal: ToolInputRefusal };
+
+/**
+ * Validate FINAL assembled argument JSON with the pure repair utils only.
+ *
+ * - A complete JSON object passes through BYTE-IDENTICALLY (single strict parse).
+ * - A blob that needs only syntax repair is admitted as the repaired JSON.
+ * - A blob that is truncated / unrepairable / not an object is refused with a
+ *   structured reason (readable, never thrown at the caller).
+ *
+ * Truncation-tolerant tools are still repaired (streaming previews may be
+ * tolerant); a side-effecting tool's cut-off blob is refused, never completed.
+ */
+export function validateFinalToolArguments(call: AssembledToolCall): AssembledArgumentResult {
+  // Fast path: already a complete JSON object — no re-serialization, byte-identical.
+  if (isCompleteToolArgsObject(call.arguments)) {
+    return { ok: true, arguments: call.arguments };
+  }
+  const parsed = parseToolArguments(call.arguments, call.name);
+  if (parsed.error !== undefined) {
+    return { ok: false, refusal: { id: call.id, name: call.name, reason: parsed.error } };
+  }
+  // Syntax repair was applied; feed the REPAIRED JSON downstream, never the raw
+  // malformed bytes.
+  return { ok: true, arguments: JSON.stringify(parsed.args) };
+}
+
+/**
+ * Turn a structured refusal into the provider's existing typed error event
+ * (`{ type: "error", message, code }`). No new contract event shape is needed.
+ */
+export function toolInputErrorEvent(refusal: ToolInputRefusal): Extract<ProviderEvent, { type: "error" }> {
+  const who = refusal.name !== "" ? refusal.name : refusal.id !== "" ? refusal.id : "tool";
+  return {
+    type: "error",
+    code: "UNKNOWN",
+    message: `tool_input_error: ${who}: ${refusal.reason}`,
+  };
 }
 
 export interface ToolCallDelta {

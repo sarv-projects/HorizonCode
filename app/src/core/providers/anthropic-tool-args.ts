@@ -5,11 +5,13 @@
  *   for message replay (fail closed to `{}`).
  * - `anthropicToolArguments` — streamed `input_json_delta` raw + start-block
  *   `declared` → contract JSON-string `arguments` (empty stream falls back to
- *   a non-empty declared object; never `""`).
+ *   a non-empty declared object via `toolArgsJson`; never `""`).
  *
  * Kept outside adapter message / SSE loops (same H-5 posture as rulings
  * **67** / **199** / **469**; mini-swe item 40).
  */
+
+import { toolArgsJson } from "./tool-args-object";
 
 /** Contract tool-call `arguments` (JSON string) → Anthropic `tool_use.input`. */
 export function anthropicToolInput(text: unknown): unknown {
@@ -31,9 +33,7 @@ export function anthropicToolInput(text: unknown): unknown {
  */
 export function anthropicToolArguments(raw: string, declared: unknown): string {
   if (raw.trim() !== "") return raw;
-  if (declared !== null && typeof declared === "object" && Object.keys(declared as object).length > 0) {
-    const encoded = JSON.stringify(declared);
-    if (typeof encoded === "string" && encoded !== "") return encoded;
-  }
-  return "{}";
+  // Route the declared-object fallback through the single-purpose util (byte-
+  // identical for objects, fail-closed to "{}" for anything else).
+  return toolArgsJson(declared);
 }

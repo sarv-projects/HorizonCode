@@ -26,7 +26,12 @@ import {
   type ProviderDeadline,
   type ProviderTimeoutOptions,
 } from "./timeout";
-import { formatAssemblyCancelNotice, ToolCallAssembler } from "./tool-call-assembly";
+import {
+  formatAssemblyCancelNotice,
+  toolInputErrorEvent,
+  ToolCallAssembler,
+  validateFinalToolArguments,
+} from "./tool-call-assembly";
 
 export interface OpenAiSettings {
   apiKey: string;
@@ -365,17 +370,27 @@ async function* streamOpenAiCompatibleInner(
   }
 
   const completed = assembler.flushCompleted();
+  let emittedCallCount = 0;
   for (const call of completed) {
+    // H-5: validate FINAL assembled argument JSON outside the SSE loop. Syntax-
+    // only repair is admitted; an unrepairable / truncated blob is refused with
+    // a structured tool_input_error rather than fed downstream as broken JSON.
+    const validated = validateFinalToolArguments(call);
+    if (validated.ok === false) {
+      yield toolInputErrorEvent(validated.refusal);
+      continue;
+    }
+    emittedCallCount += 1;
     yield {
       type: "tool_call",
       id: call.id,
       name: call.name,
-      arguments: call.arguments,
+      arguments: validated.arguments,
     };
   }
 
   let stopReason = mapFinishReason(finish);
-  if (completed.length > 0 && stopReason === "end") stopReason = "tool_use";
+  if (emittedCallCount > 0 && stopReason === "end") stopReason = "tool_use";
   yield { type: "done", stopReason, usage };
 }
 

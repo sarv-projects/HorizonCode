@@ -1,3 +1,8 @@
+// H-4 / ruling 517 residual: type-only formatter seam (no runtime cycle back
+// through the converter modules).
+import type { ChatMsg } from "../../contracts";
+import type { MessageFormatter } from "./message-formatter";
+
 /**
  * H-5 provider-shape util (ruling **495**): normalize an empty tool result to
  * the non-empty placeholder every adapter replays. Before this util the same
@@ -17,4 +22,22 @@ export const NO_TOOL_OUTPUT = "(no output)";
 /** Non-empty string → itself; empty / missing / non-string → sentinel. */
 export function toolResultContent(raw: unknown): string {
   return typeof raw === "string" && raw !== "" ? raw : NO_TOOL_OUTPUT;
+}
+
+// H-4 / ruling 517 residual: a small pure seam at the point where tool results
+// ("observations") are rendered into provider messages. When a non-default
+// `formatMessageClass` formatter is configured, the dialect's
+// `format_observation_messages` hook decides the wire payload; with no formatter
+// this returns `undefined` so the caller keeps its native, byte-identical path.
+
+/**
+ * Render observation (tool-result) messages through the selected formatter.
+ * `undefined` formatter → `undefined` (caller uses its native byte-identical
+ * rendering). Pure, loop-free; streaming is untouched.
+ */
+export function formatObservationMessages(
+  formatter: MessageFormatter | undefined,
+  toolMessages: readonly ChatMsg[],
+): readonly unknown[] | undefined {
+  return formatter === undefined ? undefined : formatter.formatObservationMessages(toolMessages);
 }

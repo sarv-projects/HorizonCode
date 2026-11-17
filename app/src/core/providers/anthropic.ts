@@ -11,7 +11,10 @@ import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ThinkingEcho, T
 import { anthropicSystemField } from "./anthropic-cache";
 import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
-import { toolResultContent } from "./tool-result-content";
+import { formatObservationMessages, toolResultContent } from "./tool-result-content";
+import type { MessageFormatter } from "./message-formatter";
+import { toolInputErrorEvent, validateFinalToolArguments } from "./tool-call-assembly";
+import { parseJsonObject } from "../json-repair";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
@@ -33,6 +36,12 @@ export interface AnthropicSettings {
   timeouts?: ProviderTimeoutOptions;
   /** Request-phase retry tuning; defaults match providers/retry.ts. */
   retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
+  /**
+   * H-4: formatter selected from config `formatMessageClass`. When absent the
+   * native `toAnthropicMessages` converter is used (byte-identical default);
+   * when set, the resolved dialect renders messages and observations.
+   */
+  messageFormatter?: MessageFormatter;
 }
 
 const API_VERSION = "2023-06-01";
@@ -53,8 +62,27 @@ interface AnthropicMessage {
 /**
  * ChatMsg[] -> Anthropic messages. Consecutive same-role messages are merged
  * because the API wants alternating turns, and tool results are user turns.
+ *
+ * H-4: when a config-selected `formatter` is supplied, every non-observation
+ * message is rendered through `format_message` and tool results through the
+ * formatter's `format_observation_messages` hook. With no formatter (the
+ * default) the native path below is byte-identical to the historic converter.
  */
-export function toAnthropicMessages(messages: ChatMsg[]): AnthropicMessage[] {
+export function toAnthropicMessages(messages: ChatMsg[], formatter?: MessageFormatter): AnthropicMessage[] {
+  if (formatter !== undefined) {
+    const out: AnthropicMessage[] = [];
+    for (const msg of messages) {
+      if (!msg) continue;
+      if (msg.role === "tool") {
+        const wire = formatObservationMessages(formatter, [msg]);
+        if (wire !== undefined) out.push(...(wire as AnthropicMessage[]));
+        continue;
+      }
+      out.push(...(formatter.formatMessages([msg]) as AnthropicMessage[]));
+    }
+    return out;
+  }
+
   const out: AnthropicMessage[] = [];
   const push = (role: "user" | "assistant", blocks: AnthropicBlock[]): void => {
     if (blocks.length === 0) return;
@@ -125,7 +153,9 @@ async function* streamAnthropic(
   const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : "https://api.anthropic.com").replace(/\/+$/, "");
   const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
-  let messages = toAnthropicMessages(wire.messages ?? []);
+  // H-4: render through the config-selected formatter when one was supplied;
+  // the default path is the byte-identical native converter.
+  let messages = toAnthropicMessages(wire.messages ?? [], settings.messageFormatter);
   if (messages.length === 0) {
     yield { type: "error", message: "anthropic: nothing to send (no messages after system)", code: "UNKNOWN" };
     return;
@@ -257,13 +287,11 @@ async function* streamAnthropic(
         return;
       }
       if (message.data === "[DONE]") break;
-      let event: Record<string, any>;
-      try {
-        event = JSON.parse(message.data) as Record<string, any>;
-      } catch {
-        continue; // an unparsable event is not fatal: the next one may be fine
-      }
-      if (!event || typeof event !== "object") continue;
+      // H-5: strict frame parse lives in a single-purpose util, never inline in
+      // the SSE loop (ruling 67 posture). An unparsable frame is not fatal: the
+      // next one may be fine.
+      const event = parseJsonObject(message.data);
+      if (event === undefined) continue;
 
       switch (event.type) {
         case "message_start": {
@@ -316,8 +344,16 @@ async function* streamAnthropic(
             meta.delete(index);
             const raw = anthropicToolArguments(args.get(index) ?? "", info.input);
             args.delete(index);
+            // H-5: FINAL assembled args never go downstream malformed. Syntax-
+            // only repair is admitted; an unrepairable / cut-off blob becomes a
+            // structured tool_input_error instead of a broken tool_call.
+            const validated = validateFinalToolArguments({ id: info.id, name: info.name, arguments: raw });
+            if (validated.ok === false) {
+              yield toolInputErrorEvent(validated.refusal);
+              break;
+            }
             emittedTool = true;
-            const call: ToolCall = { id: info.id, name: info.name, arguments: raw };
+            const call: ToolCall = { id: info.id, name: info.name, arguments: validated.arguments };
             yield { type: "tool_call", id: call.id, name: call.name, arguments: call.arguments };
           }
           break;
