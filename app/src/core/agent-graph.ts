@@ -19,6 +19,7 @@ import { loadProposals, type StoredProposalRow } from "./curator";
 import { sessionDbPath, workspaceStateDir } from "./paths";
 import { SessionStore } from "./session";
 import { listSkills } from "./skills";
+import { metricContract } from "./metrics";
 
 /** Hard display caps (mirrors the G-7 learning-graph caps, slightly wider for four node kinds). */
 export const AGENT_GRAPH_MAX_NODES = 48;
@@ -307,4 +308,25 @@ export function agentGraphInputFromWorkspace(workspace: string, toolNames: reado
 export function renderWorkspaceAgentGraph(workspace: string, toolNames: readonly string[] = []): string {
   const input = agentGraphInputFromWorkspace(workspace, toolNames);
   return renderAgentGraphAscii(buildAgentGraphModel(input));
+}
+
+/**
+ * H-7/ruling 529 (repo-wide sweep): the node/edge/object counts the `/graph
+ * agent` view prints are published statistics. This parallel surface contracts
+ * them; `renderAgentGraphAscii` stays byte-identical. Totals are uncapped store
+ * counts (the ASCII view may show fewer under the display caps) and the excludes
+ * slot says so openly. No causality is inferred beyond explicit `session.tools`
+ * and lexical reference matching (see the module header).
+ */
+export function agentGraphPublication(input: AgentGraphInput, opts: BuildAgentGraphOptions = {}): string[] {
+  const model = buildAgentGraphModel(input, opts);
+  const anchor = "none — first whole-agent graph render (no prior snapshot to compare against)";
+  const population = "the sessions, tools, skills and proposals supplied to this graph render";
+  const excludes = `display caps omitted ${model.totalNodes - model.nodes.length} node(s) and ${model.totalEdges - model.edges.length} edge(s) from the render; totals below are uncapped`;
+  return [
+    metricContract({ metric: "agent graph objects in view", anchor, population, excludes: "none — every supplied agent object is counted; proposals are never applied (ADR-010)", value: model.totalNodes }),
+    metricContract({ metric: "agent graph nodes rendered", anchor, population, excludes, value: model.nodes.length }),
+    metricContract({ metric: "agent graph edges rendered", anchor, population, excludes, value: model.edges.length }),
+    metricContract({ metric: "agent graph total edges", anchor, population, excludes: "none — uncapped edge total from explicit tools and lexical references", value: model.totalEdges }),
+  ];
 }

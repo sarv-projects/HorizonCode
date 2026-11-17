@@ -103,6 +103,7 @@ import { workspaceMountPosture } from "./workspace-mount";
 import { formatWorktreePoolLines, inspectWorktreePool, worktreePoolMaxFromEnv } from "./worktree-pool";
 import { workspaceSnapshotHonesty } from "./workspace-snapshot";
 import { parseAnthropicCacheKeepaliveMs } from "./providers/anthropic-cache-keepalive";
+import { metricContract } from "./metrics";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
 const LICENSE_STATUS_DOC = "docs/LICENSE-STATUS.md";
@@ -1734,10 +1735,41 @@ export function renderDoctor(checks: readonly DoctorCheck[]): string {
   return lines.join("\n");
 }
 
+/**
+ * H-7/ruling 529 (repo-wide sweep): the status counts `doctor` publishes are
+ * numeric statistics, so each carries a contract on the machine-readable
+ * surface. The human table (`renderDoctor`) stays byte-identical; this is a
+ * parallel surface, per the 505/510/519 precedent. The population is the check
+ * list actually run; there is no prior run to anchor against, and nothing is
+ * excluded — a FAIL is a result too, not a discarded row.
+ */
+export function doctorPublication(checks: readonly DoctorCheck[]): string[] {
+  const n = (s: DoctorStatus): number => checks.filter((c) => c.status === s).length;
+  const anchor = "none — first doctor run (no prior report of this workspace to compare against)";
+  const population = `the ${checks.length} doctor check(s) executed in this run`;
+  const excludes = "none — every check is counted; OK/WARN/FAIL are all reported, nothing discarded";
+  return [
+    metricContract({ metric: "doctor checks ok", anchor, population, excludes, value: n("ok") }),
+    metricContract({ metric: "doctor checks warning", anchor, population, excludes, value: n("warn") }),
+    metricContract({ metric: "doctor checks failure", anchor, population, excludes, value: n("fail") }),
+  ];
+}
+
 /** The machine form, suitable for attaching to a support ticket. */
 export function renderDoctorJson(checks: readonly DoctorCheck[]): string {
   const n = (s: DoctorStatus): number => checks.filter((c) => c.status === s).length;
-  return JSON.stringify({ ok: doctorExitCode(checks) === 0, summary: { ok: n("ok"), warn: n("warn"), fail: n("fail") }, checks }, null, 2);
+  // Additive `published` (H-7): the existing keys are unchanged so consumers
+  // that read `summary` / `checks` stay backward compatible.
+  return JSON.stringify(
+    {
+      ok: doctorExitCode(checks) === 0,
+      summary: { ok: n("ok"), warn: n("warn"), fail: n("fail") },
+      checks,
+      published: doctorPublication(checks),
+    },
+    null,
+    2,
+  );
 }
 
 /** Suggested exports for `hzcode doctor --fix <checkId>` — read-only, never mutates env files (ruling **299**). */

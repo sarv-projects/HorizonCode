@@ -10,6 +10,7 @@ import type { Receipt } from "../contracts";
 import { hashReceiptVersioned } from "./receipt-schema";
 import { type ChainAnchorVerdict, checkChainAnchorSync, readHeadSync, verifyReceiptAnchorSync } from "./chain-anchor-verify";
 import { receiptsPath } from "./session-kernel-reconcile";
+import { metricContract } from "./metrics";
 
 export interface ReceiptChainVerifyVerdict {
   ok: boolean;
@@ -159,4 +160,29 @@ export function formatReceiptChainVerifySummary(verdict: ReceiptChainVerifyVerdi
   ];
   if (verdict.anchor?.refusal) lines.push(`  anchor: ${verdict.anchor.refusal}`);
   return lines;
+}
+
+/**
+ * H-7/ruling 529 (repo-wide sweep): the verified-receipt count printed by
+ * `hzcode session verify` is a published number. This parallel surface carries
+ * its contract; `formatReceiptChainVerifySummary` (human text) is unchanged. A
+ * refusal publishes nothing (no verification ran), and a broken chain states
+ * honestly that the broken receipt and everything after it were not verified.
+ */
+export function receiptChainVerifyPublication(verdict: ReceiptChainVerifyVerdict): string[] {
+  if (verdict.refusal) return [];
+  const anchor = "none — first verification of this workspace's receipt chain";
+  const population = "the receipts.jsonl entries walked in this workspace during this verification";
+  const excludes = verdict.ok
+    ? "none — every receipt in the chain verified against its predecessor and the anchor"
+    : `the broken receipt at seq ${verdict.brokenAt ?? "unknown"} and every entry after it were not verified`;
+  return [
+    metricContract({
+      metric: "receipt chain verified receipts",
+      anchor,
+      population,
+      excludes,
+      value: verdict.count,
+    }),
+  ];
 }

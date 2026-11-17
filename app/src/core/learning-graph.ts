@@ -14,6 +14,7 @@
 
 import { loadProposals, type StoredProposalRow } from "./curator";
 import { workspaceStateDir } from "./paths";
+import { metricContract } from "./metrics";
 
 const KIND_ABBR: Record<string, string> = {
   memory: "mem",
@@ -272,4 +273,27 @@ export function renderWorkspaceLearningGraph(workspace: string, opts: WorkspaceG
   const proposals = load.missing ? [] : load.proposals;
   if (opts.expanded === true) return renderLearningGraphExpandedAscii(proposals, opts);
   return renderLearningGraphAscii(proposals);
+}
+
+/**
+ * H-7/ruling 529 (repo-wide sweep): the node/edge/proposal counts the `/graph`
+ * view prints are published statistics. This parallel surface contracts them;
+ * the ASCII renderers stay byte-identical. Totals are the uncapped store counts
+ * (the ASCII view may show fewer nodes/edges under the display caps), and the
+ * excludes slot states that truncation openly.
+ */
+export function learningGraphPublication(
+  proposals: readonly StoredProposalRow[],
+  opts: BuildLearningGraphOptions = {},
+): string[] {
+  const model = buildLearningGraphModel(proposals, opts);
+  const anchor = "none — first graph render (no prior snapshot of this proposal store)";
+  const population = `the ${proposals.length} curator proposal row(s) in this store`;
+  const excludes = `display caps omitted ${model.totalNodes - model.nodes.length} node(s) and ${model.totalEdges - model.edges.length} edge(s) from the render; totals below are uncapped`;
+  return [
+    metricContract({ metric: "learning graph proposals in store", anchor, population, excludes: "none — every stored proposal is counted; none is applied (ADR-010)", value: model.totalNodes }),
+    metricContract({ metric: "learning graph nodes", anchor, population, excludes, value: model.nodes.length }),
+    metricContract({ metric: "learning graph edges", anchor, population, excludes, value: model.edges.length }),
+    metricContract({ metric: "learning graph total edges", anchor, population, excludes: "none — uncapped edge total derived from reads/evidence/store order", value: model.totalEdges }),
+  ];
 }

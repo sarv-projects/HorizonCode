@@ -15,6 +15,7 @@
 
 import type { Tool, ToolContext, ToolResult } from "../contracts";
 import { deferredSearchCandidates, discoverDeferredTools, getTool } from "./index";
+import { metricContract } from "../core/metrics";
 
 /** Split a string into lowercased alphanumeric tokens. */
 function tokenize(text: string): string[] {
@@ -39,6 +40,28 @@ function matches(queryTokens: string[], haystack: string[]): boolean {
     }
   }
   return false;
+}
+
+/**
+ * H-7/ruling 529 (repo-wide sweep): the "Unlocked N tool(s)" count the
+ * `tool_search` result prints is a published number. This parallel surface
+ * carries its contract; the tool's human `output` string is unchanged. The
+ * population is exactly the matched specs returned in this call, and nothing
+ * is excluded — every matched spec that resolved to a tool is counted.
+ */
+export function toolSearchPublication(specs: readonly { name: string }[]): string[] {
+  const anchor = "none — first tool-search unlock in this session (no prior unlock to compare against)";
+  const population = `the ${specs.length} deferred tool spec(s) matched and returned in this tool-search call`;
+  const excludes = "none — every matched spec that resolved to a registered tool is counted";
+  return [
+    metricContract({
+      metric: "tool search unlocked tools",
+      anchor,
+      population,
+      excludes,
+      value: specs.length,
+    }),
+  ];
 }
 
 export const toolSearchTool: Tool = {

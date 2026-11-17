@@ -65,6 +65,7 @@ import { sanitizeForDistill } from "./distill-sanitize";
 import type { CurateRefusal } from "./curator";
 import { closeReviewForkJob, openReviewForkJob } from "./review-fork-journal";
 import { estimateStepCostUsd, enrichUsageCost } from "./usage-cost";
+import { metricContract } from "./metrics";
 
 // G-1 durable settlement: opt-in recovery + journal readers are re-exported
 // from this single G-1 entry module. Nothing calls recovery automatically.
@@ -673,6 +674,49 @@ export async function runReviewFork(spec: ReviewForkSpec, deps: ReviewForkRunDep
   result.duplicates = curated.duplicates;
   result.refusedProposals = curated.refused;
   return result;
+}
+
+/**
+ * H-7/ruling 529 (repo-wide sweep): the counts and spend in a review-fork
+ * result are published numbers. This parallel surface carries Metric/Anchor/
+ * Population/Excludes for each; `formatReviewForkNotice` (the human line) is
+ * unchanged, per the 505/510/519 precedent. A refused run publishes no counts
+ * (there was no curation), and a cost is only published when one was recorded.
+ */
+export function reviewForkPublication(result: ReviewForkRunResult): string[] {
+  if (result.status !== "ok") return [];
+  const anchor = "none — first review-fork run (no prior fork to compare against)";
+  const population = "proposals from this review fork over the parent's finished turn";
+  const excludes = "none — appended, duplicate and refused proposals are all counted; nothing discarded";
+  const blocks = [
+    metricContract({ metric: "review fork proposals appended", anchor, population, excludes, value: result.appended.length }),
+    metricContract({ metric: "review fork proposals duplicate", anchor, population, excludes, value: result.duplicates.length }),
+    metricContract({ metric: "review fork proposals refused", anchor, population, excludes, value: result.refusedProposals.length }),
+  ];
+  const costExcludes = "none — the full reserved/actual amount is reported; estimates are labelled by their source";
+  if (result.spend.reservedUsd > 0) {
+    blocks.push(
+      metricContract({
+        metric: "review fork spend reserved",
+        anchor,
+        population,
+        excludes: costExcludes,
+        value: result.spend.reservedUsd,
+      }),
+    );
+  }
+  if (result.spend.actualUsd !== undefined) {
+    blocks.push(
+      metricContract({
+        metric: "review fork spend actual",
+        anchor,
+        population,
+        excludes: costExcludes,
+        value: result.spend.actualUsd,
+      }),
+    );
+  }
+  return blocks;
 }
 
 /** A short, honest human-facing line for the post-turn notice. */

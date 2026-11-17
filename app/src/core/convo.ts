@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg } from "../contracts";
 import { estimateTokens } from "./output-budget";
+import { metricContract } from "./metrics";
 
 export interface ChainStatus {
   ok: boolean;
@@ -68,6 +69,43 @@ export function chainLine(chain: ChainStatus | undefined): string {
   if (!chain) return "receipt chain: not checked";
   if (chain.ok) return `receipt chain verified: ${chain.count} receipt(s)`;
   return `receipt chain BROKEN at receipt ${chain.brokenAt ?? "?"} (${chain.count} verified before it)`;
+}
+
+/**
+ * H-7/ruling 529 (repo-wide sweep): the numbers behind `/stats` and the receipt
+ * chain are published statistics. This parallel surface contracts them; the
+ * human strings `renderStats` / `chainLine` stay byte-identical. `~estimatedTokens`
+ * is honestly labelled as a local estimate, not a provider-billed count.
+ */
+export function conversationPublication(stats: ConvoStats, chain?: ChainStatus): string[] {
+  const anchor = "none — first conversation snapshot (no prior turn to compare against)";
+  const population = "the messages in this conversation history at snapshot time";
+  const excludes = "none — every message is counted; tool calls and roles are counted from the same history";
+  const blocks = [
+    metricContract({ metric: "conversation messages", anchor, population, excludes, value: stats.messages }),
+    metricContract({ metric: "conversation tool calls", anchor, population, excludes, value: stats.toolCalls }),
+    metricContract({
+      metric: "conversation estimated tokens",
+      anchor,
+      population,
+      excludes: "local heuristic estimate only — not provider-billed token accounting (that lives in usage-cost.ts)",
+      value: stats.estimatedTokens,
+    }),
+  ];
+  if (chain !== undefined) {
+    blocks.push(
+      metricContract({
+        metric: "conversation verified receipts",
+        anchor,
+        population: "the receipt chain attached to this conversation at export time",
+        excludes: chain.ok
+          ? "none — every receipt in the chain verified"
+          : `the broken receipt (seq ${chain.brokenAt ?? "unknown"}) and any after it are not verified`,
+        value: chain.count,
+      }),
+    );
+  }
+  return blocks;
 }
 
 export function renderExportJson(history: readonly ChatMsg[], meta: ExportMeta): string {
