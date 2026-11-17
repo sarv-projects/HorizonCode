@@ -9,7 +9,9 @@
  */
 
 import type { ChatMsg, ContextUsage } from "../contracts";
+import type { CompactionRecordV1 } from "./compaction-journal";
 import { COMPACTION_SEPARATOR, SUMMARY_HEADING } from "./compaction";
+import { crossCheckElidedJournal, type ElidedCrossCheck } from "./elided-journal-crosscheck";
 import { estimateTokens } from "./output-budget";
 import { HARNESS_PRICE_TABLE_REVISION, ratesForModel } from "./usage-cost";
 
@@ -20,6 +22,8 @@ export interface ContextChunkRow {
   hint?: string;
   /** Present when this row is the elided-turns compaction summary block. */
   kind?: "compaction";
+  /** I-2: durable ledger cross-check for the compaction row, when supplied. */
+  crossCheck?: ElidedCrossCheck;
 }
 
 /**
@@ -43,6 +47,9 @@ export function contextChunkRows(
   system: string,
   usage: ContextUsage | undefined,
   provider: string,
+  /** Optional durable elision ledger (I-2); no extra I/O by default. */
+  compactionLedger?: readonly CompactionRecordV1[],
+  compactionSessionId?: string,
 ): ContextChunkRow[] {
   const rates = ratesForModel(provider, usage?.model ?? "");
   const rows: ContextChunkRow[] = [];
@@ -75,15 +82,22 @@ export function contextChunkRows(
     else tool += t;
   }
   if (compaction > 0) {
+    const crossCheck =
+      compactionLedger === undefined
+        ? undefined
+        : crossCheckElidedJournal(compaction, compactionLedger, { sessionId: compactionSessionId });
     rows.push({
       label: compactionBlocks === 1 ? "compaction summary" : `compaction summary (×${compactionBlocks})`,
       tokens: compaction,
       usd: usdForTokens(compaction, rates.inputPerM),
       kind: "compaction",
       hint:
-        compaction > 4_000
-          ? "elided-turn summary is large; /rewind or raise compaction limit"
-          : "elided turns replaced by this labelled summary",
+        crossCheck !== undefined
+          ? crossCheck.note
+          : compaction > 4_000
+            ? "elided-turn summary is large; /rewind or raise compaction limit"
+            : "elided turns replaced by this labelled summary",
+      ...(crossCheck !== undefined ? { crossCheck } : {}),
     });
   }
   if (user > 0) rows.push({ label: "user turns", tokens: user, usd: usdForTokens(user, rates.inputPerM) });
