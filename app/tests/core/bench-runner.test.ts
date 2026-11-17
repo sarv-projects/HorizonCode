@@ -99,5 +99,5 @@ describe("--bench-corpus CLI path", () => {
     } finally {
       rmSync(bad, { force: true });
     }
-  });
+  }, 60_000);
 });

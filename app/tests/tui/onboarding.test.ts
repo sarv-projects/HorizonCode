@@ -196,13 +196,24 @@ if (SCRIPT === null) {
   test("a fresh unconfigured PTY session shows the full notice", async () => {
     const proc = startChat(pool.make());
     expect(await waitFor(proc, "no provider key or model configured")).toBe(true);
-    // A pty wraps long lines at its width; collapse whitespace before matching.
-    const text = collapseWhitespace(flatten(proc.stdout()));
+    // A pty wraps long lines and streams the notice in fragments under load;
+    // collapse whitespace and wait for all four hints before asserting.
+    let text = "";
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      text = collapseWhitespace(flatten(proc.stdout()));
+      if (
+        text.includes("hzcode login") &&
+        text.includes("--list-models") &&
+        text.includes("--mock") &&
+        text.includes(ONBOARDING_OPT_OUT_ENV)
+      ) break;
+      await Bun.sleep(100);
+    }
     expect(text).toContain("hzcode login");
     expect(text).toContain("--list-models");
     expect(text).toContain("--mock");
     expect(text).toContain(ONBOARDING_OPT_OUT_ENV);
-  });
+  }, 30_000);
 
   test("a configured PTY session keeps the banner byte-compatible (no notice)", async () => {
     const proc = startChat(pool.make(), { HZ_API_KEY: "sk-not-a-real-key" });

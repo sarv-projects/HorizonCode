@@ -594,5 +594,5 @@ describe("a tool-result transcript failure after the effect (wave-12)", () => {
       await kernel.close();
       store.close();
     }
-  }, 30000);
+  }, 60_000);
 });

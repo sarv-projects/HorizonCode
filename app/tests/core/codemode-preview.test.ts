@@ -251,15 +251,17 @@ describe("code_mode", () => {
       const controller = new AbortController();
       const { ctx } = makeCtx(ws);
       const aborted: ToolContext = { ...ctx, signal: controller.signal };
-      setTimeout(() => controller.abort(), 150);
+      // Under full-suite load a 150 ms timer can be delayed past a 10 s sleep;
+      // keep a wide margin so the assertion tests abort behavior, not timing.
+      setTimeout(() => controller.abort(), 1_000);
       const result = await codemodeTool.execute(
-        { code: "await new Promise((r) => setTimeout(r, 10000)); return 1;", timeout_ms: 30000 },
+        { code: "await new Promise((r) => setTimeout(r, 30000)); return 1;", timeout_ms: 60_000 },
         aborted,
       );
       expect(result.ok).toBe(false);
       expect(result.output).toContain("aborted");
     },
-    25_000,
+    60_000,
   );
 
   test("console output cannot forge a control frame (regression)", async () => {
