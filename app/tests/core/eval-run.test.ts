@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { postmortemsDir, recordPostmortem } from "../../src/core/postmortem";
 import { runEvalCli, type EvalCliIo } from "../../src/eval-run";
@@ -44,6 +44,50 @@ test("an assertion the run does not satisfy fails the case and exits 1", async (
   expect(text).toContain("FAIL c2");
   expect(text).toContain("terminal:");
   expect(text).toContain("summary: 1 case(s), 0 passed, 1 failed");
+}, 30000);
+
+test("--submit with no configured harness fails closed (never a fake submission)", async () => {
+  const saved = process.env.HZ_SWEBENCH_HARNESS;
+  delete process.env.HZ_SWEBENCH_HARNESS;
+  try {
+    const c = capture();
+    const dir = tempDir("hz-eval-submit-");
+    const code = await runEvalCli(
+      ["--cases", casesFile([{ id: "sub1", task: "say hi", assertions: [{ kind: "terminal", value: "succeeded" }] }]), "--forbidden", "SECRET-VALUE", "--preds-out", path.join(dir, "preds.json"), "--submit"],
+      c.io,
+    );
+    expect(code).toBe(2);
+    expect(c.errors.join("\n")).toContain("no SWE-bench harness");
+  } finally {
+    if (saved === undefined) delete process.env.HZ_SWEBENCH_HARNESS;
+    else process.env.HZ_SWEBENCH_HARNESS = saved;
+  }
+}, 30000);
+
+test("--submit invokes the external harness and reports a real submission", async () => {
+  const savedCmd = process.env.HZ_SWEBENCH_HARNESS;
+  const savedOut = process.env.HZ_FAKE_SUBMIT_ARGV_OUT;
+  const dir = tempDir("hz-eval-submit-");
+  const argvOut = path.join(dir, "argv.txt");
+  const harness = path.resolve(import.meta.dir, "../fixtures/fake-submit-harness.sh");
+  process.env.HZ_SWEBENCH_HARNESS = `sh ${harness} --from-env`;
+  process.env.HZ_FAKE_SUBMIT_ARGV_OUT = argvOut;
+  try {
+    const c = capture();
+    const preds = path.join(dir, "preds.json");
+    const code = await runEvalCli(
+      ["--cases", casesFile([{ id: "sub2", task: "say hi", assertions: [{ kind: "terminal", value: "succeeded" }] }]), "--forbidden", "SECRET-VALUE", "--preds-out", preds, "--submit"],
+      c.io,
+    );
+    expect(code).toBe(0);
+    expect(c.lines.join("\n")).toContain("swebench submit: OK");
+    expect(readFileSync(argvOut, "utf8").trim().split("\n")).toEqual(["--from-env", preds]);
+  } finally {
+    if (savedCmd === undefined) delete process.env.HZ_SWEBENCH_HARNESS;
+    else process.env.HZ_SWEBENCH_HARNESS = savedCmd;
+    if (savedOut === undefined) delete process.env.HZ_FAKE_SUBMIT_ARGV_OUT;
+    else process.env.HZ_FAKE_SUBMIT_ARGV_OUT = savedOut;
+  }
 }, 30000);
 
 test("an empty --forbidden list is refused before any execution", async () => {

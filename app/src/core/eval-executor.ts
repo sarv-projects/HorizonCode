@@ -49,9 +49,10 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { Provider, RunBudget, TerminalState } from "../contracts";
+import type { Provider, RunBudget, RuntimeEvent, TerminalState, Usage } from "../contracts";
 import type { PostmortemEvalCase } from "./evals";
 import type { EvalExecutor, EvalExecutorResult } from "./evals";
+import { metricContract } from "./metrics";
 import { createRuntime } from "./index";
 import { KernelClient } from "./kernel";
 import type { LoopDeps } from "./loop";
@@ -101,6 +102,14 @@ export interface EvalObservation {
   durationMs: number;
   /** True when the workspace was left on disk. */
   kept: boolean;
+  /**
+   * F-4: provider-reported token usage captured from the runtime's `usage`
+   * facade events (summed across the case's model turns). Absent when the
+   * provider reported no usage — the runner then counts $0 with source `none`.
+   */
+  usage?: Usage;
+  /** Provider name that reported the usage (first turn wins). */
+  provider?: string;
 }
 
 export interface LoopEvalExecutor {
@@ -110,6 +119,27 @@ export interface LoopEvalExecutor {
   observations(): readonly EvalObservation[];
   /** Scratch workspaces left on disk (empty unless `keepWorkspaces`). */
   keptWorkspaces(): readonly string[];
+}
+
+/**
+ * H-7: contracted machine-readable facts about one executor's observations.
+ * The observation fields are raw (callers branch on them); this is the
+ * publication surface where each number carries its four contract slots.
+ */
+export function evalExecutorPublication(observations: readonly EvalObservation[]): string[] {
+  const cases = observations.length;
+  const toolCalls = observations.reduce((s, o) => s + o.toolCalls.length, 0);
+  const durationMs = observations.reduce((s, o) => s + o.durationMs, 0);
+  const withUsage = observations.filter((o) => o.usage !== undefined).length;
+  const anchor = "none — first executor observation set (no prior run to compare against)";
+  const population = `${cases} eval case(s) executed through this loop evaluator`;
+  const excludes = "none — every executed case contributes an observation; an aborted run is still counted";
+  return [
+    metricContract({ metric: "eval executor cases executed", anchor, population, excludes, value: cases }),
+    metricContract({ metric: "eval executor distinct tool names observed", anchor, population, excludes, value: toolCalls }),
+    metricContract({ metric: "eval executor wall-clock (milliseconds)", anchor, population, excludes, value: `${Math.round(durationMs)}ms` }),
+    metricContract({ metric: "eval executor cases reporting usage", anchor, population, excludes, value: `${withUsage}/${cases}` }),
+  ];
 }
 
 const DEFAULT_EVAL_BUDGET: RunBudget = { maxSteps: 12, maxTokens: 0, maxWallMs: 0 };
@@ -145,6 +175,47 @@ function toolCallsFromHistory(rows: ReadonlyArray<{ role: string; toolName?: str
 }
 
 /**
+ * F-4: capture provider-reported usage from the runtime's additive `usage`
+ * facade events. One event is emitted per model turn; token fields are summed
+ * so a multi-step case is attributed to the whole run. The first provider/model
+ * seen wins (a case uses one provider). Nothing is invented: with no events the
+ * snapshot is empty, and `evals.ts` honestly records $0 with source `none`.
+ */
+interface UsageCapture {
+  onEvent(ev: RuntimeEvent): void;
+  snapshot(): { usage?: Usage; provider?: string; model?: string };
+}
+
+function captureProviderUsage(): UsageCapture {
+  let usage: Usage | undefined;
+  let provider: string | undefined;
+  let model: string | undefined;
+  const add = (key: keyof Usage, value: number | undefined): void => {
+    if (value === undefined) return;
+    if (usage === undefined) usage = {};
+    usage[key] = (usage[key] ?? 0) + value;
+  };
+  return {
+    onEvent(ev) {
+      if (ev.type !== "usage") return;
+      if (provider === undefined) provider = ev.provider;
+      if (model === undefined) model = ev.model;
+      add("inputTokens", ev.usage.inputTokens);
+      add("outputTokens", ev.usage.outputTokens);
+      add("cacheCreationInputTokens", ev.usage.cacheCreationInputTokens);
+      add("cacheReadInputTokens", ev.usage.cacheReadInputTokens);
+    },
+    snapshot() {
+      return {
+        ...(usage !== undefined ? { usage } : {}),
+        ...(provider !== undefined ? { provider } : {}),
+        ...(model !== undefined ? { model } : {}),
+      };
+    },
+  };
+}
+
+/**
  * The product path: `createRuntime` with `mock` (default true), one scratch
  * workspace per case. Hermetic when mocked; the live-provider half when not.
  */
@@ -158,16 +229,18 @@ export function makeRuntimeExecutor(opts: LoopEvalExecutorOptions = {}): LoopEva
     const started = Date.now();
     let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
     try {
+      const captured = captureProviderUsage();
       runtime = await createRuntime({
         workspace,
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         mock: opts.mock ?? true,
         budget: opts.budget ?? DEFAULT_EVAL_BUDGET,
       });
-      const result = await runtime.send(caseObj.task, { onEvent: () => undefined });
+      const result = await runtime.send(caseObj.task, { onEvent: (ev) => captured.onEvent(ev) });
       const toolCalls = toolCallsFromHistory(runtime.history());
       const terminal = terminalOf(result.exit, result.aborted);
       const keep = opts.keepWorkspaces === true;
+      const usage = captured.snapshot();
       observations.push({
         caseId: caseObj.id,
         workspace,
@@ -179,9 +252,18 @@ export function makeRuntimeExecutor(opts: LoopEvalExecutorOptions = {}): LoopEva
         sessionId: runtime.sessionId,
         durationMs: Date.now() - started,
         kept: keep,
+        ...(usage.usage !== undefined ? { usage: usage.usage } : {}),
+        ...(usage.provider !== undefined ? { provider: usage.provider } : {}),
       });
       if (keep) kept.push(workspace);
-      return { terminal, finalAnswer: result.text, toolCalls };
+      return {
+        terminal,
+        finalAnswer: result.text,
+        toolCalls,
+        ...(usage.usage !== undefined ? { usage: usage.usage } : {}),
+        ...(usage.provider !== undefined ? { provider: usage.provider } : {}),
+        ...(usage.model !== undefined ? { model: usage.model } : {}),
+      };
     } finally {
       if (runtime !== undefined) await runtime.close().catch(() => undefined);
       if (opts.keepWorkspaces !== true) rmSync(workspace, { recursive: true, force: true });
@@ -212,6 +294,7 @@ export function makeScriptedExecutor(
     try {
       await kernel.start();
       const session = store.createSession("eval");
+      const captured = captureProviderUsage();
       const deps: LoopDeps = {
         workspace,
         sessionId: session.id,
@@ -220,7 +303,7 @@ export function makeScriptedExecutor(
         kernel,
         store,
         signal: new AbortController().signal,
-        callbacks: { onEvent: () => undefined },
+        callbacks: { onEvent: (ev) => captured.onEvent(ev) },
         sessionLeases: [],
         approve: async () => opts.autoApprove === true,
         budget: opts.budget ?? DEFAULT_EVAL_BUDGET,
@@ -229,6 +312,7 @@ export function makeScriptedExecutor(
       const toolCalls = toolCallsFromHistory(store.history(session.id));
       const terminal = terminalOf(result.exit, result.aborted);
       const keep = opts.keepWorkspaces === true;
+      const usage = captured.snapshot();
       observations.push({
         caseId: caseObj.id,
         workspace,
@@ -240,9 +324,18 @@ export function makeScriptedExecutor(
         sessionId: deps.sessionId,
         durationMs: Date.now() - started,
         kept: keep,
+        ...(usage.usage !== undefined ? { usage: usage.usage } : {}),
+        ...(usage.provider !== undefined ? { provider: usage.provider } : {}),
       });
       if (keep) kept.push(workspace);
-      return { terminal, finalAnswer: result.text, toolCalls };
+      return {
+        terminal,
+        finalAnswer: result.text,
+        toolCalls,
+        ...(usage.usage !== undefined ? { usage: usage.usage } : {}),
+        ...(usage.provider !== undefined ? { provider: usage.provider } : {}),
+        ...(usage.model !== undefined ? { model: usage.model } : {}),
+      };
     } finally {
       await kernel.close().catch(() => undefined);
       store.close();

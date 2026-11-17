@@ -3672,6 +3672,16 @@ export async function runTurn(
             });
           }
         }
+        // F-4: surface the SAME provider-reported usage as a harness-side
+        // facade event so the eval executor can attribute a cost with an
+        // explicit source. The kernel `usage.recorded` event above stays the
+        // durable record; this event is the in-process projection of it.
+        emit(deps.callbacks, {
+          type: "usage",
+          usage: turn.usage,
+          provider: deps.provider.name,
+          model: deps.model,
+        });
       }
 
       if (turn.text !== "") text = text === "" ? turn.text : `${text}\n${turn.text}`;

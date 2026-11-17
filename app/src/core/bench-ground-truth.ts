@@ -113,3 +113,69 @@ export function buildIndexedEvalCases(count: number, salt?: string): IndexedEval
 export function gradeIndexedAnswer(expectedToken: string, finalAnswer: string): boolean {
   return finalAnswer.includes(expectedToken);
 }
+
+/* ------------------------- index-derived corpus (G-9 product wiring) ------------------------- */
+
+/** One line of an index-derived corpus: a trial index and an optional salt. */
+export interface IndexedCorpusRecord {
+  index: number;
+  salt?: string;
+}
+
+/**
+ * Parse a JSONL corpus. One record per line: `{ "index": N, "salt"?: "..." }`.
+ * Blank lines are skipped; a malformed record is a hard refusal (never read as
+ * "no trials" — that would launder a broken corpus into an empty pass).
+ */
+export function parseIndexedCorpusJsonl(text: string, source = "corpus.jsonl"): IndexedCorpusRecord[] {
+  const records: IndexedCorpusRecord[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i]!.trim();
+    if (trimmed === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (err) {
+      throw new Error(`${source}:${i + 1}: not valid JSON (${err instanceof Error ? err.message : String(err)})`);
+    }
+    const row = parsed as Partial<IndexedCorpusRecord> | null;
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      throw new Error(`${source}:${i + 1}: corpus record must be an object`);
+    }
+    if (!Number.isFinite(row.index) || (row.index ?? -1) < 0 || Math.floor(row.index!) !== row.index) {
+      throw new Error(`${source}:${i + 1}: index must be a non-negative integer`);
+    }
+    if (row.salt !== undefined && typeof row.salt !== "string") {
+      throw new Error(`${source}:${i + 1}: salt must be a string`);
+    }
+    records.push({ index: row.index!, ...(row.salt !== undefined ? { salt: row.salt } : {}) });
+  }
+  if (records.length === 0) throw new Error(`${source}: corpus is empty — no trials to derive`);
+  return records;
+}
+
+/** Build indexed eval cases from a parsed corpus (each trial derived from its index). */
+export function buildIndexedEvalCasesFromCorpus(
+  records: readonly IndexedCorpusRecord[],
+  defaultSalt = "hz-bench-v1",
+): IndexedEvalCase[] {
+  return records.map((record, i) => {
+    const stimulus = stimulusFromIndex(record.index, record.salt ?? defaultSalt);
+    return {
+      id: `bench-corp-${i}-${record.index}`,
+      task: stimulus.prompt,
+      expectedToken: stimulus.expectedToken,
+      published: [
+        ...stimulus.published,
+        metricContract({
+          metric: "indexed bench cases built from corpus",
+          anchor: BENCH_ANCHOR,
+          population: BENCH_POPULATION,
+          excludes: BENCH_EXCLUDES,
+          value: records.length,
+        }),
+      ],
+    };
+  });
+}

@@ -655,7 +655,12 @@ function normalizeExecutorResult(raw: unknown): { ok: NormalizedExecutor } | { m
 function metricsFrom(observed: NormalizedExecutor, wallMs: number): EvalRunMetrics {
   const base: EvalRunMetrics = { wallMs, costUsd: 0, costSource: "none" };
   if (observed.costUsd !== undefined) {
-    return { ...base, costUsd: observed.costUsd, costSource: "reported" };
+    return {
+      ...base,
+      costUsd: observed.costUsd,
+      costSource: "reported",
+      ...(observed.usage !== undefined ? { usage: observed.usage } : {}),
+    };
   }
   if (observed.usage !== undefined) {
     const enriched = enrichUsageCost(observed.usage, observed.provider ?? "unknown", observed.model ?? "unknown");

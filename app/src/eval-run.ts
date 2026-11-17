@@ -41,6 +41,10 @@ import {
   buildFrozenSplit,
 } from "./core/eval-approval";
 import { upsertPredsRecord, type PredsRecordV1 } from "./core/preds-writer";
+import { resolveSubmitCommand, submitPredictions } from "./core/swebench-submit";
+import { parseRatchetGateSpec, runRatchetGate } from "./core/eval-ratchet";
+import { metricContract } from "./core/metrics";
+import { casesFromCorpusJsonl, runIndexedBench } from "./core/bench-runner";
 
 export interface EvalCliIo {
   out(line: string): void;
@@ -59,7 +63,7 @@ interface CaseFileEntry {
 }
 
 const USAGE =
-  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir>) --forbidden <text-or-file> [--preds-out <preds.json>] [--metrics-out <metrics.json>] [--max-suite-wall-ms <ms>] [--max-suite-cost-usd <usd>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--keep] [--live]";
+  "usage: bun run src/eval-run.ts (--cases <file.json> | --postmortems <state-dir> | --bench-corpus <file.jsonl>) --forbidden <text-or-file> [--preds-out <preds.json>] [--submit] [--submit-cmd <cmd>] [--metrics-out <metrics.json>] [--max-suite-wall-ms <ms>] [--max-suite-cost-usd <usd>] [--approval <file.json>] [--write-approval <file.json>] [--held-out-fraction <0..1>] [--split-seed <int>] [--ratchet <spec.json>] [--keep] [--live]";
 
 /** The value of `--flag`, or `undefined` when absent (an empty string when bare). */
 function argValue(argv: readonly string[], flag: string): string | undefined {
@@ -130,7 +134,7 @@ function parseCaseFile(text: string, file: string): PostmortemEvalCase[] {
   });
 }
 
-async function casesFromPostmortems(stateDir: string): Promise<PostmortemEvalCase[]> {
+async function casesFromPostmortems(stateDir: string): Promise<{ cases: PostmortemEvalCase[]; skipped: number }> {
   const load = await loadPostmortems(stateDir);
   if (load.corrupt) {
     const files = load.quarantine.map((q) => q.file).join(", ");
@@ -153,10 +157,90 @@ async function casesFromPostmortems(stateDir: string): Promise<PostmortemEvalCas
     // Visible, never silent: a record with no task line cannot state a case.
     console.error(`note: ${skipped.length} post-mortem(s) skipped (no task line): ${skipped.join(", ")}`);
   }
-  return cases;
+  return { cases, skipped: skipped.length };
+}
+
+/**
+ * H-7: every number the CLI reports has a CONTRACTED machine-readable form.
+ * The default human text stays byte-identical (ruling 505/510 precedent); this
+ * parallel surface is emitted in `--metrics-out` so a consumer can prove each
+ * number carries Metric/Anchor/Population/Excludes.
+ */
+export function evalRunPublication(run: Awaited<ReturnType<typeof runEvalSet>>, skipped = 0): string[] {
+  const passed = run.results.filter((r) => r.passed).length;
+  const failed = run.results.length - passed;
+  const totalWallMs = run.results.reduce((s, r) => s + r.metrics.wallMs, 0);
+  const maxWallMs = run.results.reduce((m, r) => Math.max(m, r.metrics.wallMs), 0);
+  const totalCostUsd = run.results.reduce((s, r) => s + r.metrics.costUsd, 0);
+  const withCostData = run.results.filter((r) => r.metrics.costSource !== "none").length;
+  const anchor = "none — first eval-run CLI run (no prior run to compare against)";
+  const population = `${run.results.length} eval case(s) executed by this eval-run CLI invocation`;
+  const excludes = "none — every case in the set produced a graded result (executor throws are graded as executor_error)";
+  return [
+    metricContract({ metric: "eval-run cases executed", anchor, population, excludes, value: run.results.length }),
+    metricContract({ metric: "eval-run cases passed / failed", anchor, population, excludes, value: `${passed} passed / ${failed} failed` }),
+    metricContract({ metric: "eval-run cases skipped (no task line)", anchor, population, excludes, value: skipped }),
+    metricContract({ metric: "eval-run wall-clock (milliseconds)", anchor, population, excludes, value: `${Math.round(totalWallMs)}ms total / ${Math.round(maxWallMs)}ms max case` }),
+    metricContract({ metric: "eval-run cost (USD, harness estimate where derived)", anchor, population, excludes, value: `$${totalCostUsd.toFixed(6)} (${withCostData}/${run.results.length} case(s) with cost data)` }),
+    metricContract({ metric: "eval-run suite-gate failures", anchor, population, excludes, value: run.aggregate.suiteFailures.length }),
+  ];
 }
 
 export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAULT_IO): Promise<number> {
+  // G-8: on-disk ratchet gate. An alternative to running cases: load an
+  // approval + baseline/candidate result files from disk, decide keep/revert on
+  // the frozen split, and persist an append-only decision log. No case source
+  // or --forbidden is needed in this mode. Exit 0 = keep, 1 = revert, 2 = refusal.
+  const ratchetSpec = argValue(argv, "--ratchet");
+  if (ratchetSpec !== undefined) {
+    if (ratchetSpec === "") {
+      io.err(`--ratchet needs a spec JSON path\n${USAGE}`);
+      return 2;
+    }
+    try {
+      const spec = parseRatchetGateSpec(readFileSync(ratchetSpec, "utf8"), ratchetSpec);
+      const report = runRatchetGate(spec);
+      io.out(`ratchet: ${report.verdict} · variant=${report.variantId} · round=${report.round} · ${report.reason}`);
+      for (const block of report.published) io.out(block);
+      io.out(
+        `ratchet decision: ${report.append.appended ? "appended" : `no-op (${report.append.note})`} → ${spec.decisionLog}`,
+      );
+      return report.verdict === "keep" ? 0 : 1;
+    } catch (err) {
+      io.err(`ratchet gate refused: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+  }
+
+  // G-9: index-derived bench corpus. A JSONL of `{index, salt?}` records is
+  // derived into local cases, executed, and graded locally — no external
+  // benchmark harness. Exit 0 = all cases passed, 1 = a case failed, 2 = refusal.
+  const benchCorpus = argValue(argv, "--bench-corpus");
+  if (benchCorpus !== undefined) {
+    if (benchCorpus === "") {
+      io.err(`--bench-corpus needs a JSONL file path\n${USAGE}`);
+      return 2;
+    }
+    let benchCases;
+    try {
+      benchCases = casesFromCorpusJsonl(readFileSync(benchCorpus, "utf8"), benchCorpus);
+    } catch (err) {
+      io.err(`bench corpus refused: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+    const liveBench = argv.includes("--live");
+    const handle = makeRuntimeExecutor({ mock: !liveBench, keepWorkspaces: argv.includes("--keep") });
+    io.out(`indexed bench: ${benchCases.length} case(s) · model=${liveBench ? "configured live provider" : "mock (hermetic)"}`);
+    const benchRun = await runIndexedBench(benchCases, handle.executor);
+    for (const result of benchRun.results) {
+      io.out(
+        `${result.passed ? "PASS" : "FAIL"} ${result.caseId} · index=${result.index} · terminal=${result.terminal}${result.reason !== undefined ? ` · ${result.reason}` : ""}`,
+      );
+    }
+    for (const block of benchRun.published) io.out(block);
+    return benchRun.failed === 0 ? 0 : 1;
+  }
+
   const casesFile = argValue(argv, "--cases");
   const postmortems = argValue(argv, "--postmortems");
   if ((casesFile === undefined) === (postmortems === undefined)) {
@@ -173,8 +257,15 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
   }
 
   let cases: PostmortemEvalCase[];
+  let skippedCases = 0;
   try {
-    cases = casesFile !== undefined ? parseCaseFile(readFileSync(casesFile, "utf8"), casesFile) : await casesFromPostmortems(postmortems!);
+    if (casesFile !== undefined) {
+      cases = parseCaseFile(readFileSync(casesFile, "utf8"), casesFile);
+    } else {
+      const loaded = await casesFromPostmortems(postmortems!);
+      cases = loaded.cases;
+      skippedCases = loaded.skipped;
+    }
   } catch (err) {
     io.err(err instanceof Error ? err.message : String(err));
     return 2;
@@ -196,12 +287,22 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
   const live = argv.includes("--live");
   const keep = argv.includes("--keep");
   const predsOut = argValue(argv, "--preds-out");
+  const submitCmd = argValue(argv, "--submit-cmd");
+  const submitRequested = argv.includes("--submit") || submitCmd !== undefined;
   const metricsOut = argValue(argv, "--metrics-out");
   const maxSuiteWallMs = numericOption(argv, "--max-suite-wall-ms", io);
   const maxSuiteCostUsd = numericOption(argv, "--max-suite-cost-usd", io);
   if (maxSuiteWallMs === "bad" || maxSuiteCostUsd === "bad") return 2;
   if (metricsOut === "") {
     io.err(`--metrics-out needs a file path\n${USAGE}`);
+    return 2;
+  }
+  if (submitCmd === "") {
+    io.err(`--submit-cmd needs a command (or use HZ_SWEBENCH_HARNESS)\n${USAGE}`);
+    return 2;
+  }
+  if (submitRequested && (predsOut === undefined || predsOut === "")) {
+    io.err(`--submit requires --preds-out <preds.json> — nothing to submit otherwise\n${USAGE}`);
     return 2;
   }
   const handle = makeRuntimeExecutor({ mock: !live, keepWorkspaces: keep });
@@ -244,6 +345,20 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
         },
       };
       upsertPredsRecord(predsOut, record);
+    }
+  }
+
+  // J-1: optional EXTERNAL SWE-bench submission. The preds.json has just been
+  // written above; validate it and invoke the configured harness. No harness ⇒
+  // typed refusal (never a pretend "submitted" line).
+  if (submitRequested) {
+    try {
+      const command = resolveSubmitCommand(submitCmd !== undefined ? { submitCmd } : {});
+      const submitted = submitPredictions({ predsFile: predsOut!, command });
+      io.out(`swebench submit: OK · ${submitted.predictionCount} prediction(s) · harness=${command}`);
+    } catch (err) {
+      io.err(`swebench submit refused: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
     }
   }
 
@@ -291,6 +406,7 @@ export async function runEvalCli(argv: readonly string[], io: EvalCliIo = DEFAUL
         caseCount: run.results.length,
       },
       suiteFailures: run.aggregate.suiteFailures,
+      published: evalRunPublication(run, skippedCases),
     };
     try {
       writeFileSync(metricsOut, `${JSON.stringify(report, null, 2)}\n`, "utf8");

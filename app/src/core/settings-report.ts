@@ -7,6 +7,7 @@ import type { HzConfig } from "./config";
 import { renderConfigCheck, checkConfigFile, defaultConfigPath } from "./config";
 import { maskSecrets } from "./compaction";
 import { defaultAnalyticsLogPath, resolveAnalyticsLogPath } from "./analytics-log";
+import { metricContract } from "./metrics";
 
 export interface SettingsReportOptions {
   workspace: string;
@@ -17,6 +18,37 @@ export interface SettingsReportOptions {
 
 function line(label: string, value: string): string {
   return `  ${label}: ${maskSecrets(value)}`;
+}
+
+/**
+ * H-7: contracted machine-readable facts for the numbers `/settings` reports.
+ * The human report stays byte-identical; a consumer that needs a number uses
+ * this parallel surface, where each value carries Metric/Anchor/Population/
+ * Excludes. Config paths and keys never appear — only counts and budget limits.
+ */
+export function settingsReportPublication(opts: SettingsReportOptions): string[] {
+  const { config, workspace } = opts;
+  const anchor = "none — first settings snapshot (no comparison baseline)";
+  const population = `effective settings for workspace ${workspace}`;
+  const excludes = "none — every configured server/provider is counted; no secrets or paths are published";
+  const blocks = [
+    metricContract({ metric: "settings mcp servers", anchor, population, excludes, value: config.mcp?.servers.length ?? 0 }),
+    metricContract({ metric: "settings lsp servers", anchor, population, excludes, value: config.lsp?.servers.length ?? 0 }),
+    metricContract({ metric: "settings registered providers", anchor, population, excludes, value: config.providers?.providers.length ?? 0 }),
+    metricContract({ metric: "settings trusted workspace hooks", anchor, population, excludes, value: config.trustedWorkspaceHooks?.length ?? 0 }),
+  ];
+  if (config.budget) {
+    for (const [key, value] of [
+      ["maxSteps", config.budget.maxSteps],
+      ["maxTokens", config.budget.maxTokens],
+      ["maxWallMs", config.budget.maxWallMs],
+    ] as const) {
+      if (value !== undefined) {
+        blocks.push(metricContract({ metric: `settings budget ${key}`, anchor, population, excludes, value }));
+      }
+    }
+  }
+  return blocks;
 }
 
 /** Human-readable settings snapshot for TUI `/settings`. */

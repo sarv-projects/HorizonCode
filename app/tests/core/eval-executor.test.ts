@@ -129,6 +129,32 @@ describe("makeScriptedExecutor (in-library test model)", () => {
     expect(graded.outcome.terminal).toBe("failed");
   });
 
+  test("F-4: a provider that reports usage propagates it into the case with a harness-estimate cost", async () => {
+    const usageProvider: Provider = {
+      name: "usage-provider",
+      async *stream(): AsyncIterable<ProviderEvent> {
+        yield { type: "text", text: "done" };
+        yield {
+          type: "done",
+          stopReason: "end",
+          usage: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 5, cacheCreationInputTokens: 3 },
+        };
+      },
+    };
+    const handle = makeScriptedExecutor(usageProvider, { model: "usage-model" });
+    const graded = await runEvalCase(
+      evalCase({ id: "u1", task: "say something" }),
+      { executor: handle.executor, forbiddenTexts: ["SECRET-NEVER-PRESENT"] },
+    );
+    const obs = handle.observations()[0]!;
+    expect(obs.usage?.inputTokens).toBe(100);
+    expect(obs.usage?.cacheReadInputTokens).toBe(5);
+    expect(obs.provider).toBe("usage-provider");
+    expect(graded.metrics.usage?.inputTokens).toBe(100);
+    expect(graded.metrics.costSource).toBe("harness-estimate");
+    expect(graded.metrics.costUsd).toBeGreaterThan(0);
+  }, 30000);
+
   test("the run-half of no_answer_leak scans exactly the final answer", async () => {
     const provider = createScriptedProvider([textTurn("the answer is SECRET-VALUE")]);
     const h = makeScriptedExecutor(provider);

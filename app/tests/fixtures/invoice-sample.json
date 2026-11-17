@@ -1,0 +1,6 @@
+{
+  "lines": [
+    { "model": "minimaxai/minimax-m3.1-flash", "period": "2026-11", "costUsd": 0.000123 },
+    { "model": "gpt-4o-mini", "period": "2026-11", "costUsd": 0.5 }
+  ]
+}

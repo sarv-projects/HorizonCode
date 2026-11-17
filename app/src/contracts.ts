@@ -812,6 +812,14 @@ export type RuntimeEvent =
   | { type: "interjection.admitted"; text: string }
   | { type: "error"; message: string; code?: ProviderFailureCode }
   | ({ type: "context.usage" } & ContextUsage)
+  // ADDITIVE (F-4): provider-reported token usage for one model turn. A
+  // harness-side facade event exactly like `context.usage` above (the closed
+  // 44-name KERNEL event catalogue is unchanged). Emitted ONLY when the
+  // provider actually reports usage on its `done` event; consumers that do not
+  // know it ignore it. This is what the eval executor captures to attribute a
+  // USD cost to a case with an explicit source (none / harness-estimate /
+  // reported), rather than fabricating $0.
+  | { type: "usage"; usage: Usage; provider: string; model: string }
   // ADDITIVE (FEAT-003): the per-turn aggregated file diff. This is a
   // harness-side UI/runtime facade event, exactly like `context.usage` and
   // `turn.done` above -- a computed surface the loop emits for the TUI, NOT a
