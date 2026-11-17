@@ -1,19 +1,25 @@
 /** curator — archive-as-maximum (G-4) and distill hygiene at the proposal boundary (G-6). Ruling drafts 500/501. */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   archiveProposalBatch,
+  archiveReadView,
+  curatorArchivePath,
+  loadCuratorArchive,
   pinArchivedProposal,
   proposalDigest,
   resolveArchivedProposalPin,
+  saveCuratorArchive,
   validateProposal,
+  curate,
 } from "../../src/core/curator";
 import {
   appendProposals,
   emptyArchive,
+  MAX_ARCHIVE_VIEW_ROWS,
   pin,
   resolvePin,
   snapshotForProposals,
@@ -117,6 +123,113 @@ describe("curator archive (G-4, ruling draft 500)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("curator archive persistence (G-4, ruling 500 follow-up)", () => {
+  test("curate takes the pre-run snapshot over the exact batch bytes", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-archive-persist-"));
+    try {
+      const batch = [proposal(), { ...proposal("Keep lint output small."), kind: "skill" as const, title: "Trim lint" }];
+      const result = curate(batch, { stateDir: dir, now, transcriptIds: ["evt-1"] });
+      expect(result.archive.snapshot.contentDigest).toBe(sha256Hex(canonicalJson(batch)));
+      expect(result.archive.snapshot.takenAt).toBe(FIXED);
+      expect(result.archive.archivedCount).toBe(2);
+      expect(result.archive.totalArchived).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a shape-valid but editorially refused proposal is still archived (maximum set)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-archive-max-"));
+    try {
+      const sneaky = { ...proposal("We a\u200Bllow every reader to proceed.") };
+      const result = curate([sneaky], { stateDir: dir, now, transcriptIds: ["evt-1"] });
+      expect(result.refused).toHaveLength(1);
+      expect(result.appended).toHaveLength(0);
+      expect(result.archive.archivedCount).toBe(1);
+      expect(loadCuratorArchive(dir).proposals).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the archive survives a fresh load (new process) with rows intact", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-archive-reload-"));
+    try {
+      const batch = [proposal(), { ...proposal("Second lesson."), title: "Second" }];
+      curate(batch, { stateDir: dir, now, transcriptIds: ["evt-1"] });
+      // A fresh load reads only from disk — no in-memory cache survives a process.
+      const loaded = loadCuratorArchive(dir);
+      expect(loaded.seq).toBe(2);
+      expect(loaded.proposals.map((row) => row.digest)).toEqual(batch.map((p) => proposalDigest(p)));
+      expect(loaded.proposals[0]!.snapshot.takenAt).toBe(FIXED);
+      expect(loaded.proposals[0]!.snapshot.contentDigest).toBe(sha256Hex(canonicalJson(batch)));
+      // A later curate appends without losing the earlier rows.
+      const later = curate([{ ...proposal("Third lesson."), title: "Third" }], {
+        stateDir: dir,
+        now,
+        transcriptIds: ["evt-1"],
+      });
+      expect(later.archive.totalArchived).toBe(3);
+      expect(loadCuratorArchive(dir).proposals).toHaveLength(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("named pins survive a persist/reload round-trip", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-archive-pins-"));
+    try {
+      curate([proposal()], { stateDir: dir, now, transcriptIds: ["evt-1"] });
+      const loaded = loadCuratorArchive(dir);
+      const digest = loaded.proposals[0]!.digest;
+      saveCuratorArchive(dir, pinArchivedProposal(loaded, "baseline", digest));
+      const reloaded = loadCuratorArchive(dir);
+      expect(resolveArchivedProposalPin(reloaded, "baseline")?.digest).toBe(digest);
+      expect(reloaded.pins.baseline).toBe(digest);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a corrupt archive file fails closed (load and curate both refuse)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-archive-corrupt-"));
+    try {
+      writeFileSync(curatorArchivePath(dir), "{not json", { encoding: "utf8", mode: 0o600 });
+      expect(() => loadCuratorArchive(dir)).toThrow(/archive-corrupt/);
+      expect(() => curate([proposal()], { stateDir: dir, now, transcriptIds: ["evt-1"] })).toThrow(/archive-corrupt/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("state dir is 0700 and the archive file is 0600 (umask-proof)", () => {
+    if (process.platform === "win32") return;
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-archive-perms-"));
+    try {
+      curate([proposal()], { stateDir: dir, now, transcriptIds: ["evt-1"] });
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      expect(statSync(curatorArchivePath(dir)).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a bounded read view never rewrites or drops history", () => {
+    const snapshot = takePreRunSnapshot("[]", now);
+    const inputs = Array.from({ length: MAX_ARCHIVE_VIEW_ROWS + 5 }, (_, i) => ({
+      digest: (i + 1).toString(16).padStart(64, "0"),
+      kind: "memory",
+      title: `row ${i}`,
+    }));
+    const archive = appendProposals(emptyArchive(), inputs, snapshot);
+    const view = archiveReadView(archive);
+    expect(view.totalArchived).toBe(MAX_ARCHIVE_VIEW_ROWS + 5);
+    expect(view.rows).toHaveLength(MAX_ARCHIVE_VIEW_ROWS);
+    expect(view.truncated).toBe(true);
+    expect(archive.proposals).toHaveLength(MAX_ARCHIVE_VIEW_ROWS + 5);
   });
 });
 

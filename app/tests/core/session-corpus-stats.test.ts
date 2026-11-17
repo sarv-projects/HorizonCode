@@ -1,15 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { recordPostmortem, type PostmortemRecord } from "../../src/core/postmortem";
 import { assertPublishedNumber, parsePublishedNumber } from "../../src/core/metrics";
 import { runSessionStatsCli } from "../../src/session-stats";
+import { SessionStore } from "../../src/core/session";
+import { formatMarkdownMessages, formatMarkdownTranscriptHeader } from "../../src/core/markdown-transcript";
+import { sessionDbPath, workspaceStateDir } from "../../src/core/paths";
 import {
+  buildWorkspaceCorpusReport,
   histogramFromPostmortems,
+  readMarkdownTranscriptCorpus,
+  readSessionDbCorpus,
   renderCorpusTuningReport,
+  renderFullCorpusSummary,
+  renderFullCorpusTuningReport,
   renderSessionCorpusSummary,
   suggestCorpusTuning,
+  toolCountsFromMessages,
   TUNING_DOMINANT_TOOL_RATE,
   TUNING_FAILURE_RATE,
   TUNING_MIN_RECORDS,
@@ -207,5 +217,204 @@ describe("session-stats CLI flags (J-5)", () => {
   test("missing --postmortems returns usage exit code 2", async () => {
     const { code } = await capture([]);
     expect(code).toBe(2);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Full-corpus optimiser over the real session DB + Markdown transcripts      */
+/* -------------------------------------------------------------------------- */
+
+function toolMessage(name: string) {
+  return { role: "tool" as const, content: "ok", toolCallId: `c-${name}`, toolName: name };
+}
+
+function seedWorkspace(opts: { sessions: number; readsPerSession: number; transcriptTools?: string[] }): {
+  ws: string;
+  state: string;
+} {
+  const ws = mkdtempSync(path.join(os.tmpdir(), "j5-full-"));
+  const store = new SessionStore(ws);
+  for (let i = 0; i < opts.sessions; i += 1) {
+    const s = store.createSession(`s${i}`);
+    for (let r = 0; r < opts.readsPerSession; r += 1) store.appendMessage(s.id, toolMessage("read"));
+    if (i % 2 === 0) store.appendMessage(s.id, toolMessage("grep"));
+  }
+  store.close();
+  const state = workspaceStateDir(ws);
+  const tdir = path.join(state, "transcripts");
+  mkdirSync(tdir, { recursive: true });
+  const tools = opts.transcriptTools ?? [];
+  if (tools.length > 0) {
+    const messages = tools.map((name) => toolMessage(name));
+    writeFileSync(
+      path.join(tdir, "session.md"),
+      formatMarkdownTranscriptHeader({ sessionId: "s" }) + formatMarkdownMessages(messages),
+      { encoding: "utf8", mode: 0o600 },
+    );
+  }
+  return { ws, state };
+}
+
+describe("full-corpus optimiser (J-5, rows over the session DB + transcripts)", () => {
+  test("empty workspace is a healthy zero result (no DB, no transcripts)", async () => {
+    const ws = mkdtempSync(path.join(os.tmpdir(), "j5-empty-"));
+    try {
+      const report = await buildWorkspaceCorpusReport(ws);
+      expect(report.summary.records).toBe(0);
+      expect(report.summary.tools).toEqual([]);
+      expect(report.sources.sessionDb.sessions).toBe(0);
+      expect(report.sources.transcripts.transcripts).toBe(0);
+      expect(report.counts.toolCalls).toBe(0);
+      for (const block of report.published) assertPublishedNumber(block);
+      expect(renderFullCorpusSummary(report)).toContain("corpus sources: postmortems=0");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("reads tool counts from one real session DB (read-only)", () => {
+    const { ws } = seedWorkspace({ sessions: 1, readsPerSession: 2 });
+    try {
+      const corpus = readSessionDbCorpus(ws);
+      expect(corpus.sessions).toBe(1);
+      expect(corpus.messages).toBe(3); // 2 read + 1 grep (i=0)
+      expect(corpus.toolCalls.read).toBe(2);
+      expect(corpus.toolCalls.grep).toBe(1);
+      // Reading did not create/modify the DB: no error, no quarantine.
+      expect(corpus.error).toBeUndefined();
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("reads Markdown transcripts and merges them with the DB into one corpus", async () => {
+    const { ws, state } = seedWorkspace({
+      sessions: 2,
+      readsPerSession: 2,
+      transcriptTools: ["shell", "shell", "shell", "shell", "shell", "read"],
+    });
+    try {
+      const transcripts = readMarkdownTranscriptCorpus(ws);
+      expect(transcripts.transcripts).toBe(1);
+      expect(transcripts.toolCalls.shell).toBe(5);
+      const report = await buildWorkspaceCorpusReport(ws, state);
+      // DB: 2 sessions × 2 read = 4 read, plus grep on i=0 = 1 grep.
+      // Transcript: 5 shell + 1 read. Merged: read=5, shell=5, grep=1.
+      expect(report.summary.tools.find((t) => t.tool === "read")?.count).toBe(5);
+      expect(report.summary.tools.find((t) => t.tool === "shell")?.count).toBe(5);
+      expect(report.counts.toolCalls).toBe(11);
+      const shellHeavy = report.suggestions.find((s) => s.id === "shell-heavy");
+      expect(shellHeavy).toBeDefined();
+      expect(shellHeavy?.detail).toContain("shell has 5 calls");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed DB rows are skipped, never mistaken for tool calls or crashing", async () => {
+    const { ws, state } = seedWorkspace({ sessions: 1, readsPerSession: 1 });
+    try {
+      const db = new Database(sessionDbPath(ws));
+      const sid = db.query("SELECT id FROM sessions LIMIT 1").get() as { id: string };
+      db.run("INSERT INTO messages (id, session_id, role, content, ts, meta) VALUES (?, ?, ?, ?, ?, ?)", [
+        "bad-meta",
+        sid.id,
+        "tool",
+        "x",
+        "",
+        "{not json",
+      ]);
+      db.run("INSERT INTO messages (id, session_id, role, content, ts, meta) VALUES (?, ?, ?, ?, ?, ?)", [
+        "bad-role",
+        sid.id,
+        null,
+        "x",
+        "",
+        null,
+      ]);
+      db.close();
+      const corpus = readSessionDbCorpus(ws);
+      expect(corpus.skipped).toBeGreaterThanOrEqual(2);
+      expect(corpus.toolCalls.read).toBe(1);
+      const report = await buildWorkspaceCorpusReport(ws, state);
+      expect(report.counts.skipped).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("output is deterministic across runs over the same corpus", async () => {
+    const { ws, state } = seedWorkspace({ sessions: 3, readsPerSession: 4, transcriptTools: ["shell", "shell", "shell"] });
+    try {
+      const first = await buildWorkspaceCorpusReport(ws, state);
+      const second = await buildWorkspaceCorpusReport(ws, state);
+      expect(second.summary).toEqual(first.summary);
+      expect(second.suggestions).toEqual(first.suggestions);
+      expect(renderFullCorpusTuningReport(second)).toBe(renderFullCorpusTuningReport(first));
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("post-mortems still contribute terminal/failure suggestions in full mode", async () => {
+    const { ws, state } = seedWorkspace({ sessions: 0, readsPerSession: 0 });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        await recordPostmortem({
+          stateDir: state,
+          sessionId: `p${i}`,
+          terminal: "failed",
+          failureClass: "tool_error",
+          transcript: "task",
+          toolCalls: { read: 1 },
+          now: 1_700_000_000_000 + i,
+        });
+      }
+      const report = await buildWorkspaceCorpusReport(ws, state);
+      expect(report.sources.postmortems).toBe(3);
+      const ids = report.suggestions.map((s) => s.id);
+      expect(ids).toContain("high-failure-rate");
+      expect(ids).toContain("tool-error-class");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("--workspace drives --suggest/--tune/--json over the fuller corpus", async () => {
+    const { ws } = seedWorkspace({ sessions: 2, readsPerSession: 6 });
+    try {
+      const original = console.log;
+      let out = "";
+      console.log = (text?: unknown) => {
+        out += `${String(text)}\n`;
+      };
+      try {
+        expect(await runSessionStatsCli(["--workspace", ws, "--suggest"])).toBe(0);
+        expect(out).toContain("dominant tool: read");
+        expect(out).toContain("corpus sources:");
+        out = "";
+        expect(await runSessionStatsCli(["--workspace", ws, "--tune", "--json"])).toBe(0);
+        const parsed = JSON.parse(out.trim()) as {
+          sources: { sessionDb: { sessions: number }; transcripts: { transcripts: number } };
+          suggestions: Array<{ id: string }>;
+        };
+        expect(parsed.sources.sessionDb.sessions).toBe(2);
+        expect(parsed.suggestions.map((s) => s.id)).toContain("dominant-tool");
+      } finally {
+        console.log = original;
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("toolCountsFromMessages counts tool-result messages only", () => {
+    const msgs = [
+      { role: "assistant" as const, content: "", toolCalls: [{ id: "c1", name: "read", arguments: "{}" }] },
+      { role: "tool" as const, content: "ok", toolName: "read" },
+      { role: "tool" as const, content: "ok", toolName: "shell" },
+      { role: "tool" as const, content: "ok" }, // no toolName — skipped
+    ];
+    expect(toolCountsFromMessages(msgs as never)).toEqual({ read: 1, shell: 1 });
   });
 });

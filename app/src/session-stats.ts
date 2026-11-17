@@ -11,8 +11,11 @@ import * as path from "node:path";
 import { loadPostmortems } from "./core/postmortem";
 import { metricContract } from "./core/metrics";
 import {
+  buildWorkspaceCorpusReport,
   histogramFromPostmortems,
   renderCorpusTuningReport,
+  renderFullCorpusSummary,
+  renderFullCorpusTuningReport,
   renderSessionCorpusSummary,
   suggestCorpusTuning,
 } from "./core/session-corpus-stats";
@@ -34,7 +37,7 @@ function corruptQuarantineBlock(stateDir: string, count: number): string {
 }
 
 const USAGE =
-  "usage: bun run src/session-stats.ts --postmortems <state-dir> [--suggest|--tune] [--json]";
+  "usage: bun run src/session-stats.ts (--postmortems <state-dir> | --workspace <workspace>) [--suggest|--tune] [--json]";
 
 function argValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -44,6 +47,28 @@ function argValue(argv: readonly string[], flag: string): string | undefined {
 }
 
 export async function runSessionStatsCli(argv: readonly string[]): Promise<number> {
+  const workspace = argValue(argv, "--workspace");
+  const suggest = argv.includes("--suggest") || argv.includes("--tune");
+  const json = argv.includes("--json");
+
+  // Full-corpus mode: post-mortems + the session SQLite DB + Markdown transcripts.
+  // Bounded and read-only; --suggest/--tune/--json all apply to the fuller corpus.
+  if (workspace !== undefined) {
+    if (workspace === "") {
+      console.error(USAGE);
+      return 2;
+    }
+    const report = await buildWorkspaceCorpusReport(path.resolve(workspace));
+    if (json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else if (suggest) {
+      console.log(renderFullCorpusTuningReport(report));
+    } else {
+      console.log(renderFullCorpusSummary(report));
+    }
+    return 0;
+  }
+
   const dir = argValue(argv, "--postmortems");
   if (dir === undefined || dir === "") {
     console.error(USAGE);
@@ -59,8 +84,6 @@ export async function runSessionStatsCli(argv: readonly string[]): Promise<numbe
     console.error(`session-stats: ${loaded.quarantine.length} corrupt post-mortem(s) quarantined`);
   }
   const summary = histogramFromPostmortems(loaded.postmortems);
-  const suggest = argv.includes("--suggest") || argv.includes("--tune");
-  const json = argv.includes("--json");
   if (json) {
     const report = suggestCorpusTuning(loaded.postmortems);
     // Additive top-level `published` (summary + suggestions + load status).

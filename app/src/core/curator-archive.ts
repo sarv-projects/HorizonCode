@@ -27,6 +27,21 @@
  * prompt, session or workspace file.
  */
 
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import * as path from "node:path";
 import { canonicalJson, sha256Hex } from "./canon";
 
 /** The immutable content+time record taken before a run touches anything. */
@@ -157,4 +172,282 @@ export function resolvePin(archive: CuratorArchive, name: string): ArchivedPropo
   const digest = archive.pins[name];
   if (digest === undefined) return undefined;
   return archive.proposals.find((row) => row.digest === digest);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Persistence (G-4 follow-up)                                                */
+/* -------------------------------------------------------------------------- */
+/*
+ * The pure archive above is the in-memory model. The functions below make it
+ * DURABLE under a workspace state dir without changing any of its semantics:
+ *  - one canonical-JSON snapshot file `<stateDir>/curator-archive.json`;
+ *  - written atomically (0600 temp in a 0700 dir, fsync, rename, parent fsync);
+ *  - loaded fresh on every `curate` call (a new process sees the same archive);
+ *  - bounded READ path: a file larger than MAX_ARCHIVE_BYTES is a typed refusal
+ *    (never silently truncated), and `archiveReadView` bounds the returned rows
+ *    without mutating the stored archive — history is never rewritten or pruned.
+ * No delete/prune/overwrite API is exported: the archive stays the maximum set.
+ */
+
+/** Persisted archive file name, under the workspace state dir. */
+export const ARCHIVE_FILE = "curator-archive.json";
+export const ARCHIVE_SCHEMA_VERSION = 1;
+/** Bounded read: a persisted archive larger than this is a typed refusal. */
+export const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024;
+/** Bounded read view: the newest N rows (the file keeps every row). */
+export const MAX_ARCHIVE_VIEW_ROWS = 200;
+
+export type ArchiveStoreErrorReason = "invalid-archive-dir" | "archive-corrupt" | "archive-write-failed";
+
+/** A typed refusal from the persistence layer — never a silent empty archive. */
+export class ArchiveStoreError extends Error {
+  readonly reason: ArchiveStoreErrorReason;
+  readonly detail: string;
+
+  constructor(reason: ArchiveStoreErrorReason, detail: string) {
+    super(`${reason}: ${detail}`);
+    this.name = "ArchiveStoreError";
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
+const isUnix = process.platform !== "win32";
+const HEX64 = /^[0-9a-f]{64}$/;
+
+function storeMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Absolute path of the persisted archive for a state directory. */
+export function curatorArchivePath(stateDir: string): string {
+  return path.join(stateDir, ARCHIVE_FILE);
+}
+
+function requireStateDir(stateDir: string): string {
+  if (typeof stateDir !== "string" || stateDir.trim() === "" || !path.isAbsolute(stateDir)) {
+    throw new ArchiveStoreError(
+      "invalid-archive-dir",
+      `stateDir must be a non-empty absolute path (got ${JSON.stringify(stateDir)})`,
+    );
+  }
+  return stateDir;
+}
+
+/** Serialize an archive to stable canonical JSON (one trailing newline). */
+export function serializeArchive(archive: CuratorArchive): string {
+  if (archive === null || typeof archive !== "object" || !Array.isArray(archive.proposals)) {
+    throw new ArchiveStoreError("archive-corrupt", "serializeArchive requires an archive");
+  }
+  const pins: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const name of Object.keys(archive.pins)) pins[name] = archive.pins[name] as string;
+  const record = {
+    schemaVersion: ARCHIVE_SCHEMA_VERSION,
+    seq: archive.seq,
+    proposals: archive.proposals.map((row) => ({
+      seq: row.seq,
+      digest: row.digest,
+      kind: row.kind,
+      title: row.title,
+      snapshot: { contentDigest: row.snapshot.contentDigest, takenAt: row.snapshot.takenAt },
+    })),
+    pins,
+  };
+  return `${canonicalJson(record)}\n`;
+}
+
+function isSnapshot(value: unknown): value is PreRunSnapshot {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const snapshot = value as Partial<PreRunSnapshot>;
+  return typeof snapshot.contentDigest === "string" && HEX64.test(snapshot.contentDigest) && typeof snapshot.takenAt === "string";
+}
+
+/** Parse + validate a persisted archive. Any malformed shape is a typed refusal. */
+export function parseArchive(text: string): CuratorArchive {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (err) {
+    throw new ArchiveStoreError("archive-corrupt", `not JSON (${storeMessage(err)})`);
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ArchiveStoreError("archive-corrupt", "root is not an archive record");
+  }
+  const record = value as {
+    schemaVersion?: unknown;
+    seq?: unknown;
+    proposals?: unknown;
+    pins?: unknown;
+  };
+  if (record.schemaVersion !== ARCHIVE_SCHEMA_VERSION) {
+    throw new ArchiveStoreError("archive-corrupt", `unsupported schemaVersion ${JSON.stringify(record.schemaVersion)}`);
+  }
+  if (typeof record.seq !== "number" || !Number.isInteger(record.seq) || record.seq < 0) {
+    throw new ArchiveStoreError("archive-corrupt", "seq is not a non-negative integer");
+  }
+  if (!Array.isArray(record.proposals)) {
+    throw new ArchiveStoreError("archive-corrupt", "proposals is not an array");
+  }
+  const proposals: ArchivedProposal[] = [];
+  for (let index = 0; index < record.proposals.length; index += 1) {
+    const raw = record.proposals[index];
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ArchiveStoreError("archive-corrupt", `proposals[${index}] is not a row`);
+    }
+    const row = raw as Partial<ArchivedProposal>;
+    if (
+      typeof row.seq !== "number" ||
+      !Number.isInteger(row.seq) ||
+      row.seq !== index + 1 ||
+      typeof row.digest !== "string" ||
+      !HEX64.test(row.digest) ||
+      typeof row.kind !== "string" ||
+      typeof row.title !== "string" ||
+      !isSnapshot(row.snapshot)
+    ) {
+      throw new ArchiveStoreError("archive-corrupt", `proposals[${index}] is not a v1 archived row`);
+    }
+    proposals.push(
+      Object.freeze({
+        seq: row.seq,
+        digest: row.digest,
+        kind: row.kind,
+        title: row.title,
+        snapshot: Object.freeze({ contentDigest: row.snapshot.contentDigest, takenAt: row.snapshot.takenAt }),
+      }) as ArchivedProposal,
+    );
+  }
+  if (record.seq !== proposals.length) {
+    throw new ArchiveStoreError("archive-corrupt", `seq ${record.seq} disagrees with ${proposals.length} rows`);
+  }
+  if (record.pins === null || typeof record.pins !== "object" || Array.isArray(record.pins)) {
+    throw new ArchiveStoreError("archive-corrupt", "pins is not a record");
+  }
+  const digests = new Set(proposals.map((row) => row.digest));
+  const pins: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const name of Object.keys(record.pins as Record<string, unknown>)) {
+    const digest = (record.pins as Record<string, unknown>)[name];
+    if (!PIN_NAME_RE.test(name) || typeof digest !== "string" || !HEX64.test(digest) || !digests.has(digest)) {
+      throw new ArchiveStoreError("archive-corrupt", `pins[${JSON.stringify(name)}] is not a valid pin`);
+    }
+    pins[name] = digest;
+  }
+  return Object.freeze({
+    seq: record.seq,
+    proposals: Object.freeze(proposals),
+    pins: Object.freeze(pins),
+  }) as CuratorArchive;
+}
+
+/**
+ * Load the archive from `<stateDir>/curator-archive.json`. A missing file is a
+ * healthy empty archive; an unreadable, oversized or malformed file is a typed
+ * refusal (never "no archive" — appending against an unknown history would
+ * rewrite it). This is called on every `curate`, so a new process sees the same
+ * archive without any in-memory cache.
+ */
+export function loadCuratorArchive(stateDir: string): CuratorArchive {
+  const dir = requireStateDir(stateDir);
+  const file = curatorArchivePath(dir);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return emptyArchive();
+    throw new ArchiveStoreError("archive-corrupt", `archive is unreadable (${storeMessage(err)})`);
+  }
+  if (Buffer.byteLength(text, "utf8") > MAX_ARCHIVE_BYTES) {
+    throw new ArchiveStoreError(
+      "archive-corrupt",
+      `archive exceeds the bounded read limit of ${MAX_ARCHIVE_BYTES} bytes; refusing rather than truncating history`,
+    );
+  }
+  return parseArchive(text);
+}
+
+/** Best-effort fsync of a file descriptor opened for a just-written file. */
+function fsyncFile(file: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    fsyncSync(fd);
+  } catch {
+    /* some platforms/filesystems refuse fsync */
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** Best-effort fsync of the parent directory so the rename survives a crash. */
+function fsyncParentDir(dir: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    /* best effort */
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * Persist an archive atomically: 0700 dir, 0600 temp file, fsync, rename over
+ * the target, parent fsync. The prior bytes are replaced in one rename, never
+ * truncated; a crash leaves either the old archive or the whole new one.
+ */
+export function saveCuratorArchive(stateDir: string, archive: CuratorArchive): string {
+  const dir = requireStateDir(stateDir);
+  mkdirSync(dir, { recursive: true });
+  if (isUnix) {
+    try {
+      chmodSync(dir, statSync(dir).mode & 0o700);
+    } catch {
+      /* best effort */
+    }
+  }
+  const file = curatorArchivePath(dir);
+  const content = serializeArchive(archive);
+  const tmp = path.join(dir, `.${ARCHIVE_FILE}.hz-tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
+  try {
+    writeFileSync(tmp, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    fsyncFile(tmp);
+    if (isUnix) chmodSync(tmp, 0o600);
+    renameSync(tmp, file);
+    if (isUnix) chmodSync(file, 0o600);
+    fsyncParentDir(dir);
+    return file;
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* best effort */
+    }
+    throw new ArchiveStoreError("archive-write-failed", `cannot persist archive to ${file} (${storeMessage(err)})`);
+  }
+}
+
+export interface ArchiveReadView {
+  /** Total rows in the stored archive (nothing is ever deleted). */
+  totalArchived: number;
+  /** Newest `MAX_ARCHIVE_VIEW_ROWS` rows, in seq order. */
+  rows: readonly ArchivedProposal[];
+  pins: Readonly<Record<string, string>>;
+  /** True when the view is bounded below the full row count. */
+  truncated: boolean;
+}
+
+/**
+ * A bounded read view over an archive. Pure: it never mutates or rewrites the
+ * archive or its persisted file — no history is lost when the view is capped.
+ */
+export function archiveReadView(archive: CuratorArchive, maxRows: number = MAX_ARCHIVE_VIEW_ROWS): ArchiveReadView {
+  const limit = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : MAX_ARCHIVE_VIEW_ROWS;
+  const rows = archive.proposals.slice(Math.max(0, archive.proposals.length - limit));
+  return {
+    totalArchived: archive.proposals.length,
+    rows,
+    pins: archive.pins,
+    truncated: rows.length < archive.proposals.length,
+  };
 }

@@ -46,6 +46,7 @@ import {
   type StoredProposalRow,
   validateProposal,
 } from "../../src/core/curator";
+import { ARCHIVE_FILE } from "../../src/core/curator-archive";
 
 /* -------------------------------- fixtures -------------------------------- */
 
@@ -450,7 +451,8 @@ describe("curator — curate", () => {
     writeFileSync(path.join(workspace, "README.md"), "the workspace\n", "utf8");
     const result = curate([validProposal(), skillProposal()], storeFixture());
     expect(result.appended.length).toBe(2);
-    expect(readdirSync(state).sort()).toEqual([PROPOSALS_FILE]);
+    // G-4: curate now also persists the archive under the state dir.
+    expect(readdirSync(state).sort()).toEqual([ARCHIVE_FILE, PROPOSALS_FILE].sort());
     expect(readdirSync(workspace)).toEqual(["README.md"]);
     expect(readFileSync(path.join(workspace, "README.md"), "utf8")).toBe("the workspace\n");
     expect(proposalsFilePath(state).startsWith(workspace + path.sep)).toBe(false);

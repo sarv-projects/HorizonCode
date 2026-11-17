@@ -71,11 +71,18 @@ import { canonicalJson, digestOf } from "./canon";
 import { sanitizeForDistill } from "./distill-sanitize";
 import {
   appendProposals,
+  archiveReadView,
+  curatorArchivePath,
   emptyArchive,
+  loadCuratorArchive,
   pin as pinArchivedProposal,
   resolvePin as resolveArchivedProposalPin,
+  saveCuratorArchive,
+  serializeArchive,
   snapshotForProposals,
+  type ArchiveReadView,
   type CuratorArchive,
+  type PreRunSnapshot,
 } from "./curator-archive";
 import { notifyLearnProposalCreated } from "./learn-events";
 import {
@@ -383,6 +390,19 @@ export interface CurateRefusal {
   detail: string;
 }
 
+export interface CurateArchiveInfo {
+  /** The pre-run snapshot taken over the exact batch bytes (before curation). */
+  snapshot: PreRunSnapshot;
+  /** New archive rows added by this call (shape-valid proposals, refused included). */
+  archivedCount: number;
+  /** Total rows now archived (the archive is the maximum set — never deleted). */
+  totalArchived: number;
+  /** Absolute path of the persisted archive. */
+  archivePath: string;
+  /** A bounded view of the archive (does not rewrite or prune history). */
+  view: ArchiveReadView;
+}
+
 export interface CurateResult {
   storePath: string;
   /** Rows appended by this call, in input order. */
@@ -391,6 +411,8 @@ export interface CurateResult {
   duplicates: string[];
   /** Proposals the editorial standard refused; nothing was written for them. */
   refused: CurateRefusal[];
+  /** G-4: the durable archive this call contributed to (additive field). */
+  archive: CurateArchiveInfo;
 }
 
 export type CuratorErrorReason = "invalid-store" | "store-corrupt";
@@ -563,11 +585,16 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
   // (store-corrupt) leaves the bytes owner-only (a missing file is not an
   // error: nothing to tighten until a row is appended).
   setOwnerOnly(file, 0o600);
+  const now = typeof store.now === "function" ? store.now : () => new Date().toISOString();
+  // G-4: snapshot the EXACT batch bytes before any curation/validation runs, and
+  // load the persisted archive (fail-closed on corruption) before any write —
+  // appending against an unknown history would rewrite it.
+  const snapshot = snapshotForProposals(proposals, now);
+  const archiveBefore = loadCuratorArchive(store.stateDir);
   const seen = new Set(readStoreDigests(file));
   const transcript: ProposalEvidenceContext = { transcriptIds: store.transcriptIds ?? [] };
-  const now = typeof store.now === "function" ? store.now : () => new Date().toISOString();
 
-  const result: CurateResult = { storePath: file, appended: [], duplicates: [], refused: [] };
+  const result: CurateResult = { storePath: file, appended: [], duplicates: [], refused: [], archive: undefined };
   const lines: string[] = [];
   const list = Array.isArray(proposals) ? proposals : [];
   list.forEach((candidate, index) => {
@@ -596,6 +623,23 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
     result.appended.push({ index, digest: verdict.digest, kind: row.kind, title: row.title });
   });
 
+  // G-4: archive the WHOLE batch under the pre-run snapshot, then persist it
+  // atomically. Shape-valid proposals are archived even when the editorial
+  // standard refuses them — the archive is the maximum set of everything ever
+  // proposed, never the accepted set. Saving before the proposals.jsonl append
+  // means a persistence failure refuses the whole curate (fail closed); a
+  // later proposals append failure can only leave extra archive rows, which is
+  // the safe direction for an archive-as-maximum.
+  const archiveAfter = appendProposals(archiveBefore, shapeValidArchiveInputs(list), snapshot);
+  const archivePath = saveCuratorArchive(store.stateDir, archiveAfter);
+  result.archive = {
+    snapshot,
+    archivedCount: archiveAfter.seq - archiveBefore.seq,
+    totalArchived: archiveAfter.seq,
+    archivePath,
+    view: archiveReadView(archiveAfter),
+  };
+
   if (lines.length > 0) {
     mkdirSync(path.dirname(file), { recursive: true });
     // The directory is owner-only too (docs/03 D12).
@@ -620,15 +664,9 @@ export function curate(proposals: readonly unknown[], store: ProposalStore): Cur
 
 /* --------------------------- archive-as-maximum --------------------------- */
 
-/**
- * G-4 wiring: snapshot a batch BEFORE curation and archive it in the pure,
- * append-only archive. No filesystem writes, nothing applied — the archive is
- * the maximum set of everything ever proposed. Shape-valid candidates are
- * archived (the editorial standard still runs separately in `curate`).
- */
-export function archiveProposalBatch(proposals: readonly unknown[], now?: () => string): CuratorArchive {
-  const snapshot = snapshotForProposals(proposals, now);
-  const inputs = (Array.isArray(proposals) ? proposals : []).flatMap((candidate) => {
+/** Shape-valid proposals become archive rows (digest by {kind,title,body}). */
+function shapeValidArchiveInputs(proposals: readonly unknown[]): Array<{ digest: string; kind: string; title: string }> {
+  return (Array.isArray(proposals) ? proposals : []).flatMap((candidate) => {
     if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return [];
     const partial = candidate as Partial<ReviewProposalV1>;
     if (typeof partial.kind !== "string" || typeof partial.title !== "string" || typeof partial.body !== "string") return [];
@@ -640,9 +678,20 @@ export function archiveProposalBatch(proposals: readonly unknown[], now?: () => 
       },
     ];
   });
-  return appendProposals(emptyArchive(), inputs, snapshot);
 }
 
-// Re-export the pin/resolve surface so callers have one curator entry point.
+/**
+ * G-4 wiring: snapshot a batch BEFORE curation and archive it in the pure,
+ * append-only archive. No filesystem writes, nothing applied — the archive is
+ * the maximum set of everything ever proposed. Shape-valid candidates are
+ * archived (the editorial standard still runs separately in `curate`).
+ */
+export function archiveProposalBatch(proposals: readonly unknown[], now?: () => string): CuratorArchive {
+  const snapshot = snapshotForProposals(proposals, now);
+  return appendProposals(emptyArchive(), shapeValidArchiveInputs(proposals), snapshot);
+}
+
+// Re-export the pin/resolve + persistence surface so callers have one curator entry point.
 export { pinArchivedProposal, resolveArchivedProposalPin };
-export type { CuratorArchive };
+export { archiveReadView, curatorArchivePath, loadCuratorArchive, saveCuratorArchive, serializeArchive };
+export type { ArchiveReadView, CuratorArchive, PreRunSnapshot };

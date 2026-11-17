@@ -1,12 +1,20 @@
 /**
  * J-5: analyse the session/post-mortem corpus for tool usage histograms and
  * emit concrete tool/prompt tuning suggestions (omp session-stats idea).
- * Pure and read-only: suggestions are derived only from already-loaded
- * PostmortemRecord data, no session file is mutated and no network is used.
+ * Pure and read-only: suggestions are derived from already-loaded records and
+ * bounded, read-only scans of the session SQLite DB and Markdown transcripts.
+ * No session/DB/transcript file is mutated and no network is used.
  */
 
-import type { PostmortemRecord } from "./postmortem";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import * as path from "node:path";
+import { Database } from "bun:sqlite";
+import type { ChatMsg } from "../contracts";
+import { parseMarkdownTranscript } from "./markdown-transcript";
 import { metricContract } from "./metrics";
+import { sessionDbPath, workspaceStateDir } from "./paths";
+import { loadPostmortems, type PostmortemRecord } from "./postmortem";
+import { rowToChatMsg } from "./session";
 
 /**
  * H-7 / ruling 510 — metric contract (docs/16 §2.4.3) for this module's
@@ -175,20 +183,25 @@ function failureClassCounts(records: readonly PostmortemRecord[]): Array<[string
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-/**
- * Derive concrete tool/prompt tuning suggestions from a loaded corpus.
- * Every suggestion cites an observed count and a threshold; nothing writes to
- * a session, nor calls the network. Deterministic for a given record list.
- */
-export function suggestCorpusTuning(records: readonly PostmortemRecord[]): CorpusTuningReport {
-  const summary = histogramFromPostmortems(records);
+/** The numeric/derived signals the suggestion rules judge. */
+interface SuggestionSignals {
+  summary: SessionCorpusSummary;
+  failed: number;
+  unknown: number;
+  /** Number of records carrying an outcome (post-mortems); the failure-rate denominator. */
+  outcomeCount: number;
+  failureClasses: Array<[string, number]>;
+  /** H-7 population description for the publication surface. */
+  population: string;
+}
+
+/** The suggestion rules, shared by the post-mortem-only and full-corpus views. */
+function deriveSuggestions(signals: SuggestionSignals): TuningSuggestion[] {
+  const { summary, failed, unknown, outcomeCount, failureClasses } = signals;
   const suggestions: TuningSuggestion[] = [];
   const totalCalls = summary.tools.reduce((sum, row) => sum + row.count, 0);
   const top = summary.tools[0];
-  const failed = summary.terminals.failed ?? 0;
-  const unknown = summary.terminals.unknown ?? 0;
-  const classes = failureClassCounts(records);
-  const dominantClass = classes[0];
+  const dominantClass = failureClasses[0];
 
   if (summary.tools.length === 0) {
     suggestions.push({
@@ -225,14 +238,14 @@ export function suggestCorpusTuning(records: readonly PostmortemRecord[]): Corpu
     }
   }
 
-  if (records.length >= TUNING_MIN_RECORDS && failed / records.length >= TUNING_FAILURE_RATE) {
+  if (outcomeCount >= TUNING_MIN_RECORDS && failed / outcomeCount >= TUNING_FAILURE_RATE) {
     const cls = dominantClass === undefined ? "unknown" : `${dominantClass[0]} (${dominantClass[1]})`;
     suggestions.push({
       id: "high-failure-rate",
       area: "prompt",
       severity: "warn",
       title: "high failure rate",
-      detail: `${failed}/${records.length} post-mortems ended 'failed' (≥ ${Math.round(TUNING_FAILURE_RATE * 100)}%), dominant failure class ${cls}. Add a corrective prompt guard for that class and tune the responsible tool's retry/limit settings.`,
+      detail: `${failed}/${outcomeCount} post-mortems ended 'failed' (≥ ${Math.round(TUNING_FAILURE_RATE * 100)}%), dominant failure class ${cls}. Add a corrective prompt guard for that class and tune the responsible tool's retry/limit settings.`,
       priority: 15,
     });
   }
@@ -268,13 +281,12 @@ export function suggestCorpusTuning(records: readonly PostmortemRecord[]): Corpu
   }
 
   suggestions.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+  return suggestions;
+}
 
-  // H-7/ruling 510: the report's publication surface is the summary's blocks
-  // plus the suggestion count and each suggestion's numeric claim (its detail
-  // text). The renderer reads raw fields so --suggest output stays unchanged.
-  const population = corpusPopulation(records.length);
-  const published = [
-    ...summary.published,
+/** H-7/ruling 510: contracted blocks for the suggestions' numeric claims. */
+function publishedSuggestions(suggestions: readonly TuningSuggestion[], population: string): string[] {
+  return [
     metricContract({
       metric: "tuning suggestions emitted",
       anchor: CORPUS_ANCHOR,
@@ -292,8 +304,29 @@ export function suggestCorpusTuning(records: readonly PostmortemRecord[]): Corpu
       }),
     ),
   ];
+}
 
-  return { summary, suggestions, published };
+/**
+ * Derive concrete tool/prompt tuning suggestions from a loaded corpus.
+ * Every suggestion cites an observed count and a threshold; nothing writes to
+ * a session, nor calls the network. Deterministic for a given record list.
+ */
+export function suggestCorpusTuning(records: readonly PostmortemRecord[]): CorpusTuningReport {
+  const summary = histogramFromPostmortems(records);
+  const population = corpusPopulation(records.length);
+  const suggestions = deriveSuggestions({
+    summary,
+    failed: summary.terminals.failed ?? 0,
+    unknown: summary.terminals.unknown ?? 0,
+    outcomeCount: records.length,
+    failureClasses: failureClassCounts(records),
+    population,
+  });
+  return {
+    summary,
+    suggestions,
+    published: [...summary.published, ...publishedSuggestions(suggestions, population)],
+  };
 }
 
 /** Human-readable optimiser report (summary + concrete suggestions). */
@@ -309,4 +342,316 @@ export function renderCorpusTuningReport(report: CorpusTuningReport): string {
     lines.push(`    ${s.detail}`);
   }
   return lines.join("\n");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Full-corpus readers (J-5 follow-up): session DB + Markdown transcripts     */
+/* -------------------------------------------------------------------------- */
+/*
+ * Everything here is bounded and READ-ONLY. The SQLite DB is opened in readonly
+ * mode (never created, migrated, chmod'd or quarantined); Markdown transcripts
+ * and post-mortems are read from disk. A missing/empty corpus is a healthy zero
+ * result, and malformed rows are SKIPPED with a count (never crash, never
+ * silently treated as a different value). No network, no writes.
+ */
+
+/** Bounds so a pathological corpus cannot exhaust memory (read-only). */
+export const MAX_CORPUS_SESSIONS = 500;
+export const MAX_CORPUS_MESSAGES = 5000;
+export const MAX_CORPUS_TRANSCRIPTS = 500;
+export const MAX_CORPUS_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+
+/** Tool name → count from a transcript's ChatMsg list (tool-result messages). */
+export function toolCountsFromMessages(messages: readonly ChatMsg[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const msg of messages) {
+    if (msg.role !== "tool") continue;
+    const name = msg.toolName;
+    if (typeof name !== "string" || name.trim() === "") continue;
+    counts[name] = (counts[name] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function mergeCounts(into: Record<string, number>, from: Record<string, number>): void {
+  for (const [name, count] of Object.entries(from)) {
+    if (typeof count !== "number" || count < 1) continue;
+    into[name] = (into[name] ?? 0) + count;
+  }
+}
+
+export interface SessionDbCorpus {
+  toolCalls: Record<string, number>;
+  sessions: number;
+  messages: number;
+  /** Malformed rows skipped (not a tool count, not a crash). */
+  skipped: number;
+  truncated: boolean;
+  error?: string;
+}
+
+function emptySessionDbCorpus(): SessionDbCorpus {
+  return { toolCalls: {}, sessions: 0, messages: 0, skipped: 0, truncated: false };
+}
+
+/** Whether a raw DB row has the shape `rowToChatMsg` expects. */
+function isMessageRow(row: unknown): row is { role: string; content: string | null; meta: string | null } {
+  if (row === null || typeof row !== "object") return false;
+  const value = row as Record<string, unknown>;
+  return (
+    typeof value.role === "string" &&
+    (value.content === null || value.content === undefined || typeof value.content === "string") &&
+    (value.meta === null || value.meta === undefined || typeof value.meta === "string")
+  );
+}
+
+/** True when a `meta` cell carries malformed JSON (skipped, never misread). */
+function malformedMeta(meta: string | null): boolean {
+  if (!meta) return false;
+  try {
+    const value: unknown = JSON.parse(meta);
+    return value === null || typeof value !== "object" || Array.isArray(value);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Read tool-usage counts from the workspace's session DB, read-only and bounded.
+ * Tool rows are counted via `toolName` (the same signal the loop records on
+ * post-mortems), so DB and transcript counts are directly comparable.
+ */
+export function readSessionDbCorpus(
+  workspace: string,
+  opts: { maxSessions?: number; maxMessages?: number } = {},
+): SessionDbCorpus {
+  const maxSessions = Number.isFinite(opts.maxSessions) ? Math.max(1, Math.floor(opts.maxSessions as number)) : MAX_CORPUS_SESSIONS;
+  const maxMessages = Number.isFinite(opts.maxMessages) ? Math.max(1, Math.floor(opts.maxMessages as number)) : MAX_CORPUS_MESSAGES;
+  if (typeof workspace !== "string" || workspace.trim() === "") {
+    return { ...emptySessionDbCorpus(), error: "workspace is required" };
+  }
+  const dbPath = sessionDbPath(workspace);
+  if (!existsSync(dbPath)) return emptySessionDbCorpus();
+  let db: Database | undefined;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;
+    const names = new Set(tables.map((t) => t.name));
+    if (!names.has("sessions") || !names.has("messages")) return emptySessionDbCorpus();
+    const sessionRows = db
+      .query("SELECT id FROM sessions ORDER BY rowid DESC LIMIT ?")
+      .all(maxSessions + 1) as Array<{ id: unknown }>;
+    let truncated = sessionRows.length > maxSessions;
+    const ids = sessionRows.slice(0, maxSessions).map((r) => r.id).filter((id): id is string => typeof id === "string" && id !== "");
+    const toolCalls: Record<string, number> = {};
+    let messages = 0;
+    let skipped = 0;
+    const stmt = db.query("SELECT role, content, meta FROM messages WHERE session_id = ? ORDER BY rowid ASC LIMIT ?");
+    for (const id of ids) {
+      let rows: unknown[];
+      try {
+        rows = stmt.all(id, maxMessages + 1);
+      } catch {
+        skipped += 1;
+        continue;
+      }
+      if (rows.length > maxMessages) truncated = true;
+      for (const raw of rows.slice(0, maxMessages)) {
+        if (!isMessageRow(raw)) {
+          skipped += 1;
+          continue;
+        }
+        if (malformedMeta(raw.meta)) skipped += 1;
+        try {
+          mergeCounts(toolCalls, toolCountsFromMessages([rowToChatMsg(raw)]));
+          messages += 1;
+        } catch {
+          skipped += 1;
+        }
+      }
+    }
+    return { toolCalls, sessions: ids.length, messages, skipped, truncated };
+  } catch (err) {
+    return { ...emptySessionDbCorpus(), error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
+export interface TranscriptCorpus {
+  toolCalls: Record<string, number>;
+  transcripts: number;
+  skipped: number;
+  truncated: boolean;
+  error?: string;
+}
+
+function emptyTranscriptCorpus(): TranscriptCorpus {
+  return { toolCalls: {}, transcripts: 0, skipped: 0, truncated: false };
+}
+
+/**
+ * Read tool-usage counts from `<state>/transcripts/*.md`, read-only and bounded.
+ * Files that are unreadable or over the byte cap are skipped with a count.
+ */
+export function readMarkdownTranscriptCorpus(
+  workspace: string,
+  opts: { maxTranscripts?: number; maxBytes?: number } = {},
+): TranscriptCorpus {
+  const maxTranscripts = Number.isFinite(opts.maxTranscripts)
+    ? Math.max(1, Math.floor(opts.maxTranscripts as number))
+    : MAX_CORPUS_TRANSCRIPTS;
+  const maxBytes = Number.isFinite(opts.maxBytes) ? Math.max(1, Math.floor(opts.maxBytes as number)) : MAX_CORPUS_TRANSCRIPT_BYTES;
+  if (typeof workspace !== "string" || workspace.trim() === "") {
+    return { ...emptyTranscriptCorpus(), error: "workspace is required" };
+  }
+  const dir = path.join(workspaceStateDir(workspace), "transcripts");
+  if (!existsSync(dir)) return emptyTranscriptCorpus();
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
+  } catch (err) {
+    return { ...emptyTranscriptCorpus(), error: err instanceof Error ? err.message : String(err) };
+  }
+  const truncated = names.length > maxTranscripts;
+  const toolCalls: Record<string, number> = {};
+  let transcripts = 0;
+  let skipped = 0;
+  for (const name of names.slice(0, maxTranscripts)) {
+    const file = path.join(dir, name);
+    try {
+      if (statSync(file).size > maxBytes) {
+        skipped += 1;
+        continue;
+      }
+      const parsed = parseMarkdownTranscript(readFileSync(file, "utf8"));
+      mergeCounts(toolCalls, toolCountsFromMessages(parsed.messages));
+      transcripts += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { toolCalls, transcripts, skipped, truncated };
+}
+
+export interface FullCorpusTuningReport extends CorpusTuningReport {
+  sources: {
+    postmortems: number;
+    sessionDb: SessionDbCorpus;
+    transcripts: TranscriptCorpus;
+  };
+  counts: {
+    toolCalls: number;
+    skipped: number;
+    truncated: boolean;
+  };
+}
+
+/**
+ * Run the optimiser over the FULL corpus: post-mortems + session DB + Markdown
+ * transcripts. Session/transcript tool counts are folded in as one synthetic
+ * "succeeded" outcome so the failure-rate denominator stays the real
+ * post-mortem count while tool histograms and suggestions see the whole corpus.
+ * Bounded, read-only, deterministic.
+ */
+export async function buildWorkspaceCorpusReport(
+  workspace: string,
+  stateDir: string = workspaceStateDir(workspace),
+): Promise<FullCorpusTuningReport> {
+  const loaded = await loadPostmortems(stateDir);
+  const sessionDb = readSessionDbCorpus(workspace);
+  const transcripts = readMarkdownTranscriptCorpus(workspace);
+
+  const records: PostmortemRecord[] = [...loaded.postmortems];
+  const merged: Record<string, number> = {};
+  mergeCounts(merged, sessionDb.toolCalls);
+  mergeCounts(merged, transcripts.toolCalls);
+  if (Object.keys(merged).length > 0) {
+    records.push({
+      id: "session-corpus",
+      sessionId: "session-corpus",
+      ts: "",
+      terminal: "succeeded",
+      detail: null,
+      failureClass: "unknown",
+      task: null,
+      transcript: { firstSeq: null, lastSeq: null, count: 0, textDigest: "" },
+      toolCalls: merged,
+      failureDigest: "",
+    } as PostmortemRecord);
+  }
+
+  const summary = histogramFromPostmortems(records);
+  const population = `full session corpus for ${workspace}: ${loaded.postmortems.length} post-mortem(s), ${sessionDb.sessions} session(s), ${transcripts.transcripts} transcript(s)`;
+  const suggestions = deriveSuggestions({
+    summary,
+    failed: summary.terminals.failed ?? 0,
+    unknown: summary.terminals.unknown ?? 0,
+    outcomeCount: loaded.postmortems.length,
+    failureClasses: failureClassCounts(loaded.postmortems),
+    population,
+  });
+  const skipped = sessionDb.skipped + transcripts.skipped + loaded.quarantine.length;
+  const truncated = sessionDb.truncated || transcripts.truncated;
+  const published = [
+    ...summary.published,
+    ...publishedSuggestions(suggestions, population),
+    ...[
+      metricContract({
+        metric: "session DB rows scanned",
+        anchor: "none — first measurement (no prior corpus snapshot to compare against)",
+        population,
+        excludes: "malformed rows are skipped, never counted as tool calls",
+        value: sessionDb.messages,
+      }),
+      metricContract({
+        metric: "malformed corpus rows skipped",
+        anchor: "none — first measurement (no prior corpus snapshot to compare against)",
+        population,
+        excludes: "none — every skipped row contributes one",
+        value: skipped,
+      }),
+      metricContract({
+        metric: "corpus scan hit a read bound",
+        anchor: "none — first measurement (no prior corpus snapshot to compare against)",
+        population,
+        excludes: "none — a boolean of the configured read caps",
+        value: truncated ? 1 : 0,
+      }),
+    ],
+  ];
+  return {
+    summary,
+    suggestions,
+    published,
+    sources: { postmortems: loaded.postmortems.length, sessionDb, transcripts },
+    counts: {
+      toolCalls: summary.tools.reduce((sum, row) => sum + row.count, 0),
+      skipped,
+      truncated,
+    },
+  };
+}
+
+/** One bounded, deterministic sources line for the full-corpus renderers. */
+function corpusSourceLine(report: FullCorpusTuningReport): string {
+  const { postmortems, sessionDb, transcripts } = report.sources;
+  return (
+    `corpus sources: postmortems=${postmortems}, sessions=${sessionDb.sessions}, transcripts=${transcripts.transcripts}, ` +
+    `messages=${sessionDb.messages}, skipped=${report.counts.skipped}, truncated=${report.counts.truncated ? "yes" : "no"}`
+  );
+}
+
+/** Human summary of the full corpus (no suggestions) — bounded + read-only. */
+export function renderFullCorpusSummary(report: FullCorpusTuningReport): string {
+  return `${renderSessionCorpusSummary(report.summary)}\n${corpusSourceLine(report)}`;
+}
+
+/** Human optimiser report over the full corpus (summary + concrete suggestions). */
+export function renderFullCorpusTuningReport(report: FullCorpusTuningReport): string {
+  return `${renderCorpusTuningReport(report)}\n${corpusSourceLine(report)}`;
 }
