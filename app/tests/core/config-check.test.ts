@@ -62,6 +62,41 @@ __t("config check masks credentials in a rejected baseUrl", () => {
   __e(out).not.toContain("hunter2secret");
 });
 
+describe("I-7 $schema acceptance (editor metadata)", () => {
+  test("a string URL or path $schema is accepted, not reported as unknown", () => {
+    for (const ref of [
+      "http://json-schema.org/draft-07/schema#",
+      "https://example.com/hzcode.schema.json",
+      "./hzcode.schema.json",
+      "app/schema/hzcode.schema.json",
+    ]) {
+      const check = checkConfigFile(cfg(JSON.stringify({ $schema: ref, provider: "mock" })));
+      expect(check.unknown).toEqual([]);
+      expect(check.rejected).toEqual([]);
+      expect(renderConfigCheck(check)).toContain("ok:");
+    }
+  });
+
+  test("a malformed $schema is rejected while other unknown keys stay unknown", () => {
+    for (const ref of [42, null, {}, [], "   ", "has a space"]) {
+      const check = checkConfigFile(cfg(JSON.stringify({ $schema: ref, modle: "x" })));
+      expect(check.rejected.join("\n")).toContain("$schema must be a string URL or file path");
+      expect(check.unknown).toContain("modle");
+      expect(check.unknown).not.toContain("$schema");
+    }
+  });
+
+  test("the doc link points at the stable configuration-keys anchor", () => {
+    expect(CONFIG_ERROR_DOC).toContain("docs/33-handoff.md#configuration-keys");
+    expect(CONFIG_ERROR_DOC).not.toContain("§5");
+    const line = configErrorGuidance("model", "set HZ_MODEL");
+    expect(line).toContain("docs/33-handoff.md#configuration-keys");
+    // The diagnostic still carries the uniform fix + escape hatch.
+    expect(line).toContain("fix: ");
+    expect(line).toContain("escape hatch: ");
+  });
+});
+
 describe("I-7 self-documenting config errors", () => {
   const fix = "fix: ";
   const escape = "escape hatch: ";

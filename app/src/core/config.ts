@@ -155,6 +155,15 @@ export interface HzConfig {
    */
   providerClass?: ResolvedConfigClass;
   modelClass?: ResolvedConfigClass;
+  /**
+   * H-4 / ruling **494**: resolved `formatMessageClass` (short name → built-in
+   * FORMATTER DIALECT ID, not a module path). `makeProvider` selects a static
+   * `MessageFormatter` from this; no dynamic import. Absent when unset (each
+   * adapter then uses its native converter, byte-identical). Rejections named
+   * below — startup never throws on a bad class spec.
+   */
+  formatMessageClass?: ResolvedConfigClass;
+  formatMessageClassRejected?: string;
   providerClassRejected?: string;
   modelClassRejected?: string;
   /** Where the values came from, for the banner and for debugging. */
@@ -358,11 +367,13 @@ interface ConfigFile {
   theme?: unknown;
   notify?: unknown;
   statusLine?: unknown;
-  /** H-3 class-name keys (camel or snake); resolved in `loadConfig`. */
+  /** H-3/H-4 class-name keys (camel or snake); resolved in `loadConfig`. */
   providerClass?: unknown;
   provider_class?: unknown;
   modelClass?: unknown;
   model_class?: unknown;
+  formatMessageClass?: unknown;
+  format_message_class?: unknown;
 }
 
 /** `~/.config/horizon/config.json`, or `~/.hzcode/config.json` in place (paths.ts). */
@@ -1164,6 +1175,7 @@ export function loadConfig(
     statusLine,
     providerClass: classFields.providerClass,
     modelClass: classFields.modelClass,
+    formatMessageClass: classFields.formatMessageClass,
     providerClassRejected:
       classFields.providerClassRejected === undefined
         ? undefined
@@ -1172,6 +1184,10 @@ export function loadConfig(
       classFields.modelClassRejected === undefined
         ? undefined
         : documentConfigRejection("modelClass", classFields.modelClassRejected),
+    formatMessageClassRejected:
+      classFields.formatMessageClassRejected === undefined
+        ? undefined
+        : documentConfigRejection("formatMessageClass", classFields.formatMessageClassRejected),
     providers: registry,
     resolved,
     toolFormat,
@@ -1357,7 +1373,7 @@ export function missingKey(config: HzConfig): string | null {
  * a `config check` line or a `doctor` hint never has to go hunting through the
  * docs to find out what to do next.
  */
-export const CONFIG_ERROR_DOC = "docs/33-handoff.md §5 (config keys) / `hzcode config check`";
+export const CONFIG_ERROR_DOC = "docs/33-handoff.md#configuration-keys / `hzcode config check`";
 const CONFIG_ERROR_HOWTO =
   "escape hatch: remove the key so the default applies (or set the matching HZ_* environment variable); verify with `hzcode config check`";
 
@@ -1434,6 +1450,20 @@ export const CONFIG_KEYS: Record<string, { type: string; description: string; en
 };
 
 const TOP_KEYS = Object.keys(CONFIG_KEYS);
+/**
+ * I-7: `$schema` is editor metadata (it points at `hzcode.schema.json`), not a
+ * runtime key. It is accepted at the top level so editors can attach the schema,
+ * but its VALUE is validated: a non-empty string URL or file path with no
+ * whitespace/control characters. Every other unknown key is still rejected.
+ */
+const CONFIG_METADATA_KEYS = new Set(["$schema"]);
+
+function isValidSchemaRef(value: string): boolean {
+  const s = value.trim();
+  if (s === "" || /\s|[\u0000-\u001f\u007f]/.test(s)) return false;
+  return /^https?:\/\//i.test(s) || s.includes("/") || s.includes("\\") || s.toLowerCase().endsWith(".json");
+}
+
 const ENTRY_KEYS: Record<string, readonly string[]> = {
   "mcp.servers": ["id", "command", "args", "env", "cwd"],
   "lsp.servers": ["id", "command", "args", "env", "extensions", "rootMarkers"],
@@ -1477,7 +1507,14 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
     return result;
   }
   const cfg = parsed as Record<string, unknown>;
-  for (const key of Object.keys(cfg)) if (!TOP_KEYS.includes(key)) result.unknown.push(key);
+  for (const key of Object.keys(cfg)) {
+    if (!TOP_KEYS.includes(key) && !CONFIG_METADATA_KEYS.has(key)) result.unknown.push(key);
+  }
+  if (cfg.$schema !== undefined) {
+    if (typeof cfg.$schema !== "string" || !isValidSchemaRef(cfg.$schema)) {
+      result.rejected.push(`$schema must be a string URL or file path (got ${JSON.stringify(cfg.$schema)})`);
+    }
+  }
   for (const key of ["provider", "model", "baseUrl", "apiKey", "permissionMode"]) {
     if (cfg[key] !== undefined && typeof cfg[key] !== "string") result.rejected.push(`${key} must be a string`);
   }

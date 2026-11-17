@@ -7,6 +7,8 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import { parseJsonObject } from "../json-repair";
+import type { MessageFormatter } from "./message-formatter";
 import { applyQuirks } from "./quirks";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { maybeDumpProviderRequest } from "./request-dump";
@@ -33,6 +35,11 @@ export interface OpenAiSettings {
   timeouts?: ProviderTimeoutOptions;
   /** Request-phase retry tuning; defaults match providers/retry.ts. */
   retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
+  /**
+   * H-4: formatter selected from config `formatMessageClass`. When absent the
+   * native `toOpenAiMessages` converter is used (byte-identical default).
+   */
+  messageFormatter?: MessageFormatter;
 }
 
 /**
@@ -57,6 +64,8 @@ export interface OpenAiWireSettings {
   timeouts?: ProviderTimeoutOptions;
   /** Request-phase retry tuning; defaults match providers/retry.ts. */
   retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
+  /** H-4: optional config-selected formatter; absent → native converter. */
+  messageFormatter?: MessageFormatter;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com";
@@ -147,7 +156,11 @@ async function* streamOpenAiCompatibleInner(
   const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_BASE_URL).replace(/\/+$/, "");
   const wire = systemPromptUpdateInHistory() ? wireSystemPromptInHistory(req) : req;
-  const messages = toOpenAiMessages(wire.messages ?? []);
+  // H-4: render through the config-selected formatter when one was supplied;
+  // the default path is the byte-identical native converter.
+  const messages: readonly unknown[] = settings.messageFormatter
+    ? settings.messageFormatter.formatMessages(wire.messages ?? [])
+    : toOpenAiMessages(wire.messages ?? []);
   if (messages.length === 0) {
     yield { type: "error", message: `${name}: nothing to send (no messages)`, code: "UNKNOWN" };
     return;
@@ -304,13 +317,10 @@ async function* streamOpenAiCompatibleInner(
         break;
       }
       if (message.data === "[DONE]") break;
-      let event: Record<string, any>;
-      try {
-        event = JSON.parse(message.data) as Record<string, any>;
-      } catch {
-        continue;
-      }
-      if (!event || typeof event !== "object") continue;
+      // H-5: strict frame parse lives in a single-purpose util, never inline
+      // in the SSE loop (usage/reasoning parsing below is unchanged).
+      const event = parseJsonObject(message.data);
+      if (event === undefined) continue;
       if (event.error) {
         const text = typeof event.error.message === "string" ? event.error.message : `${name} stream error`;
         yield { type: "error", message: text };
@@ -399,6 +409,7 @@ export function createOpenAiProvider(settings: OpenAiSettings): Provider {
           authorization: `Bearer ${settings.apiKey}`,
           timeouts: settings.timeouts,
           retry: settings.retry,
+          messageFormatter: settings.messageFormatter,
         },
         req,
       ),

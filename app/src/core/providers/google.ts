@@ -26,6 +26,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import { parseJsonObject } from "../json-repair";
 import { classifyProviderFailure } from "./failure-codes";
 import {
   DEFAULT_RETRY_ATTEMPTS,
@@ -47,7 +48,8 @@ import {
   type ProviderDeadline,
   type ProviderTimeoutOptions,
 } from "./timeout";
-import { toolArgsObject } from "./tool-args-object";
+import type { MessageFormatter } from "./message-formatter";
+import { toolArgsJson, toolArgsObject } from "./tool-args-object";
 import { toolResultContent } from "./tool-result-content";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
@@ -67,6 +69,8 @@ export interface GoogleSettings {
   retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
   /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
   timeouts?: ProviderTimeoutOptions;
+  /** H-4: optional config-selected formatter; absent → native converter. */
+  messageFormatter?: MessageFormatter;
 }
 
 type GooglePart =
@@ -209,7 +213,10 @@ async function* streamGoogle(
 ): AsyncIterable<ProviderEvent> {
   const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_GOOGLE_BASE_URL).replace(/\/+$/, "");
-  const contents = toGoogleContents(req.messages ?? []);
+  // H-4: render through the config-selected formatter when one was supplied.
+  const contents: readonly unknown[] = settings.messageFormatter
+    ? settings.messageFormatter.formatMessages(req.messages ?? [])
+    : toGoogleContents(req.messages ?? []);
   if (contents.length === 0) {
     yield { type: "error", message: "google: nothing to send (no messages)", code: "UNKNOWN" };
     return;
@@ -302,15 +309,13 @@ async function* streamGoogle(
         break;
       }
       if (message.data === "[DONE]") break; // not sent by Gemini; tolerated for gateways that add it
-      let event: Record<string, any>;
-      try {
-        event = JSON.parse(message.data) as Record<string, any>;
-      } catch {
-        // A malformed frame is not fatal: name it, then keep reading.
+      // H-5: strict frame parse via a single-purpose util (no inline parse in
+      // this loop); a malformed frame is named, then reading continues.
+      const event = parseJsonObject(message.data);
+      if (event === undefined) {
         yield { type: "notice", message: `google: skipped a malformed stream frame: ${truncate(message.data.replace(/\s+/g, " ").trim(), 160)}` };
         continue;
       }
-      if (!event || typeof event !== "object") continue;
       if (event.error) {
         const text = typeof event.error.message === "string" ? event.error.message : "google stream error";
         yield { type: "error", message: text, code: classifyProviderFailure(0, text) };
@@ -340,8 +345,9 @@ async function* streamGoogle(
           calls += 1;
           emittedTool = true;
           const id = typeof call.id === "string" && call.id !== "" ? call.id : `call_${calls}`;
-          const args = call.args && typeof call.args === "object" ? call.args : {};
-          yield { type: "tool_call", id, name: call.name, arguments: JSON.stringify(args) };
+          // H-5: normalize any wire arg shape (object, JSON string, malformed /
+          // truncated tail) through the util; fail closed to "{}".
+          yield { type: "tool_call", id, name: call.name, arguments: toolArgsJson(call.args) };
         }
       }
     }

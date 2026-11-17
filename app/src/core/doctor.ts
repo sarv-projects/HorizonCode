@@ -475,6 +475,7 @@ function checkProvider(d: DoctorEnv): DoctorCheck[] {
     ["autonomy", config.autonomyRejected],
     ["providerClass", config.providerClassRejected],
     ["modelClass", config.modelClassRejected],
+    ["formatMessageClass", config.formatMessageClassRejected],
   ] as const) {
     if (reason !== undefined) out.push(warn(`config.${key}`, key, `the config file's ${key} was rejected`, reason));
   }

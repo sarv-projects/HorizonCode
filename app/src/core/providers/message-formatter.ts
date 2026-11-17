@@ -81,6 +81,17 @@ export function selectMessageFormatter(resolved: ResolvedConfigClass | undefined
   return formatterForDialect(resolved.modulePath);
 }
 
+/**
+ * Product wiring seam: an OPTIONAL formatter for `makeProvider`. When the key
+ * is unset this returns `undefined` so every adapter keeps its own native
+ * message converter (byte-identical default). When set, the resolved dialect
+ * id selects a built-in formatter statically — no dynamic import, no new dep.
+ */
+export function formatterFromResolvedConfig(resolved: ResolvedConfigClass | undefined): MessageFormatter | undefined {
+  if (resolved === undefined || resolved.key !== "formatMessageClass") return undefined;
+  return formatterForDialect(resolved.modulePath);
+}
+
 /** One-shot: raw config data → selected formatter (no config.ts wiring needed). */
 export function selectMessageFormatterFromConfig(raw: Record<string, unknown>): MessageFormatter {
   return selectMessageFormatter(parseConfigClassFields(raw).formatMessageClass);

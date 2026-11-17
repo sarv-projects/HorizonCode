@@ -30,6 +30,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../../contracts";
+import { parseJsonObject } from "../json-repair";
 import { classifyProviderFailure } from "./failure-codes";
 import {
   DEFAULT_RETRY_ATTEMPTS,
@@ -53,7 +54,8 @@ import {
   type ProviderDeadline,
   type ProviderTimeoutOptions,
 } from "./timeout";
-import { toolArgsObject } from "./tool-args-object";
+import type { MessageFormatter } from "./message-formatter";
+import { isCompleteToolArgsObject, toolArgsJson, toolArgsObject } from "./tool-args-object";
 import { toolResultContent } from "./tool-result-content";
 
 /** Endpoint root when the settings carry none; config.ts's DEFAULT_BASE_URLS matches. */
@@ -73,6 +75,8 @@ export interface OllamaSettings {
   retry?: Omit<RetryPolicy, "onRetry" | "timeouts">;
   /** Transport timeouts; defaults from HZ_PROVIDER_* (see providers/timeout.ts). */
   timeouts?: ProviderTimeoutOptions;
+  /** H-4: optional config-selected formatter; absent → native converter. */
+  messageFormatter?: MessageFormatter;
 }
 
 export interface ReadNdjsonOptions {
@@ -221,15 +225,13 @@ async function* consumeOllamaStream(
       outcome.aborted = true;
       return;
     }
-    let chunk: Record<string, any>;
-    try {
-      chunk = JSON.parse(line) as Record<string, any>;
-    } catch {
-      // A malformed line is not fatal: name it, then keep reading.
+    // H-5: strict NDJSON line parse via a single-purpose util (no inline parse
+    // in this loop); a malformed line is named, then reading continues.
+    const chunk = parseJsonObject(line);
+    if (chunk === undefined) {
       yield { type: "notice", message: `ollama: skipped a malformed stream line: ${truncate(line, 160)}` };
       continue;
     }
-    if (!chunk || typeof chunk !== "object") continue;
     if (chunk.error) {
       const errText = truncate(String(chunk.error), 400);
       yield { type: "error", message: `ollama stream error: ${errText}`, code: classifyProviderFailure(0, errText) };
@@ -249,12 +251,8 @@ async function* consumeOllamaStream(
           const entry = openCall(name !== "" ? name : `position:${position}`);
           if (name !== "") entry.name = name;
           entry.args += raw;
-          try {
-            JSON.parse(entry.args);
-            entry.complete = true;
-          } catch {
-            /* still streaming */
-          }
+          // H-5: completeness check via the util, never inline JSON.parse.
+          if (isCompleteToolArgsObject(entry.args)) entry.complete = true;
         } else if (raw !== undefined && raw !== null) {
           // A complete argument object: one call, even when the name repeats.
           if (name !== "") pending.push({ key: `call:${pending.length}`, name, args: JSON.stringify(raw), complete: true });
@@ -283,7 +281,9 @@ async function* consumeOllamaStream(
         type: "tool_call",
         id: `call_${outcome.toolCalls}`,
         name: entry.name,
-        arguments: entry.args.trim() === "" ? "{}" : entry.args,
+        // H-5: normalize any arg shape (object, string, malformed / truncated
+        // tail) through the util; a cut-off blob fails closed to "{}".
+        arguments: toolArgsJson(entry.args),
       };
     }
   }
@@ -353,7 +353,10 @@ async function* streamOllama(
 ): AsyncIterable<ProviderEvent> {
   const timeouts = resolveProviderTimeouts(settings.timeouts);
   const baseUrl = (settings.baseUrl && settings.baseUrl.trim() !== "" ? settings.baseUrl : DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, "");
-  const messages = toOllamaMessages(req.messages ?? []);
+  // H-4: render through the config-selected formatter when one was supplied.
+  const messages: unknown[] = settings.messageFormatter
+    ? [...settings.messageFormatter.formatMessages(req.messages ?? [])]
+    : toOllamaMessages(req.messages ?? []);
   if (typeof req.system === "string" && req.system !== "") messages.unshift({ role: "system", content: req.system });
   if (messages.length === 0) {
     yield { type: "error", message: "ollama: nothing to send (no messages)", code: "UNKNOWN" };

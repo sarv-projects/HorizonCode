@@ -560,6 +560,16 @@ describe("I-7 self-documenting config errors", () => {
     expect(a.hint).toContain("escape hatch: ");
   });
 
+  test("a rejected formatMessageClass is reported with the uniform diagnostic", () => {
+    writeConfig('{"provider":"mock","formatMessageClass":"remote/plugin"}');
+    const c = byId(runDoctor(fakeEnv()), "config.formatMessageClass");
+    expect(c.status).toBe("warn");
+    expect(c.hint).toContain("fix: ");
+    expect(c.hint).toContain(CONFIG_ERROR_DOC);
+    expect(c.hint).toContain("escape hatch: ");
+    expect(c.hint).toContain("Unknown formatMessageClass");
+  });
+
   test("an unknown model hint is self-documenting", () => {
     const env = { HZ_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k", LANG: "C.UTF-8", HZ_MODEL: "claude-not-a-model-9" };
     const c = byId(runDoctor(fakeEnv({ env })), "model");

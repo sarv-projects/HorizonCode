@@ -363,6 +363,24 @@ function stripFences(text: string): { text: string; stripped: boolean } {
   return { text: (m[1] ?? "").trim(), stripped: true };
 }
 
+/**
+ * H-5 single-purpose wire-frame helper: strictly parse one SSE/NDJSON frame
+ * into a plain object, or return `undefined` for malformed / non-object input.
+ * No repair, no loop, never throws — adapters call this OUTSIDE their parsing
+ * helpers (ruling **67** posture) instead of inlining `try { JSON.parse } catch`.
+ */
+export function parseJsonObject(raw: string): Record<string, any> | undefined {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, any>;
+    }
+  } catch {
+    /* malformed frame */
+  }
+  return undefined;
+}
+
 /** Repair a tolerant superset of JSON. Never throws. */
 export function repairJson(raw: string): RepairOutcome {
   let text = typeof raw === "string" ? raw.trim() : "";

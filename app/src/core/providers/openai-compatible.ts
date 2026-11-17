@@ -19,6 +19,7 @@ import type { Credential, Provider, ProviderEvent, ProviderRequest } from "../..
 import { refreshOAuthAccessToken } from "../auth/refresh";
 import { OAuthCredentialHandle } from "../auth/store";
 import type { ProviderOAuthEndpoints } from "../config";
+import type { MessageFormatter } from "./message-formatter";
 import { streamOpenAiCompatible } from "./openai";
 
 export interface OpenAiCompatibleOptions {
@@ -31,6 +32,8 @@ export interface OpenAiCompatibleOptions {
   maxTokens?: number;
   oauth?: ProviderOAuthEndpoints;
   home?: string;
+  /** H-4: optional config-selected formatter; absent → native converter. */
+  messageFormatter?: MessageFormatter;
 }
 
 /**
@@ -60,6 +63,7 @@ export function createOpenAiCompatibleProvider(opts: OpenAiCompatibleOptions): P
     name: opts.name,
     baseUrl: opts.baseUrl,
     maxTokens: opts.maxTokens,
+    messageFormatter: opts.messageFormatter,
     getAuthorization: () => {
       const live = oauthHandle?.pollCredential() ?? credential;
       return authorizationHeader(live);

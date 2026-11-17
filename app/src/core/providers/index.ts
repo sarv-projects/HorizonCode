@@ -19,6 +19,7 @@ import { createMockProvider } from "./mock";
 import { createOllamaProvider } from "./ollama";
 import { createOpenAiProvider } from "./openai";
 import { createOpenAiCompatibleProvider } from "./openai-compatible";
+import { formatterFromResolvedConfig } from "./message-formatter";
 import { wrapAnthropicToolProvider } from "./toolconv/wrap-anthropic";
 import { wrapDeepseekToolProvider } from "./toolconv/wrap-deepseek";
 import { wrapGemmaToolProvider } from "./toolconv/wrap-gemma";
@@ -123,6 +124,12 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
   // built-in does; a keyless entry (kind "none", no key declared) streams. An
   // entry with no model configured fails loud rather than forwarding a
   // placeholder id to the real host.
+  // H-4: select the message formatter from config data ONLY. When the class
+  // key is unset this is `undefined` and each adapter keeps its native
+  // converter (byte-identical default); when set it is a built-in dialect,
+  // statically selected — no dynamic import, no new dependency. Anthropic is
+  // deliberately NOT wired here (it keeps its own message builder).
+  const formatter = formatterFromResolvedConfig(config.formatMessageClass);
   const resolved = config.resolved;
   if (resolved) {
     if (resolved.credential.kind === "none" && resolved.wantsKey) {
@@ -139,6 +146,7 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
         credential: resolved.credential,
         oauth: resolved.oauth,
         home,
+        messageFormatter: formatter,
       }),
       config,
     );
@@ -155,14 +163,14 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
     case "openai":
       return withToolFormat(
         config.apiKey
-          ? createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+          ? createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, messageFormatter: formatter })
           : missingKeyProvider("openai", "OPENAI_API_KEY"),
         config,
       );
     case "google":
       return withToolFormat(
         config.apiKey
-          ? createGoogleProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl })
+          ? createGoogleProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, messageFormatter: formatter })
           : missingKeyProvider("google", "GEMINI_API_KEY or GOOGLE_API_KEY"),
         config,
       );
@@ -175,13 +183,14 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
               name: "nvidia",
               baseUrl: config.baseUrl ?? "https://integrate.api.nvidia.com/v1",
               credential: { kind: "apiKey", value: config.apiKey },
+              messageFormatter: formatter,
             })
           : missingKeyProvider("nvidia", "NVIDIA_API_KEY"),
         config,
       );
     case "ollama":
       // No key required: a local server (a key only fronts a proxy deployment).
-      return withToolFormat(createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl }), config);
+      return withToolFormat(createOllamaProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, messageFormatter: formatter }), config);
     case "mock":
       return withToolFormat(createMockProvider(), config);
     default:

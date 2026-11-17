@@ -191,4 +191,40 @@ describe("H-4 additive formatMessageClass key (ruling 494)", () => {
     expect(bad.formatMessageClass).toBeUndefined();
     expect(bad.formatMessageClassRejected).toContain("Unknown formatMessageClass");
   });
+
+  test("loadConfig exposes formatMessageClass on the resolved config (camel + snake)", () => {
+    const userFile = defaultConfigPath(home);
+    mkdirSync(path.dirname(userFile), { recursive: true });
+    writeFileSync(userFile, JSON.stringify({ provider: "openai", formatMessageClass: "google" }), "utf8");
+    const cfg = loadConfig({ HOME: home, USERPROFILE: home, HZ_PROVIDER: "openai" }, userFile);
+    expect(cfg.formatMessageClass).toEqual({
+      key: "formatMessageClass",
+      spec: "google",
+      modulePath: "google", // a dialect id, not a module path
+      via: "short-name",
+    });
+    expect(cfg.formatMessageClassRejected).toBeUndefined();
+
+    writeFileSync(userFile, JSON.stringify({ provider: "openai", format_message_class: "ollama" }), "utf8");
+    const snake = loadConfig({ HOME: home, USERPROFILE: home, HZ_PROVIDER: "openai" }, userFile);
+    expect(snake.formatMessageClass?.modulePath).toBe("ollama");
+  });
+
+  test("an unknown formatter class is a readable loadConfig rejection, never a throw", () => {
+    const userFile = defaultConfigPath(home);
+    mkdirSync(path.dirname(userFile), { recursive: true });
+    writeFileSync(userFile, JSON.stringify({ formatMessageClass: "remote/plugin" }), "utf8");
+    const cfg = loadConfig({ HOME: home, USERPROFILE: home, HZ_PROVIDER: "mock" }, userFile);
+    expect(cfg.formatMessageClass).toBeUndefined();
+    expect(cfg.formatMessageClassRejected).toContain("Unknown formatMessageClass");
+    expect(cfg.formatMessageClassRejected).toContain("remote/plugin");
+    // The closed map's known names are listed so the error is actionable.
+    for (const name of listConfigClassShortNames("formatMessageClass")) {
+      expect(cfg.formatMessageClassRejected).toContain(name);
+    }
+    // I-7: the rejection carries the uniform fix + doc link + escape hatch.
+    expect(cfg.formatMessageClassRejected).toContain("fix: ");
+    expect(cfg.formatMessageClassRejected).toContain("docs/33-handoff.md#configuration-keys");
+    expect(cfg.formatMessageClassRejected).toContain("escape hatch: ");
+  });
 });
