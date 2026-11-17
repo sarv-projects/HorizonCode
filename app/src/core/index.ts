@@ -60,6 +60,7 @@ import {
   resolveCatalogAcceptsSettings,
 } from "./catalog/accepts-settings";
 import { catalogModel, catalogWindow, loadCatalog } from "./catalog/catalog";
+import { setCostCatalog } from "./usage-cost";
 import {
   makeModelsCatalogPollNetGuard,
   startModelsCatalogPoll,
@@ -1888,6 +1889,13 @@ class HzRuntimeImpl implements HzRuntime {
  * `continueSession` when both are set.
  */
 export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
+  // Seam (H-2 / models.dev v1): register the loaded catalog ONCE at runtime
+  // bootstrap so the production callers that do not thread a catalog argument
+  // through their call chain (loop.ts's `usageCostEventFields` /
+  // `estimateStepCostUsd`) honestly emit `models.dev-v1:<provider>/<model>`
+  // when the model is priced. Unknown models keep the hardcoded harness-v1
+  // fallback inside `resolveRates`. Explicit per-call catalogs still win.
+  setCostCatalog(loadCatalog());
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
   const startupNotices: string[] = [];
   const userConfigFile = readConfigFile(defaultConfigPath(homedir()));

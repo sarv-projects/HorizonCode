@@ -38,6 +38,13 @@ import {
 } from "./repo-map-cache";
 import { buildRepoMapWithLadder, effectiveRepoMapBudget } from "./repo-map-ladder";
 import { sessionHasFilesInContext } from "./repo-map-context";
+import {
+  cochangesEnabled,
+  cochangeWorkspaceTrusted,
+  computeCochangeBonuses,
+} from "./repo-map-cochanges";
+import { kernelStateDir } from "../core/owned-spawn";
+import { loadConfig } from "../core/config";
 
 export const DEFAULT_MAX_TOKENS = 4_000;
 export const HARD_MAX_TOKENS = 16_000;
@@ -481,6 +488,12 @@ export interface RepoMapOptions {
   hasFilesInContext?: boolean;
   /** Model context window (B-2 cap = this minus 4096 padding). */
   contextWindowTokens?: number;
+  /**
+   * EXPERIMENTAL (HZ_REPO_COCHANGE=1): bounded git co-change bonuses keyed by
+   * `pairKey(a,b)`. Computed by the async tool execute path and applied here
+   * synchronously; absent or flag off => the lexical map is byte-identical.
+   */
+  cochangeBonuses?: ReadonlyMap<string, number>;
 }
 
 export interface RepoMapResult {
@@ -615,15 +628,34 @@ export function buildRepoMap(opts: RepoMapOptions): RepoMapResult | { empty: tru
 
   const allFiles = infos.map((i) => i.rel);
   const edges = new Map<string, Map<string, number>>();
+  const addEdge = (from: string, to: string, weight: number): void => {
+    const outgoing = edges.get(from) ?? new Map<string, number>();
+    outgoing.set(to, (outgoing.get(to) ?? 0) + weight);
+    edges.set(from, outgoing);
+  };
   for (const from of infos) {
     const fromMultiplier = focusSet.has(from.rel) ? FOCUS_EDGE_MULTIPLIER : 1;
     for (const [ident, count] of from.tokenCounts) {
       const to = defFile.get(ident);
       if (to === undefined || to === from.rel) continue;
       const weight = Math.sqrt(count) * (1 + (focusIdents.has(ident) ? FOCUS_IDENT_MULTIPLIER : 0)) * fromMultiplier;
-      const outgoing = edges.get(from.rel) ?? new Map<string, number>();
-      outgoing.set(to, (outgoing.get(to) ?? 0) + weight);
-      edges.set(from.rel, outgoing);
+      addEdge(from.rel, to, weight);
+    }
+  }
+
+  // EXPERIMENTAL (HZ_REPO_COCHANGE=1): add the bounded git co-change bonus to
+  // both directions of each pair. With the flag off (or no bonuses) this block
+  // never runs, so the lexical edges above are byte-identical to before.
+  if (cochangesEnabled() && opts.cochangeBonuses !== undefined && opts.cochangeBonuses.size > 0) {
+    const known = new Set(allFiles);
+    for (const [key, bonus] of opts.cochangeBonuses) {
+      const sep = key.indexOf("\u0000");
+      if (sep <= 0) continue;
+      const a = key.slice(0, sep);
+      const b = key.slice(sep + 1);
+      if (a === b || !known.has(a) || !known.has(b)) continue;
+      addEdge(a, b, bonus);
+      addEdge(b, a, bonus);
     }
   }
 
@@ -762,6 +794,24 @@ export const repoMapTool: Tool = {
         hasFilesInContext,
         contextWindowTokens: ctx.contextWindowTokens,
       };
+      // EXPERIMENTAL (HZ_REPO_COCHANGE=1): compute the bounded git co-change
+      // bonuses before the synchronous build. Fail-closed inside the helper
+      // (untrusted workspace, missing git, spawn refusal, empty history all
+      // yield an empty map); the flag-off path spawns nothing.
+      if (cochangesEnabled()) {
+        try {
+          const trusted = cochangeWorkspaceTrusted(ctx.workspace, loadConfig(process.env).trustedWorkspaceHooks);
+          const cochangeBonuses = await computeCochangeBonuses({
+            workspace: ctx.workspace,
+            stateDir: kernelStateDir(ctx.workspace),
+            trusted,
+            files: focus,
+          });
+          if (cochangeBonuses.size > 0) mapOpts.cochangeBonuses = cochangeBonuses;
+        } catch {
+          /* co-change is best-effort: never fail a map call */
+        }
+      }
       const result = useLadder ? buildRepoMapWithLadder(mapOpts) : buildRepoMap(mapOpts);
       if ("empty" in result) return fail("empty workspace");
       return { ok: true, output: result.map };

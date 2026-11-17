@@ -32,6 +32,7 @@ import type {
   ToolCall,
   ToolContext,
   ToolResult,
+  ThinkingEcho,
   Usage,
 } from "../contracts";
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
@@ -1710,6 +1711,8 @@ interface AssistantTurn {
   error?: string;
   failureCode?: ProviderFailureCode;
   quirks?: string[];
+  /** ADDITIVE: signed thinking echo from a `done` event, persisted on the assistant ChatMsg. */
+  thinkingEcho?: ThinkingEcho;
 }
 
 /**
@@ -2112,6 +2115,10 @@ async function collectAssistant(
       } else if (event.type === "done") {
         turn.stopReason = event.stopReason;
         turn.usage = event.usage;
+        // ADDITIVE: carry the signed thinking echo forward so the assistant
+        // ChatMsg can replay verbatim signed blocks on the next turn. Providers
+        // that never emit an echo leave this unset (byte-identical).
+        if (event.thinking !== undefined) turn.thinkingEcho = event.thinking;
         break;
       } else if (event.type === "error") {
         turn.error = event.message;
@@ -3787,11 +3794,29 @@ export async function runTurn(
         }
         turn.toolCalls = wireSplit.ready;
       }
+      // ADDITIVE (signed thinking echo): thread a `done.thinking` echo into the
+      // assistant ChatMsg so `toAnthropicMessages` can replay the signed blocks
+      // verbatim on the next turn. A signature without its text (or vice versa)
+      // is not a valid replay block, so both must be present; redacted thinking
+      // carries its own opaque data. With no echo these fields are absent and
+      // the stored message is byte-identical to before.
+      const echo = turn.thinkingEcho;
+      const thinkingFields =
+        echo !== undefined
+          ? {
+              ...(echo.text !== undefined && echo.text !== "" && echo.signature !== undefined && echo.signature !== ""
+                ? { thinking: echo.text, thinkingSignature: echo.signature }
+                : {}),
+              ...(echo.redacted !== undefined && echo.redacted !== "" ? { redactedThinking: echo.redacted } : {}),
+            }
+          : undefined;
+      const hasThinkingFields = thinkingFields !== undefined && Object.keys(thinkingFields).length > 0;
       if (turn.text !== "" || turn.toolCalls.length > 0) {
         deps.store.appendMessage(deps.sessionId, {
           role: "assistant",
           content: turn.text,
           toolCalls: turn.toolCalls.length > 0 ? turn.toolCalls : undefined,
+          ...(hasThinkingFields ? thinkingFields : {}),
         });
       }
       await logEvent(deps, faults, EventTypes.messageEnd, {

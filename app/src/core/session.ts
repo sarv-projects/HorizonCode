@@ -147,6 +147,10 @@ interface MessageMeta {
   toolCallId?: string;
   toolName?: string;
   toolCalls?: ToolCall[];
+  /** ADDITIVE: signed thinking echo fields, replayed by toAnthropicMessages. */
+  thinking?: string;
+  thinkingSignature?: string;
+  redactedThinking?: string;
 }
 
 const SCHEMA = `
@@ -330,6 +334,15 @@ export function rowToChatMsg(row: MessageRow): ChatMsg {
     }));
     if (calls.length > 0) msg.toolCalls = calls;
   }
+  // ADDITIVE: restore signed thinking replay fields. Absent/legacy meta leaves
+  // the message byte-identical to the pre-echo shape.
+  if (typeof meta.thinking === "string" && meta.thinking !== "") msg.thinking = meta.thinking;
+  if (typeof meta.thinkingSignature === "string" && meta.thinkingSignature !== "") {
+    msg.thinkingSignature = meta.thinkingSignature;
+  }
+  if (typeof meta.redactedThinking === "string" && meta.redactedThinking !== "") {
+    msg.redactedThinking = meta.redactedThinking;
+  }
   return msg;
 }
 
@@ -338,6 +351,9 @@ function metaFor(msg: ChatMsg): string | null {
   if (msg.toolCallId) meta.toolCallId = msg.toolCallId;
   if (msg.toolName) meta.toolName = msg.toolName;
   if (msg.toolCalls && msg.toolCalls.length > 0) meta.toolCalls = msg.toolCalls;
+  if (msg.thinking) meta.thinking = msg.thinking;
+  if (msg.thinkingSignature) meta.thinkingSignature = msg.thinkingSignature;
+  if (msg.redactedThinking) meta.redactedThinking = msg.redactedThinking;
   return Object.keys(meta).length > 0 ? JSON.stringify(meta) : null;
 }
 
