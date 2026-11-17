@@ -116,6 +116,29 @@ const TRANSFORMS: Record<string, TransformFn> = {
       msgs.push({ role: "user", content: "Continue." });
     }
   },
+  // OpenAI/Azure only: org-level logging can store requests that omit `store`,
+  // so send an explicit false. Strict OpenAI-compatible APIs 400 on the field.
+  set_store_false: (body) => {
+    body.store = false;
+  },
+  // Moonshot / Together / Nvidia / Cerebras reject `strict` on tool functions.
+  disable_strict_tools: (body) => {
+    const tools = body.tools;
+    if (!Array.isArray(tools)) return;
+    for (const raw of tools) {
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const fn = (raw as Record<string, unknown>).function;
+      if (fn !== null && typeof fn === "object" && !Array.isArray(fn)) delete (fn as Record<string, unknown>).strict;
+    }
+  },
+  // Zai: stream tool-call deltas as `tool_stream` (only when tools are active).
+  tool_stream: (body) => {
+    if (Array.isArray(body.tools) && body.tools.length > 0) body.tool_stream = true;
+  },
+  // OpenAI rejects `parallel_tool_calls` unless tools are present.
+  guard_parallel_tool_calls: (body) => {
+    if (!Array.isArray(body.tools) || body.tools.length === 0) delete body.parallel_tool_calls;
+  },
 };
 
 function compileQuirks(entries: CompatEntry[]): Quirk[] {

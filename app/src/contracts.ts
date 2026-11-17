@@ -600,6 +600,24 @@ export interface ChatMsg {
   toolCallId?: string;
   toolName?: string;
   toolCalls?: ToolCall[];
+  /**
+   * ADDITIVE (Anthropic extended thinking): accumulated thinking text from a
+   * prior signed thinking block, replayed as a `thinking` block when a
+   * signature is present. Display-only streams that never captured a signature
+   * leave these fields unset and behave exactly as before.
+   */
+  thinking?: string;
+  /** ADDITIVE: signature from Anthropic `signature_delta` for `thinking`. */
+  thinkingSignature?: string;
+  /** ADDITIVE: opaque data from an Anthropic `redacted_thinking` block. */
+  redactedThinking?: string;
+}
+
+/** ADDITIVE: signed thinking state captured from a provider stream. */
+export interface ThinkingEcho {
+  text?: string;
+  signature?: string;
+  redacted?: string;
 }
 export interface ToolSpec {
   name: string;
@@ -613,6 +631,26 @@ export interface Usage {
   cacheCreationInputTokens?: number;
   /** Provider-reported cache read tokens, when present. */
   cacheReadInputTokens?: number;
+  /**
+   * ADDITIVE (opencode mapUsage): reasoning / thinking tokens inside
+   * `outputTokens` (OpenAI `completion_tokens_details.reasoning_tokens`).
+   */
+  reasoningTokens?: number;
+  /**
+   * ADDITIVE (opencode mapUsage): `inputTokens` minus cache-read and
+   * cache-write tokens — the non-overlapping billable input breakdown.
+   */
+  nonCachedInputTokens?: number;
+  /**
+   * ADDITIVE (opencode mapUsage): provider-reported total tokens when present,
+   * otherwise `inputTokens + outputTokens`.
+   */
+  totalTokens?: number;
+  /**
+   * ADDITIVE (opencode mapUsage): cache-write tokens on OpenAI-compatible hosts
+   * that report them (`cache_write_tokens` / `cache_created_input_tokens`).
+   */
+  cacheWriteInputTokens?: number;
 }
 
 /**
@@ -644,7 +682,7 @@ export type ProviderEvent =
   | { type: "notice"; message: string }
   /** Per-request provider quirk ids (forge T-8; docs/33 §5.10). */
   | { type: "quirks"; applied: string[] }
-  | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage }
+  | { type: "done"; stopReason: "end" | "tool_use" | "max_tokens" | "abort"; usage?: Usage; thinking?: ThinkingEcho }
   | { type: "error"; message: string; code?: ProviderFailureCode };
 
 /**

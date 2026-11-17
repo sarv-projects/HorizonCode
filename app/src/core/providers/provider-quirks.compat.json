@@ -13,6 +13,29 @@
     { "quirk": "drop_parallel_tools_mistral", "modelNeedles": ["mistral"] },
     { "quirk": "strip_assistant_name", "hostNeedles": ["groq", "together"] },
     { "quirk": "drop_tool_choice", "hostNeedles": ["x.ai", "api.x.ai", "cerebras"] },
-    { "quirk": "force_user_message", "hostNeedles": ["together", "fireworks"] }
+    { "quirk": "force_user_message", "hostNeedles": ["together", "fireworks"] },
+    {
+      "quirk": "set_store_false",
+      "hostNeedles": [
+        "api.openai.com",
+        "openai.azure.com",
+        "cognitiveservices.azure.com",
+        "services.ai.azure.com"
+      ]
+    },
+    {
+      "quirk": "disable_strict_tools",
+      "hostNeedles": [
+        "api.moonshot.",
+        "api.together.",
+        "integrate.api.nvidia.com",
+        "api.cerebras.ai"
+      ]
+    },
+    { "quirk": "tool_stream", "hostNeedles": ["api.z.ai", "open.bigmodel.cn"] },
+    {
+      "quirk": "guard_parallel_tool_calls",
+      "hostNeedles": ["api.openai.com", "openai.azure.com", "cognitiveservices.azure.com", "services.ai.azure.com"]
+    }
   ]
 }

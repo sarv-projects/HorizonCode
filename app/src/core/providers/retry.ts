@@ -84,6 +84,40 @@ export function shouldRetryHttpFailure(status: number, body?: string): boolean {
   return isRetryableFailureCode(code);
 }
 
+/** Minimal header surface (`Headers` from fetch, or a plain record). */
+export type RetryHeaderLike = Headers | Record<string, string | undefined> | null | undefined;
+
+function headerValue(headers: RetryHeaderLike, name: string): string | undefined {
+  if (!headers) return undefined;
+  if (typeof (headers as Headers).get === "function") return (headers as Headers).get(name) ?? undefined;
+  const record = headers as Record<string, unknown>;
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(record)) {
+    if (key.toLowerCase() === wanted && typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+/**
+ * ADAPT opencode `model-retry.ts`: a provider may state `x-should-retry` on an
+ * error response to override the local heuristic. `"true"` forces a retry,
+ * `"false"` forbids one; anything else (or absent) defers to classification.
+ * Additive seam — callers that never pass headers keep today's behavior.
+ */
+export function retryOverrideFromHeaders(headers: RetryHeaderLike): boolean | undefined {
+  const raw = headerValue(headers, "x-should-retry")?.trim().toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return undefined;
+}
+
+/** Header override first, then the normal status/code classification. */
+export function shouldRetryResponse(status: number, body?: string, headers?: RetryHeaderLike): boolean {
+  const override = retryOverrideFromHeaders(headers);
+  if (override !== undefined) return override;
+  return shouldRetryHttpFailure(status, body);
+}
+
 export { classifyProviderFailure, isRetryableFailureCode, retryAttemptsForFailureCode };
 
 export function effectiveRetryAttempts(policy: RetryPolicy, code?: ProviderFailureCode): number {
@@ -210,7 +244,7 @@ export async function fetchWithRetry(
         if (expiredDuringBody) throw expiredDuringBody;
         const code = classifyProviderFailure(response.status, detail);
         attempts = Math.min(attempts, effectiveRetryAttempts(policy, code));
-        if (!shouldRetryHttpFailure(response.status, detail) || attempt >= attempts) {
+        if (!shouldRetryResponse(response.status, detail, response.headers) || attempt >= attempts) {
           return new Response(detail, { status: response.status, headers: response.headers });
         }
         const waitMs = backoffDelay(attempt, {

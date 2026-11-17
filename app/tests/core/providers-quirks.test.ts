@@ -42,7 +42,7 @@ describe("provider quirks", () => {
   test("unknown host is unchanged", () => {
     const body: Record<string, unknown> = { messages: [{ role: "user", content: "u" }] };
     const before = JSON.stringify(body);
-    expect(applyQuirks({ provider: "openai", model: "gpt", baseUrl: "https://api.openai.com" }, body)).toEqual([]);
+    expect(applyQuirks({ provider: "acme", model: "m", baseUrl: "https://example.invalid" }, body)).toEqual([]);
     expect(JSON.stringify(body)).toBe(before);
   });
 

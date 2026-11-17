@@ -17,6 +17,10 @@ describe("provider-quirks.compat.json", () => {
       "strip_assistant_name",
       "drop_tool_choice",
       "force_user_message",
+      "set_store_false",
+      "disable_strict_tools",
+      "tool_stream",
+      "guard_parallel_tool_calls",
     ]);
     for (const e of entries) {
       expect(known.has(e.quirk)).toBe(true);

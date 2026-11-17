@@ -63,10 +63,26 @@ export const MINIMUM_PROVIDERS = 100;
 export const CATALOG_PATH = "/experimental/v2.0/api.json?type=chat";
 export const DEFAULT_CATALOG_SOURCE = "https://models.opencode.ai";
 
+/** One context-size price tier from the v1 models.dev cost shape. */
+export interface ModelCostTier {
+  /** Context size (tokens) at/above which this tier applies. */
+  size: number;
+  input?: number;
+  output?: number;
+  cacheReadPerM?: number;
+  cacheWritePerM?: number;
+}
+
 /** Per-token cost in USD per million tokens; a reduced slice of models.dev. */
 export interface ModelCost {
   input?: number;
   output?: number;
+  /** v1 `cost.cache_read` (USD / 1M tokens). */
+  cacheReadPerM?: number;
+  /** v1 `cost.cache_write` (USD / 1M tokens). */
+  cacheWritePerM?: number;
+  /** Optional context-size price overrides (v1 `cost.tiers`). */
+  tiers?: ModelCostTier[];
 }
 
 /** The capabilities HorizonCode reads — DATA, never inferred from the id. */
@@ -164,6 +180,37 @@ function finite(value: unknown): number | undefined {
 }
 
 /**
+ * Decode v1 context tiers from a models.dev `cost` record. Tolerant: an entry
+ * without a numeric size is skipped. `context_over_200k` is the legacy v1
+ * shorthand for a 200k tier and is folded in when present.
+ */
+function decodeCostTiers(cost: Record<string, unknown>): ModelCostTier[] | undefined {
+  const tiers: ModelCostTier[] = [];
+  const parseTier = (raw: unknown, size: number | undefined): void => {
+    const t = asRecord(raw);
+    if (!t || size === undefined) return;
+    const tier: ModelCostTier = { size };
+    const input = finite(t.input);
+    const output = finite(t.output);
+    const read = finite(t.cache_read);
+    const write = finite(t.cache_write);
+    if (input !== undefined) tier.input = input;
+    if (output !== undefined) tier.output = output;
+    if (read !== undefined) tier.cacheReadPerM = read;
+    if (write !== undefined) tier.cacheWritePerM = write;
+    tiers.push(tier);
+  };
+  if (Array.isArray(cost.tiers)) {
+    for (const raw of cost.tiers) {
+      const t = asRecord(raw);
+      parseTier(raw, t ? finite(asRecord(t.tier)?.size) : undefined);
+    }
+  }
+  parseTier(cost.context_over_200k, 200_000);
+  return tiers.length > 0 ? tiers : undefined;
+}
+
+/**
  * Decode one model entry TOLERANTLY (mirrors opencode's per-model
  * `Schema.decodeUnknownResult`): returns the normalized model, or a readable
  * reason string. A reason is collected by the caller and never thrown — an
@@ -205,8 +252,14 @@ export function decodeModel(provider: string, key: string, value: unknown): Cata
     const parsed: ModelCost = {};
     const input = finite(cost.input);
     const out = finite(cost.output);
+    const read = finite(cost.cache_read);
+    const write = finite(cost.cache_write);
     if (input !== undefined) parsed.input = input;
     if (out !== undefined) parsed.output = out;
+    if (read !== undefined) parsed.cacheReadPerM = read;
+    if (write !== undefined) parsed.cacheWritePerM = write;
+    const tiers = decodeCostTiers(cost);
+    if (tiers) parsed.tiers = tiers;
     if (Object.keys(parsed).length > 0) model.cost = parsed;
   }
   return model;

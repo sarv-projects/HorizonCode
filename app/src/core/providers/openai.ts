@@ -6,9 +6,10 @@
  * that carries the finish reason.
  */
 
-import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
+import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../../contracts";
 import { parseJsonObject } from "../json-repair";
 import type { MessageFormatter } from "./message-formatter";
+import { mapOpenAiUsage } from "./openai-usage";
 import { applyQuirks } from "./quirks";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { maybeDumpProviderRequest } from "./request-dump";
@@ -295,12 +296,7 @@ async function* streamOpenAiCompatibleInner(
 
   let finish: unknown;
   let aborted = false;
-  let usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    cacheCreationInputTokens?: number;
-    cacheReadInputTokens?: number;
-  } | undefined;
+  let usage: Usage | undefined;
   const assembler = new ToolCallAssembler();
 
   const yieldAssemblyCancel = function* (): Generator<ProviderEvent, void, unknown> {
@@ -326,26 +322,12 @@ async function* streamOpenAiCompatibleInner(
         yield { type: "error", message: text };
         return;
       }
-      if (event.usage && typeof event.usage === "object") {
-        const u = event.usage as Record<string, unknown>;
-        const details =
-          u.prompt_tokens_details && typeof u.prompt_tokens_details === "object"
-            ? (u.prompt_tokens_details as Record<string, unknown>)
-            : undefined;
-        usage = {
-          inputTokens: typeof u.prompt_tokens === "number" ? u.prompt_tokens : undefined,
-          outputTokens: typeof u.completion_tokens === "number" ? u.completion_tokens : undefined,
-          cacheCreationInputTokens:
-            typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : undefined,
-          cacheReadInputTokens:
-            typeof details?.cached_tokens === "number"
-              ? details.cached_tokens
-              : typeof u.cache_read_input_tokens === "number"
-                ? u.cache_read_input_tokens
-                : undefined,
-        };
-      }
+      // Full OpenAI-compatible usage decode (opencode mapUsage), including the
+      // Moonshot `choice.usage` dialect. Top-level usage wins when both exist.
       const choice = Array.isArray(event.choices) ? event.choices[0] : undefined;
+      const choiceUsage = choice !== null && typeof choice === "object" ? (choice as Record<string, unknown>).usage : undefined;
+      const decoded = mapOpenAiUsage(event.usage) ?? mapOpenAiUsage(choiceUsage);
+      if (decoded) usage = decoded;
       if (!choice) continue;
       const delta = choice.delta ?? {};
       const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === "string" ? delta.reasoning : "";

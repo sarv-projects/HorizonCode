@@ -7,7 +7,7 @@
  * done/abort. Nothing here throws at the caller.
  */
 
-import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolCall, ToolSpec } from "../../contracts";
+import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ThinkingEcho, ToolCall, ToolSpec } from "../../contracts";
 import { anthropicSystemField } from "./anthropic-cache";
 import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
@@ -41,7 +41,9 @@ const DEFAULT_MAX_TOKENS = 4096;
 type AnthropicBlock =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string };
+  | { type: "tool_result"; tool_use_id: string; content: string }
+  | { type: "thinking"; thinking: string; signature?: string }
+  | { type: "redacted_thinking"; data: string };
 
 interface AnthropicMessage {
   role: "user" | "assistant";
@@ -70,6 +72,14 @@ export function toAnthropicMessages(messages: ChatMsg[]): AnthropicMessage[] {
     }
     if (msg.role === "assistant") {
       const blocks: AnthropicBlock[] = [];
+      // ADDITIVE (signed thinking replay): Anthropic requires a signed thinking
+      // block to be echoed back verbatim on the next turn. Without a signature
+      // there is nothing valid to replay, so older display-only history is
+      // byte-for-byte unchanged.
+      if (msg.thinkingSignature && msg.thinking) {
+        blocks.push({ type: "thinking", thinking: msg.thinking, signature: msg.thinkingSignature });
+      }
+      if (msg.redactedThinking) blocks.push({ type: "redacted_thinking", data: msg.redactedThinking });
       if (typeof msg.content === "string" && msg.content.trim() !== "") blocks.push({ type: "text", text: msg.content });
       for (const call of msg.toolCalls ?? []) {
         blocks.push({ type: "tool_use", id: call.id, name: call.name, input: anthropicToolInput(call.arguments) });
@@ -205,6 +215,28 @@ async function* streamAnthropic(
   const usage: UsageShape = {};
   const meta = new Map<number, { id: string; name: string; input?: unknown }>();
   const args = new Map<number, string>();
+  // ADDITIVE: signed thinking state, captured per content-block index so it can
+  // be echoed on `done` and replayed by toAnthropicMessages on the next turn.
+  const thinking = new Map<number, { text: string; signature: string; redacted?: string }>();
+  let thinkingEcho: ThinkingEcho | undefined;
+  const finalizeThinking = (index: number): void => {
+    const state = thinking.get(index);
+    if (!state) return;
+    thinking.delete(index);
+    const echo: ThinkingEcho = {};
+    if (state.text) echo.text = state.text;
+    if (state.signature) echo.signature = state.signature;
+    if (state.redacted) echo.redacted = state.redacted;
+    if (Object.keys(echo).length > 0) thinkingEcho = echo;
+  };
+  const thinkingState = (index: number) => {
+    let state = thinking.get(index);
+    if (!state) {
+      state = { text: "", signature: "" };
+      thinking.set(index, state);
+    }
+    return state;
+  };
 
   const flush = function* (): Generator<ProviderEvent, void, unknown> {
     const indexes = [...meta.keys()].sort((a, b) => a - b);
@@ -251,23 +283,34 @@ async function* streamAnthropic(
           if (block && block.type === "tool_use") {
             meta.set(index, { id: String(block.id ?? ""), name: String(block.name ?? ""), input: block.input });
             args.set(index, "");
+          } else if (block && block.type === "thinking") {
+            thinkingState(index).text = typeof block.thinking === "string" ? block.thinking : "";
+          } else if (block && block.type === "redacted_thinking") {
+            thinkingState(index).redacted = typeof block.data === "string" ? block.data : undefined;
           }
           break;
         }
         case "content_block_delta": {
           const delta = event.delta ?? {};
+          const index = typeof event.index === "number" ? event.index : 0;
           if (delta.type === "text_delta" && typeof delta.text === "string" && delta.text !== "") {
             yield { type: "text", text: delta.text };
           } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking !== "") {
+            // Capture the streaming text (the loop still displays it) AND keep
+            // an exact copy for the signed replay block.
+            thinkingState(index).text += delta.thinking;
             yield { type: "thinking", text: delta.thinking };
+          } else if (delta.type === "signature_delta" && typeof delta.signature === "string" && delta.signature !== "") {
+            // A signature can arrive in several deltas; concatenate in order.
+            thinkingState(index).signature += delta.signature;
           } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
-            const index = typeof event.index === "number" ? event.index : 0;
             args.set(index, (args.get(index) ?? "") + delta.partial_json);
           }
           break;
         }
         case "content_block_stop": {
           const index = typeof event.index === "number" ? event.index : 0;
+          finalizeThinking(index);
           const info = meta.get(index);
           if (info) {
             meta.delete(index);
@@ -316,8 +359,9 @@ async function* streamAnthropic(
     return;
   }
 
-  // A tool_use block that never received its content_block_stop.
+  // A tool_use (or thinking) block that never received its content_block_stop.
   for (const event of flush()) yield event;
+  for (const index of [...thinking.keys()]) finalizeThinking(index);
   if (emittedTool && stopReason === "end") stopReason = "tool_use";
   const finalUsage =
     usage.inputTokens === undefined &&
@@ -331,7 +375,7 @@ async function* streamAnthropic(
           cacheCreationInputTokens: usage.cacheCreationInputTokens,
           cacheReadInputTokens: usage.cacheReadInputTokens,
         };
-  yield { type: "done", stopReason, usage: finalUsage };
+  yield { type: "done", stopReason, usage: finalUsage, ...(thinkingEcho ? { thinking: thinkingEcho } : {}) };
 }
 
 export function createAnthropicProvider(settings: AnthropicSettings): Provider {
