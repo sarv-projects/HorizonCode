@@ -125,7 +125,7 @@ export interface AdmissionBatchCall {
 
 export type AdmissionBatchResult =
   | { ok: true; ids: string[] }
-  | { ok: false; reason: "empty-batch" | "duplicate-in-batch" | "invalid-call" | "id-collision"; detail?: string; collision?: AdmissionIdCollisionError };
+  | { ok: false; reason: "empty-batch" | "duplicate-in-batch" | "invalid-call" | "id-collision" | "lock-timeout"; detail?: string; collision?: AdmissionIdCollisionError };
 
 /**
  * The admission FIFO over one SessionStore. Construct it with a store —
