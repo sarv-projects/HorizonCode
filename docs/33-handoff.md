@@ -32,6 +32,26 @@
 
 > **2026-11-13 handoff addendum (ruling 344):** `effect-reconcile-latch-store.ts` now durably records opt-in R170 latch/release transitions and `effect-reconcile-block.ts` checks before first mutator admission, retaining barriers through restart until explicit clean release. Multi-target `apply_patch` projections and unscoped shell have fail-closed overlap gates. Full default-on kernel-owned R170 and cross-process atomic execution remain OPEN. See `28-implementation-status.md` §3 / `FULL-BACKLOG-2026-11-13.md` §A.
 
+## Configuration keys
+
+The user config file is `~/.config/horizon/config.json` (or `~/.hzcode/config.json` when that legacy tree exists). The workspace may override only the keys in `WORKSPACE_CONFIG_LAYER_KEYS`; the sentinel `"CONFIG_UNSET"` drops a workspace override so the user value wins. `hzcode doctor` reports the resolved provider/model/key source and any rejected fields. Config exceptions carry a uniform fix + doc link + escape hatch (ruling 507); this section is that doc link (`docs/33-handoff.md#configuration-keys`).
+
+| Key | Type | Meaning |
+|---|---|---|
+| `provider` | string | Built-in id (`anthropic`, `openai`, `google`, `nvidia`, `ollama`, `mock`) or a slug declared in `providers[]`. `HZ_PROVIDER` wins. |
+| `model` | string | Model id; built-ins resolve a catalog default. `HZ_MODEL` wins. |
+| `baseUrl` | string | Endpoint root; the OpenAI-chat adapter appends `/v1/chat/completions` unless the base already ends in `/v1`. `HZ_BASE_URL` wins. |
+| `apiKey` | string | Inline credential (discouraged; prefer `~/.config/horizon/env` with mode 0600 or `providers[].envKey`). `HZ_API_KEY` wins. |
+| `providers[]` | array | User-declared OpenAI-chat hosts: `{id, baseUrl, apiKey?, envKey?, models?, toolFormat?, oauth?}`. Ids must not collide with built-ins. |
+| `$schema` | string URL/path | Editor metadata; accepted and validated, not a configuration key. |
+| `tools`, `mcp`, `lsp`, `lint`, `hooks`, `trustedWorkspaceHooks` | objects | Tool exposure, MCP servers, language servers, lint commands, trusted hook declarations. |
+| `theme`, `notify`, `statusLine`, `permissionMode`, `autonomy` | scalar/object | UI and autonomy posture. |
+| `providerClass`, `modelClass`, `formatMessageClass` | string | Closed short-name maps (rulings 484/494); no dynamic import. Unknown names are rejected with the known names listed. |
+
+Provider keys are read from the user-owned `<config dir>/env` file (0600) or the process environment. A workspace `.env` is deliberately NOT read — `bin/hzcode` runs Bun with `--no-env-file`. NVIDIA NIM is a first-class provider: `NVIDIA_API_KEY` + `provider: "nvidia"` + `model: "minimaxai/minimax-m3.1-flash"`; `hzcode login <provider>` is for OAuth registry entries only.
+
+---
+
 ## 1. Repository map
 
 Repository: `github.com/sarv-projects/HorizonCode`. A terminal coding agent: TypeScript on Bun in `app/` (zero runtime dependencies; only `devDependencies` for types), plus a Rust trust kernel in `kernel/` (std plus serde only). The kernel decides (`deny > lease > ask > allow`) and records (hash-chained event log and receipts). Newer partial `effect.execute` paths execute eligible sandbox-root file operations in Rust, now under a default-on kernel OwnerLog lock/receipt for direct supported mutations (**348**); raw shell.exec is restricted to `echo/true/false/pwd` until confinement is proven. Unsupported tool effects still execute in Bun by default unless `HZ_EFFECT_HOST_KERNEL=require` refuses them (rulings 243–348). Full universal EffectHost execution and confinement are not implemented.
