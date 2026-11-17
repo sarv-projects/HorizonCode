@@ -16,7 +16,7 @@
 | Schemas `*V1` | [`05-domain-and-schemas.md`](05-domain-and-schemas.md) + [`app/src/contracts.ts`](../app/src/contracts.ts) |
 | APIs / kernel protocol | [`07-apis-and-contracts.md`](07-apis-and-contracts.md) + `kernel/src/protocol.rs` |
 | Loop / tool logic | [`08-runtime.md`](08-runtime.md), [`09-tools.md`](09-tools.md) + `loop.ts` |
-| What is **actually shipped** | [`28-implementation-status.md`](28-implementation-status.md) §3 (through **534**, status rulings) |
+| What is **actually shipped** | [`28-implementation-status.md`](28-implementation-status.md) §3 (through **535**, status rulings) |
 | Designed superset (may exceed code) | [`31-design-summary.md`](31-design-summary.md) |
 
 **Onboarding order (new agent):** [`../AGENTS.md`](../AGENTS.md) (start here) → FULL-BACKLOG (§Z) → `33-handoff` §1 → `contracts.ts` → `28` §3 → code. **Docs may lag code** — update docs when you implement backlog rows.

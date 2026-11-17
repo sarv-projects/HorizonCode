@@ -45,6 +45,12 @@ confined** and the UI/doctor say so. `HZ_SANDBOX_REQUIRE=1` refuses this posture
 `code_mode` requires network-off, so it refuses to run on this host rather than
 running unsandboxed.
 
+## Verification record (final tree after residual wave, 2026-11-17)
+
+`bash ops/gates.sh` at `04fbb45` → **8/8 green**, `GATES_EXIT=0`
+(`/tmp/gates-535.log`): rust 424 s, selftest 7534 ms, typecheck 15 s,
+ts-suite 1088 s, e2e 2839/3315/1190 ms, startup 16 s.
+
 ## Verification record (final tree after experimental additions, 2026-11-17)
 
 `bash ops/gates.sh` at `04980ae` → **8/8 green**, `GATES_EXIT=0`
