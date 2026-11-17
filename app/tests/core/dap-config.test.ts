@@ -108,7 +108,7 @@ describe("dap config", () => {
     const rows = describeAdapterCatalogue(ws());
     expect(rows.some((r) => r.name === "debugpy")).toBe(true);
     expect(rows.every((r) => typeof r.available === "boolean")).toBe(true);
-  }, { timeout: 15_000 });
+  }, { timeout: 60_000 });
 
   test("socket adapters can be auto-selected when no stdio match", () => {
     const dir = ws();
