@@ -45,6 +45,20 @@ confined** and the UI/doctor say so. `HZ_SANDBOX_REQUIRE=1` refuses this posture
 `code_mode` requires network-off, so it refuses to run on this host rather than
 running unsandboxed.
 
+## Verification record (final integrated tree, 2026-11-17)
+
+`bash ops/gates.sh` on the COMPLETE tree (`771d5c6`, all rulings 485–522 landed)
+→ **`GATES_EXIT=0`, all 8 gates passed**. Run from a native `/tmp` worktree of
+the same commit because the `/mnt/c` DrvFS checkout had degraded process-spawn
+latency (version 3–10 s vs 1 s native); this is a host filesystem observation,
+not a product regression. Times: rust-kernel-suite 452 s, kernel-selftest 36 s,
+ts-typecheck 18 s, ts-suite 903 s, e2e-headless-smoke 6192 ms, e2e-budget-rail
+3506 ms, e2e-usage-error 1162 ms, startup-latency 20 s. Full log:
+`/tmp/gates-final-native-2.log`. Standalone `bun test --timeout 30000` on the
+same tree: **3655 pass / 5 skip / 0 fail across 3660 tests / 475 files**
+(`/tmp/ts-native-final.log`). The earlier gates attempt had one flaky ts-suite
+failure (device-login test) that did not reproduce on rerun.
+
 ## Verification record (final tree)
 
 `bash ops/gates.sh` on the COMPLETE tree (`275a8e7`, all backlog waves landed,
