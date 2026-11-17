@@ -170,6 +170,7 @@ import {
   budgetExhaustionInterruptNudge,
   consecutiveMistakesInterruptNudge,
   contextOverflowInterruptNudge,
+  emptyResponseInterruptNudge,
   formatErrorsInterruptNudge,
   loopDetectionInterruptNudge,
   repeatedToolErrorInterruptNudge,
@@ -177,6 +178,7 @@ import {
 } from "./guards/guard-prompt";
 import { ActionStationarityTracker, LoopDetectionTracker, stepSignature } from "./guards/loop-detection";
 import { ThinkingLoopTracker } from "./guards/thinking-loop";
+import { EmptyResponseTracker, MAX_EMPTY_RESPONSES } from "./guards/empty-response";
 import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
 import { truncatedToolCallMessage } from "./guards/truncated-tool-batch";
@@ -211,6 +213,7 @@ import { resolvedInside, resolveSymlinkChain } from "./kernel";
 import type { PermissionMode } from "./permission-mode";
 import { modeAutoApproves, modeRefusal } from "./permission-mode";
 import { planModeShellRefusal } from "./command-guard";
+import { noteConversationMessage } from "../tools/repo-map-context";
 import { guardActionsForShellCommand, shellCompoundRefusal } from "./shell-split";
 import { invisibleUnicodeError } from "../tools/helpers";
 import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
@@ -1884,6 +1887,10 @@ async function logEvent(
 
 async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string): Promise<void> {
   if (prompt === "") return;
+  // B-2: the current message's file mentions are the conversation-derived
+  // `conversationFiles` signal (aider get_file_mentions). Combined with the
+  // file-touching tool ledger it decides whether the repo-map budget expands.
+  noteConversationMessage(deps.sessionId, prompt);
   const first = deps.store.messageCount(deps.sessionId) === 0;
   deps.store.appendMessage(deps.sessionId, { role: "user", content: prompt });
   await logEvent(deps, faults, EventTypes.messageStart, { role: "user" }, { kind: "human", id: "user" });
@@ -2627,6 +2634,8 @@ async function executeTool(
     workspace: deps.workspace,
     sessionId: deps.sessionId,
     signal: deps.signal,
+    // B-2: the model's context window drives the repo-map no-files budget cap.
+    contextWindowTokens: windowForModel(deps.model),
     // A tool-level check rides exactly the loop decision for this call when it
     // admits the same action; it is never answered by a sibling's cache entry
     // or by a stale entry from a different cwd (see GuardGate.check).
@@ -3420,6 +3429,7 @@ export async function runTurn(
     const loopDetection = new LoopDetectionTracker();
     const actionStationarity = new ActionStationarityTracker();
     const thinkingLoop = new ThinkingLoopTracker();
+    const emptyResponse = new EmptyResponseTracker();
     const mistakes = new MistakeTracker();
     const repeatTool = new RepeatToolGuard();
     repeatTool.clear();
@@ -3826,6 +3836,36 @@ export async function runTurn(
             continue;
           }
         }
+        // C-10 residual: an empty response (no text, no thinking, no tool) makes
+        // no progress — soft nudge first, bounded hard stop after MAX empties.
+        // A genuine `end` (or `abort`) with terse/empty text is a COMPLETION, not
+        // a stall: never nudge it (that would add spurious turns to every run).
+        const stopReasonForEmptyGuard: string = turn.stopReason;
+        if (
+          process.env.HZ_EMPTY_RESPONSE !== "0" &&
+          stopReasonForEmptyGuard !== "end" &&
+          stopReasonForEmptyGuard !== "abort"
+        ) {
+          const emptyVerdict = emptyResponse.inspect({
+            toolCallCount: turn.toolCalls.length,
+            thinkingText: turn.thinkingText,
+            assistantText: turn.text,
+          });
+          if (emptyVerdict.kind === "hard") {
+            emit(deps.callbacks, { type: "error", message: emptyVerdict.message ?? "empty response" });
+            await logEvent(deps, faults, EventTypes.error, {
+              message: emptyVerdict.message,
+              detail: "empty_response",
+            });
+            exit = { terminal: "failed", detail: "empty_response" };
+            break;
+          }
+          if (emptyVerdict.kind === "soft" && emptyVerdict.message !== undefined) {
+            loopNudge = emptyResponseInterruptNudge(emptyVerdict.count, MAX_EMPTY_RESPONSES);
+            emit(deps.callbacks, { type: "notice", message: emptyVerdict.message });
+            continue;
+          }
+        }
         // T-3: the model is ending its turn. If the session todo list still has
         // open items, give it ONE more step with a bounded reminder before the
         // run settles (the exit-status gate below keeps `unknown` as the
@@ -3849,6 +3889,7 @@ export async function runTurn(
       // the batch is dispatched. One provider turn (parallel calls included) is
       // one step; tight tiers apply when every call is read/plan-style.
       thinkingLoop.reset();
+      emptyResponse.reset();
       loopNudge = undefined;
       const loopCalls = turn.toolCalls.map((call) => ({ name: call.name, input: parseCall(call).args }));
       const callStepSignature = stepSignature(loopCalls);

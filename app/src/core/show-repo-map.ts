@@ -11,16 +11,20 @@ export interface ShowRepoMapOptions {
   workspace: string;
   maxTokens?: number;
   focus?: string[];
+  contextWindowTokens?: number;
 }
 
 export function buildShowRepoMap(opts: ShowRepoMapOptions): string {
   const cwd = opts.workspace;
-  const budget = effectiveRepoMapBudget(opts.focus, opts.maxTokens ?? DEFAULT_MAX_TOKENS);
+  const budget = effectiveRepoMapBudget(opts.focus, opts.maxTokens ?? DEFAULT_MAX_TOKENS, {
+    contextWindowTokens: opts.contextWindowTokens,
+  });
   const result = buildRepoMapWithLadder({
     root: cwd,
     cwd,
     maxTokens: budget,
     focus: opts.focus,
+    contextWindowTokens: opts.contextWindowTokens,
     indexFile: repoMapCachePath(cwd),
   });
   if ("empty" in result) return "(repo map empty)\n";

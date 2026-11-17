@@ -41,6 +41,7 @@ import { recordChange } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { detectLineEnding, normalizeLineEndings } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
+import { noteToolContext } from "./repo-map-context";
 import { protectedTargetRefusal } from "./verified-open";
 
 // Re-exported so existing importers keep working after the verification code was
@@ -128,6 +129,8 @@ export const writeTool: Tool = {
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
+      // B-2: record the write target as "files in context".
+      noteToolContext(ctx.sessionId, args);
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
       if (typeof args.content !== "string") return fail("content is required");
       const force = args.force === true;

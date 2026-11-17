@@ -37,6 +37,7 @@ import {
   type RepoMapIndexLoad,
 } from "./repo-map-cache";
 import { buildRepoMapWithLadder, effectiveRepoMapBudget } from "./repo-map-ladder";
+import { sessionHasFilesInContext } from "./repo-map-context";
 
 export const DEFAULT_MAX_TOKENS = 4_000;
 export const HARD_MAX_TOKENS = 16_000;
@@ -473,6 +474,13 @@ export interface RepoMapOptions {
    * `<state root>/repo-map/index.json`); absent = the in-process memo only.
    */
   indexFile?: string;
+  /**
+   * B-2: true when the conversation already has files in context (mentions or
+   * tool targets). Suppresses the no-files budget expansion. Default false.
+   */
+  hasFilesInContext?: boolean;
+  /** Model context window (B-2 cap = this minus 4096 padding). */
+  contextWindowTokens?: number;
 }
 
 export interface RepoMapResult {
@@ -736,29 +744,25 @@ export const repoMapTool: Tool = {
       const symbolCursor =
         typeof args.symbolCursor === "number" && args.symbolCursor >= 0 ? Math.floor(args.symbolCursor) : undefined;
       const useLadder = args.fallbackLadder !== false;
-      const budget = effectiveRepoMapBudget(focus, maxTokens);
+      // B-2: derive "no files in context" from the session's file-touching tools
+      // (read/edit/write/apply_patch), not only from the explicit `focus` arg.
+      const hasFilesInContext = sessionHasFilesInContext(ctx.sessionId);
+      const signals = { hasFilesInContext, contextWindowTokens: ctx.contextWindowTokens };
+      const budget = effectiveRepoMapBudget(focus, maxTokens, signals);
 
-      const result = useLadder
-        ? buildRepoMapWithLadder({
-            root,
-            cwd: ctx.cwd,
-            focus,
-            includeTests,
-            maxTokens: budget,
-            fileCursor,
-            symbolCursor,
-            indexFile: repoMapCachePath(ctx.workspace),
-          })
-        : buildRepoMap({
-            root,
-            cwd: ctx.cwd,
-            focus,
-            includeTests,
-            maxTokens: budget,
-            fileCursor,
-            symbolCursor,
-            indexFile: repoMapCachePath(ctx.workspace),
-          });
+      const mapOpts: RepoMapOptions = {
+        root,
+        cwd: ctx.cwd,
+        focus,
+        includeTests,
+        maxTokens: budget,
+        fileCursor,
+        symbolCursor,
+        indexFile: repoMapCachePath(ctx.workspace),
+        hasFilesInContext,
+        contextWindowTokens: ctx.contextWindowTokens,
+      };
+      const result = useLadder ? buildRepoMapWithLadder(mapOpts) : buildRepoMap(mapOpts);
       if ("empty" in result) return fail("empty workspace");
       return { ok: true, output: result.map };
     } catch (e) {

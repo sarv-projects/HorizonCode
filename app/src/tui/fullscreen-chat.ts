@@ -191,6 +191,14 @@ export async function runFullscreenExperimentalChat(
   const transcript: string[] = [];
   let editorText = (opts.resumedDraft ?? "").trim();
   if (editorText !== "") transcript.push(`(restored draft: ${editorText.length} chars)`);
+  // I-8 residual: the fullscreen (alt-screen) loop has no scrollback `notice`,
+  // so the first-run onboarding lines are seeded into the transcript at startup
+  // instead. main.ts supplies them only for a fresh, unconfigured, seen-once
+  // interactive run; configured sessions stay byte-identical and scrollback is
+  // unchanged.
+  if (opts.onboardingNotice !== undefined) {
+    for (const line of opts.onboardingNotice) transcript.push(line);
+  }
 
   let cols = Math.max(40, hooks.columns ?? 80);
   let rows = Math.max(10, hooks.rows ?? 24);

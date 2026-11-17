@@ -57,6 +57,7 @@ import { recordChange } from "./change-journal";
 import { canonicalize, parse, type FileOp, type PatchChunk } from "./apply-patch-parser";
 import { isBinary, relPath, resolveRealTarget, type RealTarget } from "./helpers";
 import { noteRead } from "./read-ledger";
+import { noteToolContext } from "./repo-map-context";
 import { protectedTargetRefusal } from "./verified-open";
 
 function fail(error: string): ToolResult {
@@ -530,6 +531,9 @@ export const applyPatchTool: Tool = {
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
+      // B-2: the patch text names its file targets ("Update File: ...") — record
+      // them as "files in context" for the repo-map budget.
+      noteToolContext(ctx.sessionId, args);
       if (typeof args.input !== "string" || args.input === "") return fail("input is required");
 
       const parsed = parse(args.input);

@@ -639,7 +639,7 @@
           "type": "number"
         },
         "path": {
-          "description": "File path to read.",
+          "description": "File path to read, or an hz://artifact/<id> pointer from a spilled tool result.",
           "type": "string"
         },
         "paths": {

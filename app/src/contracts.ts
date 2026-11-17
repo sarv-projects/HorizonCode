@@ -500,6 +500,11 @@ export interface ToolContext {
   guard(action: GuardAction): Promise<GuardDecision>;
   approve(req: ApprovalRequest, action?: GuardAction): Promise<boolean>;
   receipt(rec: ReceiptInput): Promise<Receipt>;
+  /**
+   * Model context window in tokens, used by the repo-map no-files budget cap
+   * (B-2, aider `max_context_window - padding`). Absent = the shipped default.
+   */
+  contextWindowTokens?: number;
   /** Present when the runtime supports delegation (the `agent` tool). */
   delegate?: DelegateRunner;
   /** Optional: used to decide hz-sandbox-exec wrapping on shell spawns (docs/33 §5.3). */
@@ -980,6 +985,9 @@ export interface RunExit {
     // (app/src/core/guards/thinking-loop.ts). Terminal `failed`, so
     // exitCodeFor's default arm already returns 1.
     | "thinking_loop"
+    // C-10: the empty-response guard's bounded hard stop (empty-response.ts).
+    // Terminal `failed`, so exitCodeFor's default arm already returns 1.
+    | "empty_response"
     // Backlog C-5: the workspace-wide SpendLedger refused the next provider
     // dispatch because its configured ceiling would be exceeded.
     | "spend"

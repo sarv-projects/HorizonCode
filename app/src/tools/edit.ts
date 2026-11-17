@@ -26,6 +26,7 @@ import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { resolveAnchor } from "./hashline";
 import { detectLineEnding } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
+import { noteToolContext } from "./repo-map-context";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -708,6 +709,8 @@ export const editTool: Tool = {
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     try {
+      // B-2: record the edit target as "files in context".
+      noteToolContext(ctx.sessionId, args);
       if (args.start_anchor !== undefined) return await executeAnchored(args, ctx);
       if (typeof args.path !== "string" || args.path === "") return fail("path is required");
       if (typeof args.old !== "string") return fail("old is required");

@@ -1,10 +1,15 @@
 /** `read` — read a text file (optionally a line range) with line numbers. */
 
 import { readFile, realpath, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
+import { ARTIFACT_MAX_BYTES, isArtifactUri, isContained, parseArtifactUri, resolveArtifactPath } from "../core/artifact-uri";
+import { blobBodyPath } from "../core/blobs";
+import { blobsDir, spillDir } from "../core/paths";
 import { isBinary, relPath, resolvePath } from "./helpers";
 import { anchorAt } from "./hashline";
 import { noteRead } from "./read-ledger";
+import { noteToolContext } from "./repo-map-context";
 import { renderStructuralSummary, structuralSummary } from "./read-summary";
 
 const MAX_LINES = 2000;
@@ -41,13 +46,39 @@ export type ReadBatchItem = {
   error?: string;
 };
 
+/**
+   * B-7: resolve an `hz://artifact/<id>` pointer to a local file. Checks the
+   * spill store first, then the blob CAS; both are path-contained and the id is
+   * a bare 64-hex sha256 (no traversal). Returns undefined for anything invalid
+   * or unknown so the caller fails closed. Raw paths never reach this function.
+   */
+function resolveArtifactForRead(workspace: string, uri: string): string | undefined {
+  const parsed = parseArtifactUri(uri);
+  if (parsed === undefined) return undefined;
+  const spillRoot = spillDir(workspace);
+  const spill = resolveArtifactPath(spillRoot, uri);
+  if (spill !== undefined && existsSync(spill)) return spill;
+  const blobRoot = blobsDir(workspace);
+  const blob = blobBodyPath(blobRoot, parsed.id);
+  if (blob !== undefined && isContained(blobRoot, blob) && existsSync(blob)) return blob;
+  return undefined;
+}
+
 async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, pathArg: string): Promise<ToolResult> {
   try {
     if (pathArg === "") return fail("path is required");
+    let effectivePath = pathArg;
+    let artifactMode = false;
+    if (isArtifactUri(pathArg)) {
+      const resolvedArtifact = resolveArtifactForRead(ctx.workspace, pathArg);
+      if (resolvedArtifact === undefined) return fail(`unknown or invalid artifact: ${pathArg}`);
+      effectivePath = resolvedArtifact;
+      artifactMode = true;
+    }
       // Resolve symlinks BEFORE Guard: the guard must see the path whose bytes
       // will actually be read. Guarding the lexical path while `readFile`
       // follows a symlink is an escape (workspace/link -> /etc/...).
-      let resolved = resolvePath(ctx.cwd, pathArg);
+      let resolved = resolvePath(ctx.cwd, effectivePath);
       try {
         resolved = await realpath(resolved);
       } catch {
@@ -68,7 +99,7 @@ async function readOnePath(args: Record<string, unknown>, ctx: ToolContext, path
       // FIFOs block forever, devices are unbounded (e.g. /dev/zero) and sockets
       // are not files: only regular files are read.
       if (!st.isFile()) return fail(`not a regular file: ${rel}`);
-      if (st.size > MAX_FILE_BYTES) {
+      if (st.size > (artifactMode ? ARTIFACT_MAX_BYTES : MAX_FILE_BYTES)) {
         return fail(`file too large to read safely: ${rel} (${st.size} bytes)`);
       }
 
@@ -166,7 +197,7 @@ export const readTool: Tool = {
   parameters: {
     type: "object",
     properties: {
-      path: { type: "string", description: "File path to read." },
+      path: { type: "string", description: "File path to read, or an hz://artifact/<id> pointer from a spilled tool result." },
       paths: {
         type: "array",
         items: { type: "string" },
@@ -192,6 +223,8 @@ export const readTool: Tool = {
   },
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    // B-2: record the read targets as "files in context" for the repo-map budget.
+    noteToolContext(ctx.sessionId, args);
     const pathStr = typeof args.path === "string" ? args.path : "";
     const hasPath = pathStr !== "";
     const pathsArg = args.paths;

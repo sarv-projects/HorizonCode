@@ -18,7 +18,8 @@ export type GuardPromptId =
   | "context-overflow"
   | "thinking-loop"
   | "repeated-tool-error"
-  | "budget-exhaustion";
+  | "budget-exhaustion"
+  | "empty-response";
 
 const PROMPT_FILES: Record<GuardPromptId, string> = {
   "tool-call-loop": "tool-call-loop.md",
@@ -29,6 +30,7 @@ const PROMPT_FILES: Record<GuardPromptId, string> = {
   "thinking-loop": "thinking-loop.md",
   "repeated-tool-error": "repeated-tool-error.md",
   "budget-exhaustion": "budget-exhaustion.md",
+  "empty-response": "empty-response.md",
 };
 
 export function wrapSystemInterrupt(reason: string, body: string): string {
@@ -94,4 +96,11 @@ export function budgetExhaustionInterruptNudge(remaining: string): string {
   const template = loadGuardPrompt("budget-exhaustion");
   const body = template.replaceAll("{remaining}", remaining);
   return wrapSystemInterrupt("budget_exhaustion", body);
+}
+
+/** Soft nudge after consecutive empty provider responses (C-10 residual). */
+export function emptyResponseInterruptNudge(count: number, max: number): string {
+  const template = loadGuardPrompt("empty-response");
+  const body = template.replaceAll("{count}", String(count)).replaceAll("{max}", String(max));
+  return wrapSystemInterrupt("empty_response", body);
 }

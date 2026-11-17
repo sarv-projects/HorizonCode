@@ -25,6 +25,7 @@ import { renderLearnChapter, renderLearnIndex } from "../core/learn-kb";
 import { renderWorkspaceTrustReport } from "../core/trust";
 import { renderSettingsReport } from "../core/settings-report";
 import { renderWorkspaceLearningGraph } from "../core/learning-graph";
+import { renderWorkspaceAgentGraph } from "../core/agent-graph";
 import { homedir } from "node:os";
 import { systemPrompt } from "../core/loop";
 import { toolSpecs } from "../tools";
@@ -898,13 +899,16 @@ export async function runConvoCommand(
       }
       case "graph": {
         const mode = arg.trim().toLowerCase();
-        if (mode === "expanded" || mode === "full" || mode === "--expanded") {
+        if (mode === "agent" || mode === "whole" || mode === "--agent") {
+          // G-7 residual: whole-agent graph (sessions / tools / skills / proposals).
+          renderer.notice(renderWorkspaceAgentGraph(workspace, toolSpecs().map((spec) => spec.name)));
+        } else if (mode === "expanded" || mode === "full" || mode === "--expanded") {
           renderer.notice(renderWorkspaceLearningGraph(workspace, { expanded: true }));
         } else if (mode === "" || mode === "default" || mode === "--default") {
           // Default chain view is byte-compatible with the reduced G-7 slice.
           renderer.notice(renderWorkspaceLearningGraph(workspace));
         } else {
-          renderer.notice("usage: /graph [expanded]");
+          renderer.notice("usage: /graph [expanded|agent]");
         }
         return true;
       }

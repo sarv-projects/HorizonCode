@@ -27,6 +27,7 @@
 import * as path from "node:path";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { displayBlobBodyPath, putBlobForWorkspace } from "./blobs";
+import { artifactUriForHash } from "./artifact-uri";
 import { sha256Hex } from "./canon";
 import type { ChatMsg } from "../contracts";
 
@@ -105,7 +106,10 @@ export interface ToolOutputTruncation {
   omittedLines: number;
   /** Byte offset of the end of the kept prefix: where the next slice starts. */
   nextOffset: number;
+  /** Raw spill path (still emitted, still readable). */
   spillPath?: string;
+  /** Stable content-sha pointer `hz://artifact/<sha256>` (B-7). */
+  artifactUri?: string;
 }
 
 export interface ToolOutputPlan {
@@ -240,12 +244,16 @@ export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {
   const nextOffset = keptBytes;
 
   let spillPath: string | undefined;
+  let artifactUri: string | undefined;
   let spill: { file: string; contents: string } | undefined;
   if (opts.blobCasWorkspace !== undefined && opts.blobCasWorkspace !== "") {
     const { hash } = putBlobForWorkspace(opts.blobCasWorkspace, text);
     spillPath = displayBlobBodyPath(opts.blobCasWorkspace, hash);
+    // The blob key is the same content sha256, so the URI resolves there too.
+    artifactUri = artifactUriForHash(hash);
   } else if (opts.spillDir !== undefined && opts.spillDir !== "") {
     const hash = sha256Hex(text);
+    artifactUri = artifactUriForHash(hash);
     const display = opts.displaySpillDir !== undefined && opts.displaySpillDir !== "" ? opts.displaySpillDir : opts.spillDir;
     spillPath = path.join(display, `${hash}.txt`);
     spill = { file: path.join(opts.spillDir, `${hash}.txt`), contents: text };
@@ -258,10 +266,15 @@ export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {
   const parts = [
     `[truncated: ${bytes} \u2192 ${keptBytes} bytes (${maxTokens}-token model budget)`,
     spillPath !== undefined ? `full output: ${spillPath}` : "full output not spilled",
+    artifactUri !== undefined ? `artifact: ${artifactUri}` : "",
     `omitted ${omittedBytes} bytes / ${omittedLines} lines`,
     `nextOffset: ${nextOffset}`,
-  ];
-  const marker = parts.join("; ") + (spillPath !== undefined ? "; read the spill or narrow the command]" : "]");
+  ].filter((part) => part !== "");
+  const marker = parts.join("; ") + (spillPath !== undefined ? "; read the spill artifact or narrow the command]" : "]");
   const prefix = kept === "" || kept.endsWith("\n") ? kept : `${kept}\n`;
-  return { text: `${prefix}${marker}`, truncated: { reason, omittedBytes, omittedLines, nextOffset, spillPath }, spill };
+  return {
+    text: `${prefix}${marker}`,
+    truncated: { reason, omittedBytes, omittedLines, nextOffset, spillPath, artifactUri },
+    spill,
+  };
 }
