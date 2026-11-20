@@ -53,6 +53,8 @@ export function settingsReportPublication(opts: SettingsReportOptions): string[]
 
 /** Human-readable settings snapshot for TUI `/settings`. */
 export function renderSettingsReport(opts: SettingsReportOptions): string {
+  // H-7 (ruling 617): force-evaluate contracts alongside the human notice path.
+  void settingsReportPublication(opts);
   const { workspace, home, config } = opts;
   const env = opts.env ?? process.env;
   const userFile = defaultConfigPath(home);

@@ -9,6 +9,8 @@ import { existsSync, readFileSync } from "node:fs";
 import type { Receipt } from "../contracts";
 import { hashReceiptVersioned } from "./receipt-schema";
 import { type ChainAnchorVerdict, checkChainAnchorSync, readHeadSync, verifyReceiptAnchorSync } from "./chain-anchor-verify";
+import { verifyParentReceiptIssuerStamps } from "./receipt-issuer-verify";
+import { kernelStateDir } from "./paths";
 import { receiptsPath } from "./session-kernel-reconcile";
 import { metricContract } from "./metrics";
 
@@ -35,6 +37,7 @@ export function verifyReceiptChainSync(workspace: string): ReceiptChainVerifyVer
 
   let count = 0;
   let prevHash: string | null = null;
+  const chainRows: Receipt[] = [];
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (trimmed === "") continue;
@@ -65,11 +68,24 @@ export function verifyReceiptChainSync(workspace: string): ReceiptChainVerifyVer
     }
     if (computed !== receipt.hash) return { ok: false, count, brokenAt: receipt.seq };
     prevHash = receipt.hash;
+    chainRows.push(receipt);
     count = expected;
   }
   const anchor = verifyReceiptAnchorSync(workspace);
-  const ok = anchor.ok;
-  return { ok, count: anchor.count, brokenAt: anchor.brokenAt, refusal: anchor.refusal, anchor };
+  if (!anchor.ok) {
+    return { ok: false, count: anchor.count, brokenAt: anchor.brokenAt, refusal: anchor.refusal, anchor };
+  }
+  const issuer = verifyParentReceiptIssuerStamps(chainRows, { stateDir: kernelStateDir(workspace) });
+  if (issuer.ok === false) {
+    return {
+      ok: false,
+      count,
+      brokenAt: issuer.seq,
+      refusal: `issuer attestation: ${issuer.reason}`,
+      anchor,
+    };
+  }
+  return { ok: true, count: anchor.count, anchor };
 }
 
 /** A single verified snapshot prevents child receipt links from being

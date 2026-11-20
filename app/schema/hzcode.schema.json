@@ -22,52 +22,134 @@
     },
     "mcp": {
       "type": "object",
-      "description": "MCP stdio servers (user config only)."
+      "description": "MCP stdio servers (user config only).",
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "command": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "env": { "type": "object", "additionalProperties": { "type": "string" } },
+              "cwd": { "type": "string" }
+            },
+            "required": ["id", "command"]
+          }
+        }
+      }
     },
     "lsp": {
       "type": "object",
-      "description": "Language servers to start (user config only)."
+      "description": "Language servers to start (user config only).",
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "command": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "env": { "type": "object", "additionalProperties": { "type": "string" } },
+              "extensions": { "type": "array", "items": { "type": "string" } },
+              "rootMarkers": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["id", "command"]
+          }
+        }
+      }
+    },
+    "lint": {
+      "type": "object",
+      "description": "Workspace lint command config (user config only)."
     },
     "providers": {
       "type": "array",
-      "description": "Registered OpenAI-compatible providers."
+      "description": "Registered OpenAI-compatible providers.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "protocol": { "type": "string" },
+          "envKey": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "models": { "type": "array", "items": { "type": "string" } },
+          "toolFormat": { "type": "string" }
+        },
+        "required": ["id", "baseUrl"]
+      }
     },
     "permissionMode": {
       "type": "string",
       "description": "Starting permission mode.",
-      "enum": [
-        "default",
-        "plan",
-        "accept-edits",
-        "read-only"
-      ]
+      "enum": ["default", "plan", "accept-edits", "read-only"]
     },
     "autonomy": {
       "type": "string",
       "description": "Autonomy preset when permissionMode is unset (maps to permission mode).",
       "enum": ["manual", "assisted", "auto-edits", "plan-only"]
     },
+    "sandboxChildNet": {
+      "type": "string",
+      "description": "Wrapped-child network posture (`off` → HZ_SANDBOX_CHILD_NET=off). Never claims shell-net enforced.",
+      "enum": ["off"]
+    },
+    "effectHostKernel": {
+      "type": "string",
+      "description": "EffectHost kernel spine when env unset at createRuntime (prototype — not full EffectHost).",
+      "enum": ["default", "require", "1"]
+    },
     "trustedWorkspaceHooks": {
       "type": "array",
-      "description": "Absolute workspace paths allowed to load workspace hooks.json."
+      "description": "Absolute workspace paths allowed to load workspace hooks.json.",
+      "items": { "type": "string" }
     },
     "theme": {
       "type": "string",
       "description": "Default TUI palette.",
-      "enum": [
-        "dark",
-        "light",
-        "auto",
-        "mono"
-      ]
+      "enum": ["dark", "light", "auto", "mono"]
     },
     "notify": {
       "type": "object",
-      "description": "Turn-end bell prefs (`bell`, `minMs`). User config only."
+      "description": "Turn-end bell prefs (`bell`, `minMs`). User config only.",
+      "additionalProperties": false,
+      "properties": {
+        "bell": { "type": "boolean" },
+        "minMs": { "type": "number" }
+      }
     },
     "statusLine": {
       "type": "object",
-      "description": "User status-line script: command + optional args (JSON on stdin)."
+      "description": "User status-line script: command + optional args (JSON on stdin).",
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["command"]
+    },
+    "providerClass": {
+      "type": "string",
+      "description": "H-3 provider class short name or closed import path (no dynamic plugin load).",
+      "enum": ["openai", "anthropic", "google", "ollama", "mock", "openai-compatible"]
+    },
+    "modelClass": {
+      "type": "string",
+      "description": "H-3 model class short name or closed import path.",
+      "enum": ["openai", "anthropic", "google", "ollama", "mock"]
+    },
+    "formatMessageClass": {
+      "type": "string",
+      "description": "H-4 formatter dialect short name (built-in only; no dynamic import).",
+      "enum": ["openai", "openai-compatible", "anthropic", "google", "ollama", "mock"]
     }
   }
 }

@@ -35,6 +35,7 @@ import {
   type OwnerWorkerTurnFrame,
 } from "./owner-worker-control-pipe";
 import { newId } from "../contracts";
+import { ownerWorkerTurnPreflight, readDarwinPpid } from "./owner-worker-ancestor-honesty";
 import { spawnOwned } from "./owned-spawn";
 
 /**
@@ -84,16 +85,48 @@ export interface AncestorVerdict {
  * injectable for hermetic tests. On non-Linux there is no /proc, so the check
  * is UNAVAILABLE and returns ok:false with a named residual.
  */
+export type AncestorWalkOpts = {
+  readFacts?: (pid: number) => ProcessFacts | undefined;
+  /** macOS reduced walk: parent pid only (defaults to `readDarwinPpid` when absent). */
+  readPpid?: (pid: number) => number | undefined;
+  maxDepth?: number;
+  platform?: string;
+};
+
+function resolvePpidReader(
+  platform: string,
+  opts: AncestorWalkOpts,
+): ((pid: number) => number | undefined) | "unavailable" {
+  if (opts.readPpid !== undefined) return opts.readPpid;
+  if (opts.readFacts !== undefined) return (pid) => opts.readFacts!(pid)?.ppid;
+  if (platform === "linux") return (pid) => readProcessFacts(pid)?.ppid;
+  if (platform === "darwin") return readDarwinPpid;
+  return "unavailable";
+}
+
 export function workerIsDescendantOf(
   workerPid: number,
   ownerPid: number,
-  opts: { readFacts?: (pid: number) => ProcessFacts | undefined; maxDepth?: number; platform?: string } = {},
+  opts: AncestorWalkOpts = {},
 ): AncestorVerdict {
-  const read = opts.readFacts ?? readProcessFacts;
   const platform = opts.platform ?? process.platform;
   const maxDepth = opts.maxDepth ?? ANCESTOR_MAX_DEPTH;
-  if (platform !== "linux") {
-    return { ok: false, chain: [], unavailable: true, reason: `ancestor proving unavailable on ${platform} (macOS/Windows residual)` };
+  if (platform === "win32") {
+    return {
+      ok: false,
+      chain: [],
+      unavailable: true,
+      reason: "ancestor proving unavailable on win32 (Windows parent-walk residual — no reduced prove path)",
+    };
+  }
+  const readPpid = resolvePpidReader(platform, opts);
+  if (readPpid === "unavailable") {
+    return {
+      ok: false,
+      chain: [],
+      unavailable: true,
+      reason: `ancestor proving unavailable on ${platform} (macOS/Windows residual)`,
+    };
   }
   if (!Number.isInteger(workerPid) || workerPid <= 0 || !Number.isInteger(ownerPid) || ownerPid <= 0) {
     return { ok: false, chain: [], reason: "ancestor check needs positive integer pids" };
@@ -105,11 +138,19 @@ export function workerIsDescendantOf(
     chain.push(current);
     if (current === ownerPid) return { ok: true, chain };
     if (current === 1 || current === 0) break;
-    if (seen.has(current)) return { ok: false, chain, reason: "ppid cycle in /proc ancestor chain" };
+    if (seen.has(current)) return { ok: false, chain, reason: "ppid cycle in ancestor chain" };
     seen.add(current);
-    const facts = read(current);
-    if (facts === undefined) return { ok: false, chain, reason: `/proc/${current}/stat unavailable (worker gone or /proc absent)` };
-    current = facts.ppid;
+    const ppid = readPpid(current);
+    if (ppid === undefined) {
+      const gone =
+        platform === "linux"
+          ? `/proc/${current}/stat unavailable (worker gone or /proc absent)`
+          : platform === "darwin"
+            ? `ps could not read ppid for pid ${current} (worker gone or macOS ps residual)`
+            : `parent pid unavailable for ${current}`;
+      return { ok: false, chain, reason: gone };
+    }
+    current = ppid;
   }
   return { ok: false, chain, reason: `owner pid ${ownerPid} not in the worker's ancestor chain (max depth ${maxDepth})` };
 }
@@ -381,6 +422,8 @@ export async function runOwnerWorkerForTurn(opts: {
 }): Promise<TurnOwnerWorkerResult> {
   const env = opts.env ?? process.env;
   if (!ownerWorkerPipeEnabled(env)) return { status: "disabled" };
+  const preflight = ownerWorkerTurnPreflight(process.platform, env);
+  if (!preflight.ok) return { status: "refused", reason: preflight.reason };
   const cmd = parseOwnerWorkerCmd(env[OWNER_WORKER_CMD_ENV]) ?? [
     process.execPath,
     path.resolve(process.argv[1] ?? ""),

@@ -147,6 +147,17 @@ export function journalPath(workspace: string): string {
   return path.join(workspaceStateDir(workspace), JOURNAL_FILE);
 }
 
+/** Under-admission (ruling 605): Guard before undo.jsonl append. */
+export async function admitChangeJournalWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("../core/preds-writer");
+  const refused = await admitPredsOutWrite(journalPath(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "change-journal refused:")
+    .replace(/^preds write denied/, "change-journal denied")
+    .replace(/^preds fs\.write requires approval/, "change-journal fs.write requires approval");
+}
+
 /* --------------------------------- state --------------------------------- */
 
 interface JournalState {
@@ -518,6 +529,31 @@ export function recordChange(sessionId: string, entry: ChangeEntry): void {
   }
 }
 
+/** Product path: admit then `recordChange` (deny → memory-only, no disk). */
+export async function recordChangeGuarded(sessionId: string, entry: ChangeEntry): Promise<string | undefined> {
+  const workspace = resolveWorkspace(sessionId, entry);
+  if (workspace === undefined) {
+    recordChange(sessionId, entry);
+    return undefined;
+  }
+  const refused = await admitChangeJournalWrite(workspace);
+  if (refused !== undefined) {
+    const oversized = typeof entry.before === "string" && Buffer.byteLength(entry.before, "utf8") > BEFORE_MAX_BYTES;
+    const full: JournalEntry = {
+      ...entry,
+      id: typeof entry.id === "string" && entry.id !== "" ? entry.id : randomUUID(),
+      sessionId: typeof entry.sessionId === "string" && entry.sessionId !== "" ? entry.sessionId : sessionId,
+      ...(oversized ? { before: null, nonRestorable: true } : {}),
+    };
+    const state = stateFor(workspace);
+    state.entries = capEntries([...state.entries, full]);
+    state.pending.push(full);
+    return refused;
+  }
+  recordChange(sessionId, entry);
+  return undefined;
+}
+
 /**
  * Remove one entry from `workspace`'s journal and append its consume tombstone
  * (so a reload cannot resurrect it). Returns false when the entry was not live
@@ -539,6 +575,21 @@ export function consumeEntry(workspace: string, entry: ChangeEntry): boolean {
     /* memory-only removal; the entry can resurface after a restart */
   }
   return true;
+}
+
+/** Product path: admit then `consumeEntry` (deny → memory-only removal, no tombstone). */
+export async function consumeEntryGuarded(workspace: string, entry: ChangeEntry): Promise<boolean> {
+  const refused = await admitChangeJournalWrite(workspace);
+  if (refused !== undefined) {
+    const state = stateFor(workspace);
+    const i = state.entries.findIndex((e) => sameEntry(e, entry));
+    if (i === -1) return false;
+    state.entries.splice(i, 1);
+    const p = state.pending.findIndex((e) => sameEntry(e, entry));
+    if (p !== -1) state.pending.splice(p, 1);
+    return true;
+  }
+  return consumeEntry(workspace, entry);
 }
 
 /** Entries this session recorded that could not be attached to a journal. */
@@ -587,6 +638,13 @@ export function consumeChange(sessionId: string, entry: ChangeEntry): boolean {
   list.splice(i, 1);
   if (list.length === 0) FLOATING.delete(sessionId);
   return true;
+}
+
+/** Product path: admit then `consumeChange` (ruling 609). */
+export async function consumeChangeGuarded(sessionId: string, entry: ChangeEntry): Promise<boolean> {
+  const workspace = workspaceFor(sessionId) ?? workspaceFromEntry(entry);
+  if (workspace !== undefined) return consumeEntryGuarded(workspace, entry);
+  return consumeChange(sessionId, entry);
 }
 
 /**

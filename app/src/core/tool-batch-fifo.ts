@@ -8,6 +8,7 @@
 
 import type { ToolCall } from "../contracts";
 import { getTool } from "../tools";
+import { agentCallIsShared } from "../tools/agent";
 
 export type ToolBatchFifoOutcome = { aborted: boolean; fatal: boolean };
 
@@ -15,8 +16,20 @@ export type ToolBatchFifoOutcome = { aborted: boolean; fatal: boolean };
  * NF-072 batch scheduling. Every tool carries a concurrency class: `shared`
  * calls in one batch run concurrently; an `exclusive` call is its own barrier
  * (`docs/24` NF-072). Unknown tools are pure error paths and share.
+ *
+ * Ruling 663: `agent` with a read-only profile (explore/review/plan/never) is
+ * shared so the parent can fan out parallel research subagents in one batch.
  */
-export function concurrencyClassOf(name: string): "shared" | "exclusive" {
+export function concurrencyClassOf(
+  name: string,
+  args?: Record<string, unknown>,
+): "shared" | "exclusive" {
+  if (name === "agent" && agentCallIsShared(args)) return "shared";
+  // shell_bg kill mutates process state — exclusive barrier; poll/output/list share.
+  if (name === "shell_bg") {
+    const op = typeof args?.op === "string" ? args.op.trim() : "";
+    return op === "kill" ? "exclusive" : "shared";
+  }
   return getTool(name)?.concurrencyClass === "exclusive" ? "exclusive" : "shared";
 }
 
@@ -25,7 +38,18 @@ export function batchSegments(calls: ToolCall[]): ToolCall[][] {
   const segments: ToolCall[][] = [];
   let shared: ToolCall[] = [];
   for (const call of calls) {
-    if (concurrencyClassOf(call.name) === "exclusive") {
+    let args: Record<string, unknown> | undefined;
+    if (typeof call.arguments === "string" && call.arguments.trim() !== "") {
+      try {
+        const parsed = JSON.parse(call.arguments) as unknown;
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          args = parsed as Record<string, unknown>;
+        }
+      } catch {
+        args = undefined;
+      }
+    }
+    if (concurrencyClassOf(call.name, args) === "exclusive") {
       if (shared.length > 0) segments.push(shared);
       shared = [];
       segments.push([call]);

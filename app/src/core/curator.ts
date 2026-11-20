@@ -369,6 +369,42 @@ export function proposalsFilePath(stateDir: string): string {
   return path.join(stateDir, PROPOSALS_FILE);
 }
 
+/** Under-admission (ruling 607): Guard before proposals.jsonl append. */
+export async function admitCuratorProposalsWrite(
+  stateDir: string,
+  workspace: string = stateDir,
+): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(proposalsFilePath(stateDir), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "curator-proposals refused:")
+    .replace(/^preds write denied/, "curator-proposals denied")
+    .replace(/^preds fs\.write requires approval/, "curator-proposals fs.write requires approval");
+}
+
+/** Product path: admit proposals + archive then `curate` (deny → throw before any append). */
+export async function curateGuarded(
+  proposals: readonly unknown[],
+  store: ProposalStore,
+  workspace: string = store.stateDir,
+): Promise<CurateResult> {
+  const refused = await admitCuratorProposalsWrite(store.stateDir, workspace);
+  if (refused !== undefined) throw new Error(refused);
+  const { curatorArchivePath } = await import("./curator-archive");
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const archiveRefused = await admitPredsOutWrite(curatorArchivePath(store.stateDir), workspace);
+  if (archiveRefused !== undefined) {
+    throw new Error(
+      archiveRefused
+        .replace(/^preds write refused:/, "curator-archive refused:")
+        .replace(/^preds write denied/, "curator-archive denied")
+        .replace(/^preds fs\.write requires approval/, "curator-archive fs.write requires approval"),
+    );
+  }
+  return curate(proposals, store);
+}
+
 /** One line of the store. `origin` is always the review fork's. */
 export interface StoredProposalRow {
   schemaVersion: 1;

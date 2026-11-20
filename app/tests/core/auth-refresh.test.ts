@@ -25,7 +25,7 @@ describe("oauth refresh", () => {
 
   test("refresh updates the store and returns oauth credential", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-refresh-"));
-    writeOAuthToken(
+    await writeOAuthToken(
       {
         provider: "myhost",
         accessToken: "stale",
@@ -57,7 +57,7 @@ describe("oauth refresh", () => {
 
   test("missing refresh token is a no-op", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-refresh-"));
-    writeOAuthToken({ provider: "myhost", accessToken: "only", obtainedAt: new Date().toISOString() }, home);
+    await writeOAuthToken({ provider: "myhost", accessToken: "only", obtainedAt: new Date().toISOString() }, home);
     globalThis.fetch = (async () => {
       throw new Error("fetch should not run");
     }) as typeof fetch;

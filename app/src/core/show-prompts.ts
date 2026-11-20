@@ -10,6 +10,7 @@ import { loadCatalog, catalogWindow } from "./catalog/catalog";
 import { loadConfig, type HzConfig } from "./config";
 import { instructionPrompt, loadInstructionBlocks, resolveModelInstructions } from "./instructions";
 import { memoryPromptSection } from "./memory/manifest";
+import { metricContract } from "./metrics";
 import { estimatePromptTokens, fitMaxOutputTokens, windowForModel } from "./output-budget";
 import { systemPrompt } from "./loop";
 import { resolveToolRoutingConfig } from "../tools/model-tool-routing";
@@ -81,6 +82,43 @@ export function buildShowPromptsRequest(opts: ShowPromptsOptions): ProviderReque
     tools: specs,
     signal: new AbortController().signal,
   };
+}
+
+/** H-7: contracted facts for `--show-prompts` (ruling 619). */
+export function showPromptsPublication(request: ProviderRequest): string[] {
+  const anchor = "none — this --show-prompts invocation";
+  const population = "assembled ProviderRequest preview with no provider call";
+  const excludes = "prompt body text, tool schemas, and model id are not published as metrics";
+  return [
+    metricContract({
+      metric: "show-prompts tools",
+      anchor,
+      population,
+      excludes,
+      value: request.tools.length,
+    }),
+    metricContract({
+      metric: "show-prompts messages",
+      anchor,
+      population,
+      excludes,
+      value: request.messages.length,
+    }),
+    metricContract({
+      metric: "show-prompts max tokens",
+      anchor,
+      population,
+      excludes,
+      value: request.maxTokens ?? 0,
+    }),
+    metricContract({
+      metric: "show-prompts system chars",
+      anchor,
+      population,
+      excludes,
+      value: typeof request.system === "string" ? request.system.length : 0,
+    }),
+  ];
 }
 
 /** Pretty-printed JSON for stdout (`--show-prompts`). */

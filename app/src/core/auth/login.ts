@@ -71,7 +71,7 @@ export async function runPkceLogin(
   if (typeof tok.expires_in === "number" && Number.isFinite(tok.expires_in)) {
     stored.expiresAt = new Date(Date.now() + tok.expires_in * 1000).toISOString();
   }
-  writeOAuthToken(stored, home);
+  await writeOAuthToken(stored, home);
   process.stderr.write(`Stored oauth token for ${entry.id} (${credentialsDbPath(home)})\n`);
 }
 

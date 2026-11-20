@@ -6,10 +6,10 @@ import { resolveRegistryCredential } from "../../src/core/config";
 import { writeOAuthToken } from "../../src/core/auth/store";
 
 describe("registry oauth credential", () => {
-  test("resolveRegistryCredential reads oauth store", () => {
+  test("resolveRegistryCredential reads oauth store", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "hz-oauth-home-"));
     try {
-      writeOAuthToken(
+      await writeOAuthToken(
         {
           provider: "myhost",
           accessToken: "tok",

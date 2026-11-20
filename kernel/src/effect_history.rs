@@ -72,7 +72,9 @@ fn check_archive(path: &Path, digest: &str) -> Result<usize, String> {
 
 fn create_archive(state_dir: &Path, digest: &str, bytes: &[u8]) -> Result<(), String> {
     let destination = archive_path(state_dir, digest);
-    let dir = destination.parent().unwrap();
+    let dir = destination.parent().ok_or_else(|| {
+        "HZ_PRECONDITION_FAILED: historical archive path has no parent".to_string()
+    })?;
     // Never call create_dir_all on an attacker-replaceable path: that can
     // follow an already present symlink and create files outside kernel state
     // before the post-creation symlink check. Create/check each component.
@@ -138,6 +140,64 @@ fn create_archive(state_dir: &Path, digest: &str, bytes: &[u8]) -> Result<(), St
     result
 }
 
+/// Archive capped shell stdout/stderr bytes under the same content-addressed
+/// CAS as file postimages. Digest must already match `bytes` (caller observes).
+pub fn archive_captured_bytes(state_dir: &Path, digest: &str, bytes: &[u8]) -> Result<(), String> {
+    if !valid_digest(digest) {
+        return Err("HZ_PRECONDITION_FAILED: stream archive digest invalid".into());
+    }
+    if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return Err("HZ_PRECONDITION_FAILED: stream archive exceeds 64 MiB".into());
+    }
+    if crate::canon::sha256_bytes(bytes) != digest {
+        return Err("HZ_PRECONDITION_FAILED: stream archive digest mismatch".into());
+    }
+    create_archive(state_dir, digest, bytes)
+}
+
+/// Independently verify archived shell streamEvidence rows (stdout/stderr).
+/// Returns the number of stream blobs checked. Missing/invalid archive fails.
+pub fn verify_stream_evidence(state_dir: &Path, stream: &Value) -> Result<usize, String> {
+    let mut checked = 0usize;
+    for key in ["stdout", "stderr"] {
+        let Some(row) = stream.get(key) else {
+            continue;
+        };
+        let digest = row["digest"]
+            .as_str()
+            .filter(|s| valid_digest(s))
+            .ok_or_else(|| {
+                format!("HZ_PRECONDITION_FAILED: streamEvidence.{key} digest invalid")
+            })?;
+        let archive = row["archive"].as_str().unwrap_or("");
+        if archive.is_empty() {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: streamEvidence.{key} archive missing"
+            ));
+        }
+        if archive != digest {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: streamEvidence.{key} archive binding mismatch"
+            ));
+        }
+        let bytes = check_archive(&archive_path(state_dir, digest), digest)?;
+        if row["archivedBytes"].as_u64() != Some(bytes as u64) {
+            return Err(format!(
+                "HZ_PRECONDITION_FAILED: streamEvidence.{key} archive length mismatch"
+            ));
+        }
+        checked += 1;
+    }
+    if checked == 0 {
+        return Err("HZ_PRECONDITION_FAILED: streamEvidence has no stdout/stderr rows".into());
+    }
+    let _ = stream
+        .get("exitCode")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "HZ_PRECONDITION_FAILED: streamEvidence missing exitCode".to_string())?;
+    Ok(checked)
+}
+
 /// Archive every independently observed present file. Content is read twice,
 /// compared to the Rust effect's digest and only then published. Absent records
 /// retain the signed historical absence FACT, not a reconstructable byte blob.
@@ -146,12 +206,23 @@ pub fn archive_postimages(state_dir: &Path, postimages: &Value) -> Result<Value,
         .ok_or_else(|| "HZ_PRECONDITION_FAILED: historical postimages must be an array".to_string())?;
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
+        crate::effect_legacy_unverifiable::refuse_retroactive_cas_backfill(row)?;
         let mut item = row.clone();
         match row["state"].as_str() {
             Some("absent") => {}
             Some("present") => {
                 let digest = row["digest"].as_str().filter(|s| valid_digest(s))
                     .ok_or_else(|| "HZ_PRECONDITION_FAILED: archive digest invalid".to_string())?;
+                if row.get("entryKind").and_then(|v| v.as_str()) == Some("directory") {
+                    // Shell mkdir metadata-only observe — no byte CAS archive (P0-2 reduced).
+                    if digest != crate::effect_evidence::DIRECTORY_POSTIMAGE_DIGEST {
+                        return Err(
+                            "HZ_PRECONDITION_FAILED: directory postimage digest invalid".into(),
+                        );
+                    }
+                    output.push(item);
+                    continue;
+                }
                 let path = row["path"].as_str().filter(|s| Path::new(s).is_absolute())
                     .ok_or_else(|| "HZ_PRECONDITION_FAILED: archive source path invalid".to_string())?;
                 let bytes = read_regular(Path::new(path))?;
@@ -170,12 +241,92 @@ pub fn archive_postimages(state_dir: &Path, postimages: &Value) -> Result<Value,
     Ok(json!(output))
 }
 
+/// Classify archived *present* postimages that are no longer the latest for
+/// their path — ruling **654** historical overwrite replay (CAS only; not disk).
+pub fn replay_superseded_from_cas(state_dir: &Path, owner_events: &[Value]) -> Value {
+    use std::collections::BTreeMap;
+    let mut latest: BTreeMap<String, String> = BTreeMap::new();
+    for event in owner_events {
+        if event["type"] != "owner.settled" {
+            continue;
+        }
+        let id = event["payload"]["effectId"].as_str().unwrap_or("");
+        let Some(rows) = event["payload"]["details"]["postimages"].as_array() else {
+            continue;
+        };
+        for row in rows {
+            let Some(path) = row["path"].as_str() else { continue };
+            if !Path::new(path).is_absolute() {
+                continue;
+            }
+            latest.insert(path.to_string(), id.to_string());
+        }
+    }
+    let mut replayed = Vec::new();
+    let mut failures = Vec::new();
+    for event in owner_events {
+        if event["type"] != "owner.settled" {
+            continue;
+        }
+        let id = event["payload"]["effectId"].as_str().unwrap_or("");
+        let Some(rows) = event["payload"]["details"]["postimages"].as_array() else {
+            continue;
+        };
+        for row in rows {
+            if row["state"].as_str() != Some("present") {
+                continue;
+            }
+            let Some(path) = row["path"].as_str() else { continue };
+            // Still the latest for this path → latest-disk verify owns it; skip.
+            if latest.get(path).map(String::as_str) == Some(id) {
+                continue;
+            }
+            let digest = row["digest"].as_str().unwrap_or("");
+            let archive = row["archive"].as_str().unwrap_or("");
+            if !valid_digest(digest) || archive.is_empty() || archive != digest {
+                // legacy / unbound — counted elsewhere as legacyUnverifiable; skip claim
+                continue;
+            }
+            match check_archive(&archive_path(state_dir, digest), digest) {
+                Ok(bytes) if row["archivedBytes"].as_u64() == Some(bytes as u64) => {
+                    replayed.push(json!({
+                        "effectId": id,
+                        "path": path,
+                        "digest": digest,
+                        "archivedBytes": bytes,
+                        "source": "cas",
+                        "superseded": true,
+                    }));
+                }
+                Ok(_) => failures.push(json!({
+                    "effectId": id,
+                    "path": path,
+                    "reason": "archive_length_mismatch",
+                })),
+                Err(err) => failures.push(json!({
+                    "effectId": id,
+                    "path": path,
+                    "reason": err,
+                })),
+            }
+        }
+    }
+    json!({
+        "ok": failures.is_empty(),
+        "checked": replayed.len(),
+        "replayed": replayed,
+        "failures": failures,
+        "scope": "superseded_cas_present_postimages_only"
+    })
+}
+
 /// Verify EVERY archived historical version independently of today's disk.
 /// Missing snapshots from legacy rows remain explicitly unverifiable.
 pub fn verify_history(state_dir: &Path, owner_events: &[Value], unresolved: usize) -> Value {
     let mut checked = 0usize;
     let mut absent_facts = 0usize;
     let mut unsupported_effects = 0usize;
+    let mut shell_net_unverifiable = 0usize;
     let mut legacy_unverifiable = 0usize;
     let mut failures = Vec::new();
     for event in owner_events {
@@ -185,16 +336,78 @@ pub fn verify_history(state_dir: &Path, owner_events: &[Value], unresolved: usiz
             legacy_unverifiable += 1;
             continue;
         };
-        if rows.is_empty() { unsupported_effects += 1; }
+        if rows.is_empty() {
+            // Shell settlements with archived streamEvidence are not file
+            // postimages, but they are also not "unsupported" for history
+            // when the CAS blobs independently verify.
+            let argv: Vec<String> = event["payload"]["details"]
+                .get("argv")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let side = crate::effect_evidence::classify_shell_argv_side_effect(&argv);
+            match event["payload"]["details"].get("streamEvidence") {
+                Some(stream) => match verify_stream_evidence(state_dir, stream) {
+                    Ok(n) => {
+                        checked += n;
+                        // Stream CAS ok still does not observe net/FS landings.
+                        if side == crate::effect_evidence::ShellSideEffectClass::LikelyNet {
+                            shell_net_unverifiable += 1;
+                            failures.push(json!({
+                                "effectId": id,
+                                "path": "shell.net",
+                                "reason": "likely_net_side_effect_unobserved",
+                                "sideEffectClass": crate::effect_evidence::shell_side_effect_class_label(side),
+                            }));
+                        }
+                    }
+                    Err(reason) => failures.push(json!({
+                        "effectId": id,
+                        "path": "streamEvidence",
+                        "reason": reason,
+                    })),
+                },
+                None => {
+                    if side == crate::effect_evidence::ShellSideEffectClass::LikelyNet {
+                        shell_net_unverifiable += 1;
+                        failures.push(json!({
+                            "effectId": id,
+                            "path": "shell.net",
+                            "reason": "likely_net_side_effect_unobserved",
+                            "sideEffectClass": crate::effect_evidence::shell_side_effect_class_label(side),
+                        }));
+                    } else {
+                        unsupported_effects += 1;
+                    }
+                }
+            }
+        }
         for row in rows {
             match row["state"].as_str() {
-                Some("absent") => { absent_facts += 1; }
+                Some("absent") => {
+                    // Signed absence facts (delete/rename/shell reduced rm|mv) are
+                    // verifiable historical records without byte CAS (**350**, **669**).
+                    absent_facts += 1;
+                    checked += 1;
+                }
                 Some("present") => {
                     let digest = row["digest"].as_str().unwrap_or("");
                     let archive = row["archive"].as_str().unwrap_or("");
                     if !valid_digest(digest) {
-                        failures.push(json!({"effectId": id, "path": row["path"], "reason": "invalid_expected_digest"}));
+                        legacy_unverifiable += 1;
                         continue;
+                    }
+                    if row.get("entryKind").and_then(|v| v.as_str()) == Some("directory") {
+                        if digest == crate::effect_evidence::DIRECTORY_POSTIMAGE_DIGEST && archive.is_empty()
+                        {
+                            // Shell mkdir metadata-only observe (**669**); not a byte CAS row.
+                            checked += 1;
+                            continue;
+                        }
                     }
                     if archive.is_empty() {
                         legacy_unverifiable += 1;
@@ -214,14 +427,33 @@ pub fn verify_history(state_dir: &Path, owner_events: &[Value], unresolved: usiz
             }
         }
     }
+    let legacy_classify = crate::effect_legacy_unverifiable::build_legacy_classify_report(owner_events);
+    let legacy_named = legacy_classify["refused"].as_u64().unwrap_or(0) as usize;
+    if legacy_named != legacy_unverifiable {
+        legacy_unverifiable = legacy_named;
+    }
+    let overwrite_replay = replay_superseded_from_cas(state_dir, owner_events);
+    let absence_replay = crate::effect_absent_reconstruct::replay_superseded_absent_facts(owner_events);
+    let overwrite_ok = overwrite_replay["ok"] == true;
+    let absence_replay_ok = absence_replay["ok"] == true;
+    let legacy_ok = legacy_classify["ok"] == true;
     json!({
-        "ok": failures.is_empty() && legacy_unverifiable == 0 && unsupported_effects == 0 && unresolved == 0,
+        "ok": failures.is_empty() && legacy_unverifiable == 0 && unsupported_effects == 0 && shell_net_unverifiable == 0 && unresolved == 0 && overwrite_ok && absence_replay_ok && legacy_ok,
         "checked": checked,
         "historicalAbsenceFacts": absent_facts,
         "legacyUnverifiable": legacy_unverifiable,
         "unsupportedEffects": unsupported_effects,
+        "shellNetUnverifiable": shell_net_unverifiable,
         "unresolved": unresolved,
         "failures": failures,
+        // Ruling **654**: superseded present versions independently re-observed from CAS.
+        "overwriteReplay": overwrite_replay,
+        // Ruling **698**: superseded signed absence facts (no byte CAS).
+        "absenceReplay": absence_replay,
+        // Ruling **709**: named legacy rows; CAS backfill refused.
+        "legacyClassify": legacy_classify,
+        // Scope name retained for wire stability; shell streamEvidence blobs
+        // are also counted in `checked` when present (ruling 542).
         "scope": "archived_kernel_owned_file_postimages_only"
     })
 }
@@ -246,12 +478,45 @@ mod tests {
         }});
         fs::write(&original, b"later version").unwrap();
         let verified = verify_history(&state, &[event.clone()], 0);
+        // Single version is still "latest" for its path — overwriteReplay empty.
+        assert_eq!(verified["overwriteReplay"]["checked"], 0);
         assert_eq!(verified["ok"], true, "{verified}");
         assert_eq!(verified["checked"], 1);
         fs::write(archive_path(&state, &digest), b"forged").unwrap();
         let tampered = verify_history(&state, &[event], 0);
         assert_eq!(tampered["ok"], false);
         assert_eq!(tampered["failures"][0]["effectId"], "e1");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn superseded_overwrite_replay_reports_prior_cas_version() {
+        let root = std::env::temp_dir().join(format!("hz-history-overwrite-{}", uuid::Uuid::new_v4()));
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let path = root.join("file");
+        fs::write(&path, b"first").unwrap();
+        let d1 = crate::canon::sha256_bytes(b"first");
+        let a1 = archive_postimages(&state, &json!([{
+            "path": &path, "state": "present", "digest": d1
+        }])).unwrap();
+        fs::write(&path, b"second").unwrap();
+        let d2 = crate::canon::sha256_bytes(b"second");
+        let a2 = archive_postimages(&state, &json!([{
+            "path": &path, "state": "present", "digest": d2
+        }])).unwrap();
+        let events = vec![
+            json!({"type": "owner.settled", "payload": {"effectId": "e1", "details": {"postimages": a1}}}),
+            json!({"type": "owner.settled", "payload": {"effectId": "e2", "details": {"postimages": a2}}}),
+        ];
+        let verified = verify_history(&state, &events, 0);
+        assert_eq!(verified["ok"], true, "{verified}");
+        assert_eq!(verified["checked"], 2);
+        assert_eq!(verified["overwriteReplay"]["checked"], 1, "{verified}");
+        assert_eq!(verified["overwriteReplay"]["replayed"][0]["effectId"], "e1");
+        assert_eq!(verified["overwriteReplay"]["replayed"][0]["superseded"], true);
+        assert_eq!(verified["overwriteReplay"]["replayed"][0]["source"], "cas");
+        assert_eq!(verified["overwriteReplay"]["replayed"][0]["digest"], d1);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -306,5 +571,91 @@ mod tests {
         assert!(refused.contains("historical archive missing digest stability"), "{refused}");
         assert_eq!(fs::read(blob).unwrap(), b"corrupt");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_stream_evidence_archives_and_verifies_without_unsupported() {
+        let root = std::env::temp_dir().join(format!("hz-history-stream-{}", uuid::Uuid::new_v4()));
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let stdout = b"hello\n";
+        let stderr = b"";
+        let out_d = crate::canon::sha256_bytes(stdout);
+        let err_d = crate::canon::sha256_bytes(stderr);
+        archive_captured_bytes(&state, &out_d, stdout).unwrap();
+        archive_captured_bytes(&state, &err_d, stderr).unwrap();
+        let stream = json!({
+            "exitCode": 0,
+            "stdout": {"digest": out_d, "archive": out_d, "archivedBytes": stdout.len()},
+            "stderr": {"digest": err_d, "archive": err_d, "archivedBytes": stderr.len()},
+        });
+        assert_eq!(verify_stream_evidence(&state, &stream).unwrap(), 2);
+        let event = json!({"type": "owner.settled", "payload": {
+            "effectId": "shell-1",
+            "details": {"postimages": [], "streamEvidence": stream},
+        }});
+        let verified = verify_history(&state, &[event], 0);
+        assert_eq!(verified["ok"], true, "{verified}");
+        assert_eq!(verified["unsupportedEffects"], 0, "{verified}");
+        assert_eq!(verified["shellNetUnverifiable"], 0, "{verified}");
+        assert_eq!(verified["checked"], 2, "{verified}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_likely_net_argv_fail_closed_even_with_stream_cas() {
+        let root = std::env::temp_dir().join(format!("hz-history-net-{}", uuid::Uuid::new_v4()));
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let stdout = b"ok\n";
+        let stderr = b"";
+        let out_d = crate::canon::sha256_bytes(stdout);
+        let err_d = crate::canon::sha256_bytes(stderr);
+        archive_captured_bytes(&state, &out_d, stdout).unwrap();
+        archive_captured_bytes(&state, &err_d, stderr).unwrap();
+        let stream = json!({
+            "exitCode": 0,
+            "stdout": {"digest": out_d, "archive": out_d, "archivedBytes": stdout.len()},
+            "stderr": {"digest": err_d, "archive": err_d, "archivedBytes": stderr.len()},
+        });
+        let event = json!({"type": "owner.settled", "payload": {
+            "effectId": "shell-net-1",
+            "details": {
+                "postimages": [],
+                "streamEvidence": stream,
+                "argv": ["curl", "https://example.com"],
+                "shellSideEffectClass": "likely_net",
+            },
+        }});
+        let verified = verify_history(&state, &[event], 0);
+        assert_eq!(verified["ok"], false, "{verified}");
+        assert_eq!(verified["shellNetUnverifiable"], 1, "{verified}");
+        assert_eq!(verified["unsupportedEffects"], 0, "{verified}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_pre356_row_fail_closed_with_named_classify() {
+        let root = std::env::temp_dir().join(format!("hz-history-legacy-{}", uuid::Uuid::new_v4()));
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let digest = crate::canon::sha256_bytes(b"legacy-bytes");
+        let event = json!({"type": "owner.settled", "payload": {
+            "effectId": "pre356",
+            "details": {"postimages": [{
+                "path": "/tmp/legacy.txt",
+                "state": "present",
+                "digest": digest
+            }]}
+        }});
+        let verified = verify_history(&state, &[event], 0);
+        assert_eq!(verified["ok"], false, "{verified}");
+        assert_eq!(verified["legacyUnverifiable"], 1);
+        assert_eq!(verified["legacyClassify"]["refused"], 1);
+        assert_eq!(
+            verified["legacyClassify"]["rows"][0]["reason"],
+            "present_row_missing_cas_archive"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

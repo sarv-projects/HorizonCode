@@ -29,6 +29,20 @@ describe("permission presentation", () => {
     expect(p.lines[2]).toBe("$ npm test");
   });
 
+  test("multi-resource projector lists every resource (ruling 563)", () => {
+    const p = permissionPresentationForRequest({
+      kind: "fs.write",
+      title: "write",
+      detail: "/tmp/ws/a.ts",
+      resources: ["/tmp/ws/a.ts", "/tmp/ws/b.ts"],
+    });
+    expect(p.lines.filter((l) => l.startsWith("resource:"))).toEqual([
+      "resource: /tmp/ws/a.ts",
+      "resource: /tmp/ws/b.ts",
+    ]);
+    expect(p.lines[0]).toBe("action: edit");
+  });
+
   test("relative path when workspace set", () => {
     const p = permissionPresentationForRequest(
       { kind: "fs.read", title: "read", detail: "/tmp/ws/src/a.ts" },
@@ -53,9 +67,9 @@ describe("permission presentation", () => {
     expect(msg).toContain("15 minutes");
   });
 
-  test("compound shell marks saved segments in presentation", () => {
+  test("compound shell marks saved segments in presentation", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-pres-cmp-"));
-    appendSavedAllow(workspace, "shell.exec", "rm -rf build");
+    await appendSavedAllow(workspace, "shell.exec", "rm -rf build");
     const p = permissionPresentationForRequest(
       { kind: "shell.exec", title: "run", detail: "echo ok && rm -rf build" },
       workspace,
@@ -66,9 +80,9 @@ describe("permission presentation", () => {
     expect(p.lines.join("\n")).toContain("rm -rf build");
   });
 
-  test("savedAllowStaleFootnote when row exists but grant inactive", () => {
+  test("savedAllowStaleFootnote when row exists but grant inactive", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-stale-foot-"));
-    appendSavedAllow(workspace, "shell.exec", "npm test");
+    await appendSavedAllow(workspace, "shell.exec", "npm test");
     expect(savedAllowStaleFootnote(workspace, "shell.exec", "npm test")).toContain("saved-allows.json");
     expect(savedAllowStaleFootnote(workspace, "shell.exec", "npm test")).toContain("[a]lways");
     expect(savedAllowStaleFootnote(workspace, "shell.exec", "other cmd")).toBeUndefined();

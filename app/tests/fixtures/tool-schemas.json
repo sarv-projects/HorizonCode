@@ -45,6 +45,60 @@
   },
   {
     "concurrencyClass": "exclusive",
+    "description": "Ask the human a question and block until answered. Use when you need a decision only the user can make; do not guess.",
+    "exposure": "direct",
+    "name": "ask_user",
+    "parameters": {
+      "properties": {
+        "context": {
+          "description": "Optional background (≤ 4 KiB).",
+          "type": "string"
+        },
+        "default": {
+          "description": "Default answer when the user accepts without picking (optional).",
+          "type": "string"
+        },
+        "options": {
+          "description": "Optional choices (2–8): plain strings or {label, description?, recommended?}.",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "recommended": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "label"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question to present (≤ 2 KiB).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
     "description": "Structural replace in one file: match a pattern with metavariables ($NAME / $$$NAME) and substitute them into a replacement template. Every occurrence is replaced. Goes through the write guard and the preimage safety check, like edit.",
     "exposure": "direct",
     "name": "ast_edit",
@@ -107,13 +161,43 @@
   },
   {
     "concurrencyClass": "exclusive",
-    "description": "Run a JavaScript program in an isolated Bun subprocess to chain tool calls, filter large outputs, and compute. Use `await tools.call(name, args)` to call tools; console.log is collected; `return` a value to get it back.",
+    "description": "Run the same self-contained coding task N times in hz worktree slots (requires HZ_BEST_OF_N=2..4; max 4) and return the first successful subagent result (sequential) or best-scored attempt (HZ_BEST_OF_N_PARALLEL=1). Requires delegation; discover via tool_search when you need redundant attempts.",
+    "exposure": "deferred",
+    "name": "best_of_n",
+    "parameters": {
+      "properties": {
+        "max_steps": {
+          "description": "Model turns per attempt (default 12, max 20).",
+          "type": "number"
+        },
+        "n": {
+          "description": "Attempts when HZ_BEST_OF_N is set (overrides env count, max 4).",
+          "type": "number"
+        },
+        "profile": {
+          "description": "Optional subagent preset (defaults to code).",
+          "type": "string"
+        },
+        "task": {
+          "description": "Self-contained task (subagents do not see this conversation).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "exclusive",
+    "description": "Run a JavaScript program in an isolated Bun subprocess to chain tool calls, filter large outputs, and compute. Use `await tools.call(name, args)` to call tools; `await tools.kv.set/get` for out-of-context state; console.log is collected; `return` a value to get it back. Typed stubs (ruling 641; HZ_CODEMODE_TYPED_STUBS=0 disables): tools.call(name,args); tools.kv.get/set; each call returns Promise<{ok,output,error?}>. read({path?,paths?,offset?,limit?,anchors?,summary?})→{ok,output,error} write({path,content,force?})→{ok,output,error} edit({path,old?,new,all?,start_anchor?,end_anchor?})→{ok,output,error} grep({pattern,path?,glob?})→{ok,output,error} glob({pattern,path?})→{ok,output,error} shell({command,cwd?,timeoutMs?})→{ok,output,error,exitCode} todo({action,text?,reason?,ops?})→{ok,output,error} repo_map({path?,maxTokens?,focus?,includeTests?,fileCursor?,symbolCursor?,symbolGraph?,symbolGraphQuery?,fallbackLadder?})→{ok,output,error} ast_search({pat,path?,glob?,lang?})→{ok,output,error} lsp({op,path})→{ok,output,error}",
     "exposure": "direct",
     "name": "code_mode",
     "parameters": {
       "properties": {
         "code": {
-          "description": "Async function body. `tools.call(name, args)` bridges to the tools; return the value you want back.",
+          "description": "Async function body. `tools.call(name, args)` bridges to the tools; `tools.kv` holds large intermediates; return the value you want back.",
           "type": "string"
         },
         "timeout_ms": {
@@ -128,7 +212,7 @@
     }
   },
   {
-    "concurrencyClass": "shared",
+    "concurrencyClass": "exclusive",
     "description": "Debugger over DAP. stack/variables are read-only; launch/attach keep a live adapter for the chat session; continue/next/stepIn/stepOut reuse it; close disposes. Pass command, or adapter name from defaults (debugpy/gdb/…), or let launch auto-pick from program extension. OMP sequencing in session.ts.",
     "exposure": "deferred",
     "name": "debug",
@@ -228,6 +312,105 @@
   },
   {
     "concurrencyClass": "shared",
+    "description": "Read-only `git blame` for one file (line range optional).",
+    "exposure": "direct",
+    "name": "git_blame",
+    "parameters": {
+      "properties": {
+        "cwd": {
+          "description": "Repository path relative to workspace (default: workspace root).",
+          "type": "string"
+        },
+        "endLine": {
+          "description": "Last line (1-based, optional).",
+          "type": "number"
+        },
+        "path": {
+          "description": "File path relative to the repo root.",
+          "type": "string"
+        },
+        "startLine": {
+          "description": "First line (1-based, optional).",
+          "type": "number"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Read-only `git diff` (unstaged by default; optional --staged).",
+    "exposure": "direct",
+    "name": "git_diff",
+    "parameters": {
+      "properties": {
+        "cwd": {
+          "description": "Repository path relative to workspace (default: workspace root).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Optional path inside the repo to limit the diff.",
+          "type": "string"
+        },
+        "staged": {
+          "description": "Diff the index (git diff --staged).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Read-only `git log` with a bounded commit count (default 20, max 100).",
+    "exposure": "direct",
+    "name": "git_log",
+    "parameters": {
+      "properties": {
+        "cwd": {
+          "description": "Repository path relative to workspace (default: workspace root).",
+          "type": "string"
+        },
+        "n": {
+          "description": "Number of commits (default 20, max 100).",
+          "type": "number"
+        },
+        "oneline": {
+          "description": "Use --oneline (default true).",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Optional path to limit history.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Read-only `git status` in the workspace (porcelain-friendly, capped output).",
+    "exposure": "direct",
+    "name": "git_status",
+    "parameters": {
+      "properties": {
+        "cwd": {
+          "description": "Repository path relative to workspace (default: workspace root).",
+          "type": "string"
+        },
+        "short": {
+          "description": "Use --short format (default true).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
     "description": "Find files matching a glob pattern, newest-agnostic name order.",
     "exposure": "direct",
     "name": "glob",
@@ -275,7 +458,7 @@
     }
   },
   {
-    "concurrencyClass": "shared",
+    "concurrencyClass": "exclusive",
     "description": "Store a session handoff under the workspace (.hz/state/handoffs.db). Summary required; optional tried/next/blockers/decisions/files/context. No todos section — use todo tool instead.",
     "exposure": "deferred",
     "name": "handoff_create",
@@ -335,7 +518,7 @@
     }
   },
   {
-    "concurrencyClass": "shared",
+    "concurrencyClass": "exclusive",
     "description": "Resume from the latest handoff on the current branch (or detached workspace scope). Walks continues_from chain (max 5). Optional BM25 query ranks sections.",
     "exposure": "deferred",
     "name": "handoff_resume",
@@ -451,7 +634,7 @@
     }
   },
   {
-    "concurrencyClass": "shared",
+    "concurrencyClass": "exclusive",
     "description": "Remove facts from a memory bank. Provide exact content and/or a BM25 query (same token rules as memory_search). At least one of content or query is required.",
     "exposure": "deferred",
     "name": "memory_forget",
@@ -482,7 +665,7 @@
     }
   },
   {
-    "concurrencyClass": "shared",
+    "concurrencyClass": "exclusive",
     "description": "Store a fact in a memory bank (FTS index). Default bank is project (.hz/state/memory.db). user and shared banks live in the user config dir. With HZ_MEMORY_SYNC_MEMORY_MD=1, project remembers also append a capped bullet to MEMORY.md. Max 5000 chars.",
     "exposure": "deferred",
     "name": "memory_remember",
@@ -694,6 +877,14 @@
         "symbolCursor": {
           "description": "Definition-row offset (after fileCursor slice) for symbol-level paging; use nextSymbolCursor from a prior truncated map.",
           "type": "number"
+        },
+        "symbolGraph": {
+          "description": "When true, append a lexical exported-symbol adjacency slice (requires index; persist when HZ_SYMBOL_GRAPH=1).",
+          "type": "boolean"
+        },
+        "symbolGraphQuery": {
+          "description": "Optional exported symbol name to narrow the symbolGraph section.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -721,6 +912,38 @@
       },
       "required": [
         "command"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Poll, read output from, or kill a long-running command the shell tool auto-backgrounded. Use poll for running/exited status, output for the latest captured lines, kill to SIGTERM then SIGKILL.",
+    "exposure": "direct",
+    "name": "shell_bg",
+    "parameters": {
+      "properties": {
+        "lines": {
+          "description": "Lines of output to return for op=output (default 80, max 500).",
+          "type": "number"
+        },
+        "op": {
+          "description": "Operation: poll status, tail output, kill the process, or list known jobs.",
+          "enum": [
+            "poll",
+            "output",
+            "kill",
+            "list"
+          ],
+          "type": "string"
+        },
+        "pid": {
+          "description": "Process id from the shell auto-background notice (required except for list).",
+          "type": "number"
+        }
+      },
+      "required": [
+        "op"
       ],
       "type": "object"
     }
@@ -927,6 +1150,75 @@
         }
       },
       "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Fetch an HTTPS URL and return its body as text (HTML is stripped to plain text). Uses kernel net.fetch admission; ambient Bun fetch — no routed egress proxy.",
+    "exposure": "direct",
+    "name": "web_fetch",
+    "parameters": {
+      "properties": {
+        "format": {
+          "description": "Response shape: text (default, HTML stripped), html (raw), or json (pretty when valid JSON).",
+          "enum": [
+            "text",
+            "html",
+            "json"
+          ],
+          "type": "string"
+        },
+        "max_bytes": {
+          "description": "Max response bytes to read (default 524288; hard cap 2 MiB).",
+          "maximum": 2097152,
+          "minimum": 1024,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "description": "Request timeout in ms (default 30000).",
+          "maximum": 120000,
+          "minimum": 1000,
+          "type": "integer"
+        },
+        "url": {
+          "description": "HTTPS URL to fetch (no credentials in the URL).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "concurrencyClass": "shared",
+    "description": "Search the web for ranked titles, URLs, snippets. Fail-closed unless HZ_WEB_SEARCH=1 (DuckDuckGo HTML), HZ_WEB_SEARCH_URL, or HZ_WEB_SEARCH_PROVIDER=brave + API key. net.fetch Guard; ambient Bun fetch (shell-net not enforced).",
+    "exposure": "direct",
+    "name": "web_search",
+    "parameters": {
+      "properties": {
+        "count": {
+          "description": "Number of results (default 8, max 20).",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "description": "Search query string.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "Request timeout in ms (default 30000).",
+          "maximum": 120000,
+          "minimum": 1000,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query"
+      ],
       "type": "object"
     }
   },

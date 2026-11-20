@@ -21,8 +21,9 @@ import {
   bankStorageKind,
   userMemoryDbPath,
 } from "./banks";
-import { appendRememberedFactToMemoryIndex, loadMemoryManifest, loadMemoryTopicBodies } from "./manifest";
+import { loadMemoryManifest, loadMemoryTopicBodies } from "./manifest";
 import { mmrLiteSelect } from "./mmr-lite";
+import { metricContract } from "../metrics";
 
 const TABLE = "memory_fts";
 
@@ -281,8 +282,9 @@ export function rememberMemoryFact(
       .get(bank, text) as { n: number } | null;
     if (dupe !== null) return { ok: false, reason: "duplicate" };
     db.prepare(`INSERT INTO ${TABLE}(content, bank) VALUES (?, ?)`).run(text, bank);
-    const memoryIndex = bank === PROJECT_BANK ? appendRememberedFactToMemoryIndex(workspace, text) : "skipped";
-    return { ok: true, bank, memoryIndex };
+    // MEMORY.md sync is opt-in and must be Guard-admitted by the tool layer
+    // (`memory_remember`) — never append from the store path.
+    return { ok: true, bank, memoryIndex: "skipped" as const };
   } finally {
     closeDb(db, memoryDbPathForBank(workspace, bank, home));
   }
@@ -352,26 +354,86 @@ export function memorySearchReadTargets(
   return [...targets];
 }
 
-/** Doctor / status: per-bank FTS row counts (mnemopi partitions). */
-export function summarizeMemoryBanks(workspace: string, home?: string): string {
-  const parts: string[] = [];
+export type MemoryBankFactCount =
+  | { bank: MemoryBankId; status: "missing" }
+  | { bank: MemoryBankId; status: "unreadable" }
+  | { bank: MemoryBankId; status: "ok"; facts: number };
+
+/** Shared inspect for doctor human + H-7 publication. */
+export function inspectMemoryBanks(workspace: string, home?: string): MemoryBankFactCount[] {
+  const out: MemoryBankFactCount[] = [];
   for (const bank of MEMORY_BANKS) {
     const dbPath =
       bankStorageKind(bank) === "workspace"
         ? workspaceStateFile(workspace, "memory.db")
         : userMemoryDbPath(home);
     if (!existsSync(dbPath)) {
-      parts.push(`${bank}: (no db)`);
+      out.push({ bank, status: "missing" });
       continue;
     }
     try {
       const db = dbForBank(workspace, bank, home);
       const row = db.query(`SELECT count(*) as n FROM ${TABLE} WHERE bank=?`).get(bank) as { n: number };
       closeDb(db, dbPath);
-      parts.push(`${bank}: ${row.n} facts`);
+      out.push({ bank, status: "ok", facts: row.n });
     } catch {
-      parts.push(`${bank}: unreadable`);
+      out.push({ bank, status: "unreadable" });
     }
   }
-  return parts.join("; ");
+  return out;
+}
+
+/** Doctor / status: per-bank FTS row counts (mnemopi partitions). */
+export function summarizeMemoryBanks(workspace: string, home?: string): string {
+  return inspectMemoryBanks(workspace, home)
+    .map((row) => {
+      if (row.status === "missing") return `${row.bank}: (no db)`;
+      if (row.status === "unreadable") return `${row.bank}: unreadable`;
+      return `${row.bank}: ${row.facts} facts`;
+    })
+    .join("; ");
+}
+
+/**
+ * H-7 parallel surface for memory bank fact counts (ruling 546).
+ * Human `summarizeMemoryBanks` stays byte-identical.
+ */
+export function memoryBanksPublication(workspace: string, home?: string): string[] {
+  const rows = inspectMemoryBanks(workspace, home);
+  const anchor = "none — first memory-banks inspect (no prior report of this workspace to compare against)";
+  const population = `memory FTS banks for workspace ${workspace}`;
+  const excludes = "missing/unreadable banks report status rather than a fact count; nothing discarded from the bank list";
+  const blocks: string[] = [
+    metricContract({
+      metric: "memory banks inspected",
+      anchor,
+      population,
+      excludes,
+      value: rows.length,
+    }),
+  ];
+  for (const row of rows) {
+    if (row.status === "ok") {
+      blocks.push(
+        metricContract({
+          metric: `memory bank ${row.bank} facts`,
+          anchor,
+          population,
+          excludes,
+          value: row.facts,
+        }),
+      );
+    } else {
+      blocks.push(
+        metricContract({
+          metric: `memory bank ${row.bank} status`,
+          anchor,
+          population,
+          excludes,
+          value: row.status,
+        }),
+      );
+    }
+  }
+  return blocks;
 }

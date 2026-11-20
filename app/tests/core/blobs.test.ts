@@ -98,21 +98,30 @@ describe("putBlob / getBlob", () => {
 });
 
 describe("tool spill optional CAS", () => {
-  test("planToolOutputCap stores in blob CAS when blobCasWorkspace is set", () => {
+  test("planToolOutputCap offers blob CAS spill without writing (ruling 584)", () => {
     const full = "z".repeat(20_000);
     const plan = planToolOutputCap(full, { blobCasWorkspace: workspace, maxBytes: 200, maxTokens: 10_000 });
-    expect(plan.spill).toBeUndefined();
+    expect(plan.spill?.contents).toBe(full);
     expect(plan.truncated?.spillPath).toMatch(/\.hz\/state\/blobs\//);
     const hash = sha256Hex(full);
+    expect(getBlobForWorkspace(workspace, hash).ok).toBe(false);
+    putBlobForWorkspace(workspace, plan.spill!.contents);
     const got = getBlobForWorkspace(workspace, hash);
     expect(got.ok).toBe(true);
     if (got.ok) expect(got.body.toString("utf8")).toBe(full);
   });
 
   test("blobSpillEnabled reads HZ_BLOB_SPILL", () => {
-    expect(blobSpillEnabled()).toBe(false);
-    process.env.HZ_BLOB_SPILL = "1";
-    expect(blobSpillEnabled()).toBe(true);
+    const prev = process.env.HZ_BLOB_SPILL;
+    try {
+      delete process.env.HZ_BLOB_SPILL;
+      expect(blobSpillEnabled()).toBe(false);
+      process.env.HZ_BLOB_SPILL = "1";
+      expect(blobSpillEnabled()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.HZ_BLOB_SPILL;
+      else process.env.HZ_BLOB_SPILL = prev;
+    }
   });
 });
 

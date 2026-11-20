@@ -19,9 +19,9 @@ afterEach(() => {
 });
 
 describe("oauth credential sqlite", () => {
-  test("round-trip in credentials.db at mode 0600", () => {
+  test("round-trip in credentials.db at mode 0600", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-sqlite-"));
-    writeOAuthToken({ provider: "anthropic", accessToken: "tok", obtainedAt: new Date().toISOString() }, home);
+    await writeOAuthToken({ provider: "anthropic", accessToken: "tok", obtainedAt: new Date().toISOString() }, home);
     const db = credentialsDbPath(home);
     expect(existsSync(db)).toBe(true);
     expect((statSync(db).mode & 0o777) === 0o600).toBe(true);
@@ -35,11 +35,9 @@ describe("oauth credential sqlite", () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-sqlite-lock-"));
     await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
-        Promise.resolve().then(() =>
-          writeOAuthToken(
-            { provider: `p${i}`, accessToken: `tok-${i}`, obtainedAt: new Date().toISOString() },
-            home,
-          ),
+        writeOAuthToken(
+          { provider: `p${i}`, accessToken: `tok-${i}`, obtainedAt: new Date().toISOString() },
+          home,
         ),
       ),
     );

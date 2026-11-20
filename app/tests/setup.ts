@@ -25,17 +25,27 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 // make a test pass/fail based on the developer's shell.
 delete process.env.HZ_THEME;
 delete process.env.HZ_SANDBOX_REQUIRE;
-delete process.env.HZ_EFFECT_HOST_KERNEL;
 delete process.env.HZ_ANCHOR_KEY;
 delete process.env.HZ_KERNEL_BIN;
 delete process.env.HZ_KERNEL_SHA256;
 delete process.env.HZ_KERNEL_PIN;
+delete process.env.HZ_EFFECT_RECONCILE_BLOCK;
+delete process.env.HZ_EFFECT_R170_BUN;
+delete process.env.HZ_EFFECT_R170_BUN_TIMEOUT_MS;
 // Bun can search parent directories for `.env`; the repo root has a developer
 // .env. Never let it choose the test provider/model.
 delete process.env.HZ_MODEL;
 delete process.env.HZ_PROVIDER;
 delete process.env.HZ_BASE_URL;
 delete process.env.HZ_API_KEY;
+
+// Pin EffectHost off for the suite. `createRuntime` auto-projects `=require`
+// when a trusted Rust kernel is discovered (ruling 540) and `=resource`
+// reconcile-block when the spine is active (538). Leaving the env unset lets
+// that projection stick for the rest of the bun process and breaks applyPlan /
+// subagent / kernelless fallback tests. Explicit `0` wins over auto-projection;
+// suites that need require/default set it themselves via setEnv.
+process.env.HZ_EFFECT_HOST_KERNEL = "0";
 
 process.on("exit", () => {
   try {
@@ -45,11 +55,11 @@ process.on("exit", () => {
   }
 });
 
-// `createRuntime` projects `HZ_EFFECT_HOST_KERNEL=default` onto `process.env`
-// when the Linux sandbox wrap is active (correct for one product process). Bun
-// runs test files in ONE process, so that projection leaked into later files
-// and silently changed which execution path they exercised. Clear it per test;
-// a file that wants the routed path sets it itself.
+// Bun runs test files in ONE process. Reset spine env after every test so a
+// file that opted into require/reconcile cannot poison the next file.
 afterEach(() => {
-  delete process.env.HZ_EFFECT_HOST_KERNEL;
+  process.env.HZ_EFFECT_HOST_KERNEL = "0";
+  delete process.env.HZ_EFFECT_RECONCILE_BLOCK;
+delete process.env.HZ_EFFECT_R170_BUN;
+delete process.env.HZ_EFFECT_R170_BUN_TIMEOUT_MS;
 });

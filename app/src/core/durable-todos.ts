@@ -53,6 +53,31 @@ function branchTrackPath(workspace: string): string {
   return path.join(stateRoot(workspace), DURABLE_BRANCH_TRACK_FILE);
 }
 
+/** Public path for Guard admission / doctor (ruling 599). */
+export function durableBranchTrackPath(workspace: string): string {
+  return branchTrackPath(workspace);
+}
+
+export async function admitDurableBranchTrackWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(branchTrackPath(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "durable-todo-branch refused:")
+    .replace(/^preds write denied/, "durable-todo-branch denied")
+    .replace(/^preds fs\.write requires approval/, "durable-todo-branch fs.write requires approval");
+}
+
+export async function admitDurableTodosDbWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(handoffDbPath(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "durable-todos-db refused:")
+    .replace(/^preds write denied/, "durable-todos-db denied")
+    .replace(/^preds fs\.write requires approval/, "durable-todos-db fs.write requires approval");
+}
+
 export function readLastDurableBranch(workspace: string): string | undefined {
   const fp = branchTrackPath(workspace);
   if (!existsSync(fp)) return undefined;
@@ -66,7 +91,7 @@ export function readLastDurableBranch(workspace: string): string | undefined {
   }
 }
 
-export function recordLastDurableBranch(workspace: string, branch: string): void {
+function persistLastDurableBranch(workspace: string, branch: string): void {
   const b = branch.trim();
   if (b === "") return;
   const dir = stateRoot(workspace);
@@ -77,25 +102,40 @@ export function recordLastDurableBranch(workspace: string, branch: string): void
   renameSync(tmp, fp);
 }
 
+/** Under-admission (ruling 599): Guard before durable-todo-branch.json persist. */
+export async function recordLastDurableBranch(workspace: string, branch: string): Promise<string | undefined> {
+  const refused = await admitDurableBranchTrackWrite(workspace);
+  if (refused !== undefined) return refused;
+  persistLastDurableBranch(workspace, branch);
+  return undefined;
+}
+
 /**
  * When `HZ_TODO_DURABLE_AUTOMERGE=1`, copy open todos from the last recorded branch
  * into the current branch when the current branch store is empty (git checkout seam).
+ * Under-admission (ruling 599): Guard handoffs.db + branch-track before any persist.
  */
-export function maybeAutoMergeDurableOnBranchChange(workspace: string): { merged: number; fromBranch?: string } {
+export async function maybeAutoMergeDurableOnBranchChange(
+  workspace: string,
+): Promise<{ merged: number; fromBranch?: string; refused?: string }> {
   if (!durableAutoMergeEnabled()) return { merged: 0 };
+  const dbRefused = await admitDurableTodosDbWrite(workspace);
+  if (dbRefused !== undefined) return { merged: 0, refused: dbRefused };
+  const trackRefused = await admitDurableBranchTrackWrite(workspace);
+  if (trackRefused !== undefined) return { merged: 0, refused: trackRefused };
   const current = branchKeyForWorkspace(workspace);
   const last = readLastDurableBranch(workspace);
   if (last === undefined || last === current) {
-    recordLastDurableBranch(workspace, current);
+    persistLastDurableBranch(workspace, current);
     return { merged: 0 };
   }
   const openOnCurrent = loadBranchTodosSqlite(workspace, current).filter((r) => !r.done && !r.dropped);
   if (openOnCurrent.length > 0) {
-    recordLastDurableBranch(workspace, current);
+    persistLastDurableBranch(workspace, current);
     return { merged: 0 };
   }
   const stats = mergeDurableBranchOpenTodos(workspace, last, current);
-  recordLastDurableBranch(workspace, current);
+  persistLastDurableBranch(workspace, current);
   return stats.merged > 0 ? { merged: stats.merged, fromBranch: last } : { merged: 0 };
 }
 
@@ -225,7 +265,7 @@ export function loadBranchTodos(workspace: string, branch?: string): DurableTodo
 export function saveBranchTodos(workspace: string, branch: string, rows: DurableTodoRow[]): void {
   if (!durableTodosEnabled()) return;
   saveBranchTodosSqlite(workspace, branch, rows);
-  recordLastDurableBranch(workspace, branch);
+  persistLastDurableBranch(workspace, branch);
 }
 
 export function durableTodoStorePath(workspace: string): string {

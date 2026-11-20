@@ -1,6 +1,288 @@
 //! Observe evidence flags — TS `effect-evidence.ts` / **257** mirror for kernel reconcile + execute.
 
-use crate::receipt_postimage::assess_postimage_observation;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
+
+use crate::receipt_postimage::{assess_postimage_observation, observe_file_postimage};
+
+/// Sentinel digest for directory-only postimage rows (metadata observe, no byte archive).
+pub const DIRECTORY_POSTIMAGE_DIGEST: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellFsMutateShape {
+    Rm,
+    Touch,
+    Mkdir,
+    Cp,
+    Mv,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedShellFsMutate {
+    pub shape: ShellFsMutateShape,
+    /// Destination or sole path (delete/touch/mkdir/cp/mv dest).
+    pub raw_path: String,
+    /// Source path for two-path `cp` / `mv` only.
+    pub raw_path_from: Option<String>,
+}
+
+fn program_basename(argv0: &str) -> &str {
+    Path::new(argv0)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(argv0)
+}
+
+/// Reduced honesty classes for shell.exec side-effects beyond streamEvidence (P0-2 **706**).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellSideEffectClass {
+    /// Reduced rm/touch/mkdir/cp/mv argv — FS postimages observed.
+    ReducedFs,
+    /// stdout/stderr streamEvidence only; no predicted FS mutate.
+    StreamOnly,
+    /// Network-capable program — FS/net landing not independently observed.
+    LikelyNet,
+    /// Mutating / compound FS-capable argv outside reduced shapes.
+    ArbitraryFs,
+    /// Empty or unclassified argv.
+    Unknown,
+}
+
+pub fn shell_side_effect_class_label(c: ShellSideEffectClass) -> &'static str {
+    match c {
+        ShellSideEffectClass::ReducedFs => "reduced_fs",
+        ShellSideEffectClass::StreamOnly => "stream_only",
+        ShellSideEffectClass::LikelyNet => "likely_net",
+        ShellSideEffectClass::ArbitraryFs => "arbitrary_fs",
+        ShellSideEffectClass::Unknown => "unknown",
+    }
+}
+
+const LIKELY_NET_PROGRAMS: &[&str] = &[
+    "curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp", "telnet", "dig", "nslookup",
+    "ping", "traceroute", "tracepath", "aria2c", "http", "https",
+];
+
+/// Classify argv for postimage/history honesty — never claims shell-net enforced.
+pub fn classify_shell_argv_side_effect(argv: &[String]) -> ShellSideEffectClass {
+    if argv.is_empty() {
+        return ShellSideEffectClass::Unknown;
+    }
+    if parse_reduced_shell_fs_mutate_argv(argv).is_some() {
+        return ShellSideEffectClass::ReducedFs;
+    }
+    let base = program_basename(&argv[0]);
+    let lower = base.to_ascii_lowercase();
+    if LIKELY_NET_PROGRAMS.iter().any(|p| *p == lower.as_str()) {
+        return ShellSideEffectClass::LikelyNet;
+    }
+    // Common FS mutators / shells outside reduced shapes → arbitrary FS residual.
+    match lower.as_str() {
+        "rm" | "cp" | "mv" | "mkdir" | "touch" | "chmod" | "chown" | "ln" | "install" | "tar"
+        | "unzip" | "gzip" | "dd" | "truncate" | "tee" | "bash" | "sh" | "zsh" | "python"
+        | "python3" | "node" | "perl" | "ruby" => ShellSideEffectClass::ArbitraryFs,
+        "echo" | "printf" | "true" | "false" | "cat" | "head" | "tail" | "wc" | "ls" | "pwd" => {
+            ShellSideEffectClass::StreamOnly
+        }
+        _ => ShellSideEffectClass::Unknown,
+    }
+}
+
+/// Reduced argv shapes for kernel-routed shell FS observe (P0-2 partial): one
+/// sandbox-relative path after known flags only. Arbitrary shell FS remains OPEN.
+pub fn parse_reduced_shell_fs_mutate_argv(argv: &[String]) -> Option<ParsedShellFsMutate> {
+    if argv.is_empty() {
+        return None;
+    }
+    let base = program_basename(&argv[0]);
+    match base {
+        "rm" => {
+            if argv.len() != 3 || argv[1] != "-f" {
+                return None;
+            }
+            Some(ParsedShellFsMutate {
+                shape: ShellFsMutateShape::Rm,
+                raw_path: argv[2].clone(),
+                raw_path_from: None,
+            })
+        }
+        "touch" => {
+            if argv.len() != 2 {
+                return None;
+            }
+            Some(ParsedShellFsMutate {
+                shape: ShellFsMutateShape::Touch,
+                raw_path: argv[1].clone(),
+                raw_path_from: None,
+            })
+        }
+        "mkdir" => match argv.len() {
+            2 => Some(ParsedShellFsMutate {
+                shape: ShellFsMutateShape::Mkdir,
+                raw_path: argv[1].clone(),
+                raw_path_from: None,
+            }),
+            3 if argv[1] == "-p" => Some(ParsedShellFsMutate {
+                shape: ShellFsMutateShape::Mkdir,
+                raw_path: argv[2].clone(),
+                raw_path_from: None,
+            }),
+            _ => None,
+        },
+        "cp" => parse_shell_two_sandbox_paths(argv, "cp", ShellFsMutateShape::Cp),
+        "mv" => parse_shell_two_sandbox_paths(argv, "mv", ShellFsMutateShape::Mv),
+        _ => None,
+    }
+}
+
+fn parse_shell_two_sandbox_paths(
+    argv: &[String],
+    program: &str,
+    shape: ShellFsMutateShape,
+) -> Option<ParsedShellFsMutate> {
+    if program_basename(&argv[0]) != program {
+        return None;
+    }
+    let (from, to) = match argv.len() {
+        3 => (&argv[1], &argv[2]),
+        4 if argv[1] == "-f" || argv[1] == "-n" => (&argv[2], &argv[3]),
+        _ => return None,
+    };
+    if from.starts_with('-') || to.starts_with('-') {
+        return None;
+    }
+    Some(ParsedShellFsMutate {
+        shape,
+        raw_path: to.clone(),
+        raw_path_from: Some(from.clone()),
+    })
+}
+
+fn resolve_shell_target_in_sandbox(
+    sandbox_root: &Path,
+    cwd: &Path,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    let candidate = if Path::new(raw_path).is_absolute() {
+        PathBuf::from(raw_path)
+    } else {
+        cwd.join(raw_path)
+    };
+    if !crate::guard::path_contained_in(sandbox_root, &candidate) {
+        return Err(
+            "HZ_PRECONDITION_FAILED: shell fs observe path must resolve inside sandboxRoot".into(),
+        );
+    }
+    crate::guard::lexical_resolve(&candidate).ok_or_else(|| {
+        "HZ_PRECONDITION_FAILED: shell fs observe path could not be resolved".to_string()
+    })
+}
+
+fn path_absent_stable(path: &Path) -> bool {
+    for _ in 0..2 {
+        match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => return false,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+fn path_entry_stable(path: &Path) -> bool {
+    let probe = || match fs::symlink_metadata(path) {
+        Ok(_) => Some(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    };
+    probe() == Some(true) && probe() == Some(true)
+}
+
+/// After `shell.exec`, independently observe predicted FS side-effect path(s).
+pub fn observe_shell_fs_postimages(
+    sandbox_root: &Path,
+    cwd: &Path,
+    parsed: &ParsedShellFsMutate,
+) -> Result<(Value, bool), String> {
+    let resolved = resolve_shell_target_in_sandbox(sandbox_root, cwd, &parsed.raw_path)?;
+    let abs = resolved.to_string_lossy().to_string();
+    if !Path::new(&abs).is_absolute() {
+        return Err("HZ_PRECONDITION_FAILED: shell fs postimage path must be absolute".into());
+    }
+    let (rows, stable) = match parsed.shape {
+        ShellFsMutateShape::Rm => {
+            let stable = path_absent_stable(&resolved);
+            (
+                vec![json!({"path": abs, "state": "absent", "via": "shell.rm"})],
+                stable,
+            )
+        }
+        ShellFsMutateShape::Touch => {
+            let obs = observe_file_postimage(&resolved);
+            let stable = obs.observation_stable && obs.digest.is_some();
+            let mut row = json!({
+                "path": abs,
+                "state": "present",
+                "via": "shell.touch",
+            });
+            if let Some(d) = obs.digest {
+                row["digest"] = json!(d);
+            }
+            (vec![row], stable)
+        }
+        ShellFsMutateShape::Mkdir => {
+            let stable = path_entry_stable(&resolved);
+            (
+                vec![json!({
+                    "path": abs,
+                    "state": "present",
+                    "digest": DIRECTORY_POSTIMAGE_DIGEST,
+                    "entryKind": "directory",
+                    "via": "shell.mkdir",
+                })],
+                stable,
+            )
+        }
+        ShellFsMutateShape::Cp | ShellFsMutateShape::Mv => {
+            let from_raw = parsed.raw_path_from.as_deref().ok_or_else(|| {
+                "HZ_PRECONDITION_FAILED: shell fs cp/mv observe missing source path".to_string()
+            })?;
+            let src = resolve_shell_target_in_sandbox(sandbox_root, cwd, from_raw)?;
+            let src_abs = src.to_string_lossy().to_string();
+            let via_dest = if parsed.shape == ShellFsMutateShape::Cp {
+                "shell.cp"
+            } else {
+                "shell.mv"
+            };
+            let obs = observe_file_postimage(&resolved);
+            let dest_stable = obs.observation_stable && obs.digest.is_some();
+            let mut row = json!({
+                "path": abs,
+                "state": "present",
+                "via": via_dest,
+            });
+            if let Some(d) = obs.digest {
+                row["digest"] = json!(d);
+            }
+            let mut rows = vec![row];
+            let mut stable = dest_stable;
+            if parsed.shape == ShellFsMutateShape::Mv {
+                let src_absent = path_absent_stable(&src);
+                stable = stable && src_absent;
+                rows.push(json!({
+                    "path": src_abs,
+                    "state": "absent",
+                    "via": "shell.mv",
+                }));
+            }
+            (rows, stable)
+        }
+    };
+    Ok((Value::Array(rows), stable))
+}
 
 /// `resultDigest` at observe matches tool output digest (fail-closed when false).
 pub fn assess_result_digest_stable(claimed: &str, observed: &str) -> bool {
@@ -189,6 +471,129 @@ mod tests {
             confirm_digest: Some("x".to_string()),
         };
         assert!(!shell_exec_result_digest_stable(&ok, &bad));
+    }
+
+    #[test]
+    fn parse_reduced_shell_fs_argv_shapes() {
+        assert_eq!(
+            parse_reduced_shell_fs_mutate_argv(&["rm".into(), "-f".into(), "x".into()])
+                .map(|p| p.shape),
+            Some(ShellFsMutateShape::Rm)
+        );
+        assert_eq!(
+            parse_reduced_shell_fs_mutate_argv(&["touch".into(), "a.txt".into()])
+                .map(|p| p.shape),
+            Some(ShellFsMutateShape::Touch)
+        );
+        assert_eq!(
+            parse_reduced_shell_fs_mutate_argv(&["mkdir".into(), "-p".into(), "d".into()])
+                .map(|p| p.shape),
+            Some(ShellFsMutateShape::Mkdir)
+        );
+        assert_eq!(
+            parse_reduced_shell_fs_mutate_argv(&["cp".into(), "a".into(), "b".into()])
+                .map(|p| (p.shape, p.raw_path_from.clone())),
+            Some((ShellFsMutateShape::Cp, Some("a".into())))
+        );
+        assert_eq!(
+            parse_reduced_shell_fs_mutate_argv(&["mv".into(), "-f".into(), "s".into(), "d".into()])
+                .map(|p| p.shape),
+            Some(ShellFsMutateShape::Mv)
+        );
+        assert!(parse_reduced_shell_fs_mutate_argv(&["cp".into(), "-r".into(), "a".into(), "b".into()]).is_none());
+        assert!(parse_reduced_shell_fs_mutate_argv(&["rm".into(), "-rf".into(), "x".into()]).is_none());
+        assert!(parse_reduced_shell_fs_mutate_argv(&["echo".into(), "hi".into()]).is_none());
+    }
+
+    #[test]
+    fn classify_shell_argv_side_effect_honesty() {
+        assert_eq!(
+            classify_shell_argv_side_effect(&["rm".into(), "-f".into(), "x".into()]),
+            ShellSideEffectClass::ReducedFs
+        );
+        assert_eq!(
+            classify_shell_argv_side_effect(&["curl".into(), "https://example.com".into()]),
+            ShellSideEffectClass::LikelyNet
+        );
+        assert_eq!(
+            classify_shell_argv_side_effect(&["wget".into(), "-O".into(), "f".into(), "u".into()]),
+            ShellSideEffectClass::LikelyNet
+        );
+        assert_eq!(
+            classify_shell_argv_side_effect(&["rm".into(), "-rf".into(), "x".into()]),
+            ShellSideEffectClass::ArbitraryFs
+        );
+        assert_eq!(
+            classify_shell_argv_side_effect(&["echo".into(), "hi".into()]),
+            ShellSideEffectClass::StreamOnly
+        );
+        assert_eq!(
+            classify_shell_argv_side_effect(&[]),
+            ShellSideEffectClass::Unknown
+        );
+    }
+
+    #[test]
+    fn observe_shell_cp_and_mv_postimages_on_disk() {
+        let root = std::env::temp_dir().join(format!(
+            "hz-shell-fs-cpmv-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("src.txt"), b"payload").unwrap();
+        fs::copy(root.join("src.txt"), root.join("dest.txt")).unwrap();
+        let cp_parsed = ParsedShellFsMutate {
+            shape: ShellFsMutateShape::Cp,
+            raw_path: "dest.txt".into(),
+            raw_path_from: Some("src.txt".into()),
+        };
+        let (cp_rows, cp_stable) =
+            observe_shell_fs_postimages(&root, &root, &cp_parsed).expect("cp observe");
+        assert!(cp_stable);
+        assert_eq!(cp_rows.as_array().unwrap().len(), 1);
+        assert_eq!(cp_rows[0]["state"], "present");
+        assert_eq!(cp_rows[0]["via"], "shell.cp");
+        assert!(root.join("dest.txt").is_file());
+
+        fs::write(root.join("mv-src.txt"), b"x").unwrap();
+        let mv_parsed = ParsedShellFsMutate {
+            shape: ShellFsMutateShape::Mv,
+            raw_path: "mv-dest.txt".into(),
+            raw_path_from: Some("mv-src.txt".into()),
+        };
+        // simulate mv by rename so observe sees expected layout
+        fs::rename(root.join("mv-src.txt"), root.join("mv-dest.txt")).unwrap();
+        let (mv_rows, mv_stable) =
+            observe_shell_fs_postimages(&root, &root, &mv_parsed).expect("mv observe");
+        assert!(mv_stable);
+        assert_eq!(mv_rows.as_array().unwrap().len(), 2);
+        assert_eq!(mv_rows[0]["via"], "shell.mv");
+        assert_eq!(mv_rows[1]["state"], "absent");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn observe_shell_touch_postimage_on_disk() {
+        let root = std::env::temp_dir().join(format!(
+            "hz-shell-fs-observe-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("probe.txt");
+        fs::write(&target, b"").unwrap();
+        let parsed = ParsedShellFsMutate {
+            shape: ShellFsMutateShape::Touch,
+            raw_path: "probe.txt".into(),
+            raw_path_from: None,
+        };
+        let (rows, stable) =
+            observe_shell_fs_postimages(&root, &root, &parsed).expect("observe");
+        assert!(stable);
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["state"], "present");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

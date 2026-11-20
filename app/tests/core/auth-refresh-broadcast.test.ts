@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { KernelClient } from "../../src/core/kernel";
 import {
-  bumpOAuthRefreshGeneration,
+  admitOAuthRefreshNotifyWrite, bumpOAuthRefreshGeneration,
   oauthRefreshNotifyPath,
   readOAuthRefreshGeneration,
 } from "../../src/core/auth/oauth-refresh-notify";
@@ -34,15 +34,15 @@ describe("oauth refresh cross-process broadcast", () => {
 
   const originalFetch = globalThis.fetch;
 
-  test("writeOAuthToken bumps generation notify file", () => {
+  test("writeOAuthToken bumps generation notify file", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-"));
     expect(readOAuthRefreshGeneration("p", home)).toBe(0);
-    writeOAuthToken(
+    await writeOAuthToken(
       { provider: "p", accessToken: "a1", obtainedAt: new Date().toISOString() },
       home,
     );
     expect(readOAuthRefreshGeneration("p", home)).toBe(1);
-    writeOAuthToken(
+    await writeOAuthToken(
       { provider: "p", accessToken: "a2", obtainedAt: new Date().toISOString() },
       home,
     );
@@ -58,7 +58,7 @@ describe("oauth refresh cross-process broadcast", () => {
     expect(kernelA).toBeDefined();
     expect(kernelB).toBeDefined();
 
-    writeOAuthToken(
+    await writeOAuthToken(
       {
         provider: "host",
         accessToken: "stale",
@@ -100,7 +100,7 @@ describe("oauth refresh cross-process broadcast", () => {
 
   test("successful refresh notifies OAuth account-rotated listeners (449)", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-"));
-    writeOAuthToken(
+    await writeOAuthToken(
       {
         provider: "host",
         accessToken: "stale",
@@ -133,7 +133,7 @@ describe("oauth refresh cross-process broadcast", () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-ws-"));
     const savedHome = process.env.HOME;
     process.env.HOME = home;
-    writeOAuthToken(
+    await writeOAuthToken(
       {
         provider: "host",
         accessToken: "stale",
@@ -172,10 +172,33 @@ describe("oauth refresh cross-process broadcast", () => {
     }
   });
 
-  test("bumpOAuthRefreshGeneration is monotonic", () => {
+  test("bumpOAuthRefreshGeneration is monotonic", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-bcast-"));
-    expect(bumpOAuthRefreshGeneration("x", home)).toBe(1);
-    expect(bumpOAuthRefreshGeneration("x", home)).toBe(2);
+    expect(await bumpOAuthRefreshGeneration("x", home)).toBe(1);
+    expect(await bumpOAuthRefreshGeneration("x", home)).toBe(2);
     expect(readOAuthRefreshGeneration("x", home)).toBe(2);
   });
+
+  test("admitOAuthRefreshNotifyWrite refuses deny before bump (ruling 596)", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-oauth-deny-"));
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(home, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(home, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-oauth-gen" }]),
+        "utf8",
+      );
+      const refused = await admitOAuthRefreshNotifyWrite("x", home);
+      expect(refused).toMatch(/denied|test-deny-oauth-gen|oauth-refresh-notify/i);
+      expect(await bumpOAuthRefreshGeneration("x", home)).toBeUndefined();
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+
 });

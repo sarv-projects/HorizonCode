@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { LiveSteering, LiveSteerClaim } from "../../src/contracts";
 import {
+  hermeticResponsesSteerWireSelfCheck,
   pumpResponsesSteering,
   ResponsesSteerWire,
   RESPONSES_WS_URL,
@@ -48,6 +49,12 @@ function factory(): { factory: SteerSocketFactory; socket: FakeSocket } {
 }
 
 describe("Responses WebSocket response.steer wire (C-9)", () => {
+  test("hermeticResponsesSteerWireSelfCheck passes offline (doctor)", () => {
+    const check = hermeticResponsesSteerWireSelfCheck();
+    expect(check.ok).toBe(true);
+    expect(check.summary).toContain("hermetic wire protocol OK");
+  });
+
   test("auth header + URL follow the documented protocol", async () => {
     const f = factory();
     const wire = new ResponsesSteerWire({ apiKey: "sk-test", responseId: "resp_1", socketFactory: f.factory });

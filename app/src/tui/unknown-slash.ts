@@ -2,14 +2,18 @@
  * unknown-slash.ts — `/unknown` command (docs/28 ruling 264; actions ruling 282).
  */
 
-import type { Runtime } from "../contracts";
+import type { GuardAction, Runtime } from "../contracts";
 import type { UnknownEffectRow } from "../core/effect-unknown-list";
 import {
   buildUnknownEvidenceBundle,
+  defaultUnknownEvidencePath,
+  unknownExportPublication,
   writeUnknownEvidenceBundle,
 } from "../core/unknown-evidence";
 import { findReceiptForUnknownTarget } from "../core/unknown-receipt-lookup";
 import type { EffectRecord } from "../core/effect-host";
+import { KernelClient } from "../core/kernel";
+import { scopeFor } from "../core/loop";
 import { printUnknownInspector, formatReceiptChainInspectLines } from "./unknown-inspector";
 import type { Renderer } from "./render";
 import { parseUnknownSlashArgs } from "./unknown-slash-parse";
@@ -74,7 +78,7 @@ export function buildUnknownInspectLines(
   });
 }
 
-export function runUnknownCommand(runtime: Runtime, renderer: Renderer, arg?: string): void {
+export async function runUnknownCommand(runtime: Runtime, renderer: Renderer, arg?: string): Promise<void> {
   const rt = runtime as RuntimeWithUnknownEffects;
   const list = rt.unknownEffects;
   if (typeof list !== "function") {
@@ -245,8 +249,32 @@ export function runUnknownCommand(runtime: Runtime, renderer: Renderer, arg?: st
       rows,
       getRecord,
     });
-    const out = writeUnknownEvidenceBundle(workspace, bundle);
+    // Under-admission (ruling 571): Guard fs.write on the evidence path first.
+    const target = defaultUnknownEvidencePath(workspace, runtime.sessionId);
+    const action: GuardAction = { kind: "fs.write", target };
+    const kernel = new KernelClient({ workspace });
+    await kernel.start();
+    let decision;
+    try {
+      decision = await kernel.checkGuard(action, scopeFor(action, workspace));
+    } catch (err) {
+      renderer.notice(
+        `export refused: the guard could not decide (${err instanceof Error ? err.message : String(err)})`,
+      );
+      return;
+    }
+    if (decision.decision !== "allow") {
+      const why =
+        decision.decision === "ask"
+          ? "unattended export never self-approves; allow the path in policy"
+          : `denied by policy: ${decision.reason !== undefined && decision.reason !== "" ? decision.reason : "no reason given"}`;
+      renderer.notice(`export refused: ${why}`);
+      return;
+    }
+    const out = writeUnknownEvidenceBundle(workspace, bundle, target);
     renderer.notice(`wrote evidence bundle (${rows.length} effect(s)): ${out}`);
+    // H-7 (ruling 574): force-evaluate contracts; human notice unchanged.
+    void unknownExportPublication({ effectCount: rows.length });
     return;
   }
 

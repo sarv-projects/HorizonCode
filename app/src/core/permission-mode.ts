@@ -123,7 +123,7 @@ const SENSITIVE_FILES: readonly string[] = [
   "rust-toolchain.toml", "rust-toolchain", ".tool-versions", "pyproject.toml", "tox.ini", "noxfile.py", "rakefile", "rakefile.rb", "gemfile",
 ];
 
-function isSensitiveRel(rel: string): boolean {
+export function isSensitiveRel(rel: string): boolean {
   // Lowercased throughout: on a case-insensitive filesystem `.GIT/hooks` IS `.git/hooks`.
   const parts = rel.split(path.sep).filter((s) => s !== "").map((s) => s.toLowerCase());
   const base = parts[parts.length - 1] ?? "";
@@ -138,6 +138,19 @@ function isSensitiveRel(rel: string): boolean {
  * Everything else, shell included, falls through to the human (or a fail-closed
  * deny when there is none).
  */
+/** In-workspace, non-sensitive `fs.write` targets accept-edits may auto-answer. */
+export function acceptEditsWriteAutoApproves(
+  action: GuardAction,
+  workspace: string,
+  inside: (target: string, workspace: string) => boolean,
+): boolean {
+  if (action.kind !== "fs.write") return false;
+  if (!inside(action.target, workspace)) return false;
+  const lexical = path.relative(path.resolve(workspace), path.resolve(workspace, action.target));
+  const real = path.relative(realpathish(workspace), realpathish(path.resolve(workspace, action.target)));
+  return !isSensitiveRel(lexical) && !isSensitiveRel(real);
+}
+
 export function modeAutoApproves(
   mode: PermissionMode | undefined,
   action: GuardAction | undefined,
@@ -145,13 +158,7 @@ export function modeAutoApproves(
   inside: (target: string, workspace: string) => boolean,
 ): boolean {
   if (mode !== "accept-edits" || action === undefined) return false;
-  if (action.kind !== "fs.write") return false;
-  if (!inside(action.target, workspace)) return false;
-  // Judge BOTH the lexical path and the symlink-resolved one: an in-workspace
-  // link (`gitlink -> .git`, `notes.md -> package.json`) must not hide a sensitive target.
-  const lexical = path.relative(path.resolve(workspace), path.resolve(workspace, action.target));
-  const real = path.relative(realpathish(workspace), realpathish(path.resolve(workspace, action.target)));
-  return !isSensitiveRel(lexical) && !isSensitiveRel(real);
+  return acceptEditsWriteAutoApproves(action, workspace, inside);
 }
 
 /** The prompt badge text for a mode (empty for default). */

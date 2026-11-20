@@ -11,9 +11,10 @@ use std::path::{Path, PathBuf};
 
 use crate::guard;
 use crate::jsonl_append;
+use crate::sandbox_path_verify;
 
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 fn random_suffix() -> String {
     format!(
@@ -53,19 +54,11 @@ pub fn write_bytes_atomic_in_sandbox(
     target: &Path,
     payload: &[u8],
 ) -> Result<(), String> {
-    if !guard::path_contained_in(sandbox_root, target) {
-        return Err(
-            "HZ_PRECONDITION_FAILED: atomic write target must resolve inside sandboxRoot".to_string(),
-        );
-    }
+    let target = sandbox_path_verify::recheck_path_in_sandbox(sandbox_root, target, None)?;
     let parent = target
         .parent()
         .ok_or_else(|| "HZ_PRECONDITION_FAILED: atomic write target has no parent directory".to_string())?;
-    if !guard::path_contained_in(sandbox_root, parent) {
-        return Err(
-            "HZ_PRECONDITION_FAILED: atomic write parent must resolve inside sandboxRoot".to_string(),
-        );
-    }
+    sandbox_path_verify::recheck_path_in_sandbox(sandbox_root, parent, None)?;
     if let Some(parent_resolved) = guard::lexical_resolve(parent) {
         if !guard::path_contained_in(sandbox_root, &parent_resolved) {
             return Err(
@@ -78,22 +71,21 @@ pub fn write_bytes_atomic_in_sandbox(
         format!("HZ_PRECONDITION_FAILED: effect.execute write failed creating parent: {e}")
     })?;
 
-    let tmp = temp_path_beside(target);
-    if !guard::path_contained_in(sandbox_root, &tmp) {
-        return Err(
-            "HZ_PRECONDITION_FAILED: atomic write temp path must resolve inside sandboxRoot"
-                .to_string(),
-        );
-    }
+    let tmp = temp_path_beside(&target);
+    sandbox_path_verify::recheck_path_in_sandbox(sandbox_root, &tmp, None)?;
 
     {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .map_err(|e| {
-                format!("HZ_PRECONDITION_FAILED: atomic write could not create temp file: {e}")
-            })?;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            opts.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        let file = opts.open(&tmp).map_err(|e| {
+            format!("HZ_PRECONDITION_FAILED: atomic write could not create temp file: {e}")
+        })?;
+        sandbox_path_verify::verify_fd_contained_in_sandbox(&file, sandbox_root, &tmp, None)?;
+        let mut file = file;
         file.write_all(payload)
             .map_err(|e| format!("HZ_PRECONDITION_FAILED: atomic write temp write failed: {e}"))?;
         file.flush()
@@ -109,7 +101,7 @@ pub fn write_bytes_atomic_in_sandbox(
                 .to_string(),
         );
     }
-    if target.exists() && !same_device(&tmp, target)? {
+    if target.exists() && !same_device(&tmp, &target)? {
         let _ = fs::remove_file(&tmp);
         return Err(
             "HZ_PRECONDITION_FAILED: atomic write refused: temp and target on different devices (cross-device rename)"
@@ -117,11 +109,13 @@ pub fn write_bytes_atomic_in_sandbox(
         );
     }
 
-    fs::rename(&tmp, target).map_err(|e| {
+    sandbox_path_verify::recheck_path_in_sandbox(sandbox_root, &target, Some(&target))?;
+
+    fs::rename(&tmp, &target).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("HZ_PRECONDITION_FAILED: atomic write rename failed: {e}")
     })?;
-    jsonl_append::sync_jsonl_parent_dir_best_effort(target);
+    jsonl_append::sync_jsonl_parent_dir_best_effort(&target);
     Ok(())
 }
 
@@ -281,5 +275,31 @@ mod tests {
         let err = rename_file_in_sandbox(&sandbox, &from, &evil).unwrap_err();
         assert!(err.contains("sandboxRoot"), "{err}");
         let _ = fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn atomic_write_refuses_symlink_swap_before_effect() {
+        use std::os::unix::fs::symlink;
+
+        let sandbox = fresh_sandbox("symlink-swap");
+        let candidate = sandbox.join("target.txt");
+        fs::write(&candidate, b"good").unwrap();
+        fs::remove_file(&candidate).unwrap();
+        let outside = std::env::temp_dir().join(format!("hz-swap-out-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        fs::write(&secret, b"secret").unwrap();
+        symlink(&secret, &candidate).unwrap();
+        let err =
+            write_bytes_atomic_in_sandbox(&sandbox, &candidate, b"pwned").unwrap_err();
+        assert!(
+            err.contains("resolution moved") || err.contains("outside sandboxRoot"),
+            "{err}"
+        );
+        assert_eq!(fs::read(&secret).unwrap(), b"secret");
+        let _ = fs::remove_dir_all(&sandbox);
+        let _ = fs::remove_dir_all(&outside);
     }
 }

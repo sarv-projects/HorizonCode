@@ -120,9 +120,17 @@ describe("H-4 Anthropic consumes the configured formatter", () => {
   test("default (no formatter) is byte-identical to the native converter", async () => {
     // Direct converter: no second argument keeps the historic output exactly.
     expect(toAnthropicMessages([...MESSAGES])).toEqual(NATIVE_MESSAGES);
-    // Provider with no configured formatter posts the same native messages.
-    const body = await anthropicPostedBody(baseConfig({ provider: "anthropic" }));
-    expect(body.messages).toEqual(NATIVE_MESSAGES);
+    // Cache breakpoints (default ON, ruling 542) stamp cache_control; opt out so
+    // this identity assertion stays about the formatter seam, not B-4 markers.
+    const prevBp = process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
+    process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = "0";
+    try {
+      const body = await anthropicPostedBody(baseConfig({ provider: "anthropic" }));
+      expect(body.messages).toEqual(NATIVE_MESSAGES);
+    } finally {
+      if (prevBp === undefined) delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
+      else process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = prevBp;
+    }
   });
 
   test("a non-default dialect selected from config changes Anthropic rendering", async () => {

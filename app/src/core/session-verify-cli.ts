@@ -8,6 +8,7 @@
  */
 
 import { SessionStore } from "./session";
+import { metricContract } from "./metrics";
 import {
   formatEffectReconcileProbeSummary,
   probeEffectReconcile,
@@ -46,6 +47,21 @@ import {
   replayNestedEventStreams,
   type NestedEventStreamReplayVerdict,
 } from "./receipt-nested-event-stream-replay";
+import {
+  formatNestedObserveSummary,
+  type NestedObserveSessionSurface,
+  nestedObserveBlocksVerify,
+} from "./effect-nested-observe";
+import {
+  absenceReconstructBlocksVerify,
+  formatAbsenceReconstructSummary,
+  type AbsenceReconstructSessionSurface,
+} from "./effect-absent-path-reconstruct";
+import {
+  formatLegacyClassifySummary,
+  type LegacyClassifySessionSurface,
+  legacyClassifyBlocksVerify,
+} from "./effect-legacy-unverifiable";
 
 export const SESSION_VERIFY_FAIL_EXIT = 3;
 
@@ -63,6 +79,12 @@ export interface SessionVerifyReport {
   nestedReceipts: NestedReceiptReplayVerdict;
   /** Nested child event-stream replay from a verified parent read (ruling **478**). */
   nestedEventStreams: NestedEventStreamReplayVerdict;
+  /** Trusted-kernel childEffectIds OwnerLog observe (**697**); optional when kernel absent. */
+  nestedObserve?: NestedObserveSessionSurface;
+  /** Latest absent-path independent reconstruction (**698**); optional when kernel absent. */
+  absenceReconstruct?: AbsenceReconstructSessionSurface;
+  /** Named legacy unverifiable postimage rows (**709**); optional when kernel absent. */
+  legacyClassify?: LegacyClassifySessionSurface;
   /** Effects still `unknown` after in-session reconcile simulation. */
   openUnknownCount: number;
   ok: boolean;
@@ -72,7 +94,15 @@ function countOpenUnknown(report: EffectReconcileProbeReport): number {
   return report.rows.filter((r) => r.sessionVerdict === "unknown" || r.ledgerVerdict === "unknown").length;
 }
 
-export function buildSessionVerifyReport(workspace: string, sessionId: string): SessionVerifyReport {
+export function buildSessionVerifyReport(
+  workspace: string,
+  sessionId: string,
+  opts?: {
+    nestedObserve?: NestedObserveSessionSurface;
+    absenceReconstruct?: AbsenceReconstructSessionSurface;
+    legacyClassify?: LegacyClassifySessionSurface;
+  },
+): SessionVerifyReport {
   const store = new SessionStore(workspace);
   const sessionFound = store.getSession(sessionId) !== null;
   const chain = verifyReceiptChainSync(workspace);
@@ -91,6 +121,9 @@ export function buildSessionVerifyReport(workspace: string, sessionId: string): 
   const openUnknownCount = countOpenUnknown(reconcile);
   const anchorsOk =
     (sessionEvents.ok || sessionEvents.skipped) && compactionChains.every((c) => c.ok || c.skipped);
+  const nestedObserve = opts?.nestedObserve;
+  const absenceReconstruct = opts?.absenceReconstruct;
+  const legacyClassify = opts?.legacyClassify;
   const ok =
     sessionFound &&
     chain.ok &&
@@ -99,7 +132,10 @@ export function buildSessionVerifyReport(workspace: string, sessionId: string): 
     nestedEventStreams.ok &&
     reconcile.mismatches.length === 0 &&
     evidence.failures.length === 0 &&
-    openUnknownCount === 0;
+    openUnknownCount === 0 &&
+    !nestedObserveBlocksVerify(nestedObserve) &&
+    !absenceReconstructBlocksVerify(absenceReconstruct) &&
+    !legacyClassifyBlocksVerify(legacyClassify);
   return {
     workspace,
     sessionId,
@@ -112,9 +148,66 @@ export function buildSessionVerifyReport(workspace: string, sessionId: string): 
     postimageReplayEnabled: replayOn,
     nestedReceipts,
     nestedEventStreams,
+    nestedObserve,
+    absenceReconstruct,
+    legacyClassify,
     openUnknownCount,
     ok,
   };
+}
+
+/** Async wrapper: probes trusted-kernel nested observe before building the report. */
+export async function buildSessionVerifyReportAsync(
+  workspace: string,
+  sessionId: string,
+): Promise<SessionVerifyReport> {
+  const [{ probeNestedObserveViaKernel }, { probeAbsenceReconstructViaKernel }, { probeLegacyClassifyViaKernel }] =
+    await Promise.all([
+      import("./effect-nested-observe"),
+      import("./effect-absent-path-reconstruct"),
+      import("./effect-legacy-unverifiable"),
+    ]);
+  const [nestedObserve, absenceReconstruct, legacyClassify] = await Promise.all([
+    probeNestedObserveViaKernel(workspace),
+    probeAbsenceReconstructViaKernel(workspace),
+    probeLegacyClassifyViaKernel(workspace),
+  ]);
+  return buildSessionVerifyReport(workspace, sessionId, {
+    nestedObserve,
+    absenceReconstruct,
+    legacyClassify,
+  });
+}
+
+
+/** H-7: contracted form of `hzcode session verify` scalar outcomes (ruling 591). */
+export function sessionVerifyPublication(report: SessionVerifyReport): string[] {
+  const anchor = "none — this session-verify invocation";
+  const population = "read-only verify of receipt chain, nested replay, reconcile, and evidence for one session";
+  const excludes = "none — scalars are derived from the verify report only (no mutation)";
+  return [
+    metricContract({
+      metric: "session verify ok",
+      anchor,
+      population,
+      excludes,
+      value: report.ok ? 1 : 0,
+    }),
+    metricContract({
+      metric: "session verify open unknown",
+      anchor,
+      population,
+      excludes,
+      value: report.openUnknownCount,
+    }),
+    metricContract({
+      metric: "session verify reconcile mismatches",
+      anchor,
+      population,
+      excludes,
+      value: report.reconcile.mismatches.length,
+    }),
+  ];
 }
 
 export function sessionVerifyExitCode(report: SessionVerifyReport): number {
@@ -147,6 +240,15 @@ export function renderSessionVerify(report: SessionVerifyReport): string {
   }
   lines.push(`  ${formatEffectReconcileProbeSummary(report.reconcile)}`);
   lines.push(`  ${formatEffectEvidenceGateSummary(report.evidence)}`);
+  if (report.nestedObserve !== undefined) {
+    lines.push(`  ${formatNestedObserveSummary(report.nestedObserve)}`);
+  }
+  if (report.absenceReconstruct !== undefined) {
+    lines.push(`  ${formatAbsenceReconstructSummary(report.absenceReconstruct)}`);
+  }
+  if (report.legacyClassify !== undefined) {
+    lines.push(`  ${formatLegacyClassifySummary(report.legacyClassify)}`);
+  }
   if (report.postimageReplayEnabled) {
     const replayPosture = postimageReplayDoctorPosture();
     const via =
@@ -182,4 +284,19 @@ export function renderSessionVerify(report: SessionVerifyReport): string {
   }
   lines.push(report.ok ? "  verdict: verified (reduced)" : "  verdict: not verified");
   return lines.join("\n");
+}
+
+/** Optional auto-emit line for CLI (ruling **708**); async side effect when env opt-in. */
+export async function sessionVerifyAutoEmitLine(
+  report: SessionVerifyReport,
+): Promise<string | undefined> {
+  const {
+    formatVerificationArtifactAutoEmitNotice,
+    tryAutoEmitVerificationArtifactSessionVerify,
+    verificationArtifactAutoEmitEnabled,
+  } = await import("./verification-artifact-auto");
+  if (!verificationArtifactAutoEmitEnabled()) return undefined;
+  const result = await tryAutoEmitVerificationArtifactSessionVerify(report.workspace, report);
+  if (result === undefined) return undefined;
+  return `  ${formatVerificationArtifactAutoEmitNotice(result)}`;
 }

@@ -19,6 +19,7 @@ import type {
   ApprovalHandler,
   ApprovalRequest,
   ChatMsg,
+  ChatMsgContent,
   ContextUsage,
   GuardAction,
   GuardKind,
@@ -47,13 +48,19 @@ import {
 import { hydrateSavedGrants } from "./saved-allows";
 import { durableAutoMergeEnabled, durableTodosEnabled, maybeAutoMergeDurableOnBranchChange } from "./durable-todos";
 import { hydrateTodosFromDurable } from "../tools/todo";
+import { calibrationFeaturesFromMessages } from "./decision-helper";
+import { liveDifficultyJudgeOptIn, resolveThinkingEffortWithLiveJudge } from "./difficulty-live-judge";
 import { parseThinkingAutoFlag, resolveThinkingEffort } from "./thinking-effort";
 import { augmentConfigWithTrustedWorkspace, defaultConfigPath, loadConfig, readConfigFile, type HzConfig, type McpConfig } from "./config";
 import { applySandboxChildNetFromConfig } from "./sandbox-child-net";
 import {
   applyEffectHostKernelFromUserConfig,
+  applyEffectHostKernelRegulatedRequire,
   applyEffectHostKernelSandboxDefault,
+  applyEffectHostKernelTrustedRequire,
 } from "./effect-host-runtime";
+import { applyEngineeringBrainFromAutonomy } from "./engineering-viability";
+import { applyProductNetnsCapableDefault } from "./sandbox-netns-runtime";
 import { kernelEnforcesProcessSandbox } from "./sandbox-spawn";
 import {
   parseCheckModelAcceptsSettingsFlag,
@@ -62,6 +69,7 @@ import {
 import { catalogModel, catalogWindow, loadCatalog } from "./catalog/catalog";
 import { setCostCatalog } from "./usage-cost";
 import {
+  makeModelsCatalogPollCacheWriteGuard,
   makeModelsCatalogPollNetGuard,
   startModelsCatalogPoll,
   type ModelsPollStop,
@@ -80,11 +88,13 @@ import {
   BudgetLedger,
   errorMessage,
   getApprovalHandler,
+  getAskUserHandler,
   MAX_PROVIDER_CALLS,
   runTurn,
   scopeFor,
   SESSION_LEASE_TTL_MS,
   setApprovalHandler as setProcessApprovalHandler,
+  setAskUserHandler as setProcessAskUserHandler,
   streamFor,
   systemPrompt,
 } from "./loop";
@@ -94,6 +104,7 @@ import { makeProvider } from "./providers";
 import { loadHooks, runLifecycleHooks } from "./hooks";
 import { ensureWorkspaceHookTrust, formatUntrustedWorkspaceStartupNotice, hooksLoadOptions } from "./trust";
 import { SessionStore, type SessionInfo } from "./session";
+import { textFromChatContent } from "./chat-content";
 import { acquireOwnedSession, claimSessionForRecovery, type SessionOwnerLease } from "./session-owner";
 import { reindexSessionSearch, searchSessions as ftsSearchSessions } from "./session-search";
 import { onOAuthAccountRotated } from "./auth/refresh";
@@ -113,16 +124,20 @@ import {
   reviewForkEnabled,
   spawnDetachedReviewFork,
 } from "./review";
-import { SpendLedger, spendLimitMicroFromEnv } from "./spend-ledger";
+import { admitSpendLedgerWrite, SpendLedger, spendLimitMicroFromEnv } from "./spend-ledger";
+import { ownerWorkerSuccessNotice } from "./owner-worker-ancestor-honesty";
+import { applyProductGuardG1WireDefault } from "./guard-g1-wire";
+import { guardG1WireStartupNotice } from "./guard-g1-wire-honesty";
 import { runOwnerWorkerForTurn } from "./owner-worker-spawn";
 import {
   appendMarkdownTranscriptEvent,
   markdownTranscriptCursor,
   markdownTranscriptEnabled,
+  markdownTranscriptPath,
   resumeMessagesFromMarkdownTranscript,
   syncMarkdownTranscript,
 } from "./markdown-transcript";
-import { readSessionGoal, writeSessionGoal, type SessionGoalStatus } from "./session-goal";
+import { readSessionGoal, sessionGoalPath, writeSessionGoal, type SessionGoalStatus } from "./session-goal";
 import {
   activeSkillSection,
   BUILTIN_SKILLS,
@@ -151,13 +166,13 @@ import {
   checkpointViews,
   changesSince,
   listCheckpoints,
-  recordCheckpoint,
+  recordCheckpointGuarded,
   rewindPlan,
   type CheckpointView,
 } from "./checkpoints";
 import type { PermissionMode } from "./permission-mode";
 import { isPermissionMode, meetPermissionMode, permissionModeError } from "./permission-mode";
-import { consumeChange, reloadFromDisk } from "../tools/change-journal";
+import { consumeChangeGuarded, reloadFromDisk } from "../tools/change-journal";
 import { receiptHead, type ChainStatus } from "./convo";
 import { isRefused, writeAtomic } from "../tools/atomic-write";
 import { setThemeMode } from "../tui/style";
@@ -168,6 +183,7 @@ import { mirrorEffectReconcileToKernel } from "./effect-kernel-reconcile";
 import { reconcileEffectsOnAttach } from "./effect-reconcile-attach";
 import { effectHostKernelRequireRefusal } from "./effect-host-posture";
 import {
+  applyReconcileBlockSpineDefault,
   effectReconcileBlockLatchView,
   effectReconcileBlockObservePendingRefusal,
   effectReconcileBlockRefusal,
@@ -181,6 +197,8 @@ export interface HzRuntime extends Runtime {
   readonly config: HzConfig;
   /** Register (or clear, with a non-function) this instance's approval handler. */
   setApprovalHandler(fn: ApprovalHandler): void;
+  /** Register this instance's structured `ask_user` handler (TUI / client). */
+  setAskUserHandler(fn: import("../contracts").AskUserHandler): void;
   /** Remember an approval for the rest of the session (the "always" answer). */
   grantLease(kind: GuardKind, pattern: string, ttlMs?: number): Promise<Lease>;
   /** Start a fresh session in this workspace and switch to it. */
@@ -297,6 +315,7 @@ class HzRuntimeImpl implements HzRuntime {
   private session: SessionInfo;
   private currentModel: string;
   private instanceApproval?: ApprovalHandler;
+  private instanceAskUser?: import("../contracts").AskUserHandler;
   private controller?: AbortController;
   private active?: RuntimeCallbacks;
   /** Per-turn mid-turn steer buffer; set for the duration of `runSend`. */
@@ -346,14 +365,21 @@ class HzRuntimeImpl implements HzRuntime {
     this.modelsCatalogPollStop = stop;
   }
 
-  /** Background models.dev poll with kernel `net.fetch` admission (docs/33 §5.8). */
+  /** Background models.dev poll with kernel `net.fetch` + cache `fs.write` admission. */
   wireDefaultModelsCatalogPoll(): void {
+    const home = homedir();
     this.beginModelsCatalogPoll(
       startModelsCatalogPoll({
-        home: homedir(),
+        home,
         onNotice: (message) => this.note(message),
         assertNetFetch: makeModelsCatalogPollNetGuard((url) =>
           this.kernel.checkGuard({ kind: "net.fetch", target: url }, undefined, this.leases, this.session.id),
+        ),
+        // Under-admission (ruling 576): Guard before models-dev cache rewrite.
+        assertCacheWrite: makeModelsCatalogPollCacheWriteGuard(
+          (target) =>
+            this.kernel.checkGuard({ kind: "fs.write", target }, undefined, this.leases, this.session.id),
+          home,
         ),
       }),
     );
@@ -432,6 +458,32 @@ class HzRuntimeImpl implements HzRuntime {
 
   /** Set or update the session goal statement (ruling 453). */
   async setGoal(statement: string, status: SessionGoalStatus = "active"): Promise<string> {
+    // Under-admission (ruling 573): Guard fs.write on the goals JSON before mutate.
+    const target = sessionGoalPath(this.workspace, this.session.id);
+    const action: GuardAction = { kind: "fs.write", target };
+    let decision;
+    try {
+      decision = await this.kernel.checkGuard(
+        action,
+        scopeFor(action, this.workspace),
+        this.leases,
+        this.session.id,
+      );
+    } catch (err) {
+      throw new Error(
+        `goal update refused: the guard could not decide (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    if (decision.decision === "ask") {
+      throw new Error(
+        "goal update refused: unattended setGoal never self-approves; allow the path in policy",
+      );
+    }
+    if (decision.decision === "deny") {
+      const why =
+        decision.reason !== undefined && decision.reason !== "" ? decision.reason : "no reason given";
+      throw new Error(`goal update refused: denied by policy: ${why}`);
+    }
     const goal = writeSessionGoal(this.workspace, this.session.id, statement, status);
     await this.append(streamFor(this.session.id), EventTypes.goalUpdated, {
       sessionId: this.session.id,
@@ -515,14 +567,59 @@ class HzRuntimeImpl implements HzRuntime {
   }
 
   /**
+   * Under-admission (ruling 575): Guard `fs.write` on the Markdown transcript
+   * path once per session; deny/ask latch refuses all subsequent mirror/sync
+   * writes without mutating disk.
+   */
+  /** @internal product/bootstrap latch — see ruling 575. */
+  transcriptWriteAdmit: "unset" | "allow" | "refuse" = "unset";
+  /** @internal refuse reason after a failed admit (ruling 575). */
+  transcriptWriteRefuseReason = "";
+
+  /** Guard `fs.write` on the Markdown transcript path (ruling 575). */
+  async ensureTranscriptWriteAdmitted(): Promise<boolean> {
+    if (!markdownTranscriptEnabled()) return false;
+    if (this.transcriptWriteAdmit === "allow") return true;
+    if (this.transcriptWriteAdmit === "refuse") return false;
+    const target = markdownTranscriptPath(this.workspace, this.session.id);
+    const action: GuardAction = { kind: "fs.write", target };
+    let decision;
+    try {
+      decision = await this.kernel.checkGuard(
+        action,
+        scopeFor(action, this.workspace),
+        this.leases,
+        this.session.id,
+      );
+    } catch (err) {
+      this.transcriptWriteAdmit = "refuse";
+      this.transcriptWriteRefuseReason =
+        `the guard could not decide (${err instanceof Error ? err.message : String(err)})`;
+      return false;
+    }
+    if (decision.decision !== "allow") {
+      this.transcriptWriteAdmit = "refuse";
+      this.transcriptWriteRefuseReason =
+        decision.decision === "ask"
+          ? "unattended transcript write never self-approves; allow the path in policy"
+          : `denied by policy: ${decision.reason !== undefined && decision.reason !== "" ? decision.reason : "no reason given"}`;
+      return false;
+    }
+    this.transcriptWriteAdmit = "allow";
+    return true;
+  }
+
+  /**
    * E-4: mirror newly stored conversation messages into the Markdown transcript
    * as events happen. The in-process cursor is the single source of truth for
    * how many sections are already on disk, so this never duplicates a section
    * written by an earlier append or by the per-turn `syncMarkdownTranscript`
    * safety net. Best-effort: a write failure is a notice, never a failed turn.
+   * Requires a prior successful `ensureTranscriptWriteAdmitted` (ruling 575).
    */
   private mirrorTranscript(): void {
     if (!markdownTranscriptEnabled()) return;
+    if (this.transcriptWriteAdmit !== "allow") return;
     const total = this.store.messageCount(this.session.id);
     const from = markdownTranscriptCursor(this.workspace, this.session.id, total);
     if (from >= total) return;
@@ -561,6 +658,10 @@ class HzRuntimeImpl implements HzRuntime {
     this.instanceApproval = typeof fn === "function" ? fn : undefined;
   }
 
+  setAskUserHandler(fn: import("../contracts").AskUserHandler): void {
+    this.instanceAskUser = typeof fn === "function" ? fn : undefined;
+  }
+
   /**
    * UI/CLI mutations that bypass runTurn still obey the EffectHost gates.
    * They have not been wired to kernel effect.execute; strict mode therefore
@@ -581,7 +682,12 @@ class HzRuntimeImpl implements HzRuntime {
    * The name is kept for the TUI contract; the object is still Lease-shaped.
    */
   async grantLease(kind: GuardKind, pattern: string, ttlMs: number = SESSION_LEASE_TTL_MS): Promise<Lease> {
-    const grant = await this.kernel.makeGrant(kind, typeof pattern === "string" && pattern !== "" ? pattern : "*", ttlMs);
+    const target = typeof pattern === "string" && pattern !== "" ? pattern : "*";
+    const { mintHumanApprovalGrant } = await import("./human-approval-principal");
+    const grant =
+      target !== "*" && !target.endsWith("*")
+        ? await mintHumanApprovalGrant(this.kernel, kind, target, this.session.id, ttlMs)
+        : await this.kernel.makeGrant(kind, target, ttlMs, this.session.id);
     this.leases.push(grant);
     return grant;
   }
@@ -705,13 +811,13 @@ class HzRuntimeImpl implements HzRuntime {
     const rows = this.store.history(this.session.id);
     let at = -1;
     for (let i = rows.length - 1; i >= 0; i -= 1) {
-      if (rows[i].role === "user" && (rows[i].content ?? "").trim() !== "") {
+      if (rows[i].role === "user" && textFromChatContent(rows[i]!.content).trim() !== "") {
         at = i;
         break;
       }
     }
     if (at < 0) return undefined;
-    const text = rows[at].content;
+    const text = textFromChatContent(rows[at]!.content);
     this.store.truncateMessages(this.session.id, at);
     return text;
   }
@@ -980,7 +1086,7 @@ class HzRuntimeImpl implements HzRuntime {
       }
       // The entry is spent: tombstone it so a reload cannot resurrect it and a
       // second rewind of the same checkpoint finds nothing to put back.
-      consumeChange(this.session.id, entry);
+      await consumeChangeGuarded(this.session.id, entry);
       // The workspace now holds the restored bytes -- later edits are legitimate.
       noteRead(ctx, entry.path);
       restored.push(item.rel);
@@ -1270,7 +1376,7 @@ class HzRuntimeImpl implements HzRuntime {
       kernelMode: this.kernel.mode,
     });
     // I-4 / ruling 468: opt-in local analytics.ndjson (no network, no chat/keys).
-    appendAnalyticsEvent({
+    await appendAnalyticsEvent({
       workspace: this.workspace,
       event: "session.start",
       sessionId: this.session.id,
@@ -1286,7 +1392,7 @@ class HzRuntimeImpl implements HzRuntime {
   private async logSessionEnd(sessionId: string): Promise<void> {
     clearDiscoveredTools(sessionId);
     await this.append(streamFor(sessionId), EventTypes.sessionEnd, { sessionId });
-    appendAnalyticsEvent({
+    await appendAnalyticsEvent({
       workspace: this.workspace,
       event: "session.end",
       sessionId,
@@ -1366,7 +1472,7 @@ class HzRuntimeImpl implements HzRuntime {
       }
       const firstLine = userText.trim().split(/\r?\n/, 1)[0] ?? "";
       const label = firstLine.slice(0, 60);
-      const recorded = recordCheckpoint(
+      const recorded = await recordCheckpointGuarded(
         this.workspace,
         this.session.id,
         this.store.messageCount(this.session.id),
@@ -1376,6 +1482,7 @@ class HzRuntimeImpl implements HzRuntime {
           onAppendFailure: (message) => this.note(message),
         },
       );
+      if (recorded === undefined) return;
       try {
         await this.append(streamFor(this.session.id), EventTypes.sessionCheckpointCreated, {
           sessionId: this.session.id,
@@ -1420,12 +1527,26 @@ class HzRuntimeImpl implements HzRuntime {
   }
 
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
+    return this.enqueueSend(text, cb);
+  }
+
+  /** Product path for multipart user prompts (extends **676**, ruling **731**). */
+  sendMultimodal(content: ChatMsgContent, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
+    const flat = textFromChatContent(content);
+    return this.enqueueSend(flat, cb, content);
+  }
+
+  private enqueueSend(
+    text: string,
+    cb: RuntimeCallbacks,
+    multimodal?: ChatMsgContent,
+  ): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
     // Turns are serialized: a second send waits for the first to finish.
     this.pendingSends += 1;
     const run = this.sendQueue
       .then(
-        () => this.runSend(text, cb),
-        () => this.runSend(text, cb),
+        () => this.runSend(text, cb, multimodal),
+        () => this.runSend(text, cb, multimodal),
       )
       .finally(() => {
         this.pendingSends -= 1;
@@ -1437,7 +1558,11 @@ class HzRuntimeImpl implements HzRuntime {
     return run;
   }
 
-  private async runSend(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
+  private async runSend(
+    text: string,
+    cb: RuntimeCallbacks,
+    multimodal?: ChatMsgContent,
+  ): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
     if (this.closed) {
       emit(cb, { type: "error", message: "this runtime is closed" });
       return { text: "", aborted: false, exit: { terminal: "failed", detail: "internal_error" } };
@@ -1475,8 +1600,8 @@ class HzRuntimeImpl implements HzRuntime {
           stateDir: workspaceStateDir(this.workspace),
           sessionId: this.session.id,
         });
-        if (ow.status === "ok") {
-          emit(cb, { type: "notice", message: `owner-worker pipe: verified worker pid ${ow.pid} (FIFO reserved)` });
+        if (ow.status === "ok" && ow.pid !== undefined) {
+          emit(cb, { type: "notice", message: ownerWorkerSuccessNotice(process.platform, ow.pid) });
         } else if (ow.status === "refused") {
           emit(cb, { type: "notice", message: `owner-worker pipe: ${ow.reason ?? "refused"}` });
         }
@@ -1547,10 +1672,12 @@ class HzRuntimeImpl implements HzRuntime {
         });
       }
       let userContent = text;
+      let turnPrompt: string | ChatMsgContent = multimodal ?? text;
       const activated = resolveSkillForMessage(this.workspace, text, skillTrust);
       if (activated) {
         skillSections.push(activeSkillSection(activated.skill));
         userContent = activated.action !== "" ? activated.action : `Apply the ${activated.skill.name} skill.`;
+        turnPrompt = userContent;
         emit(cb, { type: "notice", message: `skill active: ${activated.skill.name}` });
         await this.append(streamFor(this.session.id), EventTypes.skillInvoked, {
           sessionId: this.session.id,
@@ -1564,6 +1691,17 @@ class HzRuntimeImpl implements HzRuntime {
       // NF-073: one ledger per turn tree — the main turn and every subagent it
       // spawns share this ceiling; a fresh one starts with each send().
       const ledger = new BudgetLedger(this.budget);
+      // Under-admission (ruling 575): Guard the transcript path once before any
+      // mid-turn mirror or post-turn sync can write.
+      if (markdownTranscriptEnabled()) {
+        const allowed = await this.ensureTranscriptWriteAdmitted();
+        if (!allowed && this.transcriptWriteRefuseReason !== "") {
+          emit(cb, {
+            type: "notice",
+            message: `markdown transcript refused: ${this.transcriptWriteRefuseReason}`,
+          });
+        }
+      }
       // The context snapshot rides every dispatch: capture the newest one for
       // `/context` while passing every event through untouched.
       const callbacks: RuntimeCallbacks = {
@@ -1585,12 +1723,26 @@ class HzRuntimeImpl implements HzRuntime {
       const checkAcceptsSettings = parseCheckModelAcceptsSettingsFlag(
         process.env.HZ_CHECK_MODEL_ACCEPTS_SETTINGS,
       );
-      const thinking = resolveThinkingEffort({
+      const thinkingInput = {
         userText: userContent,
         envValue: process.env.HZ_THINKING_EFFORT,
         // Default-on cheap heuristic when effort unset; HZ_THINKING_AUTO=0 opts out (ruling 464).
         autoDifficulty: parseThinkingAutoFlag(process.env.HZ_THINKING_AUTO),
-      });
+        // Opt-in local calibrated estimate (ruling 541 / 493 / 551); still ≤ auto ceiling.
+        calibratedEnv: process.env,
+        calibrationFeatures: calibrationFeaturesFromMessages(this.store.history(this.session.id), {
+          availableToolCount: toolSpecs(this.session.id).length,
+        }),
+      };
+      const thinking = liveDifficultyJudgeOptIn(process.env)
+        ? await resolveThinkingEffortWithLiveJudge({
+            ...thinkingInput,
+            provider: this.provider,
+            mainModel: this.currentModel,
+            signal: controller.signal,
+            env: process.env,
+          })
+        : resolveThinkingEffort(thinkingInput);
       if (thinking.effort !== undefined && thinking.source !== undefined) {
         emit(callbacks, {
           type: "notice",
@@ -1621,18 +1773,23 @@ class HzRuntimeImpl implements HzRuntime {
           // executeTool, and the model is told via the plan rail line.
           planMode: this.planOn,
           permissionMode: this.mode,
+          autonomy: this.config.autonomy,
           approve: this.instanceApproval ?? getApprovalHandler(),
+          askUser: this.instanceAskUser ?? getAskUserHandler(),
           systemExtra: skillSections.length > 0 ? skillSections.join("\n\n") : undefined,
           ledger,
           effectHost: this.effectHost,
           trustedWorkspaceHooks: this.config.trustedWorkspaceHooks,
-          delegate: (task, maxSteps, profile) =>
+          delegate: (task, maxSteps, profile, delegateOpts) =>
             runNested({
               parentSessionId: this.session.id,
               // C-13 (ruling 363 residual): the child's tool calls join the same
               // durable FIFO admission as the parent turn.
               admissionId,
-              workspace: this.workspace,
+              workspace:
+                typeof delegateOpts?.workspace === "string" && delegateOpts.workspace.trim() !== ""
+                  ? delegateOpts.workspace.trim()
+                  : this.workspace,
               task,
               maxSteps,
               profile,
@@ -1643,6 +1800,7 @@ class HzRuntimeImpl implements HzRuntime {
               signal: controller.signal,
               sessionLeases: this.leases,
               approve: this.instanceApproval ?? getApprovalHandler(),
+              askUser: this.instanceAskUser ?? getAskUserHandler(),
               permissionMode: this.mode,
               ledger,
               effectHost: this.effectHost,
@@ -1653,7 +1811,7 @@ class HzRuntimeImpl implements HzRuntime {
               },
             }),
         },
-        userContent,
+        turnPrompt,
       );
       // Wave-14c: record the turn's checkpoint AFTER the run completed. The
       // label is the user's first line; the change ids come from the durable
@@ -1662,7 +1820,8 @@ class HzRuntimeImpl implements HzRuntime {
       // E-4: per-event append (above) is the primary writer; this full-history
       // sync is a safety net for any message that arrived without a mapped
       // event. Best-effort — never fails the turn (parser/resume: ruling 476).
-      {
+      // Under-admission (ruling 575): only sync when Guard already allowed.
+      if (this.transcriptWriteAdmit === "allow") {
         const md = syncMarkdownTranscript({
           workspace: this.workspace,
           sessionId: this.session.id,
@@ -1723,14 +1882,23 @@ class HzRuntimeImpl implements HzRuntime {
             });
           // No configured HZ_SPEND_LIMIT_USD -> no ledger -> both paths refuse
           // before dispatch with a clear notice (never surprise spend).
-          const spend = limitMicroUsd > 0 ? new SpendLedger(this.workspace, { limitMicroUsd }) : undefined;
+          // Under-admission (ruling 583): Guard before durable spend.json mutate.
+          let spend: SpendLedger | undefined;
+          if (limitMicroUsd > 0) {
+            const spendRefused = await admitSpendLedgerWrite(this.workspace);
+            if (spendRefused !== undefined) {
+              emit(cb, { type: "notice", message: `spend ledger refused: ${spendRefused}` });
+            } else {
+              spend = new SpendLedger(this.workspace, { limitMicroUsd });
+            }
+          }
           const onNotice = (message: string): void => emit(cb, { type: "notice", message });
           if (detachedReviewForkEnabled()) {
             // G-1: detached, fire-and-forget scheduling. Reserve in the parent,
             // spawn the worker, and return to the turn without awaiting a call.
             // HZ_REVIEW_FORK=1 alone keeps ruling 488's awaited path below.
             if (spend !== undefined) {
-              spawnDetachedReviewFork({
+              await spawnDetachedReviewFork({
                 spec: buildSpec(),
                 model: this.currentModel,
                 providerName: this.provider.name,
@@ -1906,6 +2074,12 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, undefined, workspace), workspace, process.env, home, (message) =>
     startupNotices.push(message),
   );
+  // Regulated envelope composes =require after config load (env still unset wins).
+  const effectHostRegulated = applyEffectHostKernelRegulatedRequire(process.env, config.autonomy);
+  if (effectHostRegulated.notice) startupNotices.push(effectHostRegulated.notice);
+  // Engineering Brain compose for autonomous/regulated/unattended (ruling 639).
+  const engineeringBrain = applyEngineeringBrainFromAutonomy(process.env, config.autonomy);
+  if (engineeringBrain.notice) startupNotices.push(engineeringBrain.notice);
   const trustStartup = formatUntrustedWorkspaceStartupNotice(workspace, home, config.trustedWorkspaceHooks);
   if (trustStartup !== undefined) startupNotices.push(trustStartup);
   if (config.theme !== undefined) setThemeMode(config.theme);
@@ -1982,11 +2156,29 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   const repaired = claim.repaired;
   const interrupted = claim.interrupted;
 
+  // Prefer fail-closed =require when trusted Rust kernel is live (ruling **540**);
+  // sandbox =default remains the untrusted/Linux-wrap fallback. Explicit env/config win.
+  const effectHostTrustedRequire = applyEffectHostKernelTrustedRequire(
+    process.env,
+    kernelMode === "trusted",
+  );
+  if (effectHostTrustedRequire.notice) startupNotices.push(effectHostTrustedRequire.notice);
   const effectHostSandboxDefault = applyEffectHostKernelSandboxDefault(
     process.env,
     await kernelEnforcesProcessSandbox(kernel),
   );
   if (effectHostSandboxDefault.notice) startupNotices.push(effectHostSandboxDefault.notice);
+  const productNetnsDefault = applyProductNetnsCapableDefault(process.env, {
+    kernelTrusted: kernelMode === "trusted",
+  });
+  if (productNetnsDefault.notice) startupNotices.push(productNetnsDefault.notice);
+  const productGuardG1WireDefault = applyProductGuardG1WireDefault(process.env, {
+    kernelTrusted: kernelMode === "trusted",
+  });
+  if (productGuardG1WireDefault.notice) startupNotices.push(productGuardG1WireDefault.notice);
+  startupNotices.push(guardG1WireStartupNotice(process.env));
+  const reconcileSpineDefault = applyReconcileBlockSpineDefault(process.env);
+  if (reconcileSpineDefault.notice) startupNotices.push(reconcileSpineDefault.notice);
 
   const effectLedger = new WorkspaceEffectLedger(workspace);
   const effectHost = new EffectHost(effectLedger);
@@ -2039,12 +2231,17 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
     } else {
       store.truncateMessages(session.id, 0);
       for (const msg of restored.messages) store.appendMessage(session.id, msg);
-      syncMarkdownTranscript({
-        workspace,
-        sessionId: session.id,
-        history: store.history(session.id),
-        meta: { title: session.title, model },
-      });
+      // Under-admission (ruling 575): Guard before rewriting the state transcript.
+      if (await impl.ensureTranscriptWriteAdmitted()) {
+        syncMarkdownTranscript({
+          workspace,
+          sessionId: session.id,
+          history: store.history(session.id),
+          meta: { title: session.title, model },
+        });
+      } else if (impl.transcriptWriteRefuseReason !== "") {
+        impl.note(`markdown transcript refused: ${impl.transcriptWriteRefuseReason}`);
+      }
       impl.note(
         `restored ${restored.messages.length} message(s) from Markdown transcript ${restored.path}`,
       );
@@ -2129,8 +2326,10 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   }
   if (durableTodosEnabled(process.env)) {
     if (durableAutoMergeEnabled(process.env)) {
-      const auto = maybeAutoMergeDurableOnBranchChange(workspace);
-      if (auto.merged > 0 && auto.fromBranch !== undefined) {
+      const auto = await maybeAutoMergeDurableOnBranchChange(workspace);
+      if (auto.refused !== undefined) {
+        impl.note(`durable todo auto-merge skipped — ${auto.refused}`);
+      } else if (auto.merged > 0 && auto.fromBranch !== undefined) {
         impl.note(
           `merged ${auto.merged} durable todo(s) from branch ${auto.fromBranch} after branch change (HZ_TODO_DURABLE_AUTOMERGE=1)`,
         );
@@ -2149,7 +2348,12 @@ export function setApprovalHandler(fn: ApprovalHandler): void {
   setProcessApprovalHandler(fn);
 }
 
-export { getApprovalHandler } from "./loop";
+/** Register the process-wide `ask_user` handler (used when a runtime has no instance hook). */
+export function setAskUserHandler(fn: import("../contracts").AskUserHandler): void {
+  setProcessAskUserHandler(fn);
+}
+
+export { getApprovalHandler, getAskUserHandler } from "./loop";
 export { loadConfig, describeConfig, missingKey, DEFAULT_MODELS, builtinDefaultModel } from "./config";
 export type { HzConfig, ProviderName } from "./config";
 export {

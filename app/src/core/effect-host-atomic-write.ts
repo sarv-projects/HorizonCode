@@ -5,8 +5,10 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { constants } from "node:fs";
 import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
+import { recheckPathInWorkspace, verifyFdInWorkspace } from "./sandbox-fd-verify";
 
 function pathInsideRoot(root: string, candidate: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -38,22 +40,30 @@ export async function writeBytesAtomicInSandbox(
   resolved: string,
   payload: Buffer,
 ): Promise<void> {
-  if (!pathInsideRoot(sandboxRoot, resolved)) {
-    throw new Error("HZ_PRECONDITION_FAILED: atomic write target must resolve inside sandboxRoot");
+  const rechecked = recheckPathInWorkspace(sandboxRoot, resolved);
+  if (typeof rechecked !== "string") {
+    throw new Error(rechecked.refusal);
   }
+  resolved = rechecked;
   const parent = path.dirname(resolved);
-  if (!pathInsideRoot(sandboxRoot, parent)) {
-    throw new Error("HZ_PRECONDITION_FAILED: atomic write parent must resolve inside sandboxRoot");
+  const parentCheck = recheckPathInWorkspace(sandboxRoot, parent);
+  if (typeof parentCheck !== "string") {
+    throw new Error(parentCheck.refusal);
   }
   await mkdir(parent, { recursive: true });
   const base = path.basename(resolved);
   const tmp = path.join(parent, `.${base}.hz-tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
-  if (!pathInsideRoot(sandboxRoot, tmp)) {
-    throw new Error("HZ_PRECONDITION_FAILED: atomic write temp path must resolve inside sandboxRoot");
+  const tmpCheck = recheckPathInWorkspace(sandboxRoot, tmp);
+  if (typeof tmpCheck !== "string") {
+    throw new Error(tmpCheck.refusal);
   }
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await open(tmp, "wx");
+    handle = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    const verified = await verifyFdInWorkspace(handle, sandboxRoot, tmp);
+    if ("refusal" in verified) {
+      throw new Error(verified.refusal);
+    }
     await handle.writeFile(payload);
     await handle.sync();
     await handle.close();
@@ -76,7 +86,12 @@ export async function writeBytesAtomicInSandbox(
       const code = e && typeof e === "object" && "code" in e ? (e as { code: string }).code : "";
       if (code !== "ENOENT") throw e;
     }
-    await rename(tmp, resolved);
+    const renameTarget = recheckPathInWorkspace(sandboxRoot, resolved, resolved);
+    if (typeof renameTarget !== "string") {
+      await unlink(tmp).catch(() => undefined);
+      throw new Error(renameTarget.refusal);
+    }
+    await rename(tmp, renameTarget);
     await syncDirBestEffort(parent);
   } catch (err) {
     await handle?.close().catch(() => undefined);

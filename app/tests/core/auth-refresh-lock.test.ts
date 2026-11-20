@@ -23,7 +23,7 @@ describe("oauth refresh flock", () => {
 
   test("concurrent refresh performs one token fetch", async () => {
     home = mkdtempSync(path.join(tmpdir(), "hz-oauth-lock-"));
-    writeOAuthToken(
+    await writeOAuthToken(
       {
         provider: "host",
         accessToken: "stale",

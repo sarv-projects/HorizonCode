@@ -152,3 +152,30 @@ export function writeSessionArchive(
     eventCount: archive.events?.length ?? 0,
   };
 }
+
+/** Under-admission for `.hzs` export (ruling 621; complements CLI-level 569). */
+export async function admitSessionArchiveWrite(
+  workspace: string,
+  outPath?: string,
+  sessionId: string = "session",
+): Promise<string | undefined> {
+  const target = outPath ?? defaultHzsExportPath(workspace, sessionId);
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(target, workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "session-archive refused:")
+    .replace(/^preds write denied/, "session-archive denied")
+    .replace(/^preds fs\.write requires approval/, "session-archive fs.write requires approval");
+}
+
+/** Product path: admit then write (ruling 621). */
+export async function writeSessionArchiveGuarded(
+  workspace: string,
+  sessionId: string,
+  outPath?: string,
+): Promise<{ path: string; messageCount: number; checkpointCount: number; eventCount: number }> {
+  const refused = await admitSessionArchiveWrite(workspace, outPath, sessionId);
+  if (refused !== undefined) throw new Error(refused);
+  return writeSessionArchive(workspace, sessionId, outPath);
+}

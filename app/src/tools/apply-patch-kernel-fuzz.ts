@@ -9,7 +9,8 @@
  * `edit.ts` rung 5) and rung (7) unique dominant block score (≥0.97, Δ0.08 vs
  * second-best) and rung (8) unique max-score Levenshtein block match (same 0.66
  * threshold as Bun `apply-patch.ts`) when `HZ_EFFECT_HOST_EDIT_REPAIR=1` (same
- * opt-in as kernel `fs.edit` repair). Bun first-hit score fuzz stays Bun-only.
+ * opt-in as kernel `fs.edit` repair). Tied-equal qualifying bands use first-hit
+ * tied Levenshtein (**687**); mixed-score Bun first-hit stays Bun-only under require.
  */
 
 import { canonicalize, type PatchChunk } from "./apply-patch-parser";
@@ -243,6 +244,39 @@ export function findUniqueLevenshteinLineWindow(fileLines: string[], wantLines: 
   return atBest[0];
 }
 
+type LevenshteinQualifyingWindow = { start: number; sim: number };
+
+function levenshteinQualifyingWindows(fileLines: string[], wantLines: string[]): LevenshteinQualifyingWindow[] {
+  const n = wantLines.length;
+  if (n === 0 || n > fileLines.length) return [];
+  const wantBlock = wantLines.join("\n");
+  const out: LevenshteinQualifyingWindow[] = [];
+  for (let s = 0; s + n <= fileLines.length; s += 1) {
+    const window = fileLines.slice(s, s + n);
+    const sim = applyPatchBlockSimilarity(window.join("\n"), wantBlock);
+    if (sim >= APPLY_PATCH_LEVENSHTEIN_THRESHOLD) out.push({ start: s, sim });
+  }
+  return out;
+}
+
+/**
+ * Reduced first-hit parity (ruling **687**): when every Levenshtein-qualifying window
+ * shares the same score (tied band) kernel routes Bun's file-order first-hit start.
+ * Mixed scores with a weaker first qualifier stay Bun-only under require.
+ */
+export function findFirstHitTiedQualifyingLevenshteinWindow(
+  fileLines: string[],
+  wantLines: string[],
+): number | undefined {
+  const qualifying = levenshteinQualifyingWindows(fileLines, wantLines);
+  if (qualifying.length < 2) return undefined;
+  const maxSim = Math.max(...qualifying.map((q) => q.sim));
+  if (qualifying.some((q) => q.sim !== maxSim)) return undefined;
+  const atMax = qualifying.filter((q) => q.sim === maxSim);
+  if (atMax.length < 2) return undefined;
+  return qualifying[0]!.start;
+}
+
 /**
  * Bun `apply-patch.ts` rung (4): the first window (file order) whose block similarity
  * meets the Levenshtein threshold — position beats score (intentionally not kernel-routed).
@@ -351,6 +385,7 @@ export type ApplyPatchKernelFuzzClass =
   | "line_patch"
   | "dominant_score"
   | "levenshtein"
+  | "first_hit_tied_levenshtein"
   | "bun_fuzz_only";
 
 /** Classify how a single update chunk relates to on-disk bytes (no writes). */
@@ -380,6 +415,9 @@ export function classifyApplyPatchChunkKernelFuzz(
   if (trimBothHits > 1 || indentHits > 1 || foldHits > 1 || linePatchHits > 1) return "bun_fuzz_only";
   if (findUniqueDominantScoreLineWindow(fileLines, want) !== undefined) return "dominant_score";
   if (findUniqueLevenshteinLineWindow(fileLines, want) !== undefined) return "levenshtein";
+  if (findFirstHitTiedQualifyingLevenshteinWindow(fileLines, want) !== undefined) {
+    return "first_hit_tied_levenshtein";
+  }
   return "bun_fuzz_only";
 }
 
@@ -426,6 +464,8 @@ export function resolveKernelApplyPatchChunkEdit(
     start = findUniqueDominantScoreLineWindow(fileLines, want);
   } else if (klass === "levenshtein") {
     start = findUniqueLevenshteinLineWindow(fileLines, want);
+  } else if (klass === "first_hit_tied_levenshtein") {
+    start = findFirstHitTiedQualifyingLevenshteinWindow(fileLines, want);
   } else {
     return undefined;
   }

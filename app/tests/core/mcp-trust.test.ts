@@ -29,13 +29,13 @@ describe("workspace mcp trust", () => {
     expect(notes.join("\n")).toMatch(/mcp\.json|mcp/);
   });
 
-  test("noticeUntrustedWorkspaceMcp is silent for trusted workspace", () => {
+  test("noticeUntrustedWorkspaceMcp is silent for trusted workspace", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-mcp-trust-"));
     home = mkdtempSync(path.join(tmpdir(), "hz-mcp-home-"));
     const mcpFile = workspaceMcpConfigFile(workspace);
     mkdirSync(path.dirname(mcpFile), { recursive: true });
     writeFileSync(mcpFile, '{"servers":[]}');
-    bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
+    await bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
     const notes: string[] = [];
     noticeUntrustedWorkspaceMcp(workspace, [path.resolve(workspace)], home, (m) => notes.push(m));
     expect(notes.length).toBe(0);

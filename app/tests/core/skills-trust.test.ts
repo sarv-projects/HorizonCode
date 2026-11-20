@@ -43,25 +43,25 @@ describe("workspace skills trust", () => {
     expect(notes.join("\n")).toContain("workspace skills ignored");
   });
 
-  test("trusted workspace skills load and bind digest", () => {
+  test("trusted workspace skills load and bind digest", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-skill-trust-"));
     home = mkdtempSync(path.join(tmpdir(), "hz-skill-home-"));
     writeSkill("deploy");
     const resolved = path.resolve(workspace);
-    bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
+    await bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
     const skills = listSkills(workspace, { trustedWorkspaceHooks: [resolved], home });
     expect(skills.some((s) => s.name === "deploy")).toBe(true);
     const digest = digestWorkspaceSkills(workspace);
     expect(loadTrustStore(home).records[0]?.skillsDigest).toBe(digest);
   });
 
-  test("skills digest change hides project skill until re-bind", () => {
+  test("skills digest change hides project skill until re-bind", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-skill-trust-"));
     home = mkdtempSync(path.join(tmpdir(), "hz-skill-home-"));
     writeSkill("deploy");
     const resolved = path.resolve(workspace);
     const currents = collectWorkspaceTrustDigests(workspace);
-    bindWorkspaceTrustRecord(home, workspace, currents);
+    await bindWorkspaceTrustRecord(home, workspace, currents);
     writeSkill("deploy", "new body");
     const notes: string[] = [];
     expect(

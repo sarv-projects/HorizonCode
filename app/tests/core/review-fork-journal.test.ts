@@ -10,14 +10,16 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   REVIEW_FORK_JOURNAL_FILE,
   ReviewForkJournalError,
+  admitReviewForkJournalWrite,
   closeReviewForkJob,
   openReviewForkJob,
+  openReviewForkJobGuarded,
   readJournal,
   recoverReviewForkJournal,
   reviewForkJobId,
@@ -69,6 +71,30 @@ function fakeSpend(): JournalSpend & { settled: Array<{ id: string; usd: number;
     },
   };
 }
+
+describe("review-fork-journal under-admission (ruling 611)", () => {
+  test("admitReviewForkJournalWrite refuses deny before append", async () => {
+    const state = tempDir("hz-rfj-deny-");
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(state, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(state, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-rfj-journal" }]),
+        "utf8",
+      );
+      const refused = await admitReviewForkJournalWrite(state);
+      expect(refused).toMatch(/denied|test-deny-rfj-journal|journal/i);
+      await expect(openReviewForkJobGuarded(state, content(), NOW)).rejects.toThrow(/denied|test-deny-rfj-journal|journal/i);
+      expect(existsSync(reviewForkJournalPath(state))).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
+});
 
 describe("G-1 durable journal — transitions", () => {
   test("reserve → settle records both transitions and recovery is a no-op", () => {
@@ -180,7 +206,7 @@ describe("G-1 end-to-end (real SpendLedger)", () => {
       const state = workspaceStateDir(ws);
       const ledger = new SpendLedger(ws, { limitMicroUsd: 100_000 }); // $0.10
       let captured: ReviewForkWorkerJob | undefined;
-      const outcome = spawnDetachedReviewFork({
+      const outcome = await spawnDetachedReviewFork({
         spec: makeSpec(ws),
         model: "mock-1",
         providerName: "mock",
@@ -212,12 +238,12 @@ describe("G-1 end-to-end (real SpendLedger)", () => {
     }
   });
 
-  test("worker crash recovers the real reservation exactly once", () => {
+  test("worker crash recovers the real reservation exactly once", async () => {
     const ws = mkdtempSync(path.join(tmpdir(), "hz-rfj-e2e-crash-"));
     try {
       const state = workspaceStateDir(ws);
       const ledger = new SpendLedger(ws, { limitMicroUsd: 100_000 });
-      const outcome = spawnDetachedReviewFork({
+      const outcome = await spawnDetachedReviewFork({
         spec: makeSpec(ws),
         model: "mock-1",
         providerName: "mock",

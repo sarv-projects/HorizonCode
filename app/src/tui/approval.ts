@@ -9,6 +9,7 @@
 import type { ApprovalHandler, ApprovalRequest, GuardAction, GuardKind, Lease, Runtime } from "../contracts";
 import * as core from "../core";
 import { SESSION_LEASE_TTL_MS } from "../core/loop";
+import { mintHumanApprovalGrant } from "../core/human-approval-principal";
 import type { KernelClient } from "../core/kernel";
 import { richDiff } from "./diff";
 import { formatApprovalAskAnnouncement, screenReaderMode } from "./a11y";
@@ -115,10 +116,19 @@ async function rememberAlways(
       // Ruling 32: "always" mints a session GRANT — a bounded pre-authorisation
       // that mints a fresh one-use lease per effect it covers (a lease would be
       // spent by its first use, turning "always" into "once").
-      const grant = await ctx.kernel.makeGrant(kind as GuardKind, target, SESSION_LEASE_TTL_MS, ctx.sessionId);
+      const grant = await mintHumanApprovalGrant(
+        ctx.kernel,
+        kind as GuardKind,
+        target,
+        ctx.sessionId,
+        SESSION_LEASE_TTL_MS,
+      );
       recordSessionGrantExpiry(ctx.sessionId, kind, target, grant.expiry);
       const ws = workspaceFromUi(ui);
-      if (ws !== undefined) appendSavedAllow(ws, kind as GuardKind, target);
+      if (ws !== undefined) {
+        const refused = await appendSavedAllow(ws, kind as GuardKind, target);
+        if (refused !== undefined) r.notice(refused);
+      }
       return true;
     }
     const runtime = ui.runtime as RuntimeWithExtras | undefined;
@@ -126,7 +136,10 @@ async function rememberAlways(
     if (typeof grant !== "function") return false;
     await Promise.resolve(grant.call(runtime, kind, target));
     const ws = workspaceFromUi(ui);
-    if (ws !== undefined) appendSavedAllow(ws, kind as GuardKind, target);
+    if (ws !== undefined) {
+      const refused = await appendSavedAllow(ws, kind as GuardKind, target);
+      if (refused !== undefined) r.notice(refused);
+    }
     return true;
   } catch (err) {
     r.notice(`could not remember that decision: ${errorMessage(err)}`);

@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { EventTypes, newId, nowIso } from "../../src/contracts";
@@ -11,6 +11,10 @@ import {
   __resetEffectReconcileBlockForTests,
   assessEffectReconcileBlock,
   effectReconcileBlockObservePendingRefusal,
+  effectReconcileBlockObservationHookRefusal,
+  effectReconcileBlockPreToolHookRefusal,
+  EFFECT_RECONCILE_BLOCK_OBSERVATION_HOOK_NOTICE,
+  EFFECT_RECONCILE_BLOCK_PRETOOL_HOOK_NOTICE,
   effectReconcileBlockRefusal,
   effectReconcileBlockEnabled,
   effectReconcileBlockMode,
@@ -32,7 +36,29 @@ import { appendReconcileLatch, reconcileLatchFile } from "../../src/core/effect-
 import { EffectHost, createEffectId } from "../../src/core/effect-host";
 import { KernelClient } from "../../src/core/kernel";
 import { kernelStateDir } from "../../src/core/paths";
+import { HOOK_POINTS, type HooksConfig } from "../../src/core/hooks";
 import { restoreEnv, setEnv, snapshotEnv, type EnvSnapshot } from "./helpers";
+
+function hooksWithPreToolCount(count: number): HooksConfig {
+  if (count === 0) return { state: "none" };
+  const empty = Object.fromEntries(HOOK_POINTS.map((p) => [p, []])) as Record<
+    (typeof HOOK_POINTS)[number],
+    []
+  >;
+  return {
+    state: "ready",
+    points: {
+      ...empty,
+      preTool: Array.from({ length: count }, () => ({
+        command: "true",
+        args: [] as string[],
+        source: "hooks.json",
+        timeoutMs: 30_000,
+      })),
+    },
+    sources: ["hooks.json"],
+  };
+}
 
 let workspace: string;
 let envBackup: EnvSnapshot;
@@ -181,6 +207,44 @@ describe("observe-pending gate (rulings 333, 334)", () => {
       host,
     );
     expect(refusal).toContain("refusing shell");
+  });
+
+  test("refuses mutating MCP on overlapping path while observe-pending (ruling 683)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "mcp-pending.ts");
+    host.begin(effectId, "write", "w-mcp");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const tool = "mcp__srv__write_file";
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      tool,
+      { path: "mcp-pending.ts", content: "x" },
+      host,
+    );
+    expect(refusal).toContain("observe not settled");
+    expect(refusal).toContain(`refusing ${tool}`);
+    expect(
+      effectReconcileBlockObservePendingRefusal(workspace, tool, { path: "other.ts", content: "x" }, host),
+    ).toBeUndefined();
+  });
+
+  test("unscoped mutating MCP denied while any resource observe-pending (ruling 683)", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "any.ts");
+    host.begin(effectId, "write", "w-any");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockObservePendingRefusal(
+      workspace,
+      "mcp__srv__do_thing",
+      { payload: "opaque" },
+      host,
+    );
+    expect(refusal).toContain("observe not settled");
+    expect(refusal).toContain("unknown resource");
   });
 
   test("off when HZ_EFFECT_RECONCILE_BLOCK unset", () => {
@@ -368,6 +432,73 @@ test("resource latch refuses writes via symlink aliases to blocked files", () =>
   expect(refusal).toContain("refusing write");
 });
 
+test("resource latch refuses writes via hardlink aliases (device,inode) when paths differ (ruling 695)", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const sid = "sess-hardlink-alias";
+  const target = path.join(workspace, "blocked-primary.ts");
+  const hardlink = path.join(workspace, "nested", "hardalias.ts");
+  mkdirSync(path.dirname(hardlink), { recursive: true });
+  writeFileSync(target, "original");
+  linkSync(target, hardlink);
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown file effect", [target]);
+  const refusal = effectReconcileBlockRefusal(workspace, sid, "write", {
+    path: path.relative(workspace, hardlink),
+    content: "via hardlink",
+  });
+  expect(refusal).toContain("refusing write");
+  expect(refusal).toContain("hardalias.ts");
+  expect(
+    effectReconcileBlockRefusal(workspace, sid, "write", { path: "other.ts", content: "ok" }),
+  ).toBeUndefined();
+});
+
+test("resource latch refuses writes via dangling symlink when target absent (ruling 699)", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const sid = "sess-dangling-alias";
+  const target = path.join(workspace, "hot.ts");
+  const link = path.join(workspace, "dangle.ts");
+  symlinkSync(target, link);
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown hot effect", [target]);
+  const refusalOverlap = effectReconcileBlockRefusal(workspace, sid, "write", {
+    path: "dangle.ts",
+    content: "via dangling",
+  });
+  expect(refusalOverlap).toContain("refusing write");
+
+  const cold = path.join(workspace, "cold.ts");
+  writeFileSync(cold, "c");
+  const danglingCold = path.join(workspace, "dangle-cold.ts");
+  symlinkSync(path.join(workspace, "will-never-exist.ts"), danglingCold);
+  __latchEffectReconcileBlockForTests(workspace, sid, "unknown cold effect", [cold]);
+  const refusalUncertain = effectReconcileBlockRefusal(workspace, sid, "write", {
+    path: "dangle-cold.ts",
+    content: "maybe cold",
+  });
+  expect(refusalUncertain).toContain("dangling symlink");
+  expect(refusalUncertain).toContain("final link target absent");
+});
+
+test("resource latch observe-pending refuses hardlink alias to pending file (ruling 695)", () => {
+  setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
+  const host = new EffectHost();
+  const effectId = createEffectId();
+  const primary = path.join(workspace, "observe-primary.ts");
+  const hardlink = path.join(workspace, "observe-hard.ts");
+  writeFileSync(primary, "x");
+  linkSync(primary, hardlink);
+  host.begin(effectId, "write", "w-hl-obs");
+  host.recordAllow(effectId);
+  host.recordExecute(effectId, { ok: true, resourceKey: primary });
+  const refusal = effectReconcileBlockObservePendingRefusal(
+    workspace,
+    "write",
+    { path: path.relative(workspace, hardlink), content: "y" },
+    host,
+  );
+  expect(refusal).toContain("observe not settled");
+  expect(refusal).toContain("refusing write");
+});
+
 test("shell cwd outside blocked paths cannot certify arbitrary command effects", () => {
   setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "resource" });
   const sid = "sess-shell-cwd-bypass";
@@ -473,3 +604,150 @@ describe("latch view for TUI (ruling 304, 307)", () => {
     expect(formatEffectReconcileBlockStatusLines(view).join("\n")).toContain("LATCHED");
   });
 });
+
+describe("preTool hook reconcile barrier (ruling 691)", () => {
+  test("refuses deciding hooks when session latch is active", () => {
+    const sid = "sess-pretool-latch";
+    __latchEffectReconcileBlockForTests(workspace, sid, "probe mismatch");
+    const refusal = effectReconcileBlockPreToolHookRefusal(
+      workspace,
+      sid,
+      hooksWithPreToolCount(2),
+    );
+    expect(refusal).toContain(EFFECT_RECONCILE_BLOCK_PRETOOL_HOOK_NOTICE);
+    expect(refusal).toContain("preTool hook spawn");
+    expect(refusal).toContain("2 deciding hook");
+    expect(refusal).toContain("probe mismatch");
+  });
+
+  test("refuses deciding hooks during observe-pending without latch", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "hook-pending.ts");
+    host.begin(effectId, "write", "w-hook");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockPreToolHookRefusal(
+      workspace,
+      "sess-pretool-observe",
+      hooksWithPreToolCount(1),
+      host,
+    );
+    expect(refusal).toContain(EFFECT_RECONCILE_BLOCK_PRETOOL_HOOK_NOTICE);
+    expect(refusal).toContain("observe-pending");
+    host.recordObserve(effectId, { receiptId: "r-hook", receiptSeq: 1, resourceKey: target });
+    expect(
+      effectReconcileBlockPreToolHookRefusal(
+        workspace,
+        "sess-pretool-observe",
+        hooksWithPreToolCount(1),
+        host,
+      ),
+    ).toBeUndefined();
+  });
+
+  test("no preTool hooks or reconcile off → no refusal", () => {
+    setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "" });
+    expect(
+      effectReconcileBlockPreToolHookRefusal(workspace, "sid", hooksWithPreToolCount(1)),
+    ).toBeUndefined();
+    setEnv({ HZ_EFFECT_RECONCILE_BLOCK: "1" });
+    expect(
+      effectReconcileBlockPreToolHookRefusal(workspace, "sid", { state: "none" }),
+    ).toBeUndefined();
+    expect(
+      effectReconcileBlockPreToolHookRefusal(workspace, "sid", hooksWithPreToolCount(0)),
+    ).toBeUndefined();
+  });
+});
+
+function hooksWithPostToolCount(count: number): HooksConfig {
+  if (count === 0) return { state: "none" };
+  const empty = Object.fromEntries(HOOK_POINTS.map((p) => [p, []])) as Record<
+    (typeof HOOK_POINTS)[number],
+    []
+  >;
+  return {
+    state: "ready",
+    points: {
+      ...empty,
+      postTool: Array.from({ length: count }, () => ({
+        point: "postTool" as const,
+        index: 0,
+        source: "test",
+        command: "/bin/true",
+        args: [],
+        timeoutMs: 1000,
+      })),
+    },
+    sources: ["test"],
+  };
+}
+
+describe("observation hook reconcile barrier (ruling 718)", () => {
+  test("refuses postTool hooks when session latch is active", () => {
+    const sid = "sess-posttool-latch";
+    __latchEffectReconcileBlockForTests(workspace, sid, "probe mismatch");
+    const refusal = effectReconcileBlockObservationHookRefusal(
+      workspace,
+      sid,
+      hooksWithPostToolCount(2),
+      undefined,
+      { point: "postTool", tool: "write" },
+    );
+    expect(refusal).toContain(EFFECT_RECONCILE_BLOCK_OBSERVATION_HOOK_NOTICE);
+    expect(refusal).toContain("postTool hook spawn");
+    expect(refusal).toContain("2 observation hook");
+  });
+
+  test("refuses lifecycle hooks during observe-pending without latch", () => {
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const target = path.join(workspace, "lifecycle-pending.ts");
+    host.begin(effectId, "write", "w-lifecycle");
+    host.recordAllow(effectId);
+    host.recordExecute(effectId, { ok: true, resourceKey: target });
+    const refusal = effectReconcileBlockObservationHookRefusal(
+      workspace,
+      "sess-lifecycle-observe",
+      hooksWithLifecycleCount(1),
+      host,
+      { point: "turnStart" },
+    );
+    expect(refusal).toContain(EFFECT_RECONCILE_BLOCK_OBSERVATION_HOOK_NOTICE);
+    expect(refusal).toContain("lifecycle turnStart");
+    host.recordObserve(effectId, { receiptId: "r-lifecycle", receiptSeq: 1, resourceKey: target });
+    expect(
+      effectReconcileBlockObservationHookRefusal(
+        workspace,
+        "sess-lifecycle-observe",
+        hooksWithLifecycleCount(1),
+        host,
+        { point: "turnStart" },
+      ),
+    ).toBeUndefined();
+  });
+});
+
+function hooksWithLifecycleCount(count: number): HooksConfig {
+  if (count === 0) return { state: "none" };
+  const empty = Object.fromEntries(HOOK_POINTS.map((p) => [p, []])) as Record<
+    (typeof HOOK_POINTS)[number],
+    []
+  >;
+  return {
+    state: "ready",
+    points: {
+      ...empty,
+      turnStart: Array.from({ length: count }, () => ({
+        point: "turnStart" as const,
+        index: 0,
+        source: "test",
+        command: "/bin/true",
+        args: [],
+        timeoutMs: 1000,
+      })),
+    },
+    sources: ["test"],
+  };
+}

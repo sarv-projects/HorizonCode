@@ -11,13 +11,21 @@ import { canonicalJson, sha256Hex, type Receipt, type ReceiptInput } from "../co
 const V1_FIELDS = [
   "id", "seq", "ts", "action", "tool", "argsDigest", "resultDigest", "prevHash",
 ] as const;
-const V2_BINDINGS = ["effectId", "postimageDigest", "postimagePath", "childEffectIds"] as const;
-const V2_ALLOWED = new Set<string>([...V1_FIELDS, ...V2_BINDINGS, "leaseId", "schemaVersion", "hash"]);
+const V2_BINDINGS = [
+  "effectId",
+  "postimageDigest",
+  "postimagePath",
+  "childEffectIds",
+  "parentReceiptId",
+] as const;
+const V2_ALLOWED = new Set<string>([
+  ...V1_FIELDS, ...V2_BINDINGS, "leaseId", "schemaVersion", "hash", "issuerStamp",
+]);
 
 export function issueReceiptSchemaVersion(input: ReceiptInput): 1 | 2 {
   if (input.schemaVersion === 2 || input.effectId !== undefined ||
       input.postimageDigest !== undefined || input.postimagePath !== undefined ||
-      input.childEffectIds !== undefined) return 2;
+      input.childEffectIds !== undefined || input.parentReceiptId !== undefined) return 2;
   return 1;
 }
 
@@ -45,6 +53,10 @@ export function receiptSchemaVersion(record: Record<string, unknown>): 1 | 2 {
         new Set(children).size !== children.length) {
       throw new Error("HZ_PRECONDITION_FAILED: receipt v2 childEffectIds invalid or duplicate");
     }
+  }
+  if (record.parentReceiptId !== undefined &&
+      (typeof record.parentReceiptId !== "string" || record.parentReceiptId.length === 0)) {
+    throw new Error("HZ_PRECONDITION_FAILED: receipt v2 parentReceiptId invalid");
   }
   return 2;
 }
@@ -78,5 +90,6 @@ export function createReceiptForHash(input: ReceiptInput, base: Omit<Receipt, "h
     ...(input.postimageDigest !== undefined ? { postimageDigest: input.postimageDigest } : {}),
     ...(input.postimagePath !== undefined ? { postimagePath: input.postimagePath } : {}),
     ...(input.childEffectIds !== undefined ? { childEffectIds: [...input.childEffectIds] } : {}),
+    ...(input.parentReceiptId !== undefined ? { parentReceiptId: input.parentReceiptId } : {}),
   };
 }

@@ -7,7 +7,11 @@
 
 import * as path from "node:path";
 import type { ApprovalRequest } from "../contracts";
-import { permissionActionResourceLines, openCodeActionForGuardKind } from "../core/permission-vocabulary";
+import {
+  openCodeActionForGuardKind,
+  permissionActionResourceLines,
+  permissionMultiResourceLines,
+} from "../core/permission-vocabulary";
 import { analyzeShellCompound, shellCompoundPresentationLines, shellSavedGrantTargets } from "../core/shell-split";
 import { isWorkspaceTrustApprovalTitle } from "../core/trust";
 import { loadSavedAllows } from "../core/saved-allows";
@@ -42,8 +46,12 @@ function withActionResource(
   presentation: PermissionPresentation,
   kind: string,
   target: string,
+  resources?: readonly string[],
 ): PermissionPresentation {
-  const head = permissionActionResourceLines(kind, target);
+  const head =
+    resources !== undefined && resources.length > 0
+      ? permissionMultiResourceLines(kind, resources)
+      : permissionActionResourceLines(kind, target);
   if (head.length === 0) return presentation;
   return { ...presentation, lines: [...head, ...presentation.lines] };
 }
@@ -56,6 +64,7 @@ export function permissionPresentationForRequest(
   const target = (req.detail ?? "").trim();
   const shown = relPath(target, workspace);
 
+  const multi = req.resources;
   if (kind === "shell") {
     const command = target;
     const analysis = command ? analyzeShellCompound(command) : { ok: false as const, reason: "empty" };
@@ -79,6 +88,7 @@ export function permissionPresentationForRequest(
       },
       req.kind ?? "shell.exec",
       target,
+      multi,
     );
   }
   if (kind === "read") {
@@ -90,6 +100,7 @@ export function permissionPresentationForRequest(
       },
       req.kind ?? "fs.read",
       target,
+      multi,
     );
   }
   if (kind === "edit") {
@@ -101,6 +112,7 @@ export function permissionPresentationForRequest(
       },
       req.kind ?? "fs.write",
       target,
+      multi,
     );
   }
   if (kind === "webfetch") {
@@ -112,6 +124,7 @@ export function permissionPresentationForRequest(
       },
       req.kind ?? "net.fetch",
       target,
+      multi,
     );
   }
   if (kind === "mcp") {
@@ -123,6 +136,7 @@ export function permissionPresentationForRequest(
       },
       req.kind ?? "mcp.invoke",
       target,
+      multi,
     );
   }
   if (req.kind === "other" && isWorkspaceTrustApprovalTitle(req.title)) {

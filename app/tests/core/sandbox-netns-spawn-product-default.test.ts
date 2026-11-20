@@ -11,9 +11,11 @@ import { kernelStateDir, spawnOwned } from "../../src/core/owned-spawn";
 import { SandboxUnavailableError } from "../../src/core/sandbox-spawn";
 import {
   assessSandboxNetnsProductSpawnPosture,
+  attemptNetnsSpawnProductDefaultConnectEgress,
   mergeSandboxNetnsProductDefaultSpawnEnv,
   productSpawnVethMode,
   sandboxNetnsProductSpawnOptIn,
+  stripCallerVethPlumbEnv,
 } from "../../src/core/sandbox-netns-spawn-product-default";
 import { sandboxExecVethCreateRequested } from "../../src/core/sandbox-exec-veth-create";
 import { VETH_HERMETIC_BRIDGE_HOST } from "../../src/core/sandbox-netns-veth";
@@ -149,5 +151,56 @@ describe("spawnOwned product-default netns routing (ruling 341)", () => {
       else process.env.HZ_SANDBOX_EXEC = prevExec;
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+});
+
+describe("product-default CREATE hermetic prove path (ruling 656)", () => {
+  test("stripCallerVethPlumbEnv removes hand-built CREATE pins", () => {
+    const stripped = stripCallerVethPlumbEnv({
+      HZ_SANDBOX_NETNS: "1",
+      HZ_SANDBOX_VETH_CREATE: "1",
+      HZ_SANDBOX_VETH_HOST: "vethX",
+      HZ_EGRESS_PROXY: "http://127.0.0.1:9",
+    });
+    expect(stripped.HZ_SANDBOX_VETH_CREATE).toBeUndefined();
+    expect(stripped.HZ_SANDBOX_VETH_HOST).toBeUndefined();
+    expect(stripped.HZ_SANDBOX_NETNS).toBe("1");
+  });
+
+  test("product merge from HZ_SANDBOX_NETNS alone (no pre-set VETH) wires CREATE", () => {
+    const product = {
+      HZ_SANDBOX_EXEC: "1",
+      HZ_SANDBOX_NETNS: "1",
+      HZ_EGRESS_PROXY: "http://127.0.0.1:4317",
+    };
+    expect(sandboxExecVethCreateRequested(product)).toBe(false);
+    const merged = mergeSandboxNetnsProductDefaultSpawnEnv(product, {
+      sandboxWrapped: true,
+      spawnPid: 65601,
+    });
+    expect(sandboxExecVethCreateRequested(merged)).toBe(true);
+    expect(merged.HZ_EGRESS_NETNS_PROXY_ROUTED).toBe("1");
+    expect(assessNetnsSpawnRoutedProxyWiring(merged).wired).toBe(true);
+  });
+
+  test("attemptNetnsSpawnProductDefaultConnectEgress refuses when product routing off", async () => {
+    const result = await attemptNetnsSpawnProductDefaultConnectEgress(
+      { HZ_SANDBOX_EXEC: "1", HZ_EGRESS_PROXY: "http://127.0.0.1:9" },
+      "example.com:443",
+      () => ({ ok: true, status: 0, stdout: "", stderr: "" }),
+      async () => ({ port: 9, stop: () => undefined }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason?.toLowerCase()).toContain("product");
+  });
+
+  test("create-path doctor detail names 656 and never enforced", () => {
+    const posture = assessSandboxNetnsProductSpawnPosture({
+      HZ_SANDBOX_EXEC: "1",
+      HZ_SANDBOX_NETNS: "1",
+      HZ_EGRESS_PROXY: "http://127.0.0.1:4317",
+    });
+    expect(posture.detail).toContain("656");
+    expect(posture.detail.toLowerCase()).toContain("never claim enforced");
   });
 });

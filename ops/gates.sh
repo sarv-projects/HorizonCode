@@ -169,6 +169,17 @@ gate_kernel_selftest() {
   # the suite passed against a kernel without one-use leases. The build is a
   # no-op when the tree is unchanged.
   ( cd "$ROOT/kernel" && cargo build --release --locked ) || return 1
+  # Pin the just-built binary for subsequent ts-suite (verifyKernelPin). Without
+  # this, a rebuild that changes bytes fails closed as "untrusted" against a
+  # stale kernel/kernel.sha256 (ruling 647 follow-up). Prefer env over rewriting
+  # the committed manifest so gates stay non-dirtying.
+  if command -v sha256sum >/dev/null 2>&1; then
+    export HZ_KERNEL_SHA256
+    HZ_KERNEL_SHA256="$(sha256sum "$bin" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    export HZ_KERNEL_SHA256
+    HZ_KERNEL_SHA256="$(shasum -a 256 "$bin" | awk '{print $1}')"
+  fi
   local state
   state="$(mktemp -d "$WORK_DIR/selftest.XXXXXX")"
   "$bin" --selftest --state-dir "$state"

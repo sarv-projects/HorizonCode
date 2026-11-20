@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { EffectHost, createEffectId } from "../../src/core/effect-host";
 import {
   frozenUnknownResourceKeys,
+  isR170MutatingTool,
+  mutationResourceTargets,
   mutatingToolResourceKey,
   observePendingResourceKeys,
   observePendingTargetForTool,
@@ -10,6 +12,7 @@ import {
   shellExplicitResourceTarget,
   unknownEffectIdsForResourceKey,
 } from "../../src/core/effect-resource-gate";
+import { registerMcpTools, clearMcpTools } from "../../src/core/mcp/registry";
 
 describe("effect-resource-gate (R170 reduced)", () => {
   const workspace = path.resolve("/tmp/hz-r170-ws");
@@ -102,6 +105,58 @@ describe("effect-resource-gate (R170 reduced)", () => {
     );
     expect(refusal).toContain("blocked_by_unknown");
     expect(refusal).toContain(hot);
+  });
+
+  test("SQLite mutators are R170 mutating and fail-closed on UNKNOWN (ruling 690)", () => {
+    expect(isR170MutatingTool("memory_remember")).toBe(true);
+    expect(isR170MutatingTool("handoff_create")).toBe(true);
+    expect(mutationResourceTargets("memory_remember", { text: "x" }, workspace)).toBeUndefined();
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const resource = path.resolve(workspace, "sqlite-u.txt");
+    host.begin(effectId, "write", "call-sql");
+    host.recordAllow(effectId);
+    host.recordObserve(effectId, { receiptId: "r-sql", receiptSeq: 1, resourceKey: resource });
+    const frozen = frozenUnknownResourceKeys(host);
+    const refusal = r170ResourceGateRefusal(
+      "memory_remember",
+      { text: "note" },
+      workspace,
+      frozen,
+      host,
+    );
+    expect(refusal).toContain("blocked_by_unknown");
+    expect(refusal).toContain("unknown resource target");
+  });
+
+  test("MCP mutating tool blocked on UNKNOWN overlap; read-only hint exempt (ruling 683)", () => {
+    clearMcpTools();
+    registerMcpTools("srv", [
+      { name: "write_file", inputSchema: { type: "object" } },
+      { name: "read_file", inputSchema: { type: "object" }, readOnlyHint: true },
+    ]);
+    const writeTool = "mcp__srv__write_file";
+    const readTool = "mcp__srv__read_file";
+    expect(isR170MutatingTool(writeTool)).toBe(true);
+    expect(isR170MutatingTool(readTool)).toBe(false);
+    const host = new EffectHost();
+    const effectId = createEffectId();
+    const resource = path.resolve(workspace, "mcp-u.txt");
+    host.begin(effectId, "write", "call-1");
+    host.recordAllow(effectId);
+    host.recordObserve(effectId, { receiptId: "r1", receiptSeq: 1, resourceKey: resource });
+    const frozen = frozenUnknownResourceKeys(host);
+    const refusal = r170ResourceGateRefusal(
+      writeTool,
+      { path: "mcp-u.txt", content: "z" },
+      workspace,
+      frozen,
+      host,
+    );
+    expect(refusal).toContain("blocked_by_unknown");
+    expect(r170ResourceGateRefusal(readTool, { path: "mcp-u.txt" }, workspace, frozen, host)).toBeUndefined();
+    expect(mutationResourceTargets(readTool, { path: "mcp-u.txt" }, workspace)).toEqual([]);
+    clearMcpTools();
   });
 
   test("allows edit on different path", () => {

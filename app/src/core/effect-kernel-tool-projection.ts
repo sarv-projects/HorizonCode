@@ -1,12 +1,15 @@
 /**
- * Project `apply_patch` / `ast_edit` into kernel fs.write / fs.edit (rulings **287**, **293**, **353**).
+ * Project `apply_patch` / `ast_edit` into kernel fs.write / fs.edit (rulings **287**, **293**, **353**, **539**).
  * Multi-site structural rewrites are one original-preimage-pinned atomic
- * whole-file write; cross-file transactions are still unavailable.
+ * whole-file write; multi-file exact Add/Update/Move/Delete plans are owned by reduced
+ * kernel `fs.batch` (write/edit/rename/delete — rulings 630/631/646); mixed-score
+ * Bun first-hit score fuzz refused under require (**687**); tied-equal band kernel-routes.
  */
 
 import * as path from "node:path";
 import { parse, type FileOp, type PatchChunk } from "../tools/apply-patch-parser";
 import {
+  applyPatchFirstHitScoreFuzzBunOwned,
   classifyApplyPatchChunkKernelFuzz,
   resolveKernelApplyPatchChunkEdit,
 } from "../tools/apply-patch-kernel-fuzz";
@@ -435,6 +438,7 @@ export type ApplyPatchProjectionMissReason =
   | "path_escape"
   | "read_fail"
   | "bun_fuzz_only"
+  | "bun_first_hit_score_fuzz"
   | "fuzz_unresolved"
   | "resolve_mismatch";
 
@@ -494,7 +498,11 @@ export async function classifyApplyPatchKernelProjectionMiss(
         }
       }
 
-      if (classifyApplyPatchChunkKernelFuzz(before, chunk) === "bun_fuzz_only") return "bun_fuzz_only";
+      if (classifyApplyPatchChunkKernelFuzz(before, chunk) === "bun_fuzz_only") {
+        return applyPatchFirstHitScoreFuzzBunOwned(before, chunk)
+          ? "bun_first_hit_score_fuzz"
+          : "bun_fuzz_only";
+      }
       const resolvedEdit = resolveKernelApplyPatchChunkEdit(before, chunk, env);
       if (!resolvedEdit) return "fuzz_unresolved";
       resolvedCount += 1;
@@ -517,7 +525,9 @@ export function applyPatchProjectionMissRequireDetail(reason: ApplyPatchProjecti
     case "read_fail":
       return "apply_patch target file unreadable";
     case "bun_fuzz_only":
-      return "apply_patch chunk needs Bun-only fuzz (first-hit / below-threshold) — refused under require";
+      return "apply_patch chunk needs Bun-only fuzz (below-threshold / ambiguous) — refused under require";
+    case "bun_first_hit_score_fuzz":
+      return "apply_patch chunk needs Bun position-ordered first-hit score fuzz (not kernel-unique / tied-equal band) — refused under require";
     case "fuzz_unresolved":
       return "apply_patch fuzzy chunk ambiguous or unresolved under HZ_EFFECT_HOST_EDIT_REPAIR";
     case "resolve_mismatch":

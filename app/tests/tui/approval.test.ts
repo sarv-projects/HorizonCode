@@ -202,7 +202,7 @@ describe("approvals at the chat bar", () => {
 
   test("shows stale saved-allow footnote on the line prompt", async () => {
     footnoteWorkspace = mkdtempSync(path.join(tmpdir(), "hz-approval-line-"));
-    appendSavedAllow(footnoteWorkspace, "shell.exec", "npm test");
+    await appendSavedAllow(footnoteWorkspace, "shell.exec", "npm test");
     const h = harness({ interactive: true, answer: "n" });
     h.ui.runtime = { workspace: footnoteWorkspace } as Runtime;
     await h.answer(
@@ -245,7 +245,7 @@ describe("approvals at the chat bar", () => {
 
   test("shows stale saved-allow footnote on the approval card", async () => {
     footnoteWorkspace = mkdtempSync(path.join(tmpdir(), "hz-approval-foot-"));
-    appendSavedAllow(footnoteWorkspace, "shell.exec", "npm test");
+    await appendSavedAllow(footnoteWorkspace, "shell.exec", "npm test");
     const h = harness({ interactive: true, askKey: async () => "n" });
     h.ui.runtime = { workspace: footnoteWorkspace } as Runtime;
   await h.answer(

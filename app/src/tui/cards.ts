@@ -117,7 +117,18 @@ export function patchStats(patch: string): { add: number; del: number; files: nu
 /* ------------------------------ tool taxonomy ------------------------------ */
 
 /** Tools whose card is committed once, when they finish. */
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "glob", "ast_search", "repo_map"]);
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "glob",
+  "ast_search",
+  "repo_map",
+  "git_status",
+  "git_diff",
+  "git_log",
+  "git_blame",
+  "shell_bg",
+]);
 /** Tools whose header is printed at start (they can block on approval or run long). */
 export const HEADER_FIRST_TOOLS: ReadonlySet<string> = new Set(["shell", "shell_session", "write", "edit", "ast_edit", "apply_patch", "agent"]);
 

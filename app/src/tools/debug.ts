@@ -237,7 +237,7 @@ export const debugTool: Tool = {
     },
     required: ["op"],
   },
-  concurrencyClass: "shared",
+  concurrencyClass: "exclusive",
   exposure: "deferred",
   searchInfo: { keywords: ["debug", "debugger", "dap", "stack", "variables", "breakpoint", "step", "attach"] },
 

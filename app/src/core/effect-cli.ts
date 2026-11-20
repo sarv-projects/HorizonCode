@@ -19,6 +19,7 @@ import {
   type EffectEvidenceGateReport,
 } from "./effect-evidence-gate";
 import { formatProbeIoHintLine, formatVcsProbeLine } from "./effect-reconcile-probe-io";
+import { metricContract } from "./metrics";
 
 export const EFFECT_RECONCILE_FAIL_EXIT = 3;
 
@@ -66,7 +67,47 @@ function buildObserveOnlyReport(workspace: string, sessionId?: string): EffectOb
   return { workspace, sessionId, rows, mismatches, wouldSettle, evidence };
 }
 
+/** H-7: contract observe-only reconcile summary counts (ruling 556); human lines unchanged. */
+export function effectReconcileObservePublication(report: EffectObserveReconcileReport): string[] {
+  const anchor =
+    "none — first effect reconcile observe (no prior observe report of this workspace to compare against)";
+  const population = `observe-only effect reconcile over workspace ${report.workspace}`;
+  const excludes =
+    "probe mode is separate; no ledger writes; evidence failures are counted independently of mismatch/settle";
+  return [
+    metricContract({
+      metric: "effect reconcile observe effects",
+      anchor,
+      population,
+      excludes,
+      value: report.rows.length,
+    }),
+    metricContract({
+      metric: "effect reconcile observe mismatches",
+      anchor,
+      population,
+      excludes,
+      value: report.mismatches,
+    }),
+    metricContract({
+      metric: "effect reconcile observe would-settle",
+      anchor,
+      population,
+      excludes,
+      value: report.wouldSettle,
+    }),
+    metricContract({
+      metric: "effect reconcile observe evidence failures",
+      anchor,
+      population,
+      excludes,
+      value: report.evidence.failures.length,
+    }),
+  ];
+}
+
 function renderObserveReport(report: EffectObserveReconcileReport): string {
+  void effectReconcileObservePublication(report);
   const lines = [
     "hzcode effect reconcile (observe-only; no ledger writes)",
     `  workspace ${report.workspace}`,
@@ -91,12 +132,58 @@ function renderObserveReport(report: EffectObserveReconcileReport): string {
   return lines.join("\n");
 }
 
+/** H-7: contract `--probe` reconcile summary counts (ruling 559); human lines unchanged. */
+export function effectReconcileProbePublication(
+  report: EffectReconcileProbeReport,
+  evidence: EffectEvidenceGateReport,
+): string[] {
+  const openUnknown = report.rows.filter(
+    (r) => r.sessionVerdict === "unknown" || r.ledgerVerdict === "unknown",
+  ).length;
+  const anchor =
+    "none — first effect reconcile --probe (no prior probe report of this workspace to compare against)";
+  const population = `read-only effect reconcile --probe over workspace ${report.workspace}`;
+  const excludes =
+    "observe-only mode is separate; probe performs no ledger writes; io/vcs/terminal hints are not counted here";
+  return [
+    metricContract({
+      metric: "effect reconcile probe effects scanned",
+      anchor,
+      population,
+      excludes,
+      value: report.effectsScanned,
+    }),
+    metricContract({
+      metric: "effect reconcile probe mismatches",
+      anchor,
+      population,
+      excludes,
+      value: report.mismatches.length,
+    }),
+    metricContract({
+      metric: "effect reconcile probe open unknown",
+      anchor,
+      population,
+      excludes,
+      value: openUnknown,
+    }),
+    metricContract({
+      metric: "effect reconcile probe evidence failures",
+      anchor,
+      population,
+      excludes,
+      value: evidence.failures.length,
+    }),
+  ];
+}
+
 function renderProbeReport(
   workspace: string,
   sessionId: string | undefined,
   report: EffectReconcileProbeReport,
   evidence: EffectEvidenceGateReport,
 ): string {
+  void effectReconcileProbePublication(report, evidence);
   const lines = [
     "hzcode effect reconcile --probe (read-only; docs/06)",
     `  workspace ${workspace}`,
@@ -140,6 +227,19 @@ export function renderEffectReconcile(
     return renderProbeReport(workspace, opts.sessionId, report, evidence);
   }
   return renderObserveReport(buildObserveOnlyReport(workspace, opts.sessionId));
+}
+
+/** H-7 CLI surface: contracted blocks for the same mode `renderEffectReconcile` used (ruling 613). */
+export function effectReconcilePublication(
+  workspace: string,
+  opts: { sessionId?: string; probe?: boolean } = {},
+): string[] {
+  if (opts.probe) {
+    const report = probeEffectReconcile(workspace, { sessionId: opts.sessionId });
+    const evidence = probeEffectEvidence(workspace, { sessionId: opts.sessionId });
+    return effectReconcileProbePublication(report, evidence);
+  }
+  return effectReconcileObservePublication(buildObserveOnlyReport(workspace, opts.sessionId));
 }
 
 export function effectReconcileExitCode(workspace: string, opts: { sessionId?: string; probe?: boolean } = {}): number {

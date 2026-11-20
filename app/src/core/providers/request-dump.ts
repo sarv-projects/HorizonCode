@@ -25,12 +25,31 @@ function ensureFile(file: string): void {
   }
 }
 
+/** Under-admission for HZ_DEBUG_REQUESTS JSONL (ruling 612). */
+export async function admitRequestDumpWrite(
+  file: string,
+  workspace: string = path.dirname(path.resolve(file)),
+): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("../preds-writer");
+  const refused = await admitPredsOutWrite(file, workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "request-dump refused:")
+    .replace(/^preds write denied/, "request-dump denied")
+    .replace(/^preds fs\.write requires approval/, "request-dump fs.write requires approval");
+}
+
 /** Append one masked request record when HZ_DEBUG_REQUESTS names a writable path. */
-export function maybeDumpProviderRequest(provider: string, body: Record<string, unknown>): void {
+export async function maybeDumpProviderRequest(provider: string, body: Record<string, unknown>): Promise<void> {
   const raw = process.env.HZ_DEBUG_REQUESTS;
   if (typeof raw !== "string" || raw.trim() === "") return;
   const file = path.resolve(raw.trim());
   try {
+    const refused = await admitRequestDumpWrite(file);
+    if (refused !== undefined) {
+      process.stderr.write(`hzcode: HZ_DEBUG_REQUESTS refused: ${refused}\n`);
+      return;
+    }
     ensureFile(file);
     const line =
       JSON.stringify({

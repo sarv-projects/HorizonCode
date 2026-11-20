@@ -120,7 +120,7 @@ export async function runDeviceCodeLogin(
       if (typeof json.expires_in === "number" && Number.isFinite(json.expires_in)) {
         stored.expiresAt = new Date(Date.now() + json.expires_in * 1000).toISOString();
       }
-      writeOAuthToken(stored, home);
+      await writeOAuthToken(stored, home);
       process.stderr.write(`Stored oauth token for ${entry.id}\n`);
       return;
     }

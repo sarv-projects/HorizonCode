@@ -6,11 +6,12 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   COCHANGE_FLAG,
+  cochangeCachePath,
   cochangesEnabled,
   computeCochangeBonuses,
   countPairCochanges,
@@ -147,6 +148,24 @@ describe("cache and seeded git repo", () => {
     expect(second).toEqual(first);
     // head + log on the first call; only head on the cached second call.
     expect(calls()).toBe(3);
+  });
+
+  test("persistCache=false computes bonuses but writes no cochange.json (ruling 565)", async () => {
+    process.env[COCHANGE_FLAG] = "1";
+    const workspace = temp();
+    const stateDir = temp();
+    const cacheDir = temp();
+    const { runner } = fakeRunner(["a.ts\nb.ts\n"]);
+    const bonuses = await computeCochangeBonuses({
+      workspace,
+      stateDir,
+      trusted: true,
+      runner,
+      cacheDir,
+      persistCache: false,
+    });
+    expect(bonuses.size).toBe(1);
+    expect(existsSync(cochangeCachePath(workspace, cacheDir))).toBe(false);
   });
 
   test("seeded temp git repo yields a bounded bonus via the guarded runner", async () => {

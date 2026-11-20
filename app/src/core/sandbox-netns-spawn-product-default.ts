@@ -1,12 +1,17 @@
 /**
- * spawnOwned product-default routed netns stack (ruling **341**).
+ * spawnOwned product-default routed netns stack (rulings **341** / **656** / **672**).
  *
  * When Linux sandbox wrap is on and product spawn routing is enabled, wrapped
  * children get ROUTED bridge proxy env plus JOIN (parent netns) or in-wrapper
  * CREATE+ADDR+default-route — advisory only, never shell-net enforced.
  *
- * Enabled when `HZ_SANDBOX_NETNS_SPAWN_ROUTED=1`, or automatically when
+ * `createRuntime` may set `HZ_SANDBOX_NETNS=1` when trusted kernel + probe ok
+ * (**672**). Enabled when `HZ_SANDBOX_NETNS_SPAWN_ROUTED=1`, or automatically when
  * `HZ_SANDBOX_NETNS=1` unless `HZ_SANDBOX_NETNS_SPAWN_ROUTED=0`.
+ *
+ * Ruling **656**: `attemptNetnsSpawnProductDefaultConnectEgress` proves the
+ * product-default env merge alone can confine a CREATE-path child (CAP/nsenter
+ * required); never claim shell-net enforced.
  */
 
 import {
@@ -15,17 +20,24 @@ import {
   netnsRoutedProxySpawnOptIn,
   netnsSpawnRoutedProxyOptIn,
 } from "./sandbox-netns-proxy";
-import { netnsIsolationExpected, sandboxNetnsHonestyFlag } from "./sandbox-netns-route";
+import {
+  mergeSandboxNetnsHonestySpawnEnv,
+  netnsIsolationExpected,
+  sandboxNetnsHonestyFlag,
+} from "./sandbox-netns-route";
 import { sandboxExecVethCreateRequested } from "./sandbox-exec-veth-create";
 import { sandboxExecVethJoinRequested } from "./sandbox-exec-veth-join";
 import {
+  attemptNetnsSpawnWrappedExecCreateConnectEgress,
   buildExecCreatePlumbEnvFragment,
   execCreateSpawnWiringReady,
   execCreateVethInterfaceNames,
+  type SpawnWrappedExecCreateConnectResult,
 } from "./sandbox-netns-spawn-wrapped-exec-create-connect";
 import { assessSandboxExecVethCreateSpawnWiring } from "./sandbox-exec-veth-create";
 import { assessSandboxExecVethJoinSpawnWiring } from "./sandbox-exec-veth-join";
 import { mergedSpawnRoutedChildProxyEnv } from "./sandbox-netns-spawn-veth";
+import type { DoctorRunFn, StartBridgeConnectProxy } from "./sandbox-netns-veth";
 import { VETH_HERMETIC_BRIDGE_HOST } from "./sandbox-netns-veth";
 
 export type SandboxNetnsProductSpawnKind =
@@ -33,6 +45,7 @@ export type SandboxNetnsProductSpawnKind =
   | "product-off-default"
   | "join-path-advisory"
   | "create-path-advisory"
+  | "hermetic-product-create-ok"
   | "stack-partial";
 
 export interface SandboxNetnsProductSpawnPosture {
@@ -179,7 +192,7 @@ export function assessSandboxNetnsProductSpawnPosture(
       joinSpawnWired: false,
       createSpawnWired: false,
       detail:
-        "wrapped spawnOwned does not auto-wire ROUTED+JOIN/CREATE — set HZ_SANDBOX_NETNS_SPAWN_ROUTED=1 or HZ_SANDBOX_NETNS=1",
+        "wrapped spawnOwned does not auto-wire ROUTED+JOIN/CREATE — set HZ_SANDBOX_NETNS_SPAWN_ROUTED=1 or HZ_SANDBOX_NETNS=1 (createRuntime may default NETNS=1 when capable — **672**)",
     };
   }
   const merged = mergeSandboxNetnsProductDefaultSpawnEnv(env, { sandboxWrapped: true });
@@ -228,7 +241,7 @@ export function assessSandboxNetnsProductSpawnPosture(
       childProxyUrl: typeof childProxy === "string" ? childProxy : undefined,
       detail:
         createWired && createReady
-          ? "spawnOwned may auto-wire CREATE+ADDR+ROUTED proxy for wrapped children — hermetic **332**; CAP/nsenter gaps remain; never claim enforced"
+          ? "spawnOwned may auto-wire CREATE+ADDR+ROUTED proxy for wrapped children — hermetic **332**/**656** product-default prove path; CAP/nsenter gaps remain; never claim enforced"
           : "product CREATE path incomplete — see egress.netns.spawn.wrapped.exec_create; never claim enforced",
     };
   }
@@ -245,7 +258,71 @@ export function assessSandboxNetnsProductSpawnPosture(
   };
 }
 
-/** Read-only fix lines for `hzcode doctor --fix egress.netns.spawn.product` (ruling **341**). */
+/**
+ * Strip caller-supplied CREATE/JOIN veth pins so product merge owns plumbing
+ * (ruling **656** — prove product-default path, not hand-built CREATE env).
+ */
+export function stripCallerVethPlumbEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const next = { ...env };
+  for (const key of Object.keys(next)) {
+    if (key.startsWith("HZ_SANDBOX_VETH_")) delete next[key];
+  }
+  return next;
+}
+
+/**
+ * Hermetic product-default CREATE confinement (**656**): start from product
+ * flags only (`HZ_SANDBOX_NETNS=1` / `HZ_SANDBOX_NETNS_SPAWN_ROUTED=1` + proxy),
+ * merge honesty + product CREATE plumb, then reuse **332** probe helpers.
+ * Never claims shell-net enforced; CAP/nsenter gaps skip cleanly.
+ */
+export async function attemptNetnsSpawnProductDefaultConnectEgress(
+  productEnv: Record<string, string | undefined>,
+  connectAuthority: string,
+  run: DoctorRunFn,
+  startProxy: StartBridgeConnectProxy,
+  options: {
+    bridgeHost?: string;
+    sandboxExecBin?: string;
+    spawnPid?: number;
+    vethSuffix?: string;
+  } = {},
+): Promise<SpawnWrappedExecCreateConnectResult> {
+  if (!sandboxNetnsProductSpawnOptIn(productEnv)) {
+    return {
+      ok: false,
+      reason:
+        "product spawn routing off — set HZ_SANDBOX_NETNS=1 or HZ_SANDBOX_NETNS_SPAWN_ROUTED=1",
+    };
+  }
+  const stripped = stripCallerVethPlumbEnv(productEnv);
+  const honest = mergeSandboxNetnsHonestySpawnEnv(stripped);
+  const merged = mergeSandboxNetnsProductDefaultSpawnEnv(honest, {
+    sandboxWrapped: true,
+    spawnPid: options.spawnPid ?? process.pid,
+  });
+  if (!sandboxExecVethCreateRequested(merged) || !execCreateSpawnWiringReady(merged)) {
+    return {
+      ok: false,
+      reason: "product merge did not wire CREATE+ADDR path (set HZ_SANDBOX_NETNS_SPAWN_VETH=create or leave default)",
+    };
+  }
+  return attemptNetnsSpawnWrappedExecCreateConnectEgress(
+    merged,
+    connectAuthority,
+    run,
+    startProxy,
+    {
+      bridgeHost: options.bridgeHost,
+      sandboxExecBin: options.sandboxExecBin,
+      vethSuffix: options.vethSuffix ?? String(options.spawnPid ?? process.pid),
+    },
+  );
+}
+
+/** Read-only fix lines for `hzcode doctor --fix egress.netns.spawn.product` (rulings 341, 656). */
 export function sandboxNetnsProductSpawnDoctorFixLines(
   env: Record<string, string | undefined> = process.env,
 ): string[] {

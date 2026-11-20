@@ -4,10 +4,14 @@ import {
   budgetExhaustionInterruptNudge,
   consecutiveMistakesInterruptNudge,
   contextOverflowInterruptNudge,
+  emptyResponseInterruptNudge,
   formatErrorsInterruptNudge,
+  loadGuardPrompt,
   loopDetectionInterruptNudge,
   repeatedToolErrorInterruptNudge,
+  thinkingLoopInterruptNudge,
   wrapSystemInterrupt,
+  type GuardPromptId,
 } from "../../src/core/guards/guard-prompt";
 
 describe("guard prompts", () => {
@@ -67,5 +71,36 @@ describe("guard prompts", () => {
     expect(text).toContain("</system-interrupt>");
     expect(text).toContain("2 steps");
     expect(text).toContain("Wrap up");
+  });
+
+  test("thinkingLoopInterruptNudge wraps thinking-loop.md (ruling 566)", () => {
+    const text = thinkingLoopInterruptNudge();
+    expect(text).toContain('reason="thinking_loop"');
+    expect(text).toContain("<system-interrupt");
+    expect(text).toContain("</system-interrupt>");
+  });
+
+  test("emptyResponseInterruptNudge wraps empty-response.md (ruling 566)", () => {
+    const text = emptyResponseInterruptNudge(2, 3);
+    expect(text).toContain('reason="empty_response"');
+    expect(text).toContain("2");
+    expect(text).toContain("3");
+  });
+
+  test("all nine C-10 guard prompt files load non-empty (ruling 566)", () => {
+    const ids: GuardPromptId[] = [
+      "tool-call-loop",
+      "action-stationarity",
+      "consecutive-mistakes",
+      "format-errors",
+      "context-overflow",
+      "thinking-loop",
+      "repeated-tool-error",
+      "budget-exhaustion",
+      "empty-response",
+    ];
+    for (const id of ids) {
+      expect(loadGuardPrompt(id).trim().length).toBeGreaterThan(0);
+    }
   });
 });

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   applyEffectHostKernelFromUserConfig,
+  applyEffectHostKernelRegulatedRequire,
   applyEffectHostKernelSandboxDefault,
+  applyEffectHostKernelTrustedRequire,
   parseEffectHostKernelConfig,
   sandboxWrapActiveForEffectHost,
 } from "../../src/core/effect-host-runtime";
@@ -67,6 +69,72 @@ describe("effect-host-runtime (ruling 340)", () => {
     } finally {
       restoreEnv(snap);
     }
+  });
+});
+
+describe("effect-host-runtime trusted require (ruling 540)", () => {
+  test("applyEffectHostKernelTrustedRequire sets require when Linux + trusted + env unset", () => {
+    const env: Record<string, string | undefined> = {};
+    const res = applyEffectHostKernelTrustedRequire(env, true);
+    if (process.platform === "linux") {
+      expect(res.applied).toBe("trusted-require");
+      expect(env.HZ_EFFECT_HOST_KERNEL).toBe("require");
+      expect(res.mode).toBe("require");
+      expect(res.notice).toContain("trusted");
+      expect(res.notice).toContain("not full EffectHost");
+    } else {
+      expect(res.applied).toBeUndefined();
+      expect(env.HZ_EFFECT_HOST_KERNEL).toBeUndefined();
+    }
+  });
+
+  test("trusted require preserves explicit env and skips when untrusted", () => {
+    const untrusted: Record<string, string | undefined> = {};
+    expect(applyEffectHostKernelTrustedRequire(untrusted, false).applied).toBeUndefined();
+
+    const explicit: Record<string, string | undefined> = { HZ_EFFECT_HOST_KERNEL: "default" };
+    expect(applyEffectHostKernelTrustedRequire(explicit, true).applied).toBeUndefined();
+    expect(explicit.HZ_EFFECT_HOST_KERNEL).toBe("default");
+
+    const off: Record<string, string | undefined> = { HZ_EFFECT_HOST_KERNEL: "0" };
+    expect(applyEffectHostKernelTrustedRequire(off, true).applied).toBeUndefined();
+  });
+
+  test("trusted require wins over sandbox-default when both would apply", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_SANDBOX_EXEC: "1" });
+      const env: Record<string, string | undefined> = { ...process.env };
+      delete env.HZ_EFFECT_HOST_KERNEL;
+      const trusted = applyEffectHostKernelTrustedRequire(env, true);
+      const sandbox = applyEffectHostKernelSandboxDefault(env, false);
+      if (process.platform === "linux") {
+        expect(trusted.applied).toBe("trusted-require");
+        expect(env.HZ_EFFECT_HOST_KERNEL).toBe("require");
+        expect(sandbox.applied).toBeUndefined();
+      }
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+});
+
+describe("effect-host-runtime regulated require (ruling 630)", () => {
+  test("applyEffectHostKernelRegulatedRequire sets require when autonomy=regulated and env unset", () => {
+    const env: Record<string, string | undefined> = {};
+    const res = applyEffectHostKernelRegulatedRequire(env, "regulated");
+    expect(res.applied).toBe("config");
+    expect(env.HZ_EFFECT_HOST_KERNEL).toBe("require");
+    expect(res.notice).toContain("autonomy=regulated");
+    expect(res.notice).toContain("not full EffectHost");
+  });
+
+  test("regulated require preserves explicit env and skips other autonomy ids", () => {
+    expect(applyEffectHostKernelRegulatedRequire({}, "autonomous").applied).toBeUndefined();
+    expect(applyEffectHostKernelRegulatedRequire({}, undefined).applied).toBeUndefined();
+    const explicit: Record<string, string | undefined> = { HZ_EFFECT_HOST_KERNEL: "default" };
+    expect(applyEffectHostKernelRegulatedRequire(explicit, "regulated").applied).toBeUndefined();
+    expect(explicit.HZ_EFFECT_HOST_KERNEL).toBe("default");
   });
 });
 

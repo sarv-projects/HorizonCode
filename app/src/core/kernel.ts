@@ -8,6 +8,12 @@
  * (events/<stream>.jsonl and their .head anchors, receipts.jsonl and its anchor)
  * and evaluates the same DEFAULT_POLICY.
  *
+ * H-29 / rulings 626–628 / **632**: when `HZ_KERNEL_SOCKET` / `HZ_KERNEL_DETACH=1`
+ * is set, spawn passes `--socket`, product may RPC over the Unix socket, skip
+ * exit SIGKILL (orphan survive), and reattach to a live `hzk.pid` listener.
+ * Detach seals the launch control secret in mode-0600 `hzk.control` so remint
+ * works after reattach (same-UID FS readers already in the fd-3 threat model).
+ *
  * The only visible difference is `kernelMode`: 'trusted' for the sandboxed Rust
  * kernel, 'untrusted' for the in-process fallback.
  *
@@ -19,9 +25,20 @@
 
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
+import * as net from "node:net";
 import type { Writable } from "node:stream";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  clearKernelControlSecret,
+  connectKernelSocket,
+  kernelDetachLooksLive,
+  readKernelControlSecret,
+  readKernelSupervisorEpoch,
+  resolveLiveSocketPath,
+  waitForKernelSocket,
+  writeKernelControlSecret,
+} from "./kernel-socket";
 import { appendJsonl } from "./jsonl-append";
 import { deleteFileInSandbox } from "./effect-host-atomic-delete";
 import { renameFileInSandbox } from "./effect-host-atomic-rename";
@@ -29,6 +46,7 @@ import { writeBytesAtomicInSandbox } from "./effect-host-atomic-write";
 import { resolveKernelFsEditOldString, renderKernelFsEditReplacement } from "./effect-host-edit-repair";
 import {
   observeCapturedShellStreamDigest,
+  observeKernelApplyPatchMultiOpResultDigest,
   observeKernelFsMutationResultDigest,
   shellExecResultDigestStable,
 } from "./effect-evidence";
@@ -50,11 +68,17 @@ import type {
   ReceiptInput,
 } from "../contracts";
 import { DEFAULT_POLICY, hashEnvelope, newId, nowIso } from "../contracts";
+import { applyGuardG1Wire } from "./guard-g1-wire";
+import { HUMAN_APPROVAL_PRINCIPAL } from "../contracts";
+import { ownerVisibleToSession } from "./human-approval-principal";
+import { assertHumanApprovalPathAttestationForMint } from "./human-approval-principal-strict";
+import { verifyParentReceiptIssuerStamps } from "./receipt-issuer-verify";
 import { createReceiptForHash, hashReceiptVersioned, receiptPreimageVersioned } from "./receipt-schema";
 import { canonicalJson, sha256Hex } from "./canon";
 import { withFileLock } from "./file-lock";
 import { kernelStateDir } from "./paths";
 import { verifyKernelPin, type KernelPinResult } from "./kernel-pin";
+import { assertSupervisorBinarySeal } from "./kernel-binary-seal";
 
 /** Refuse a symlink walk after this many hops (a loop, or an absurd chain). */
 const SYMLINK_HOP_LIMIT = 40;
@@ -500,9 +524,7 @@ interface OwnedLease extends Lease {
 }
 
 function leaseVisibleTo(lease: Lease, sessionId: string | undefined): boolean {
-  const owner = (lease as OwnedLease).owner;
-  if (owner === undefined || owner === null || owner === "") return true;
-  return typeof sessionId === "string" && sessionId !== "" && owner === sessionId;
+  return ownerVisibleToSession((lease as OwnedLease).owner, sessionId);
 }
 
 /** Newest-first active session grant for an exact action (display / hydrate; does not consume). */
@@ -597,6 +619,27 @@ function fileStamp(file: string): string | undefined {
 /** An explicitly configured kernel binary, trimmed; empty means "not set". */
 function kernelBinOverride(env: Record<string, string | undefined>): string {
   return typeof env.HZ_KERNEL_BIN === "string" ? env.HZ_KERNEL_BIN.trim() : "";
+}
+
+/**
+ * H-29 / ruling 626: resolve the optional Unix socket path for durable kernel
+ * serve. Explicit `HZ_KERNEL_SOCKET` wins; `HZ_KERNEL_DETACH=1` defaults to
+ * `<stateDir>/hzk.sock`. Empty / unset → stdio-only (legacy product path).
+ */
+export function resolveKernelSocketPath(
+  env: Record<string, string | undefined>,
+  stateDir: string,
+  platform: string = process.platform,
+): string | undefined {
+  // Native Windows has no Unix socket serve / SO_PEERCRED peer gate (ruling **696**).
+  if (platform === "win32") return undefined;
+  const explicit = typeof env.HZ_KERNEL_SOCKET === "string" ? env.HZ_KERNEL_SOCKET.trim() : "";
+  if (explicit !== "") return explicit;
+  const detach = typeof env.HZ_KERNEL_DETACH === "string" ? env.HZ_KERNEL_DETACH.trim() : "";
+  if (detach === "1" || /^true$/i.test(detach)) {
+    return path.join(stateDir, "hzk.sock");
+  }
+  return undefined;
 }
 
 /* ------------------------------ LocalKernel ------------------------------ */
@@ -1053,6 +1096,7 @@ export class LocalKernel {
     let count = 0;
     let prevHash: string | null = null;
     let lastRecord: { hash: string; record: Record<string, unknown> } | undefined;
+    const chainRows: Receipt[] = [];
     for (const line of await this.lines(file)) {
       const text = line.trim();
       if (text === "") continue;
@@ -1078,24 +1122,30 @@ export class LocalKernel {
       }
       if (computed !== receipt.hash) return { ok: false, count, brokenAt: receipt.seq };
       prevHash = receipt.hash;
+      chainRows.push(receipt);
       lastRecord = { hash: receipt.hash, record: receipt as unknown as Record<string, unknown> };
       count = expected;
     }
     const check = this.checkAnchor(await this.readHead(file), count, lastRecord, "receipt", file);
     if (check.refusal !== undefined) throw new Error(check.refusal);
     if (check.brokenAt !== undefined) return { ok: false, count, brokenAt: check.brokenAt };
+    const issuer = verifyParentReceiptIssuerStamps(chainRows, { stateDir: this.stateDir });
+    if (issuer.ok === false) {
+      return { ok: false, count, brokenAt: issuer.seq ?? count };
+    }
     return { ok: true, count };
   }
 
   async checkGuard(action: GuardAction, scope?: PolicyScope, leases: Lease[] = [], sessionId?: string): Promise<GuardDecision> {
+    const wire = (decision: GuardDecision): GuardDecision => applyGuardG1Wire(decision);
     if (action === null || typeof action !== "object" || typeof action.kind !== "string") {
-      return { decision: "deny", reason: "malformed guard action" };
+      return wire({ decision: "deny", reason: "malformed guard action" });
     }
     // Fail closed before evaluation: an unknown kind must never reach the
     // policy as an unrecognised action (guard.rs refuses it the same way, and
     // the structural state-dir rule is keyed to the exact mutating kind).
     if (!(KNOWN_GUARD_KINDS as readonly string[]).includes(action.kind)) {
-      return { decision: "deny", reason: unknownKindRefusal(action.kind) };
+      return wire({ decision: "deny", reason: unknownKindRefusal(action.kind) });
     }
     // Structural, before policy and leases: the state directory holds the policy
     // this decision comes from, so it is never a legal fs.write / shell.exec target.
@@ -1112,19 +1162,7 @@ export class LocalKernel {
     // the transport changes.
     const matching = this.currentPolicy().filter((rule) => ruleMatches(rule, action.kind, effective));
     const deny = matching.find((rule) => rule.decision === "deny");
-    if (deny) return { decision: "deny", reason: `policy denies ${action.kind} for ${effective} targets` };
-
-    // Execution-bearing workspace paths never ride a bare policy allow. The
-    // guard.rs structural rule is authoritative with a trusted kernel; this is
-    // its fallback twin, evaluated before leases/grants (neither can waive it).
-    if (action.kind === "fs.write" && isSensitiveWriteTarget(action.target)) {
-      return {
-        decision: "ask",
-        reason:
-          `sensitive-write: ${action.target} is a sensitive path (git hooks/config, env file, ` +
-          `lockfile, CI workflow, container/build file or shell profile); explicit approval required`,
-      };
-    }
+    if (deny) return wire({ decision: "deny", reason: `policy denies ${action.kind} for ${effective} targets` });
 
     // Only leases this kernel issued (its own mint table) are honoured. A
     // caller-supplied lease is a claim, not a mint: a fabricated
@@ -1133,6 +1171,34 @@ export class LocalKernel {
     // Rust kernel made the same move (guard.rs::check).
     void leases;
     const now = Date.now();
+
+    // H6 + human-approval re-check (ruling 659): exact one-use lease may clear
+    // sensitive-write; wildcard leases/grants cannot.
+    if (action.kind === "fs.write" && isSensitiveWriteTarget(action.target)) {
+      const exactMatch = [...this.leases.values()].find(
+        (lease) =>
+          lease &&
+          lease.kind === action.kind &&
+          leaseActive(lease, now) &&
+          leaseVisibleTo(lease, sessionId) &&
+          lease.pattern === action.target,
+      );
+      if (exactMatch) {
+        this.leases.delete(exactMatch.leaseId);
+        return wire({
+          decision: "allow",
+          leaseId: exactMatch.leaseId,
+          reason: `lease ${exactMatch.leaseId} (exact) covers sensitive-write ${action.kind} on ${action.target} (consumed)`,
+        });
+      }
+      return wire({
+        decision: "ask",
+        reason:
+          `sensitive-write: ${action.target} is a sensitive path (git hooks/config, env file, ` +
+          `lockfile, CI workflow, container/build file or shell profile); explicit approval required`,
+      });
+    }
+
     // docs/11 L1 reduced form (ruling 32): a lease admits ONE effect. The first
     // matching check takes the lease OUT of the table and cites it; a second
     // identical action finds no lease and falls back to policy (ask) or a
@@ -1147,11 +1213,11 @@ export class LocalKernel {
     );
     if (heldMatch) {
       this.leases.delete(heldMatch.leaseId);
-      return {
+      return wire({
         decision: "allow",
         leaseId: heldMatch.leaseId,
         reason: `lease ${heldMatch.leaseId} (${heldMatch.pattern}) covers ${action.kind} on ${action.target} (consumed)`,
-      };
+      });
     }
 
     // docs/11 L7 reduced form (ruling 32): the grant fires only where the answer
@@ -1166,11 +1232,11 @@ export class LocalKernel {
       const grant = findActiveSessionGrant(this.grants, action, sessionId, now);
       if (grant) {
         const bound = this.mintBoundLease(action.kind, action.target, grant, now);
-        return {
+        return wire({
           decision: "allow",
           leaseId: bound.leaseId,
           reason: `grant ${grant.leaseId} covers ${action.kind} on ${action.target} (minted one-use lease ${bound.leaseId})`,
-        };
+        });
       }
     }
 
@@ -1178,7 +1244,7 @@ export class LocalKernel {
     if (ask) {
       // R1: an ask rule beats a matching allow rule; the lease above still wins
       // on purpose — lease semantics are unchanged.
-      return { decision: "ask", reason: `${action.kind} for ${effective} targets needs approval` };
+      return wire({ decision: "ask", reason: `${action.kind} for ${effective} targets needs approval` });
     }
 
     const allow = matching.find((rule) => rule.decision === "allow");
@@ -1186,18 +1252,24 @@ export class LocalKernel {
       // MEMORY.md is user-curated memory (docs/33 §5.4): a policy allow never
       // silent-writes it; a human ask (or a held/grant lease above) is required.
       if (isMemoryManifestWrite(action, this.stateDir)) {
-        return {
+        return wire({
           decision: "ask",
           reason: `memory-manifest-protected: writing MEMORY.md needs approval`,
-        };
+        });
       }
-      return { decision: "allow" };
+      return wire({ decision: "allow" });
     }
 
-    return { decision: "ask", reason: `no policy rule allows ${action.kind}` };
+    return wire({ decision: "ask", reason: `no policy rule allows ${action.kind}` });
   }
 
-  async makeLease(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
+  async makeLease(
+    kind: GuardKind,
+    pattern: string,
+    ttlMs: number,
+    sessionId?: string,
+    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+  ): Promise<Lease> {
     // The Rust kernel refuses an empty pattern (string_param); mirror that here
     // instead of widening it to `*`, or one approval would mean two things.
     if (typeof pattern !== "string" || pattern === "") throw new Error("lease pattern must be a non-empty string");
@@ -1214,6 +1286,7 @@ export class LocalKernel {
     if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs < 0) {
       throw new Error("guard.lease.ttlMs must be a number");
     }
+    assertHumanApprovalPathAttestationForMint(opts);
     const ttl = Math.floor(ttlMs);
     const lease: OwnedLease = {
       leaseId: newId(),
@@ -1223,7 +1296,10 @@ export class LocalKernel {
     };
     // A sessionId mints an owner-scoped lease; without one the lease keeps the
     // legacy owner-less shape that stays globally consultable (documented).
-    if (typeof sessionId === "string" && sessionId !== "") lease.owner = sessionId;
+    if (typeof sessionId === "string" && sessionId !== "") {
+      lease.owner = opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? `human:${sessionId}` : sessionId;
+      if (opts?.principal === HUMAN_APPROVAL_PRINCIPAL) lease.principal = HUMAN_APPROVAL_PRINCIPAL;
+    }
     this.leases.set(lease.leaseId, lease);
     return lease;
   }
@@ -1235,7 +1311,13 @@ export class LocalKernel {
    * pre-authorisation, never consumed; each check it covers mints a fresh
    * one-use lease via mintBoundLease.
    */
-  async makeGrant(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
+  async makeGrant(
+    kind: GuardKind,
+    pattern: string,
+    ttlMs: number,
+    sessionId?: string,
+    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+  ): Promise<Lease> {
     if (typeof pattern !== "string" || pattern === "") throw new Error("grant pattern must be a non-empty string");
     if (!(KNOWN_GUARD_KINDS as readonly string[]).includes(kind)) {
       throw new Error(unknownKindRefusal(kind));
@@ -1243,6 +1325,7 @@ export class LocalKernel {
     if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs < 0) {
       throw new Error("guard.grant.ttlMs must be a number");
     }
+    assertHumanApprovalPathAttestationForMint(opts);
     const ttl = Math.floor(ttlMs);
     const grant: OwnedLease = {
       leaseId: newId(),
@@ -1250,7 +1333,10 @@ export class LocalKernel {
       pattern,
       expiry: new Date(Date.now() + ttl).toISOString(),
     };
-    if (typeof sessionId === "string" && sessionId !== "") grant.owner = sessionId;
+    if (typeof sessionId === "string" && sessionId !== "") {
+      grant.owner = opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? `human:${sessionId}` : sessionId;
+      if (opts?.principal === HUMAN_APPROVAL_PRINCIPAL) grant.principal = HUMAN_APPROVAL_PRINCIPAL;
+    }
     this.grants.set(grant.leaseId, grant);
     return grant;
   }
@@ -1389,6 +1475,10 @@ export class KernelClient {
   private readonly pinEnv: Record<string, string | undefined>;
   private readonly pinManifestPath?: string;
   private child?: ChildProcessWithoutNullStreams;
+  /** H-29 / 628: durable Unix NDJSON transport (optional; preferred when set). */
+  private socket?: net.Socket;
+  /** When true, close/disconnect must not SIGKILL the kernel (orphan survive). */
+  private detachSurvive = false;
   private readonly pending = new Map<number, PendingCall>();
   private writeChain: Promise<void> = Promise.resolve();
   private stdoutBuffer = "";
@@ -1496,12 +1586,56 @@ export class KernelClient {
     }
 
     try {
+      // H-29 / 626–628: optional durable Unix listener.
+      const socketPath = resolveKernelSocketPath(process.env, this.stateDir);
+      this.detachSurvive = Boolean(socketPath);
+
+      // Reattach to a surviving orphan before spawning a second kernel.
+      if (socketPath && kernelDetachLooksLive(this.stateDir, socketPath)) {
+        const livePath = resolveLiveSocketPath(this.stateDir, socketPath) ?? socketPath;
+        try {
+          await this.attachSocket(livePath);
+          const pong = await this.callRemote<"ping">("ping", {}, this.timeoutMs);
+          this.binaryPath = binary;
+          // H-30 / 634: on-disk epoch must match live ping (restarted kernel advances).
+          this.assertSupervisorEpoch(pong?.supervisorEpoch);
+          // H-30 / 710: hzk.binary + ping.supervisorBinarySha256 must match client digest.
+          assertSupervisorBinarySeal(
+            this.stateDir,
+            pin.actual,
+            typeof pong?.supervisorBinarySha256 === "string" ? pong.supervisorBinarySha256 : undefined,
+          );
+          // Ruling 632: recover sealed control secret for remint after detach.
+          const recovered = readKernelControlSecret(this.stateDir);
+          if (recovered) this.#controlSecret = recovered;
+          const remint =
+            recovered !== undefined
+              ? "control remint restored from hzk.control"
+              : "control remint unavailable (no hzk.control seal)";
+          const epochNote =
+            typeof pong?.supervisorEpoch === "number"
+              ? ` epoch=${pong.supervisorEpoch}`
+              : "";
+          this.setMode(
+            "trusted",
+            `kernel ${pong?.version ?? "unknown"} reattached via ${livePath} ` +
+              `(H-29 detach; ${remint}${epochNote})`,
+          );
+          return this.modeValue;
+        } catch (reattachErr) {
+          this.capture(`socket reattach failed: ${errorMessage(reattachErr)}`);
+          await this.disconnectTransport({ killOrphan: false });
+        }
+      }
+
       // The only controlling parent knows this key. A raw NDJSON caller can
       // invoke guard.check, but cannot mint a lease/grant or amend the
       // allowlist without proving control of this launch-private pipe.
       // The key is NOT passed in argv/environment or serialized in a result.
       const controlSecret = randomBytes(32).toString("hex");
-      const child = spawn(binary, ["--state-dir", this.stateDir, "--control-fd", "3"], {
+      const spawnArgs = ["--state-dir", this.stateDir, "--control-fd", "3"];
+      if (socketPath) spawnArgs.push("--socket", socketPath);
+      const child = spawn(binary, spawnArgs, {
         cwd: this.workspace,
         stdio: ["pipe", "pipe", "pipe", "pipe"],
         // Explicit env snapshot at spawn: a runtime mutation of process.env
@@ -1527,6 +1661,16 @@ export class KernelClient {
         throw new Error("private kernel control pipe unavailable");
       }
       this.#controlSecret = controlSecret;
+      // H-29 / 632: seal control secret for detach reattach (mode 0600).
+      if (this.detachSurvive) {
+        try {
+          writeKernelControlSecret(this.stateDir, controlSecret);
+        } catch (sealErr) {
+          this.capture(`detach control seal failed: ${errorMessage(sealErr)}`);
+        }
+      } else {
+        clearKernelControlSecret(this.stateDir);
+      }
       // A failed/old child can close fd 3 before the parent writes. Absorb
       // EPIPE as a kernel-start failure, not an unhandled process exception.
       controlPipe.on("error", (error: Error) =>
@@ -1534,24 +1678,92 @@ export class KernelClient {
       );
       this.wire(child);
       controlPipe.end(`${controlSecret}\n`);
+
+      // Prefer socket RPC once the durable listener is up (stdio stays as
+      // fallback drain on the kernel side).
+      if (socketPath) {
+        const ready = await waitForKernelSocket(socketPath, this.timeoutMs);
+        if (ready) {
+          try {
+            await this.attachSocket(socketPath);
+          } catch (sockErr) {
+            this.capture(`socket attach after spawn failed (stdio still live): ${errorMessage(sockErr)}`);
+          }
+        }
+      }
+
       const pong = await this.callRemote<"ping">("ping", {}, this.timeoutMs);
       this.binaryPath = binary;
+      if (this.detachSurvive) {
+        this.assertSupervisorEpoch(pong?.supervisorEpoch);
+        assertSupervisorBinarySeal(
+          this.stateDir,
+          pin.actual,
+          typeof pong?.supervisorBinarySha256 === "string" ? pong.supervisorBinarySha256 : undefined,
+        );
+      }
+      const via = this.socket ? `, socket ${socketPath}` : "";
+      const epochNote =
+        typeof pong?.supervisorEpoch === "number" ? `, epoch ${pong.supervisorEpoch}` : "";
       this.setMode(
         "trusted",
-        `kernel ${pong?.version ?? "unknown"} (${binary}${pin.status === "verified" ? ", sha256 verified" : ", sha256 unpinned"})`,
+        `kernel ${pong?.version ?? "unknown"} (${binary}${pin.status === "verified" ? ", sha256 verified" : ", sha256 unpinned"}${via}${epochNote})`,
       );
       return this.modeValue;
     } catch (err) {
       this.capture(`start failed: ${errorMessage(err)}`);
-      await this.killChild();
+      // Failed starts must never leave a half-bound orphan listener.
+      await this.disconnectTransport({ killOrphan: true });
       this.setMode("untrusted", `kernel start failed (${errorMessage(err)}) — using the local fallback`);
       return this.modeValue;
     }
   }
 
+  /**
+   * H-30 / 634: require `ping.supervisorEpoch` to match on-disk `hzk.epoch`
+   * after detach serve. Mismatch means a restarted / foreign kernel.
+   */
+  private assertSupervisorEpoch(pingEpoch: number | undefined): void {
+    const disk = readKernelSupervisorEpoch(this.stateDir);
+    if (disk === undefined && pingEpoch === undefined) return;
+    if (disk === undefined || pingEpoch === undefined || disk !== pingEpoch) {
+      throw new Error(
+        `HZ_PRECONDITION_FAILED: supervisor epoch mismatch (disk=${disk ?? "none"} ping=${pingEpoch ?? "none"})`,
+      );
+    }
+  }
+
+  /** Wire an NDJSON Unix socket as the preferred RPC transport. */
+  private async attachSocket(socketPath: string): Promise<void> {
+    const socket = await connectKernelSocket(socketPath);
+    if (this.socket) {
+      try {
+        this.socket.destroy();
+      } catch {
+        /* already gone */
+      }
+    }
+    this.socket = socket;
+    socket.on("data", (chunk: string | Buffer) => this.onStdout(String(chunk)));
+    socket.on("error", (err: Error) => {
+      if (this.closed) return;
+      this.fallBack(`kernel socket error: ${err.message}`);
+    });
+    socket.on("close", () => {
+      if (this.closed || this.socket !== socket) return;
+      // Stdio child may still be alive; only fall back when no child remains.
+      if (!this.child) this.fallBack("kernel socket closed");
+      else this.socket = undefined;
+    });
+  }
+
   private wire(child: ChildProcessWithoutNullStreams): void {
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string | Buffer) => this.onStdout(String(chunk)));
+    child.stdout.on("data", (chunk: string | Buffer) => {
+      // When socket RPC is primary, ignore stdio responses to avoid double-dispatch.
+      if (this.socket) return;
+      this.onStdout(String(chunk));
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string | Buffer) => this.capture(String(chunk)));
     // The spawn error handler was attached before validating the private
@@ -1559,17 +1771,22 @@ export class KernelClient {
     child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       if (this.closed) return;
       const how = signal ? `signal ${signal}` : `code ${code === null ? "null" : code}`;
+      // Socket-only reattach has no child; detach orphans must not fall back
+      // merely because we intentionally left the process alive.
+      if (this.detachSurvive && this.socket) return;
       this.fallBack(`kernel exited unexpectedly (${how})`);
     });
-    // Last-resort cleanup: never leave an orphan kernel process behind.
-    this.exitHook = () => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    };
-    process.once("exit", this.exitHook);
+    // H-29 / 628: detach mode leaves the kernel listening after parent exit.
+    if (!this.detachSurvive) {
+      this.exitHook = () => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      };
+      process.once("exit", this.exitHook);
+    }
   }
 
   private capture(text: string): void {
@@ -1629,7 +1846,7 @@ export class KernelClient {
     if (this.closed) return;
     // A child process that is dying during the handshake must release the pending
     // ping immediately, otherwise start-up would sit on the 5s timeout.
-    if (!this.child && this.modeValue === "untrusted") return;
+    if (!this.child && !this.socket && this.modeValue === "untrusted") return;
     const pending = [...this.pending.values()];
     this.pending.clear();
     for (const call of pending) {
@@ -1640,9 +1857,33 @@ export class KernelClient {
     this.setMode("untrusted", reason);
   }
 
-  private async killChild(): Promise<void> {
+  private async disconnectTransport(opts: { killOrphan: boolean }): Promise<void> {
+    const socket = this.socket;
+    this.socket = undefined;
+    if (socket) {
+      try {
+        socket.end();
+      } catch {
+        /* already closed */
+      }
+      try {
+        socket.destroy();
+      } catch {
+        /* already gone */
+      }
+    }
     const child = this.child;
     this.child = undefined;
+    // H-29 / 632: keep sealed secret on detach; clear on kill so remint dies with orphan.
+    if (opts.killOrphan || !this.detachSurvive) {
+      clearKernelControlSecret(this.stateDir);
+    } else if (this.#controlSecret) {
+      try {
+        writeKernelControlSecret(this.stateDir, this.#controlSecret);
+      } catch {
+        /* best-effort seal before memory drop */
+      }
+    }
     this.#controlSecret = undefined;
     this.stdoutBuffer = "";
     if (this.exitHook) {
@@ -1655,6 +1896,8 @@ export class KernelClient {
     } catch {
       /* already closed */
     }
+    // H-29 / 628: detachSurvive leaves the orphan listening unless explicitly killed.
+    if (this.detachSurvive && !opts.killOrphan) return;
     try {
       child.kill("SIGTERM");
     } catch {
@@ -1670,6 +1913,12 @@ export class KernelClient {
     }
   }
 
+  private async killChild(): Promise<void> {
+    // Fallback / error paths always tear down the process. Intentional detach
+    // survival is only for `close()` when `detachSurvive` is set.
+    await this.disconnectTransport({ killOrphan: true });
+  }
+
   /** One request/response round trip against the Rust kernel. */
   private callRemote<M extends KernelMethod>(
     method: M,
@@ -1677,8 +1926,9 @@ export class KernelClient {
     timeoutMs: number = this.timeoutMs,
   ): Promise<KernelRequestMap[M]["result"]> {
     return new Promise<KernelRequestMap[M]["result"]>((resolve, reject) => {
+      const socket = this.socket;
       const child = this.child;
-      if (!child || this.closed) {
+      if ((!socket && !child) || this.closed) {
         reject(new Error("kernel is not running"));
         return;
       }
@@ -1696,12 +1946,18 @@ export class KernelClient {
         method,
       });
       const payload = JSON.stringify({ id, method, params: params ?? {} }) + "\n";
-      // Writes are queued: never interleave two requests on stdin.
+      // Writes are queued: never interleave two requests on the same transport.
       this.writeChain = this.writeChain.then(
         () =>
           new Promise<void>((done) => {
             try {
-              child.stdin.write(payload, "utf8", () => done());
+              if (socket) {
+                socket.write(payload, "utf8", () => done());
+              } else if (child) {
+                child.stdin.write(payload, "utf8", () => done());
+              } else {
+                done();
+              }
             } catch {
               done();
             }
@@ -1744,20 +2000,28 @@ export class KernelClient {
           Array.isArray(p.leases) ? (p.leases as Lease[]) : [],
           typeof p.sessionId === "string" ? p.sessionId : undefined,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
-      case "guard.lease":
+      case "guard.lease": {
+        const principal =
+          p.principal === HUMAN_APPROVAL_PRINCIPAL ? ({ principal: HUMAN_APPROVAL_PRINCIPAL } as const) : undefined;
         return this.local.makeLease(
           p.kind as GuardKind,
           String(p.pattern ?? "*"),
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
+          principal,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
-      case "guard.grant":
+      }
+      case "guard.grant": {
+        const principal =
+          p.principal === HUMAN_APPROVAL_PRINCIPAL ? ({ principal: HUMAN_APPROVAL_PRINCIPAL } as const) : undefined;
         return this.local.makeGrant(
           p.kind as GuardKind,
           String(p.pattern ?? "*"),
           typeof p.ttlMs === "number" ? p.ttlMs : 0,
           typeof p.sessionId === "string" ? p.sessionId : undefined,
+          principal,
         ) as unknown as Promise<KernelRequestMap[M]["result"]>;
+      }
       case "guard.grant.query":
         return Promise.resolve({
           grant: this.local.queryGrantForAction(
@@ -1873,6 +2137,345 @@ export class KernelClient {
               }
               throw new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.write failed: ${msg}`);
             });
+        }
+        if (kindLower === "fs.batch") {
+          const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
+          if (!sandboxRoot) {
+            return Promise.reject(
+              new Error(
+                `HZ_PRECONDITION_FAILED: effect.execute for dispatch kind "fs.batch" is not implemented in the kernel; TypeScript owns real tool execution`,
+              ),
+            );
+          }
+          const opsRaw = dispatch?.spec?.ops;
+          if (!Array.isArray(opsRaw) || opsRaw.length === 0) {
+            return Promise.reject(
+              new Error(
+                "HZ_PRECONDITION_FAILED: effect.execute fs.batch requires a non-empty dispatch.spec.ops array",
+              ),
+            );
+          }
+          type BatchWrite = {
+            path: string;
+            payload: Buffer;
+            expectedPreimageDigest?: string | null;
+            opKind: "fs.write" | "fs.edit";
+          };
+          type BatchRename = {
+            from: string;
+            to: string;
+            expectedPreimageDigest?: string | null;
+          };
+          type BatchDelete = {
+            path: string;
+            expectedPreimageDigest?: string;
+          };
+          const planned: BatchWrite[] = [];
+          const plannedRenames: BatchRename[] = [];
+          const plannedDeletes: BatchDelete[] = [];
+          const stagedContent = new Map<string, string>();
+          for (let i = 0; i < opsRaw.length; i += 1) {
+            const op = opsRaw[i] as Record<string, unknown> | undefined;
+            if (!op || typeof op !== "object") {
+              return Promise.reject(
+                new Error(`HZ_PRECONDITION_FAILED: fs.batch ops[${i}] must be an object`),
+              );
+            }
+            const opKindRaw = typeof op.kind === "string" ? op.kind : "";
+            const opKindLower = opKindRaw.toLowerCase();
+            const isWrite = opKindLower === "fs.write";
+            const isEdit = opKindLower === "fs.edit";
+            const isRename = opKindLower === "fs.rename";
+            const isDelete = opKindLower === "fs.delete";
+            if (!isWrite && !isEdit && !isRename && !isDelete) {
+              return Promise.reject(
+                new Error(
+                  `HZ_PRECONDITION_FAILED: fs.batch accepts only exact fs.write/fs.edit/fs.rename/fs.delete ops; refused mixed/non-write kind ${JSON.stringify(opKindRaw)} at ops[${i}]`,
+                ),
+              );
+            }
+            if (isRename) {
+              const from = typeof op.from === "string" ? op.from : "";
+              const to = typeof op.to === "string" ? op.to : "";
+              if (!from || !to) {
+                return Promise.reject(
+                  new Error(
+                    `HZ_PRECONDITION_FAILED: fs.batch ops[${i}] fs.rename requires from and to`,
+                  ),
+                );
+              }
+              const entry: BatchRename = { from, to };
+              if ("expectedPreimageDigest" in op) {
+                entry.expectedPreimageDigest =
+                  op.expectedPreimageDigest === null
+                    ? null
+                    : typeof op.expectedPreimageDigest === "string"
+                      ? op.expectedPreimageDigest
+                      : undefined;
+              }
+              plannedRenames.push(entry);
+              continue;
+            }
+            if (isDelete) {
+              const delPath = typeof op.path === "string" ? op.path : "";
+              if (!delPath) {
+                return Promise.reject(
+                  new Error(`HZ_PRECONDITION_FAILED: fs.batch ops[${i}] fs.delete requires path`),
+                );
+              }
+              const entry: BatchDelete = { path: delPath };
+              if ("expectedPreimageDigest" in op && typeof op.expectedPreimageDigest === "string") {
+                entry.expectedPreimageDigest = op.expectedPreimageDigest;
+              }
+              plannedDeletes.push(entry);
+              continue;
+            }
+            const rawPath = typeof op.path === "string" ? op.path : "";
+            if (!rawPath) {
+              return Promise.reject(
+                new Error(
+                  `HZ_PRECONDITION_FAILED: fs.batch ops[${i}] ${isEdit ? "fs.edit" : "fs.write"} requires path`,
+                ),
+              );
+            }
+            let payload: Buffer;
+            if (isEdit) {
+              const oldString =
+                typeof op.oldString === "string"
+                  ? op.oldString
+                  : typeof op.old_string === "string"
+                    ? op.old_string
+                    : undefined;
+              const newString =
+                typeof op.newString === "string"
+                  ? op.newString
+                  : typeof op.new_string === "string"
+                    ? op.new_string
+                    : undefined;
+              if (typeof oldString !== "string") {
+                return Promise.reject(
+                  new Error(`HZ_PRECONDITION_FAILED: fs.batch ops[${i}] fs.edit requires oldString`),
+                );
+              }
+              if (typeof newString !== "string") {
+                return Promise.reject(
+                  new Error(`HZ_PRECONDITION_FAILED: fs.batch ops[${i}] fs.edit requires newString`),
+                );
+              }
+              const candidate = pathInsideSandbox(sandboxRoot, rawPath, "fs.edit");
+              let content = stagedContent.get(rawPath);
+              if (content === undefined) {
+                if (!existsSync(candidate)) {
+                  return Promise.reject(
+                    new Error(
+                      "HZ_PRECONDITION_FAILED: effect.execute fs.batch fs.edit requires an existing file",
+                    ),
+                  );
+                }
+                content = readFileSync(candidate, "utf8");
+              }
+              const resolvedOld = resolveKernelFsEditOldString(content, oldString, process.env);
+              if (resolvedOld.ok === false) {
+                const msg =
+                  resolvedOld.reason === "ambiguous"
+                    ? "HZ_PRECONDITION_FAILED: effect.execute fs.batch fs.edit oldString must match exactly once"
+                    : "HZ_PRECONDITION_FAILED: effect.execute fs.batch fs.edit oldString not found in file";
+                return Promise.reject(new Error(msg));
+              }
+              const updated =
+                content.slice(0, resolvedOld.start) +
+                renderKernelFsEditReplacement(newString, resolvedOld, content) +
+                content.slice(resolvedOld.end);
+              payload = Buffer.from(updated, "utf8");
+              stagedContent.set(rawPath, updated);
+            } else if (typeof op.text === "string") {
+              payload = Buffer.from(op.text, "utf8");
+              stagedContent.set(rawPath, op.text);
+            } else if (Array.isArray(op.bytes)) {
+              payload = Buffer.from(op.bytes as number[]);
+              stagedContent.set(rawPath, payload.toString("utf8"));
+            } else if (typeof op.bytes === "string") {
+              payload = Buffer.from(op.bytes, "utf8");
+              stagedContent.set(rawPath, op.bytes);
+            } else {
+              return Promise.reject(
+                new Error(
+                  `HZ_PRECONDITION_FAILED: fs.batch ops[${i}] fs.write requires text or bytes`,
+                ),
+              );
+            }
+            const entry: BatchWrite = {
+              path: rawPath,
+              payload,
+              opKind: isEdit ? "fs.edit" : "fs.write",
+            };
+            if ("expectedPreimageDigest" in op) {
+              entry.expectedPreimageDigest =
+                op.expectedPreimageDigest === null
+                  ? null
+                  : typeof op.expectedPreimageDigest === "string"
+                    ? op.expectedPreimageDigest
+                    : undefined;
+              if (
+                entry.expectedPreimageDigest !== null &&
+                entry.expectedPreimageDigest !== undefined &&
+                !/^[a-f0-9]{64}$/.test(entry.expectedPreimageDigest)
+              ) {
+                return Promise.reject(
+                  new Error(
+                    "HZ_PRECONDITION_FAILED: expectedPreimageDigest must be lowercase sha256 hex (or null for new fs.write)",
+                  ),
+                );
+              }
+            }
+            planned.push(entry);
+          }
+          // Verify all preimages against disk before any write (LocalKernel mirror of Rust).
+          for (const entry of planned) {
+            const candidate = pathInsideSandbox(
+              sandboxRoot,
+              entry.path,
+              entry.opKind === "fs.edit" ? "fs.edit" : "fs.write",
+            );
+            if (entry.expectedPreimageDigest === null) {
+              if (existsSync(candidate)) {
+                return Promise.reject(
+                  new Error("HZ_PRECONDITION_FAILED: preimage missing-file assertion failed"),
+                );
+              }
+            } else if (typeof entry.expectedPreimageDigest === "string") {
+              const primary = observePostimageDigest(candidate);
+              const confirm = observePostimageDigest(candidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              if (!stability.observationStable || primary !== entry.expectedPreimageDigest) {
+                return Promise.reject(
+                  new Error("HZ_PRECONDITION_FAILED: preimage digest mismatch"),
+                );
+              }
+            }
+          }
+          for (const ren of plannedRenames) {
+            if (typeof ren.expectedPreimageDigest === "string") {
+              const candidate = pathInsideSandbox(sandboxRoot, ren.from, "fs.rename");
+              const primary = observePostimageDigest(candidate);
+              const confirm = observePostimageDigest(candidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              if (!stability.observationStable || primary !== ren.expectedPreimageDigest) {
+                return Promise.reject(
+                  new Error("HZ_PRECONDITION_FAILED: preimage digest mismatch"),
+                );
+              }
+            }
+          }
+          for (const del of plannedDeletes) {
+            if (typeof del.expectedPreimageDigest === "string") {
+              const candidate = pathInsideSandbox(sandboxRoot, del.path, "fs.delete");
+              const primary = observePostimageDigest(candidate);
+              const confirm = observePostimageDigest(candidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              if (!stability.observationStable || primary !== del.expectedPreimageDigest) {
+                return Promise.reject(
+                  new Error("HZ_PRECONDITION_FAILED: preimage digest mismatch"),
+                );
+              }
+            }
+          }
+          // Same-path edits: keep only the final staged payload per path (ruling 553).
+          const collapsed: BatchWrite[] = [];
+          const lastIndexByPath = new Map<string, number>();
+          for (const entry of planned) {
+            const prev = lastIndexByPath.get(entry.path);
+            if (prev === undefined) {
+              lastIndexByPath.set(entry.path, collapsed.length);
+              collapsed.push(entry);
+            } else {
+              collapsed[prev] = entry;
+            }
+          }
+          return (async () => {
+            const { rename: fsRename } = await import("node:fs/promises");
+            const resolvedPaths: string[] = [];
+            for (const entry of collapsed) {
+              const candidate = pathInsideSandbox(
+                sandboxRoot,
+                entry.path,
+                entry.opKind === "fs.edit" ? "fs.edit" : "fs.write",
+              );
+              await writeBytesAtomicInSandbox(sandboxRoot, candidate, entry.payload);
+              resolvedPaths.push(candidate);
+            }
+            for (const ren of plannedRenames) {
+              const fromPath = pathInsideSandbox(sandboxRoot, ren.from, "fs.rename");
+              const toPath = pathInsideSandbox(sandboxRoot, ren.to, "fs.rename");
+              await fsRename(fromPath, toPath);
+              // Prefer observing rename destinations; drop the source write path if renamed.
+              const srcIdx = resolvedPaths.indexOf(fromPath);
+              if (srcIdx >= 0) resolvedPaths[srcIdx] = toPath;
+              else resolvedPaths.push(toPath);
+            }
+            const { unlink } = await import("node:fs/promises");
+            for (const del of plannedDeletes) {
+              const delPath = pathInsideSandbox(sandboxRoot, del.path, "fs.delete");
+              await unlink(delPath);
+              resolvedPaths.push(delPath);
+            }
+            const contentDigests: Array<string | null> = [];
+            let allStable = true;
+            for (const candidate of resolvedPaths) {
+              if (!existsSync(candidate)) {
+                contentDigests.push(null);
+                continue;
+              }
+              const primary = observePostimageDigest(candidate);
+              const confirm = observePostimageDigest(candidate);
+              const stability = assessPostimageObservation(primary, confirm);
+              if (!stability.observationStable || primary === undefined) {
+                allStable = false;
+                contentDigests.push(null);
+              } else {
+                contentDigests.push(primary);
+              }
+            }
+            const batchOpCount = collapsed.length + plannedRenames.length + plannedDeletes.length;
+            const relPaths = [
+              ...collapsed.map((e) => e.path),
+              ...plannedRenames.map((r) => `${r.from}→${r.to}`),
+              ...plannedDeletes.map((d) => `delete:${d.path}`),
+            ].join(", ");
+            const lastDigest =
+              [...contentDigests].reverse().find((d): d is string => typeof d === "string") ??
+              undefined;
+            const resultObs = observeKernelApplyPatchMultiOpResultDigest(
+              batchOpCount,
+              relPaths,
+              lastDigest,
+            );
+            const resultDigestStable = allStable && resultObs.resultDigestStable;
+            const verdict =
+              allStable && resultDigestStable ? ("settled" as const) : ("unknown" as const);
+            const result: KernelRequestMap["effect.execute"]["result"] = {
+              verdict,
+              effectId,
+              phases: ["allow", "execute", "observe"],
+              postimageObservationStable: allStable,
+              resultDigestStable,
+              batchOpCount,
+              writePaths: resolvedPaths,
+              contentDigests,
+              renameCount: plannedRenames.length,
+              deleteCount: plannedDeletes.length,
+              ...(lastDigest !== undefined ? { contentDigest: lastDigest } : {}),
+              ...(resultObs.resultDigest ? { resultDigest: resultObs.resultDigest } : {}),
+              ...(resolvedPaths[0] !== undefined ? { writePath: resolvedPaths[0] } : {}),
+            };
+            return result as unknown as KernelRequestMap[M]["result"];
+          })().catch((err) => {
+            const msg = errorMessage(err);
+            if (msg.includes("HZ_PRECONDITION_FAILED")) {
+              throw err instanceof Error ? err : new Error(msg);
+            }
+            throw new Error(`HZ_PRECONDITION_FAILED: effect.execute fs.batch failed: ${msg}`);
+          });
         }
         if (kindLower === "fs.edit") {
           const sandboxRoot = typeof p.sandboxRoot === "string" ? p.sandboxRoot : "";
@@ -2249,7 +2852,7 @@ export class KernelClient {
     // cannot forge either class on the product-bound transport.
     const authMethod = method === "guard.lease" || method === "guard.grant" ||
       method === "guard.allowlist.amend" || method === "receipt.issue";
-    if (this.modeValue === "trusted" && this.child && !this.closed) {
+    if (this.modeValue === "trusted" && (this.child || this.socket) && !this.closed) {
       try {
         if (authMethod && !this.#controlSecret) {
           throw new KernelRefusal("HZ_PRECONDITION_FAILED: trusted kernel parent credential unavailable");
@@ -2298,7 +2901,7 @@ export class KernelClient {
 
   /* --------------------------- Public kernel API --------------------------- */
 
-  async ping(): Promise<{ version: string }> {
+  async ping(): Promise<KernelRequestMap["ping"]["result"]> {
     return this.rpc("ping", {});
   }
 
@@ -2374,10 +2977,11 @@ export class KernelClient {
         }
       }
     }
-    return this.rpc(
+    const decision = await this.rpc(
       "guard.check",
       { action, scope, leases, sessionId } as unknown as KernelRequestMap["guard.check"]["params"],
     );
+    return applyGuardG1Wire(decision as GuardDecision);
   }
 
   /**
@@ -2396,11 +3000,21 @@ export class KernelClient {
    * one it keeps the legacy owner-less shape. Both transports accept the
    * additive field.
    */
-  async makeLease(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
-    return this.rpc(
-      "guard.lease",
-      { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.lease"]["params"],
-    );
+  async makeLease(
+    kind: GuardKind,
+    pattern: string,
+    ttlMs: number,
+    sessionId?: string,
+    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+  ): Promise<Lease> {
+    assertHumanApprovalPathAttestationForMint(opts);
+    return this.rpc("guard.lease", {
+      kind,
+      pattern,
+      ttlMs,
+      sessionId,
+      ...(opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? { principal: HUMAN_APPROVAL_PRINCIPAL } : {}),
+    } as unknown as KernelRequestMap["guard.lease"]["params"]);
   }
 
   /**
@@ -2409,11 +3023,21 @@ export class KernelClient {
    * otherwise `ask`, by minting a fresh bound lease for that exact effect. Both
    * transports accept the additive field.
    */
-  async makeGrant(kind: GuardKind, pattern: string, ttlMs: number, sessionId?: string): Promise<Lease> {
-    const grant = await this.rpc(
-      "guard.grant",
-      { kind, pattern, ttlMs, sessionId } as unknown as KernelRequestMap["guard.grant"]["params"],
-    );
+  async makeGrant(
+    kind: GuardKind,
+    pattern: string,
+    ttlMs: number,
+    sessionId?: string,
+    opts?: { principal?: typeof HUMAN_APPROVAL_PRINCIPAL },
+  ): Promise<Lease> {
+    assertHumanApprovalPathAttestationForMint(opts);
+    const grant = await this.rpc("guard.grant", {
+      kind,
+      pattern,
+      ttlMs,
+      sessionId,
+      ...(opts?.principal === HUMAN_APPROVAL_PRINCIPAL ? { principal: HUMAN_APPROVAL_PRINCIPAL } : {}),
+    } as unknown as KernelRequestMap["guard.grant"]["params"]);
     this.local.adoptGrantMirror(grant);
     return grant;
   }
@@ -2472,9 +3096,15 @@ export class KernelClient {
     return this.rpc("effect.owner.postimage.verify", {});
   }
 
-  /** Recover only a verifiable v2 prepare-only crash, never an execution/UNKNOWN. */
-  async ownerRecover(effectId: string): Promise<KernelRequestMap["effect.owner.recover"]["result"]> {
-    return this.rpc("effect.owner.recover", { effectId });
+  /** Recover prepare-only crash, attested abandon, or observe-settle (**349** / **655** / **714**). */
+  async ownerRecover(
+    effectId: string,
+    opts?: KernelRequestMap["effect.owner.recover"]["params"],
+  ): Promise<KernelRequestMap["effect.owner.recover"]["result"]> {
+    return this.rpc("effect.owner.recover", {
+      effectId,
+      ...opts,
+    });
   }
 
   /** Kernel hermetic effect.execute, now with default-on Rust OwnerLog for supported mutations. */
@@ -2504,7 +3134,11 @@ export class KernelClient {
     return this.rpc("effect.reconcile", params);
   }
 
-  /** Kill the kernel child (when any) and release the client. */
+  /**
+   * Release this client. In detach mode (`HZ_KERNEL_DETACH` / `HZ_KERNEL_SOCKET`)
+   * the kernel orphan is left listening for H-29 reattach; otherwise the child
+   * is SIGTERM/SIGKILL'd.
+   */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -2514,7 +3148,7 @@ export class KernelClient {
       clearTimeout(call.timer);
       call.reject(new Error("kernel client closed"));
     }
-    await this.killChild();
+    await this.disconnectTransport({ killOrphan: !this.detachSurvive });
     await this.local.close();
   }
 }

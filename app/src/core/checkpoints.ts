@@ -225,6 +225,17 @@ export function checkpointPath(workspace: string): string {
   return path.join(workspaceStateDir(realpathish(path.resolve(workspace))), CHECKPOINT_FILE);
 }
 
+/** Under-admission (ruling 604): Guard before checkpoints.jsonl append. */
+export async function admitCheckpointWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(checkpointPath(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "checkpoint refused:")
+    .replace(/^preds write denied/, "checkpoint denied")
+    .replace(/^preds fs\.write requires approval/, "checkpoint fs.write requires approval");
+}
+
 /* --------------------------------- state --------------------------------- */
 
 interface CheckpointState {
@@ -457,6 +468,22 @@ export function recordCheckpoint(
     }
   }
   return record;
+}
+
+/** Product path: admit then `recordCheckpoint` (deny → undefined, no disk write). */
+export async function recordCheckpointGuarded(
+  workspace: string,
+  sessionId: string,
+  messageIndex: number,
+  changes: readonly string[],
+  opts: RecordCheckpointOptions = {},
+): Promise<CheckpointRecord | undefined> {
+  const refused = await admitCheckpointWrite(workspace);
+  if (refused !== undefined) {
+    opts.onAppendFailure?.(refused);
+    return undefined;
+  }
+  return recordCheckpoint(workspace, sessionId, messageIndex, changes, opts);
 }
 
 /**

@@ -10,7 +10,7 @@ describe("openai-compatible oauth refresh on 401", () => {
   test("retries once after refresh", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "hz-oauth-401-"));
     try {
-      writeOAuthToken(
+      await writeOAuthToken(
         {
           provider: "oauthhost",
           accessToken: "stale",

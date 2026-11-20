@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { applyAnthropicRequestCacheBreakpoints } from "../../src/core/providers/anthropic-cache-wire";
 
 describe("anthropic-cache-wire", () => {
-  test("off by default", () => {
+  test("on by default (product); opt-out with =0", () => {
     const prev = process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
     delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
     try {
       const messages = [{ role: "user" as const, content: [{ type: "text", text: "hi" }] }];
+      const on = applyAnthropicRequestCacheBreakpoints("sys", messages);
+      expect(on.system).toEqual([
+        { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+      ]);
+      process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = "0";
       expect(applyAnthropicRequestCacheBreakpoints("sys", messages)).toEqual({ system: "sys", messages });
     } finally {
       if (prev === undefined) delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;

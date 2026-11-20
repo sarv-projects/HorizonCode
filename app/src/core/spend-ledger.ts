@@ -332,3 +332,12 @@ export function spendLedgerPath(workspace: string): string {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return path.join(dir, SPEND_LEDGER_FILE);
 }
+
+/**
+ * Under-admission (ruling 583): Guard `fs.write` on the durable spend ledger
+ * before the first mutate. Returns an error string on deny/ask; undefined when allowed.
+ */
+export async function admitSpendLedgerWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  return admitPredsOutWrite(spendLedgerPath(workspace), workspace);
+}

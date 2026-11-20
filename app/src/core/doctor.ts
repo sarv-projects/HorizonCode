@@ -18,19 +18,38 @@ import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import { catalogModel, loadCatalog } from "./catalog/catalog";
 import { parseModelsPollIntervalMs } from "./catalog/catalog-poll";
-import { summarizeHandoffStore } from "./memory/handoff";
+import { handoffStorePublication, summarizeHandoffStore } from "./memory/handoff";
 import { summarizeProviderFailureCodes } from "./providers/failure-codes";
 import { docs30SkipBacklogCount } from "./docs30-skip-backlog";
 import { oauthCredentialsDbPath } from "./auth/credential-db";
 import { readOAuthRefreshGeneration } from "./auth/oauth-refresh-notify";
 import { readOAuthToken } from "./auth/store";
 import { configErrorGuidance, defaultConfigPath, loadConfig, missingKey, readConfigFile, type EnvLike } from "./config";
+import {
+  kernelDetachEnvRequested,
+  kernelDetachPeerHonesty,
+} from "./kernel-detach-peer-honesty";
+import { assessKernelSupervisorBinary } from "./kernel-binary-seal";
+import { hostSupervisorLeaseHonesty } from "./kernel-supervisor-host";
+import { bootBirthHonesty } from "./boot-birth-honesty";
+import {
+  ownerWorkerAncestorHonesty,
+  ownerWorkerPipeEnvRequested,
+} from "./owner-worker-ancestor-honesty";
+import { projectProductGuardG1WireDoctorEnv } from "./guard-g1-wire";
+import { guardG1WireDoctorFixLines, guardG1WireHonesty } from "./guard-g1-wire-honesty";
+import {
+  humanApprovalPrincipalDoctorFixLines,
+  humanApprovalPrincipalHonesty,
+  humanCryptoPrincipalEnvRequested,
+  humanCryptographicPrincipalVerifierAvailable,
+} from "./human-approval-principal-honesty";
 import { resolveKernelBinary, resolveSandboxExecBinary } from "./kernel";
 import { verifyKernelPin, type KernelPinResult } from "./kernel-pin";
 import { hzEventCoverageReport } from "./event-catalogue";
-import { summarizeMemoryTopics } from "./memory/manifest";
-import { summarizeMemoryBanks } from "./memory/store";
-import { savedAllowsPath, summarizeSavedAllows } from "./saved-allows";
+import { memoryTopicsPublication, summarizeMemoryTopics } from "./memory/manifest";
+import { memoryBanksPublication, summarizeMemoryBanks } from "./memory/store";
+import { savedAllowsPath, savedAllowsPublication, summarizeSavedAllows } from "./saved-allows";
 import { workspaceTrustGate, workspaceTrustNextSteps } from "./trust";
 import {
   formatSessionKernelReconcileDoctorDetail,
@@ -47,6 +66,10 @@ import {
   effectHostPrototypeHonestyDoctorHint,
 } from "./effect-host-posture";
 import { postimageReplayDoctorFixLines, postimageReplayDoctorPosture } from "./effect-postimage-replay";
+import {
+  assessReceiptIssuerDoctorPosture,
+  formatReceiptIssuerDoctorDetail,
+} from "./receipt-issuer-doctor";
 import { applyEffectHostKernelFromUserConfig, applyEffectHostKernelSandboxDefault } from "./effect-host-runtime";
 import { effectReconcileBlockDoctorHint } from "./effect-reconcile-block";
 import { formatEffectReconcileProbeSummary, probeEffectReconcile } from "./effect-reconcile-probe";
@@ -88,6 +111,12 @@ import {
 } from "./sandbox-netns-veth";
 import { netnsEgressRoutePosture } from "./sandbox-netns-route";
 import {
+  assessProductNetnsCapability,
+  formatProductNetnsCapabilityDoctorDetail,
+  PRODUCT_NETNS_TLS_MITM_RESIDUAL,
+  projectProductNetnsDoctorEnv,
+} from "./sandbox-netns-runtime";
+import {
   assessSandboxExecVethJoinPosture,
   assessSandboxExecVethJoinSpawnWiring,
   type SandboxExecVethJoinPosture,
@@ -98,11 +127,36 @@ import {
   type SandboxExecVethCreatePosture,
 } from "./sandbox-exec-veth-create";
 import { sandboxPlatformHonesty } from "./sandbox-platform-honesty";
+import { assessKernelShellExecDoctorPosture } from "./kernel-shell-exec-doctor";
 import { jsonlFsyncEnabled } from "./jsonl-append";
 import { workspaceMountPosture } from "./workspace-mount";
+import { assessBestOfNDoctor, formatBestOfNDoctorDetail } from "./best-of-n-doctor";
+import {
+  assessWebSearchDoctor,
+  formatWebSearchDoctorDetail,
+  WEB_SEARCH_DOCTOR_FIX_LINES,
+} from "./web-search-doctor";
+import {
+  assessVisionDoctor,
+  formatVisionDoctorDetail,
+  VISION_DOCTOR_FIX_LINES,
+} from "./vision-doctor";
+import {
+  assessSpeculationDoctor,
+  formatSpeculationDoctorDetail,
+  SPECULATION_DOCTOR_FIX_LINES,
+} from "./speculation-doctor";
 import { formatWorktreePoolLines, inspectWorktreePool, worktreePoolMaxFromEnv } from "./worktree-pool";
 import { workspaceSnapshotHonesty } from "./workspace-snapshot";
 import { parseAnthropicCacheKeepaliveMs } from "./providers/anthropic-cache-keepalive";
+import {
+  assessCacheHitProbeDoctor,
+  formatCacheHitProbeDoctorDetail,
+} from "./providers/cache-hit-probe-doctor";
+import {
+  assessResponsesSteerDoctor,
+  formatResponsesSteerDoctorDetail,
+} from "./providers/responses-steer-doctor";
 import { metricContract } from "./metrics";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
@@ -144,6 +198,8 @@ export interface DoctorEnv {
   kernelPinManifest?: string;
   /** True when the user explicitly accepted an untrusted kernel (--allow-untrusted). */
   allowUntrusted?: boolean;
+  /** Host OS for cross-platform honesty checks (tests); defaults to `process.platform`. */
+  platform?: string;
 }
 
 export interface RealDoctorEnvOptions {
@@ -237,7 +293,206 @@ function kernelPinCheck(d: DoctorEnv, pin: KernelPinResult): DoctorCheck {
   }
 }
 
-/** The chosen runtime posture, always visible in the report. */
+/** D-3 / ruling **707**: never claim boot-id birth on macOS/Windows; name reduced Darwin path. */
+export function checkBootBirthHonesty(d: DoctorEnv): DoctorCheck {
+  const platform = d.platform ?? process.platform;
+  const posture = bootBirthHonesty(platform);
+  if (posture.method === "unavailable") {
+    return warn("runtime.birth", "D-3 process births", posture.detail, "use Linux for boot-id tokens or WSL; native Windows spawn ledger birthIdentity may be null");
+  }
+  if (posture.method === "darwin-lstart") {
+    return warn(
+      "runtime.birth",
+      "D-3 process births",
+      posture.detail,
+      "monotonic sleep-wake re-anchor remains OPEN; never expect boot:<bootId>: tokens on macOS",
+    );
+  }
+  if (!posture.bootIdTokensAvailable) {
+    return warn(
+      "runtime.birth",
+      "D-3 process births",
+      posture.detail,
+      "ensure /proc/stat exposes btime for boot-anchored spawn ledger tokens",
+    );
+  }
+  return warn(
+    "runtime.birth",
+    "D-3 process births",
+    `${posture.detail}; monotonic sleep-wake re-anchor without new boot_id still OPEN`,
+    "boot-id tokens are Linux-only; macOS/Windows paths documented in boot-birth-honesty.ts",
+  );
+}
+
+/** Ruling **712** / **717** / **719**: never claim cryptographic human identity on principal:"human" stamps. */
+export function checkHumanApprovalPrincipalHonesty(d: DoctorEnv): DoctorCheck {
+  const env = d.env as NodeJS.ProcessEnv;
+  const posture = humanApprovalPrincipalHonesty(env);
+  const wantsCrypto = humanCryptoPrincipalEnvRequested(env);
+  const verifier = humanCryptographicPrincipalVerifierAvailable(env);
+  if (wantsCrypto && !verifier) {
+    return fail(
+      "guard.human.principal",
+      "Human approval principal",
+      posture.detail,
+      `unset HZ_HUMAN_CRYPTO_PRINCIPAL — no verifier ships; cryptographic human identity remains OPEN; run hzcode doctor --fix guard.human.principal`,
+    );
+  }
+  if (posture.strictMintGateEnabled) {
+    return ok(
+      "guard.human.principal",
+      "Human approval principal",
+      `${posture.detail}; cryptographic human identity and kernel-internal policy-allow mint stamps remain OPEN`,
+    );
+  }
+  return warn(
+    "guard.human.principal",
+    "Human approval principal",
+    `${posture.detail}; cryptographic human identity remains OPEN`,
+    "sessionId is caller-claimed; fd-3 proves Bun parent only (ruling 352); set HZ_HUMAN_PRINCIPAL_STRICT=1 to refuse product-layer raw mint; run hzcode doctor --fix guard.human.principal",
+  );
+}
+
+function doctorKernelTrustedForProductDefaults(d: DoctorEnv): boolean {
+  if (d.kernelBinary === undefined || !existsSync(d.kernelBinary)) return false;
+  const pin = verifyKernelPin({ binary: d.kernelBinary, env: d.env, manifestPath: d.kernelPinManifest });
+  return pin.ok;
+}
+
+/** G1 — doctor honesty rulings 716 + product default 719 (legacy allow vs protocol V2 projection). */
+export function checkGuardG1WireHonesty(d: DoctorEnv): DoctorCheck {
+  const projected = projectProductGuardG1WireDoctorEnv(
+    d.env as Record<string, string | undefined>,
+    doctorKernelTrustedForProductDefaults(d),
+  );
+  const posture = guardG1WireHonesty(projected as NodeJS.ProcessEnv);
+  if (posture.mode === "protocol-v2") {
+    return ok(
+      "guard.g1.wire",
+      "G1 guard wire",
+      `${posture.detail}; frozen-allow removal + raw lease/grant still OPEN`,
+    );
+  }
+  return warn(
+    "guard.g1.wire",
+    "G1 guard wire",
+    posture.detail,
+    `set ${"HZ_GUARD_G1_WIRE"}=1 for V2 projection (trusted runtime defaults on when unset); run hzcode doctor --fix guard.g1.wire`,
+  );
+}
+
+/** C-12 / ruling **704**: never claim ancestor-proved on Windows; name macOS reduced walk. */
+export function checkOwnerWorkerAncestorHonesty(d: DoctorEnv): DoctorCheck {
+  const platform = d.platform ?? process.platform;
+  const posture = ownerWorkerAncestorHonesty(platform);
+  const wantsPipe = ownerWorkerPipeEnvRequested(d.env as NodeJS.ProcessEnv);
+  if (!posture.ancestorProvingAvailable && wantsPipe) {
+    return fail(
+      "owner_worker.ancestor",
+      "C-12 owner/worker pipe",
+      `${posture.detail}; HZ_OWNER_WORKER_PIPE=1 is set but handshake will refuse before FIFO reserve`,
+      "use Linux for full /proc ancestor proof or macOS for reduced ps walk; clear HZ_OWNER_WORKER_PIPE on native Windows",
+    );
+  }
+  if (posture.method === "darwin-ps" && wantsPipe) {
+    return warn(
+      "owner_worker.ancestor",
+      "C-12 owner/worker pipe",
+      posture.detail,
+      "HZ_OWNER_WORKER_PIPE=1 is opt-in; full R170 cross-process atomicity and live D-6 over the pipe remain OPEN",
+    );
+  }
+  if (!posture.ancestorProvingAvailable) {
+    return warn("owner_worker.ancestor", "C-12 owner/worker pipe", posture.detail, "set HZ_OWNER_WORKER_PIPE=1 only on Linux or macOS (reduced)");
+  }
+  return wantsPipe
+    ? warn(
+        "owner_worker.ancestor",
+        "C-12 owner/worker pipe",
+        `${posture.detail}; HZ_OWNER_WORKER_PIPE=1 is enabled (opt-in)`,
+        "full R170 cross-process atomicity and live D-6 events over the pipe remain OPEN",
+      )
+    : ok("owner_worker.ancestor", "C-12 owner/worker pipe", posture.detail);
+}
+
+/** H-29 / ruling **696**: never claim peer-proven detach lease on non-Unix. */
+export function checkKernelDetachPeerHonesty(d: DoctorEnv): DoctorCheck {
+  const platform = d.platform ?? process.platform;
+  const posture = kernelDetachPeerHonesty(platform);
+  const wantsDetach = kernelDetachEnvRequested(d.env as Record<string, string | undefined>);
+  if (!posture.socketServeAvailable && wantsDetach) {
+    return fail(
+      "kernel.detach.peer",
+      "H-29 detach peer lease",
+      `${posture.detail}; HZ_KERNEL_SOCKET / HZ_KERNEL_DETACH is set but will not attach a socket listener`,
+      "use Linux/macOS/WSL for detach reattach; clear HZ_KERNEL_DETACH on native Windows",
+    );
+  }
+  if (!posture.peerCheckOnAccept) {
+    return warn(
+      "kernel.detach.peer",
+      "H-29 detach peer lease",
+      posture.detail,
+      "peer check is Unix SO_PEERCRED on accept only — not a human principal",
+    );
+  }
+  return ok("kernel.detach.peer", "H-29 detach peer lease", posture.detail);
+}
+
+/** H-30 / CB-6 / ruling **703** + **724**: cross-state-dir host supervisor lock honesty. */
+export function checkKernelSupervisorHost(d: DoctorEnv): DoctorCheck {
+  const platform = d.platform ?? process.platform;
+  const env = d.env as Record<string, string | undefined>;
+  const posture = hostSupervisorLeaseHonesty(platform, env);
+  const detach =
+    env.HZ_KERNEL_DETACH === "1" ||
+    (typeof env.HZ_KERNEL_SOCKET === "string" && env.HZ_KERNEL_SOCKET.trim() !== "");
+  if (!posture.crossProcessLock) {
+    if (detach) {
+      return fail(
+        "kernel.supervisor.host",
+        "H-30 host supervisor lease",
+        posture.detail,
+        "detach requires cross-process supervisor lock; use Linux/macOS/WSL or native Windows LockFileEx kernel (ruling 724)",
+      );
+    }
+    return warn(
+      "kernel.supervisor.host",
+      "H-30 host supervisor lease",
+      posture.detail,
+      "cross-process host supervisor lock unavailable on this platform",
+    );
+  }
+  if (posture.windowsFileLock && detach) {
+    return fail(
+      "kernel.supervisor.host",
+      "H-30 host supervisor lease",
+      `${posture.detail}; HZ_KERNEL_DETACH/HZ_KERNEL_SOCKET set`,
+      "native Windows has LockFileEx host lock but detach socket/peer lease is Unix-only (ruling 696)",
+    );
+  }
+  return ok("kernel.supervisor.host", "H-30 host supervisor lease", posture.detail);
+}
+
+/** H-30 / CB-6 / ruling **710**: detach binary-upgrade seal honesty. */
+export function checkKernelSupervisorBinary(d: DoctorEnv): DoctorCheck {
+  const detach =
+    d.env.HZ_KERNEL_DETACH === "1" ||
+    (typeof d.env.HZ_KERNEL_SOCKET === "string" && d.env.HZ_KERNEL_SOCKET.trim() !== "");
+  const posture = assessKernelSupervisorBinary({
+    detachRequested: detach,
+    stateDir: kernelStateDir(d.workspace),
+    kernelBinary: d.kernelBinary,
+  });
+  if (posture.status === "fail") {
+    return fail("kernel.supervisor.binary", "H-30 detach binary seal", posture.detail, posture.hint);
+  }
+  if (posture.status === "warn") {
+    return warn("kernel.supervisor.binary", "H-30 detach binary seal", posture.detail, posture.hint);
+  }
+  return ok("kernel.supervisor.binary", "H-30 detach binary seal", posture.detail);
+}
+
 function kernelModeDetail(d: DoctorEnv, trusted: boolean, why: string): string {
   if (trusted) return `trusted (Rust kernel); ${why}`;
   const choice =
@@ -352,6 +607,11 @@ export function checkKernel(d: DoctorEnv): DoctorCheck[] {
   } finally {
     if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
   }
+  out.push(checkKernelDetachPeerHonesty(d));
+  out.push(checkKernelSupervisorHost(d));
+  out.push(checkKernelSupervisorBinary(d));
+  out.push(checkHumanApprovalPrincipalHonesty(d));
+  out.push(checkGuardG1WireHonesty(d));
   return out;
 }
 
@@ -439,6 +699,50 @@ function checkAnthropicCache(d: DoctorEnv): DoctorCheck {
     "local prefix measure on keep-alive tick when provider=anthropic (no API cache-hit)",
   ].join("; ");
   return ok("provider.cache", "Anthropic cache layout (B-4)", detail);
+}
+
+function checkProviderCacheHit(d: DoctorEnv): DoctorCheck {
+  const posture = assessCacheHitProbeDoctor(d.env, d.home);
+  const detail = formatCacheHitProbeDoctorDetail(posture);
+  if (!posture.selfCheck.ok) {
+    return fail(
+      "provider.cache.hit",
+      "provider cache-hit probe (B-4)",
+      detail,
+      "cache-hit probe hermetic self-check failed — see cache-hit-probe.ts",
+    );
+  }
+  if (posture.liveRequested && posture.providerKeyMissing) {
+    return warn(
+      "provider.cache.hit",
+      "provider cache-hit probe (B-4)",
+      detail,
+      "set a provider API key before expecting live cache-hit evidence (HZ_LIVE_CACHE=1 does not run from doctor)",
+    );
+  }
+  return ok("provider.cache.hit", "provider cache-hit probe (B-4)", detail);
+}
+
+function checkResponsesSteer(d: DoctorEnv): DoctorCheck {
+  const posture = assessResponsesSteerDoctor(d.env);
+  const detail = formatResponsesSteerDoctorDetail(posture);
+  if (!posture.selfCheck.ok) {
+    return fail(
+      "provider.responses.steer",
+      "Responses response.steer (C-9)",
+      detail,
+      "responses-steer hermetic wire self-check failed — see responses-steer-wire.ts",
+    );
+  }
+  if (posture.productRequested && posture.openAiKeyMissing) {
+    return warn(
+      "provider.responses.steer",
+      "Responses response.steer (C-9)",
+      detail,
+      "set OPENAI_API_KEY before expecting live GPT-6 response.steer (doctor does not open the Responses WS)",
+    );
+  }
+  return ok("provider.responses.steer", "Responses response.steer (C-9)", detail);
 }
 
 function checkCatalogPoll(d: DoctorEnv): DoctorCheck {
@@ -530,7 +834,25 @@ function checkProvider(d: DoctorEnv): DoctorCheck[] {
           ),
     );
   }
+  out.push(checkProviderVision(d, config));
   return out;
+}
+
+export function checkProviderVision(d: DoctorEnv, config: ReturnType<typeof loadConfig>): DoctorCheck {
+  const posture = assessVisionDoctor(config.provider, config.model, d.env);
+  const detail = formatVisionDoctorDetail(posture);
+  if (posture.support === false) {
+    return warn(
+      "provider.vision",
+      "multimodal vision",
+      detail,
+      "use a vision-capable model or export HZ_VISION=1 (see hzcode doctor --fix provider.vision)",
+    );
+  }
+  if (posture.support === "unknown") {
+    return warn("provider.vision", "multimodal vision", detail, "set HZ_VISION=0 to force text-only wire if images fail at runtime");
+  }
+  return ok("provider.vision", "multimodal vision", detail);
 }
 
 function modeOf(p: string): number | undefined {
@@ -592,6 +914,23 @@ function checkSandboxExec(d: DoctorEnv): DoctorCheck {
     );
   }
   return ok("sandbox.exec", "hz-sandbox-exec", `found (${bin}); optional shell child confinement when the kernel reports process enforced`);
+}
+
+/** Kernel-routed shell.exec wrap posture — never shell-net `enforced` (ruling **730**). */
+function checkKernelShellExec(d: DoctorEnv): DoctorCheck {
+  const posture = assessKernelShellExecDoctorPosture(d.env as Record<string, string | undefined>);
+  if (posture.status === "ok") {
+    return ok("kernel.shell.exec", "kernel shell.exec wrap", posture.detail);
+  }
+  if (posture.status === "fail") {
+    return fail(
+      "kernel.shell.exec",
+      "kernel shell.exec wrap",
+      posture.detail,
+      posture.hint ?? "build hz-sandbox-exec or unset HZ_SANDBOX_REQUIRE",
+    );
+  }
+  return warn("kernel.shell.exec", "kernel shell.exec wrap", posture.detail, posture.hint);
 }
 
 /** Seatbelt / macOS child_net unavailable on Linux builds — never claim enforced. */
@@ -711,27 +1050,48 @@ function checkEgressNetnsProxyReach(d: DoctorEnv): DoctorCheck {
   );
 }
 
+/** Product netns userns/CAP/WSL capability probe (ruling **715**; extends **672**). */
+function checkEgressNetnsCapability(d: DoctorEnv): DoctorCheck {
+  const cap = assessProductNetnsCapability({ env: d.env as Record<string, string | undefined>, run: d.run });
+  const detail = formatProductNetnsCapabilityDoctorDetail(cap);
+  const hint = cap.capable
+    ? "trusted Rust kernel + unset HZ_SANDBOX_NETNS may default HZ_SANDBOX_NETNS=1 at createRuntime — advisory only"
+    : cap.reason === "wsl"
+      ? "WSL: child net defaults on; routed netns CREATE path stays off — set HZ_SANDBOX_CHILD_NET=off only to fail closed"
+      : cap.reason === "no-cap-net-admin"
+        ? "run on a host with CAP_NET_ADMIN for veth CREATE or keep product netns off"
+        : "build or set HZ_SANDBOX_EXEC_BIN; product shell-net egress is never enforced";
+  return warn("egress.netns.capability", "product netns capability", detail, hint);
+}
+
 /** Netns egress route: ambient vs deny-only vs proxy-env partial (ruling **288**). */
 function checkEgressNetnsRoute(d: DoctorEnv): DoctorCheck {
-  const posture = netnsEgressRoutePosture(d.env as Record<string, string | undefined>);
+  const base = d.env as Record<string, string | undefined>;
+  const cap = assessProductNetnsCapability({ env: base, run: d.run });
+  const env = projectProductNetnsDoctorEnv(base, cap);
+  const posture = netnsEgressRoutePosture(env);
+  const defaultOnNote = cap.capable
+    ? "createRuntime default-on-when-capable (**672**): may set HZ_SANDBOX_NETNS=1 + child net off when trusted kernel + probe ok — "
+    : `default-off (${cap.detail}) — `;
   const label =
     posture.route === "ambient"
       ? "ambient"
       : posture.route === "deny-only"
         ? "netns deny-only"
         : "proxy-routed partial";
+  const mitmResidual = PRODUCT_NETNS_TLS_MITM_RESIDUAL;
   if (posture.route === "ambient") {
     return warn(
       "egress.netns.route",
       "netns egress route",
-      `${label} — ${posture.detail}`,
+      `${defaultOnNote}${label} — ${posture.detail}; ${mitmResidual}`,
       "set HZ_SANDBOX_EXEC=1 + HZ_SANDBOX_NETNS=1 or default child net off for netns TCP deny; HZ_EGRESS_PROXY is advisory only",
     );
   }
   return warn(
     "egress.netns.route",
     "netns egress route",
-    `${label} — ${posture.detail}`,
+    `${defaultOnNote}${label} — ${posture.detail}; ${mitmResidual}`,
     "true routed proxy-only netns egress (parent-loopback reachability) still open; never claim shell-net enforced",
   );
 }
@@ -855,15 +1215,20 @@ function checkEffectReconcileProbe(d: DoctorEnv): DoctorCheck {
 function checkEffectHostKernel(d: DoctorEnv): DoctorCheck {
   const env = { ...d.env } as Record<string, string | undefined>;
   const configured = applyEffectHostKernelFromUserConfig(readConfigFile(defaultConfigPath(d.home)), env);
-  // The runtime can additionally enable =default after kernel startup. Doctor
-  // cannot certify the kernel capability here, so only project explicit Linux
-  // sandbox wrapping, and label that projection provisional.
+  // createRuntime may prefer =require after a trusted Rust kernel starts (**540**).
+  // Doctor cannot certify trusted transport here — do not project require — and
+  // only provisionally projects Linux sandbox-wrap =default (**340**).
   const sandbox = applyEffectHostKernelSandboxDefault(env, false);
+  const netnsCap = assessProductNetnsCapability({ env, run: d.run });
+  const netnsSpine =
+    netnsCap.capable
+      ? "createRuntime may default HZ_SANDBOX_NETNS=1 when trusted Rust kernel + userns/netns probe ok (**672** — product CREATE advisory only)"
+      : `product netns default-off on this host (**672**): ${netnsCap.detail}`;
   const source = configured.applied === "config"
-    ? "effective mode from user config (env unset)"
+    ? `effective mode from user config (env unset); ${netnsSpine}`
     : sandbox.applied === "sandbox-default"
-      ? "projected Linux sandbox-wrap default (kernel capability not probed)"
-      : "effective mode from environment/default";
+      ? `projected Linux sandbox-wrap default (kernel capability not probed; createRuntime prefers =require when trusted Rust kernel is active — **540**; ${netnsSpine})`
+      : `effective mode from environment/default (createRuntime may set =require on Linux when trusted Rust kernel is active and env unset — **540**; ${netnsSpine}; trusted kernel not probed here)`;
   const posture = effectHostDoctorPosture(env);
   const detail = `${posture.detail}; ${source}`;
   const prototypeHint = effectHostPrototypeHonestyDoctorHint(env);
@@ -1007,9 +1372,17 @@ function formatSandboxNetnsProductSpawnDoctorCheck(posture: SandboxNetnsProductS
 }
 
 function checkEgressNetnsSpawnProductDefault(d: DoctorEnv): DoctorCheck {
-  return formatSandboxNetnsProductSpawnDoctorCheck(
-    assessSandboxNetnsProductSpawnPosture(d.env as Record<string, string | undefined>),
-  );
+  const base = d.env as Record<string, string | undefined>;
+  const cap = assessProductNetnsCapability({ env: base, run: d.run });
+  const env = projectProductNetnsDoctorEnv(base, cap);
+  const posture = assessSandboxNetnsProductSpawnPosture(env);
+  const capNote = cap.capable
+    ? "createRuntime default-on-when-capable (**672**): HZ_SANDBOX_NETNS=1 when trusted kernel + probe — "
+    : `probe gap: ${cap.detail} — `;
+  return formatSandboxNetnsProductSpawnDoctorCheck({
+    ...posture,
+    detail: `${capNote}${posture.detail}; ${PRODUCT_NETNS_TLS_MITM_RESIDUAL}`,
+  });
 }
 
 function formatNetnsSpawnVethRoutedDoctorCheck(posture: NetnsSpawnVethRoutedPosture): DoctorCheck {
@@ -1461,6 +1834,95 @@ export function checkWorktreePool(d: DoctorEnv): DoctorCheck {
   return ok("worktree.pool", "worktree pool", summary);
 }
 
+export function checkBestOfN(d: DoctorEnv): DoctorCheck {
+  const posture = assessBestOfNDoctor(d.env);
+  const detail = formatBestOfNDoctorDetail(posture);
+  if (!posture.selfCheckOk) {
+    return fail(
+      "harness.best_of_n",
+      "Best-of-N worktree racing",
+      detail,
+      "best-of-n hermetic self-check failed — see best-of-n.ts",
+    );
+  }
+  if (!posture.racingEnabled) {
+    return ok("harness.best_of_n", "Best-of-N worktree racing", detail);
+  }
+  if (posture.n > worktreePoolMaxFromEnv(d.env as Record<string, string | undefined>)) {
+    return warn(
+      "harness.best_of_n",
+      "Best-of-N worktree racing",
+      detail,
+      "HZ_BEST_OF_N exceeds HZ_WORKTREE_POOL_MAX — lower N or raise pool max",
+    );
+  }
+  return ok("harness.best_of_n", "Best-of-N worktree racing", detail);
+}
+
+/** Speculative execution — default-off; doctor names opt-in wire and prep-discard honesty (**730**). */
+export function checkSpeculativeExecution(d: DoctorEnv): DoctorCheck {
+  const posture = assessSpeculationDoctor(d.env);
+  const detail = formatSpeculationDoctorDetail(posture);
+  if (!posture.selfCheckOk) {
+    return fail(
+      "runtime.speculation",
+      "Speculative execution",
+      detail,
+      "speculation hermetic self-check failed — see speculation.ts",
+    );
+  }
+  if (!posture.enabled) {
+    return ok("runtime.speculation", "Speculative execution", detail);
+  }
+  return warn(
+    "runtime.speculation",
+    "Speculative execution",
+    detail,
+    "prepped reads skip user hooks and decline ask during prep; see hzcode doctor --fix runtime.speculation",
+  );
+}
+
+export function checkReceiptIssuerAttestation(d: DoctorEnv): DoctorCheck {
+  const posture = assessReceiptIssuerDoctorPosture(d.workspace);
+  const detail = formatReceiptIssuerDoctorDetail(posture);
+  if (posture.nestedLinkClaims === 0) {
+    return ok("receipt.issuer", "nested receipt attestation", detail);
+  }
+  if (!posture.attestationOk) {
+    return posture.keyPresent
+      ? fail(
+          "receipt.issuer",
+          "nested receipt attestation",
+          detail,
+          "re-run hzcode session verify; fix or remove invalid issuerStamp on parentReceiptId rows",
+        )
+      : warn(
+          "receipt.issuer",
+          "nested receipt attestation",
+          detail,
+          "launch the product Rust kernel with control-fd 3 so .receipt-issuer.key is created before nested parentReceiptId mint",
+        );
+  }
+  return ok("receipt.issuer", "nested receipt attestation", detail);
+}
+
+export function checkWebSearch(d: DoctorEnv): DoctorCheck {
+  const posture = assessWebSearchDoctor(d.env);
+  const detail = formatWebSearchDoctorDetail(posture);
+  if (!posture.selfCheckOk) {
+    return fail("tools.web_search", "builtin.web_search", detail, "web-search parse self-check failed");
+  }
+  if (!posture.enabled) {
+    return warn(
+      "tools.web_search",
+      "builtin.web_search",
+      detail,
+      "configure a search backend (see hzcode doctor --fix tools.web_search)",
+    );
+  }
+  return ok("tools.web_search", "builtin.web_search", detail);
+}
+
 function utf8Locale(env: EnvLike): boolean {
   for (const key of ["LC_ALL", "LC_CTYPE", "LANG"]) {
     const v = env[key];
@@ -1656,10 +2118,13 @@ function checkTuiScreen(d: DoctorEnv): DoctorCheck {
 export function runDoctor(d: DoctorEnv): DoctorCheck[] {
   const groups: Array<[string, () => DoctorCheck | DoctorCheck[]]> = [
     ["bun", () => checkBun(d)],
-    ["kernel", () => checkKernel(d)],
+    ["kernel", () => [...checkKernel(d), checkBootBirthHonesty(d), checkOwnerWorkerAncestorHonesty(d)]],
     ["config", () => checkConfig(d)],
     ["catalog", () => [checkCatalogSource(d), checkCatalogPoll(d), checkDocs30SkipBacklog()]],
-    ["provider", () => [...checkProvider(d), checkAnthropicCache(d)]],
+    [
+      "provider",
+      () => [...checkProvider(d), checkAnthropicCache(d), checkProviderCacheHit(d), checkResponsesSteer(d)],
+    ],
     [
       "workspace",
       () => [
@@ -1675,18 +2140,31 @@ export function runDoctor(d: DoctorEnv): DoctorCheck[] {
         checkStateDurability(d),
         checkEffectReconcileProbe(d),
         checkEffectPostimageReplay(d),
+        checkReceiptIssuerAttestation(d),
         checkTerminalRunCapability(d),
         checkTerminalStateProbe(d),
+        checkSpeculativeExecution(d),
       ],
     ],
-    ["git", () => [checkGit(d), checkWorktreePool(d)]],
+    ["git", () => [checkGit(d), checkWorktreePool(d), checkBestOfN(d)]],
     ["repo", () => checkRepoLicense()],
-    ["sandbox", () => [checkSandboxExec(d), checkLandlockHost(d), checkSandboxPlatformHonesty(d), checkEffectHostKernel(d)]],
+    [
+      "sandbox",
+      () => [
+        checkSandboxExec(d),
+        checkKernelShellExec(d),
+        checkLandlockHost(d),
+        checkSandboxPlatformHonesty(d),
+        checkEffectHostKernel(d),
+      ],
+    ],
     [
       "egress",
       () => [
+        checkWebSearch(d),
         checkShellEgressHonesty(d),
         checkEgressNetnsPartial(d),
+        checkEgressNetnsCapability(d),
         checkEgressNetnsRoute(d),
         checkEgressNetnsProxyReach(d),
         checkEgressNetnsVeth(d),
@@ -1743,20 +2221,35 @@ export function renderDoctor(checks: readonly DoctorCheck[]): string {
  * list actually run; there is no prior run to anchor against, and nothing is
  * excluded — a FAIL is a result too, not a discarded row.
  */
-export function doctorPublication(checks: readonly DoctorCheck[]): string[] {
+export function doctorPublication(
+  checks: readonly DoctorCheck[],
+  workspace?: string,
+  home?: string,
+): string[] {
   const n = (s: DoctorStatus): number => checks.filter((c) => c.status === s).length;
   const anchor = "none — first doctor run (no prior report of this workspace to compare against)";
   const population = `the ${checks.length} doctor check(s) executed in this run`;
   const excludes = "none — every check is counted; OK/WARN/FAIL are all reported, nothing discarded";
-  return [
+  const blocks = [
     metricContract({ metric: "doctor checks ok", anchor, population, excludes, value: n("ok") }),
     metricContract({ metric: "doctor checks warning", anchor, population, excludes, value: n("warn") }),
     metricContract({ metric: "doctor checks failure", anchor, population, excludes, value: n("fail") }),
   ];
+  if (workspace !== undefined && workspace !== "") {
+    blocks.push(...savedAllowsPublication(workspace));
+    blocks.push(...memoryBanksPublication(workspace, home));
+    blocks.push(...memoryTopicsPublication(workspace));
+    blocks.push(...handoffStorePublication(workspace));
+  }
+  return blocks;
 }
 
 /** The machine form, suitable for attaching to a support ticket. */
-export function renderDoctorJson(checks: readonly DoctorCheck[]): string {
+export function renderDoctorJson(
+  checks: readonly DoctorCheck[],
+  workspace?: string,
+  home?: string,
+): string {
   const n = (s: DoctorStatus): number => checks.filter((c) => c.status === s).length;
   // Additive `published` (H-7): the existing keys are unchanged so consumers
   // that read `summary` / `checks` stay backward compatible.
@@ -1765,7 +2258,7 @@ export function renderDoctorJson(checks: readonly DoctorCheck[]): string {
       ok: doctorExitCode(checks) === 0,
       summary: { ok: n("ok"), warn: n("warn"), fail: n("fail") },
       checks,
-      published: doctorPublication(checks),
+      published: doctorPublication(checks, workspace, home),
     },
     null,
     2,
@@ -1780,5 +2273,10 @@ export function doctorFixSuggestion(
   if (checkId === "effect.host") return effectHostDoctorFixLines(env);
   if (checkId === "effect.postimage.replay") return postimageReplayDoctorFixLines(env);
   if (checkId === "egress.netns.spawn.product") return sandboxNetnsProductSpawnDoctorFixLines(env);
+  if (checkId === "guard.g1.wire") return guardG1WireDoctorFixLines(env);
+  if (checkId === "guard.human.principal") return humanApprovalPrincipalDoctorFixLines(env);
+  if (checkId === "tools.web_search") return [...WEB_SEARCH_DOCTOR_FIX_LINES];
+  if (checkId === "provider.vision") return [...VISION_DOCTOR_FIX_LINES];
+  if (checkId === "runtime.speculation") return [...SPECULATION_DOCTOR_FIX_LINES];
   return undefined;
 }

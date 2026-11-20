@@ -36,19 +36,10 @@
  */
 
 import { constants } from "node:fs";
-import { lstat, open, readlink, stat, type FileHandle } from "node:fs/promises";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import type { GuardAction, ToolContext } from "../contracts";
+import { verifyFdInWorkspace } from "../core/sandbox-fd-verify";
 import { kernelStateDir, realpathish } from "../core/paths";
-
-/** Where an open descriptor really points, or undefined without /proc (non-Linux). */
-async function fdTarget(fd: number): Promise<string | undefined> {
-  if (process.platform !== "linux") return undefined;
-  try {
-    return await readlink(`/proc/self/fd/${fd}`);
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * The guard's own protected-path classifier, fetched lazily.
@@ -83,6 +74,8 @@ export interface VerifiedWrite {
 export interface VerifiedOpenOptions {
   /** Add `O_EXCL`: never adopt an existing file (or symlink) at this path. */
   exclusive?: boolean;
+  /** Guard-approved real target; refuse when resolution moves before open. */
+  expectedReal?: string;
 }
 
 /**
@@ -114,9 +107,9 @@ export async function openVerifiedWrite(
 ): Promise<VerifiedWrite | { refusal: string }> {
   const stateDir = kernelStateDir(ctx.workspace);
   const pre = await lstat(resolved).catch(() => undefined);
-  // No /proc: pin the last component where the tool's semantics allow it (the
-  // path is not already a symlink) and check the descriptor's identity below.
-  const noFollow = process.platform !== "linux" && (pre === undefined || !pre.isSymbolicLink());
+  // Pin the final component with O_NOFOLLOW when we are not deliberately writing
+  // through an existing file-level symlink (verify-then-allow policy).
+  const noFollow = pre === undefined || !pre.isSymbolicLink();
   const flags =
     (pre === undefined ? constants.O_WRONLY | constants.O_CREAT : constants.O_WRONLY) |
     (noFollow ? constants.O_NOFOLLOW : 0) |
@@ -133,23 +126,17 @@ export async function openVerifiedWrite(
   }
 
   try {
-    const byFd = await fdTarget(handle.fd);
-    let classified: string;
-    if (byFd !== undefined) {
-      classified = byFd;
-    } else {
-      // Weaker fallback (non-Linux): the descriptor cannot name its own path, so
-      // the evidence is the path's resolution plus "the path and the descriptor
-      // are the same file". An intermediate-component swap inside the window is
-      // the named residual (see the header).
-      const viaPath = await stat(resolved).catch(() => undefined);
-      const viaFd = await handle.stat();
-      if (viaPath === undefined || viaPath.dev !== viaFd.dev || viaPath.ino !== viaFd.ino) {
-        await handle.close();
-        return { refusal: `HZ_PRECONDITION_FAILED: write refused: ${resolved} changed while being opened; nothing was written` };
-      }
-      classified = realpathish(resolved);
+    const wsCheck = await verifyFdInWorkspace(
+      handle,
+      ctx.workspace,
+      resolved,
+      opts.expectedReal,
+    );
+    if ("refusal" in wsCheck) {
+      await handle.close();
+      return { refusal: wsCheck.refusal };
     }
+    const classified = wsCheck.openedAs;
     if ((await protectedClassifier())({ kind: "fs.write", target: classified }, stateDir) !== undefined) {
       await handle.close();
       return { refusal: protectedRefusal(resolved, classified, stateDir) };

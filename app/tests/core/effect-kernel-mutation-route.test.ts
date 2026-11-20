@@ -166,7 +166,7 @@ describe("kernel shell argv route", () => {
 });
 
 describe("kernel apply_patch / ast_edit route", () => {
-  test("multi-op apply_patch refuses before the first kernel write until batch is atomic", async () => {
+  test("multi-file exact apply_patch commits via one kernel fs.batch", async () => {
     const kernel = new KernelClient({
       workspace,
       stateDir: path.join(workspace, ".hzcode", "kernel"),
@@ -179,11 +179,175 @@ describe("kernel apply_patch / ast_edit route", () => {
 *** End Patch`;
     try {
       const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-ap-m", "eff-ap-m", { input: patch });
-      expect(out?.result.ok).toBe(false);
-      expect(out?.result.error).toContain("atomic kernel batch");
-      expect(() => readFileSync(path.join(workspace, "one.txt"), "utf8")).toThrow();
-      expect(() => readFileSync(path.join(workspace, "two.txt"), "utf8")).toThrow();
-      expect(lastChangeFor("s-ap-m", path.join(workspace, "two.txt"))).toBeUndefined();
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("fs.batch");
+      expect(readFileSync(path.join(workspace, "one.txt"), "utf8")).toBe("1\n");
+      expect(readFileSync(path.join(workspace, "two.txt"), "utf8")).toBe("2\n");
+      expect(lastChangeFor("s-ap-m", path.join(workspace, "one.txt"))?.before).toBeNull();
+      expect(lastChangeFor("s-ap-m", path.join(workspace, "two.txt"))?.before).toBeNull();
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("multi-file exact Update+Add apply_patch uses fs.batch with pinned preimages", async () => {
+    writeFileSync(path.join(workspace, "keep.txt"), "keep\n", "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Update File: keep.txt
+@@
+-keep
++KEEP
+*** Add File: fresh.txt
++new
+*** End Patch`;
+    try {
+      const captured: Array<{ kind?: string; ops?: Array<{ kind?: string; path?: string }> }> = [];
+      const executeEffect = kernel.executeEffect.bind(kernel);
+      (kernel as { executeEffect: typeof kernel.executeEffect }).executeEffect = async (req) => {
+        const spec = (req.dispatch as { spec?: { ops?: Array<{ kind?: string; path?: string }> } })?.spec;
+        captured.push({ kind: req.dispatch?.kind, ops: spec?.ops });
+        return executeEffect(req);
+      };
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-ap-batch", "eff-ap-batch", {
+        input: patch,
+      });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("fs.batch");
+      // Ruling 552: single exact Update hunk → fs.edit; Add → fs.write in the same batch.
+      expect(captured[0]?.kind).toBe("fs.batch");
+      expect(captured[0]?.ops?.map((o) => `${o.kind}:${o.path}`)).toEqual([
+        "fs.edit:keep.txt",
+        "fs.write:fresh.txt",
+      ]);
+      expect(readFileSync(path.join(workspace, "keep.txt"), "utf8")).toBe("KEEP\n");
+      expect(readFileSync(path.join(workspace, "fresh.txt"), "utf8")).toBe("new\n");
+      expect(lastChangeFor("s-ap-batch", path.join(workspace, "keep.txt"))?.before).toBe("keep\n");
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("multi-file Move+Add apply_patch commits via kernel fs.batch rename (ruling 630)", async () => {
+    writeFileSync(path.join(workspace, "src.txt"), "x\n", "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Update File: src.txt
+*** Move to: dst.txt
+@@
+-x
++y
+*** Add File: extra.txt
++z
+*** End Patch`;
+    try {
+      const captured: Array<{ kind?: string; ops?: Array<{ kind?: string; path?: string; from?: string; to?: string }> }> = [];
+      const executeEffect = kernel.executeEffect.bind(kernel);
+      (kernel as { executeEffect: typeof kernel.executeEffect }).executeEffect = async (req) => {
+        const spec = (req.dispatch as { spec?: { ops?: Array<{ kind?: string; path?: string; from?: string; to?: string }> } })?.spec;
+        captured.push({ kind: req.dispatch?.kind, ops: spec?.ops });
+        return executeEffect(req);
+      };
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-ap-mix", "eff-ap-mix", {
+        input: patch,
+      });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("fs.batch");
+      expect(captured[0]?.kind).toBe("fs.batch");
+      expect(captured[0]?.ops?.some((o) => o.kind === "fs.rename" && o.from === "src.txt" && o.to === "dst.txt")).toBe(true);
+      expect(captured[0]?.ops?.some((o) => o.kind === "fs.write" && o.path === "extra.txt")).toBe(true);
+      expect(() => readFileSync(path.join(workspace, "src.txt"), "utf8")).toThrow();
+      expect(readFileSync(path.join(workspace, "dst.txt"), "utf8")).toBe("y\n");
+      expect(readFileSync(path.join(workspace, "extra.txt"), "utf8")).toBe("z\n");
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("multi-file Delete+Update apply_patch commits via kernel fs.batch delete (ruling 631)", async () => {
+    writeFileSync(path.join(workspace, "gone.txt"), "x\n", "utf8");
+    writeFileSync(path.join(workspace, "keep.txt"), "y\n", "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Delete File: gone.txt
+*** Update File: keep.txt
+@@
+-y
++Y
+*** End Patch`;
+    try {
+      const captured: Array<{ kind?: string; ops?: Array<{ kind?: string; path?: string }> }> = [];
+      const executeEffect = kernel.executeEffect.bind(kernel);
+      (kernel as { executeEffect: typeof kernel.executeEffect }).executeEffect = async (req) => {
+        const spec = (req.dispatch as { spec?: { ops?: Array<{ kind?: string; path?: string }> } })?.spec;
+        captured.push({ kind: req.dispatch?.kind, ops: spec?.ops });
+        return executeEffect(req);
+      };
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-ap-del", "eff-ap-del", {
+        input: patch,
+      });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("fs.batch");
+      expect(captured[0]?.ops?.some((o) => o.kind === "fs.delete" && o.path === "gone.txt")).toBe(true);
+      expect(() => readFileSync(path.join(workspace, "gone.txt"), "utf8")).toThrow();
+      expect(readFileSync(path.join(workspace, "keep.txt"), "utf8")).toBe("Y\n");
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("multi-file multi-hunk Update projects ordered fs.edit ops in one fs.batch (ruling 553)", async () => {
+    writeFileSync(path.join(workspace, "multi.txt"), "alpha\nmiddle\nbeta\n", "utf8");
+    writeFileSync(path.join(workspace, "other.txt"), "x\n", "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Update File: multi.txt
+@@
+-alpha
++ALPHA
+@@
+-beta
++BETA
+*** Update File: other.txt
+@@
+-x
++y
+*** End Patch`;
+    try {
+      const captured: Array<{ kind?: string; ops?: Array<{ kind?: string; path?: string; oldString?: string }> }> =
+        [];
+      const executeEffect = kernel.executeEffect.bind(kernel);
+      (kernel as { executeEffect: typeof kernel.executeEffect }).executeEffect = async (req) => {
+        const spec = (req.dispatch as { spec?: { ops?: Array<{ kind?: string; path?: string; oldString?: string }> } })
+          ?.spec;
+        captured.push({ kind: req.dispatch?.kind, ops: spec?.ops });
+        return executeEffect(req);
+      };
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-mh-batch", "eff-mh-batch", {
+        input: patch,
+      });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("fs.batch");
+      expect(captured[0]?.kind).toBe("fs.batch");
+      expect(captured[0]?.ops?.map((o) => `${o.kind}:${o.path}:${o.oldString ?? ""}`)).toEqual([
+        "fs.edit:multi.txt:alpha",
+        "fs.edit:multi.txt:beta",
+        "fs.edit:other.txt:x",
+      ]);
+      expect(readFileSync(path.join(workspace, "multi.txt"), "utf8")).toBe("ALPHA\nmiddle\nBETA\n");
+      expect(readFileSync(path.join(workspace, "other.txt"), "utf8")).toBe("y\n");
     } finally {
       await kernel.close();
     }
@@ -212,6 +376,71 @@ describe("kernel apply_patch / ast_edit route", () => {
       expect(readFileSync(path.join(workspace, "one.txt"), "utf8")).toBe("ALPHA\nmiddle\nBETA\n");
       expect(lastChangeFor("s-atomic", path.join(workspace, "one.txt"))?.before).toBe(initial);
       expect(out?.kernelObserve.resultDigestStable).toBe(true);
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("same-file multi-hunk trim_end repair is one atomic write when EDIT_REPAIR=1 (ruling 646)", async () => {
+    // Trailing spaces on disk; patch lines are trim_end-unique under repair.
+    const initial = "alpha  \nmiddle\nbeta  \n";
+    writeFileSync(path.join(workspace, "trim.txt"), initial, "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    const patch = `*** Begin Patch
+*** Update File: trim.txt
+@@
+-alpha
++ALPHA
+@@
+-beta
++BETA
+*** End Patch`;
+    try {
+      setEnv({ HZ_EFFECT_HOST_EDIT_REPAIR: "0" });
+      const refused = await tryKernelApplyPatchRoute(kernel, workspace, "s-trim-off", "eff-trim-off", {
+        input: patch,
+      });
+      expect(refused?.result.ok).toBe(false);
+      expect(readFileSync(path.join(workspace, "trim.txt"), "utf8")).toBe(initial);
+
+      setEnv({ HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-trim", "eff-trim", { input: patch });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("one atomic kernel fs.write");
+      expect(readFileSync(path.join(workspace, "trim.txt"), "utf8")).toBe("ALPHA\nmiddle\nBETA\n");
+    } finally {
+      await kernel.close();
+    }
+  });
+
+  test("multi-file Update with relative_indent hunks batches under EDIT_REPAIR (ruling 646)", async () => {
+    writeFileSync(path.join(workspace, "a.ts"), "function f() {\n    const x = 1;\n}\n", "utf8");
+    writeFileSync(path.join(workspace, "b.ts"), "function g() {\n    const y = 2;\n}\n", "utf8");
+    const kernel = new KernelClient({
+      workspace,
+      stateDir: path.join(workspace, ".hzcode", "kernel"),
+    });
+    // Patch uses unindented old lines; unique relative_indent match on disk.
+    const patch = `*** Begin Patch
+*** Update File: a.ts
+@@
+-const x = 1;
++const x = 9;
+*** Update File: b.ts
+@@
+-const y = 2;
++const y = 8;
+*** End Patch`;
+    try {
+      setEnv({ HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+      const out = await tryKernelApplyPatchRoute(kernel, workspace, "s-indent", "eff-indent", { input: patch });
+      expect(out?.result.ok).toBe(true);
+      expect(out?.result.output).toContain("kernel fs.batch");
+      expect(readFileSync(path.join(workspace, "a.ts"), "utf8")).toContain("const x = 9;");
+      expect(readFileSync(path.join(workspace, "b.ts"), "utf8")).toContain("const y = 8;");
     } finally {
       await kernel.close();
     }

@@ -2,11 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { assertPublishedNumber, parsePublishedNumber } from "../../src/core/metrics";
 import {
   applyKeymapOverrides,
   checkKeymapOverrides,
   chordFromKey,
   defaultKeymap,
+  keybindCheckPublication,
   loadUserKeymap,
   normalizeChord,
   resolveAction,
@@ -22,6 +24,13 @@ afterEach(() => {
 });
 
 describe("keymap", () => {
+  test("keybindCheckPublication contracts counts (ruling 616)", () => {
+    const blocks = keybindCheckPublication({ overrideCount: 2, actionCount: 9, errorCount: 1 });
+    expect(blocks).toHaveLength(3);
+    for (const block of blocks) assertPublishedNumber(block);
+    expect(blocks.map((b) => Number(parsePublishedNumber(b).value))).toEqual([2, 9, 1]);
+  });
+
   test("normalizeChord sorts modifiers and aliases esc", () => {
     expect(normalizeChord("Shift+Ctrl+P")).toBe("ctrl+shift+p");
     expect(normalizeChord("esc")).toBe("escape");

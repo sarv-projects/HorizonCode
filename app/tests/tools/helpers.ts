@@ -15,6 +15,7 @@ import {
   newId,
   sha256Hex,
   type ApprovalRequest,
+  type AskUserHandler,
   type GuardAction,
   type GuardDecision,
   type GuardDecisionValue,
@@ -78,6 +79,8 @@ export interface MockCtxOptions {
   approve?: boolean | ApproveFn;
   /** Start with an already-aborted signal (default false). */
   aborted?: boolean;
+  /** Injected `ask_user` handler. */
+  askUser?: AskUserHandler;
 }
 
 export interface MockToolContext extends ToolContext {
@@ -108,6 +111,7 @@ export function mockToolContext(opts: MockCtxOptions = {}): MockToolContext {
     approveCalls,
     receiptCalls,
     abort: () => controller.abort(),
+    ...(opts.askUser !== undefined ? { askUser: opts.askUser } : {}),
 
     async guard(action: GuardAction): Promise<GuardDecision> {
       guardCalls.push(action);

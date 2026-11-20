@@ -42,6 +42,9 @@ describe("context.usage", () => {
       expect(first.maxOutput).toBeGreaterThan(0);
       expect(first.messages).toBeGreaterThan(0);
       expect(first.historyLimit).toBe(HISTORY_LIMIT);
+      expect(first.defaultHistoryLimit).toBe(HISTORY_LIMIT);
+      expect(first.tokenFitCompaction).not.toBe(true);
+      expect(first.llmCompactionActive).not.toBe(true);
 
       // The runtime keeps the newest snapshot for /context, and the model name
       // it reports is the one the dispatch actually used.

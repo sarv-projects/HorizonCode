@@ -8,7 +8,10 @@ import { sha256Hex } from "../core/canon";
 import { planToolOutputCap, writeSpillFile } from "../core/output-budget";
 import { spillDir } from "../core/paths";
 import {
+  appendBackgroundCapture,
+  beginBackgroundCapture,
   clearAutoBackground,
+  completeBackgroundCapture,
   noteAutoBackground,
   shellAutoBackgroundMs,
   shellAutoBackgroundNotice,
@@ -724,7 +727,9 @@ export const shellTool: Tool = {
               captureTruncated = true;
               continue; // keep draining, stop buffering
             }
-            out += decoder.decode(value, { stream: true });
+            const piece = decoder.decode(value, { stream: true });
+            out += piece;
+            appendBackgroundCapture(proc.pid, piece);
           }
         } catch {
           /* stream closed by a kill */
@@ -753,6 +758,16 @@ export const shellTool: Tool = {
           clearTimeout(timer);
           if (typeof (proc as { unref?: () => void }).unref === "function") (proc as { unref: () => void }).unref();
           const elapsed = Date.now() - startedAt;
+          const logPath = path.join(spillDir(ctx.workspace), `shell-bg-${proc.pid}.log`);
+          beginBackgroundCapture({
+            pid: proc.pid,
+            sessionId: ctx.sessionId,
+            command,
+            cwd: dir,
+            logPath,
+            initialOutput: out,
+            startedAtMs: startedAt,
+          });
           const minimised = minimiseShellOutput(out);
           const truncatedBody = truncate(minimised.text, MAX_OUTPUT).replace(/\n+$/, "");
           let body = truncatedBody + shellAutoBackgroundNotice(proc.pid, elapsed);
@@ -761,8 +776,14 @@ export const shellTool: Tool = {
           // This is observation only — the child is NOT killed here.
           noteAutoBackground({ pid: proc.pid, backgroundedAtMs: elapsed, notice: body });
           void proc.exited.then(
-            () => clearAutoBackground(proc.pid),
-            () => clearAutoBackground(proc.pid),
+            () => {
+              completeBackgroundCapture(proc.pid, proc.exitCode, proc.signalCode);
+              clearAutoBackground(proc.pid);
+            },
+            () => {
+              completeBackgroundCapture(proc.pid, proc.exitCode, proc.signalCode);
+              clearAutoBackground(proc.pid);
+            },
           );
           ctx.signal.removeEventListener("abort", onAbort);
           return {

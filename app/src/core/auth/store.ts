@@ -33,11 +33,27 @@ export function credentialsDbPath(home: string = homedir()): string {
   return oauthCredentialsDbPath(home);
 }
 
-export function writeOAuthToken(token: StoredOAuthToken, home: string = homedir()): void {
+/**
+ * Under-admission (ruling 597): Guard `fs.write` on credentials.db before SQLite
+ * upsert. Refresh.gen is admitted separately by bump (596).
+ */
+export async function admitOAuthCredentialsDbWrite(home: string = homedir()): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("../preds-writer");
+  const refused = await admitPredsOutWrite(credentialsDbPath(home), home);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "oauth-credentials refused:")
+    .replace(/^preds write denied/, "oauth-credentials denied")
+    .replace(/^preds fs\.write requires approval/, "oauth-credentials fs.write requires approval");
+}
+
+export async function writeOAuthToken(token: StoredOAuthToken, home: string = homedir()): Promise<string | undefined> {
+  const refused = await admitOAuthCredentialsDbWrite(home);
+  if (refused !== undefined) return refused;
   const legacyDir = path.dirname(oauthTokenPath(token.provider, home));
   if (!existsSync(legacyDir)) mkdirSync(legacyDir, { recursive: true, mode: 0o700 });
   writeOAuthTokenDb(token, home);
-  bumpOAuthRefreshGeneration(token.provider, home);
+  await bumpOAuthRefreshGeneration(token.provider, home);
   try {
     unlinkSync(oauthTokenPath(token.provider, home));
   } catch {
@@ -48,6 +64,7 @@ export function writeOAuthToken(token: StoredOAuthToken, home: string = homedir(
   } catch {
     /* */
   }
+  return undefined;
 }
 
 export function readOAuthToken(provider: string, home: string = homedir()): StoredOAuthToken | undefined {

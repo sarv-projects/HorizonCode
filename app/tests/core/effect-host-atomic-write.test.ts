@@ -22,9 +22,9 @@ describe("effect-host atomic write", () => {
     const sandbox = mkdtempSync(path.join(tmpdir(), "hz-eff-atomic-"));
     try {
       const outside = path.join(tmpdir(), `hz-out-${Date.now()}.txt`);
-      await expect(writeBytesAtomicInSandbox(sandbox, outside, Buffer.from("x"))).rejects.toThrow(
-        "sandboxRoot",
-      );
+      await expect(writeBytesAtomicInSandbox(sandbox, outside, Buffer.from("x"))).rejects.toMatchObject({
+        message: expect.stringMatching(/outside workspace|sandboxRoot/),
+      });
     } finally {
       rmSync(sandbox, { recursive: true, force: true });
     }

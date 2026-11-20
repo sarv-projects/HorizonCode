@@ -19,9 +19,23 @@ describe("autonomy presets", () => {
   test("each preset maps to a permission mode", () => {
     for (const p of AUTONOMY_PRESETS) {
       expect(p.permissionMode).toBeDefined();
+      expect(p.envelopeTarget).toBeDefined();
       expect(parseAutonomyPreset(p.id)?.permissionMode).toBe(p.permissionMode);
     }
     expect(parseAutonomyPreset("auto_edits")?.id).toBe("auto-edits");
+  });
+
+  test("envelope presets wire real tiers (not permission-mode aliases)", () => {
+    expect(parseAutonomyPreset("pilot")?.permissionMode).toBe("default");
+    expect(parseAutonomyPreset("pilot")?.envelopeTier).toBe("pilot-autonomous");
+    expect(parseAutonomyPreset("autonomous")?.permissionMode).toBe("default");
+    expect(parseAutonomyPreset("autonomous")?.envelopeTier).toBe("pilot-autonomous");
+    expect(parseAutonomyPreset("unattended")?.envelopeTier).toBe("unattended");
+    expect(parseAutonomyPreset("unattended")?.permissionMode).toBe("default");
+    expect(parseAutonomyPreset("regulated")?.envelopeTarget).toBe("regulated-kernel-require");
+    expect(parseAutonomyPreset("regulated")?.envelopeTier).toBe("regulated");
+    expect(parseAutonomyPreset("regulated")?.description).toContain("HZ_EFFECT_HOST_KERNEL=require");
+    expect(AUTONOMY_PRESETS.some((p) => p.id === "manual")).toBe(true);
   });
 
   test("config autonomy selects permission mode when permissionMode omitted", () => {

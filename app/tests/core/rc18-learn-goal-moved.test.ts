@@ -43,18 +43,32 @@ describe("RC-18 learn / goal / session.moved", () => {
 
   test("setGoal emits hz.goal.updated (453)", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-goal-"));
-    const runtime = await createRuntime({ workspace, mock: true });
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(workspace, "no-such-hz-kernel");
     try {
-      expect(typeof runtime.setGoal).toBe("function");
-      await runtime.setGoal!("ship the RC-18 catalogue");
-      const rows = loadRows(sessionEventsPath(workspace, runtime.sessionId));
-      const goals = rows.filter((r) => r.type === EventTypes.goalUpdated);
-      expect(goals).toHaveLength(1);
-      expect(goals[0]?.payload?.statement).toBe("ship the RC-18 catalogue");
-      expect(goals[0]?.payload?.status).toBe("active");
-      expect(runtime.goalStatement?.()).toBe("ship the RC-18 catalogue");
+      const kernelState = path.join(workspace, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "allow", reason: "test-allow-goal" }]),
+        "utf8",
+      );
+      const runtime = await createRuntime({ workspace, mock: true });
+      try {
+        expect(typeof runtime.setGoal).toBe("function");
+        await runtime.setGoal!("ship the RC-18 catalogue");
+        const rows = loadRows(sessionEventsPath(workspace, runtime.sessionId));
+        const goals = rows.filter((r) => r.type === EventTypes.goalUpdated);
+        expect(goals).toHaveLength(1);
+        expect(goals[0]?.payload?.statement).toBe("ship the RC-18 catalogue");
+        expect(goals[0]?.payload?.status).toBe("active");
+        expect(runtime.goalStatement?.()).toBe("ship the RC-18 catalogue");
+      } finally {
+        await runtime.close();
+      }
     } finally {
-      await runtime.close();
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
     }
   });
 

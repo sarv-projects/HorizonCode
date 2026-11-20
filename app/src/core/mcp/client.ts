@@ -42,6 +42,7 @@
  */
 
 import { scrubEnv } from "../../tools/helpers";
+import { effectHostMcpAmbientSpawnRefusal } from "../effect-host-posture";
 import { spawnOwned, type OwnedProc } from "../owned-spawn";
 import { listAllMcpResources, listAllMcpTools, mcpListRequestParams } from "./list-pagination";
 
@@ -393,6 +394,10 @@ export class McpClient implements McpToolCaller {
   /* ----------------------------- connection ----------------------------- */
 
   private async spawnAndHandshake(): Promise<McpToolInfo[]> {
+    const spawnRefusal = effectHostMcpAmbientSpawnRefusal(this.serverId);
+    if (spawnRefusal !== undefined) {
+      throw new McpTransportError(this.serverId, spawnRefusal);
+    }
     await this.killChild(); // a reconnect may replace a dead child that lingers
     this.buffer = "";
     this.stderrBuffer = "";

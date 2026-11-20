@@ -179,7 +179,7 @@ describe("apply-patch kernel fuzz (ruling 299)", () => {
     expect(resolved?.new).toBe(`${line} fixed`);
   });
 
-  test("near-tied high scores fail dominant-score rung", () => {
+  test("near-tied duplicate lines kernel-route tied-equal first-hit (ruling 687)", () => {
     const line = "alpha beta gamma delta\n";
     const before = line + line;
     const chunk = {
@@ -187,22 +187,23 @@ describe("apply-patch kernel fuzz (ruling 299)", () => {
       newLines: ["alpha beta gamma fixed"],
       eofAnchored: false,
     };
-    expect(classifyApplyPatchChunkKernelFuzz(before, chunk)).toBe("bun_fuzz_only");
-    expect(resolveKernelApplyPatchChunkEdit(before, chunk, { HZ_EFFECT_HOST_EDIT_REPAIR: "1" })).toBeUndefined();
+    expect(classifyApplyPatchChunkKernelFuzz(before, chunk)).toBe("first_hit_tied_levenshtein");
+    expect(resolveKernelApplyPatchChunkEdit(before, chunk, { HZ_EFFECT_HOST_EDIT_REPAIR: "1" })).toBeDefined();
   });
 
-  test("tied max-score Levenshtein matches fail-closed on kernel path", () => {
-    const before = "alfa beta\nalfa beta\n";
+  test("mixed-score first-hit stays Bun-only under require honesty", () => {
+    const before = "alfa betz\nalfa beta\nalfa beta\n";
     const chunk = {
       oldLines: ["alpha beta"],
       newLines: ["alpha beta fixed"],
       eofAnchored: false,
     };
     expect(classifyApplyPatchChunkKernelFuzz(before, chunk)).toBe("bun_fuzz_only");
+    expect(applyPatchFirstHitScoreFuzzBunOwned(before, chunk)).toBe(true);
     expect(resolveKernelApplyPatchChunkEdit(before, chunk, { HZ_EFFECT_HOST_EDIT_REPAIR: "1" })).toBeUndefined();
   });
 
-  test("first-hit score fuzz is Bun-owned when kernel ties (ruling 313)", () => {
+  test("tied-equal first-hit score fuzz kernel-routes with EDIT_REPAIR (ruling 687)", () => {
     const before = "alfa beta\nalfa beta\n";
     const chunk = {
       oldLines: ["alpha beta"],
@@ -212,7 +213,11 @@ describe("apply-patch kernel fuzz (ruling 299)", () => {
     const lines = before.replace(/\r\n/g, "\n").split("\n").slice(0, -1);
     expect(bunApplyPatchFirstHitLevenshteinStart(lines, chunk.oldLines)).toBe(0);
     expect(classifyApplyPatchScoreMatchPolicy(lines, chunk.oldLines)).toBe("bun_first_hit");
-    expect(applyPatchFirstHitScoreFuzzBunOwned(before, chunk)).toBe(true);
+    expect(applyPatchFirstHitScoreFuzzBunOwned(before, chunk)).toBe(false);
+    expect(classifyApplyPatchChunkKernelFuzz(before, chunk)).toBe("first_hit_tied_levenshtein");
+    const resolved = resolveKernelApplyPatchChunkEdit(before, chunk, { HZ_EFFECT_HOST_EDIT_REPAIR: "1" });
+    expect(resolved?.old).toBe("alfa beta");
+    expect(resolved?.new).toBe("alpha beta fixed");
   });
 
   test("unique dominant score is kernel policy not Bun first-hit", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildShowPromptsRequest, renderShowPrompts } from "../../src/core/show-prompts";
+import { buildShowPromptsRequest, renderShowPrompts, showPromptsPublication } from "../../src/core/show-prompts";
 import { loadConfig } from "../../src/core/config";
+import { assertPublishedNumber, parsePublishedNumber } from "../../src/core/metrics";
 import { makeWorkspace } from "../tools/helpers";
 
 describe("--show-prompts payload", () => {
@@ -19,6 +20,11 @@ describe("--show-prompts payload", () => {
       const text = renderShowPrompts(req);
       expect(text).toContain('"Hello!"');
       expect(text).toContain('"tools"');
+      const blocks = showPromptsPublication(req);
+      expect(blocks).toHaveLength(4);
+      for (const block of blocks) assertPublishedNumber(block);
+      expect(Number(parsePublishedNumber(blocks[0]!).value)).toBe(req.tools.length);
+      expect(Number(parsePublishedNumber(blocks[1]!).value)).toBe(1);
     } finally {
       if (prev.p === undefined) delete process.env.HZ_PROVIDER;
       else process.env.HZ_PROVIDER = prev.p;

@@ -24,6 +24,7 @@
 | ADR-014 | **Derivative work is permitted, tracked and attributed** | Accepted |
 | ADR-015 | **Tools are declared, not string-matched** | Accepted |
 | ADR-016 | **Subagent construction funnels through one primitive** | Accepted |
+| ADR-017 | **Ratify shipped build topology (`app/` Bun + `kernel/` Rust); keep designed capability planes** | Accepted |
 
 ---
 
@@ -247,5 +248,33 @@
 **Why.** The easiest way for an agent system to become unsafe is for child construction to be duplicated: one path forgets to narrow permissions, another forgets the budget, a third forgets receipts. Reasonix's boundary-test discipline is the cheapest possible defence.
 
 **Consequences.** Child sessions are always traceable to a parent receipt, and `hzcode session tree` can always reconstruct authority and cost.
+
+---
+
+## ADR-017 — Ratify shipped build topology; keep designed capability planes
+
+**The question.** Do we rebuild into the `packages/@horizoncode/*` + multi-crate `pnpm` monorepo of `03-hld.md` / `04-lld.md`, or treat the live zero-dep Bun `app/` + single Rust `kernel/` tree as the build topology?
+
+**Decision.** **Ratify the shipped topology as the build topology.** HorizonCode ships as:
+
+- `app/` — TypeScript/Bun orchestration, cognition, tools, TUI/surfaces (zero runtime npm dependencies).
+- `kernel/` — Rust authority, OwnerLog, Guard, sandbox/egress, and (over time) heavy native capability that must not bloat the Bun supply chain (AST index, search, confinement backends).
+
+The multi-package / `hz_native` / `hz_codegen` layout in `03`/`04` remains a **capability and layering blueprint**, not a mandatory filesystem layout. Capability planes (authority, orchestration, cognition, data, surfaces) stay binding; they map onto `app/` + `kernel/` modules and future Rust crates *inside* `kernel/` (or sibling crates under `kernel/`) without requiring a 24-package TypeScript monorepo.
+
+**Why.** Specifying a topology we are not building creates permanent spec rot and burns velocity. Zero-dep Bun is a real supply-chain advantage (Threat T5). Rust is the right place for AST/search/sandbox/authority without abandoning intelligence ambition.
+
+**Rejected alternatives.**
+
+- Rebuild into `packages/*` before P0 spine closes — rejected: topology churn without closing trust bars.
+- Delete capability ambition from `03`/`04` to “match code” — rejected: HorizonCode must stand out; planes and contracts stay DESIGNED targets.
+- Invent root `LICENSE` in this ADR — rejected: owner-gated (`LICENSE-STATUS.md`).
+
+**Consequences.**
+
+- Docs that claim `pnpm gate:*` / `config.jsonc` / `hz_codegen` as *shipped* must be labeled DESIGNED or updated to `ops/gates.sh` / `config.json`.
+- Native intelligence (tree-sitter repo-map, stronger search) lands in Rust/kernel or WASM — not by adding runtime deps to `app/package.json` without an explicit ADR.
+- Envelope autonomy profiles compose on top of this topology; they do not replace receipts or OwnerLog.
+- Evidence: `docs/audit/architecture-critique-verification-2026-11-19.md`.
 
 

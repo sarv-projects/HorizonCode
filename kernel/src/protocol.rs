@@ -6,6 +6,7 @@
 //! Malformed lines answer with `"id": null` and the kernel never exits on bad input.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -16,8 +17,10 @@ use crate::effect_owner;
 use crate::egress_connect;
 use crate::eventlog::{AnchorConfig, EventLog};
 use crate::guard::{self, Guard, GuardAction, Lease};
+use crate::human_principal;
 use crate::receipts::Receipts;
 use crate::sandbox;
+use crate::workspace_binding::WorkspaceBinding;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -31,31 +34,74 @@ pub struct Kernel {
     /// A raw RPC may narrow to this workspace, never widen it. Standalone
     /// kernels started without the variable remain explicitly unbound.
     workspace_root: Option<std::path::PathBuf>,
+    /// H-31 / ruling 623: `(root, device, inode)` captured when
+    /// `HZ_KERNEL_WORKSPACE_ROOT` is set. `Err` means the env was set but
+    /// identity could not be captured — mutating effects fail closed.
+    workspace_binding: Result<Option<WorkspaceBinding>, String>,
     egress_connect: Mutex<egress_connect::ListenerSlot>,
     effect_hermetic: effect_host::SharedHermeticLedger,
+    /// H-30 / 634: monotonic detach supervisor epoch (0 = stdio-only / unset).
+    supervisor_epoch: AtomicU64,
+    /// H-30 / 709: running image digest after `--socket` bind (unset on stdio-only).
+    supervisor_binary_sha: Mutex<Option<String>>,
 }
 
 impl Kernel {
     pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig) -> Self {
-        Self::new_with_control(state_dir, anchor, None)
+        Self::new_with_control(state_dir, anchor, None, None)
     }
 
     pub fn new_with_control(
         state_dir: &Path,
         anchor: AnchorConfig,
         control_secret: Option<String>,
+        issuer_key: Option<Vec<u8>>,
     ) -> Self {
+        let workspace_root = std::env::var_os("HZ_KERNEL_WORKSPACE_ROOT")
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from);
+        let workspace_binding = match &workspace_root {
+            None => Ok(None),
+            Some(root) => match WorkspaceBinding::capture(root) {
+                Ok(b) => Ok(Some(b)),
+                Err(e) => Err(e),
+            },
+        };
+        let mut guard = Guard::new(state_dir);
+        // H-31 / 629: fold launch binding into every Guard decision digest.
+        if let Ok(Some(ref binding)) = workspace_binding {
+            guard.set_workspace_binding(Some(binding.clone()));
+        }
         Kernel {
             events: EventLog::new_with_anchor(state_dir, anchor.clone()),
-            receipts: Receipts::new_with_anchor(state_dir, anchor),
-            guard: Guard::new(state_dir),
+            receipts: Receipts::new_with_anchor(state_dir, anchor, issuer_key),
+            guard,
             control_secret,
-            workspace_root: std::env::var_os("HZ_KERNEL_WORKSPACE_ROOT")
-                .filter(|s| !s.is_empty())
-                .map(std::path::PathBuf::from),
+            workspace_root,
+            workspace_binding,
             egress_connect: Mutex::new(egress_connect::ListenerSlot::new()),
             effect_hermetic: Mutex::new(effect_host::HermeticEffectLedger::default()),
+            supervisor_epoch: AtomicU64::new(0),
+            supervisor_binary_sha: Mutex::new(None),
         }
+    }
+
+    /// Record the detach supervisor epoch after `hzk.epoch` advances (ruling 634).
+    pub fn set_supervisor_epoch(&self, epoch: u64) {
+        self.supervisor_epoch.store(epoch, Ordering::SeqCst);
+    }
+
+    pub fn supervisor_epoch(&self) -> u64 {
+        self.supervisor_epoch.load(Ordering::SeqCst)
+    }
+
+    /// Running image digest after `--socket` bind (H-30 partial; unset on stdio-only).
+    pub fn set_supervisor_binary_sha(&self, sha: Option<String>) {
+        *self.supervisor_binary_sha.lock().unwrap() = sha;
+    }
+
+    pub fn supervisor_binary_sha(&self) -> Option<String> {
+        self.supervisor_binary_sha.lock().unwrap().clone()
     }
 
     /// Never panics: any bad input becomes an `error` response.
@@ -96,7 +142,43 @@ impl Kernel {
 
     fn dispatch(&self, method: &str, params: &Value) -> Result<Value, String> {
         match method {
-            "ping" => Ok(json!({ "version": VERSION })),
+            "ping" => {
+                let mut out = json!({ "version": VERSION });
+                if let Some(obj) = out.as_object_mut() {
+                    obj.insert(
+                        "socketPeerAuth".to_string(),
+                        crate::peer_auth::socket_peer_auth_json(),
+                    );
+                    obj.insert(
+                        "hostSupervisorLease".to_string(),
+                        crate::host_supervisor_lease::host_supervisor_lease_json(),
+                    );
+                }
+                if let Ok(Some(binding)) = &self.workspace_binding {
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.insert("workspaceBinding".to_string(), binding.to_json());
+                    }
+                } else if let Err(err) = &self.workspace_binding {
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.insert(
+                            "workspaceBindingError".to_string(),
+                            json!(err),
+                        );
+                    }
+                }
+                let epoch = self.supervisor_epoch();
+                if epoch > 0 {
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.insert("supervisorEpoch".to_string(), json!(epoch));
+                    }
+                }
+                if let Some(sha) = self.supervisor_binary_sha() {
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.insert("supervisorBinarySha256".to_string(), json!(sha));
+                    }
+                }
+                Ok(out)
+            }
 
             "log.append" => {
                 let stream = string_param(params, "stream")?;
@@ -200,8 +282,12 @@ impl Kernel {
                 // Additive: a client that supplies sessionId mints a lease owned
                 // by that session; one that does not mints a legacy owner-less
                 // lease, which stays globally consultable (documented legacy).
-                let owner = session_param(params);
-                let lease = self.guard.issue_lease(&kind, &pattern, ttl_ms, owner);
+                let (owner, principal_in) = mint_owner_and_principal(params);
+                let principal = human_principal::normalize_parent_control_mint_principal(
+                    self.control_secret.is_some(),
+                    principal_in,
+                )?;
+                let lease = self.guard.issue_lease(&kind, &pattern, ttl_ms, owner, principal);
                 serde_json::to_value(lease).map_err(|e| format!("cannot serialize lease: {}", e))
             }
 
@@ -219,8 +305,12 @@ impl Kernel {
                 let pattern = string_param(params, "pattern")?;
                 let ttl_ms = number_param(params, "ttlMs")
                     .ok_or_else(|| "guard.grant.ttlMs must be a number".to_string())?;
-                let owner = session_param(params);
-                let grant = self.guard.issue_grant(&kind, &pattern, ttl_ms, owner);
+                let (owner, principal_in) = mint_owner_and_principal(params);
+                let principal = human_principal::normalize_parent_control_mint_principal(
+                    self.control_secret.is_some(),
+                    principal_in,
+                )?;
+                let grant = self.guard.issue_grant(&kind, &pattern, ttl_ms, owner, principal);
                 serde_json::to_value(grant).map_err(|e| format!("cannot serialize grant: {}", e))
             }
 
@@ -388,7 +478,26 @@ impl Kernel {
             // The OS owner lock covers prepare, execute, postimage and settle.
             "effect.execute" => {
                 if effect_owner::is_mutating(params) {
-                    if let Some(bound) = &self.workspace_root {
+                    if let Err(err) = &self.workspace_binding {
+                        return Err(err.clone());
+                    }
+                    if let Ok(Some(binding)) = &self.workspace_binding {
+                        let supplied = params
+                            .get("sandboxRoot")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                "HZ_PRECONDITION_FAILED: bound effect.execute requires sandboxRoot"
+                                    .to_string()
+                            })?;
+                        if !Path::new(supplied).is_absolute() {
+                            return Err("HZ_PRECONDITION_FAILED: effect.execute sandboxRoot does not equal kernel-bound workspace root".into());
+                        }
+                        // H-31: path text alone is insufficient — live (dev,ino)
+                        // must still match the launch-time binding.
+                        binding.check_path(Path::new(supplied))?;
+                    } else if let Some(bound) = &self.workspace_root {
+                        // Defensive: env set but binding missing should not happen.
                         let supplied = params
                             .get("sandboxRoot")
                             .and_then(Value::as_str)
@@ -438,15 +547,20 @@ impl Kernel {
                 &self.receipts,
                 self.guard.state_dir(),
             ),
-            // V2 OwnerLog: a PREPARE-only interrupted effect has a durable
-            // no-execute proof; anything past owner.executing stays UNKNOWN.
+            // V2 OwnerLog: PREPARE-only clean release (**349**); attested
+            // executed-UNKNOWN abandon (**655**); observe-settle (**714**/**721**).
             "effect.owner.recover" => {
                 let effect_id = string_param(params, "effectId")?;
+                let mode = params.get("mode").and_then(|v| v.as_str());
+                let attestation = params.get("attestation").and_then(|v| v.as_str());
                 effect_owner::recover(
                     &self.events,
                     &self.receipts,
                     self.guard.state_dir(),
                     &effect_id,
+                    mode,
+                    attestation,
+                    Some(params),
                 )
             }
 
@@ -521,6 +635,23 @@ fn session_param(params: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// Owner + optional `principal` for approval-path mints (`principal: "human"`).
+fn mint_owner_and_principal(params: &Value) -> (Option<String>, Option<String>) {
+    let session = session_param(params);
+    let principal = params
+        .get("principal")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let owner = match (session.as_deref(), principal.as_deref()) {
+        (Some(sid), Some("human")) => Some(format!("human:{sid}")),
+        (Some(sid), _) => Some(sid.to_string()),
+        _ => None,
+    };
+    (owner, principal)
 }
 
 fn lease_list(value: Option<&Value>) -> Result<Vec<Lease>, String> {

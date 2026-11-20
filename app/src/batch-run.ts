@@ -36,10 +36,11 @@ import {
   type BatchSelectionOptions,
   type BatchJobRow,
 } from "./core/batch-runner";
-import { SpendLedger, spendLimitMicroFromEnv } from "./core/spend-ledger";
+import { admitSpendLedgerWrite, SpendLedger, spendLimitMicroFromEnv } from "./core/spend-ledger";
 import type { EvalExecutor } from "./core/evals";
 import { metricContract } from "./core/metrics";
 import { formatBenchmarkManagerReport } from "./core/benchmark-manager";
+import { admitExplicitCliOutWrite } from "./core/preds-writer";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 
@@ -97,7 +98,7 @@ function guardedExecutorFrom(runtimeExecutor: EvalExecutor): BatchRowExecutor {
 }
 
 /** Publish the execution summary through the metric contract (H-7). */
-function batchExecutionPublished(s: BatchExecutionSummary): string[] {
+export function batchExecutionPublished(s: BatchExecutionSummary): string[] {
   const population = `${s.total} selected row(s) in this batch run (bun run batch; executed through the injected guarded runtime)`;
   const anchor = "none — first batch execution measurement (no prior run of this set to compare against)";
   const excludes =
@@ -106,6 +107,59 @@ function batchExecutionPublished(s: BatchExecutionSummary): string[] {
     metricContract({ metric: "batch rows executed", anchor, population, excludes, value: s.executed }),
     metricContract({ metric: "batch rows succeeded", anchor, population, excludes, value: s.done }),
     metricContract({ metric: "batch rows failed", anchor, population, excludes, value: s.failed }),
+  ];
+}
+
+/** H-7: selection / status / dry-run counts (ruling 578). */
+export function batchSelectionPublication(input: { selected: number; total: number }): string[] {
+  const anchor = "none — this batch selection invocation";
+  return [
+    metricContract({
+      metric: "batch selection selected",
+      anchor,
+      population: "rows matching the active filter/arm/slice/shuffle selection",
+      excludes: "none — count is selectBatchRows length",
+      value: input.selected,
+    }),
+    metricContract({
+      metric: "batch selection total",
+      anchor,
+      population: "rows loaded from the batch job JSONL before selection",
+      excludes: "corrupt rows refused before selection",
+      value: input.total,
+    }),
+  ];
+}
+
+export function batchStatusPublication(input: { pending: number; total: number }): string[] {
+  const anchor = "none — this batch --status invocation";
+  return [
+    metricContract({
+      metric: "batch status pending",
+      anchor,
+      population: "selected rows still pending execution",
+      excludes: "done/failed rows are not pending",
+      value: input.pending,
+    }),
+    metricContract({
+      metric: "batch status total",
+      anchor,
+      population: "selected rows reported by --status",
+      excludes: "none — count is the selected list length",
+      value: input.total,
+    }),
+  ];
+}
+
+export function batchDryRunPublication(input: { pending: number }): string[] {
+  return [
+    metricContract({
+      metric: "batch dry-run pending",
+      anchor: "none — this batch --dry-run invocation",
+      population: "pending selected rows that would execute through the guarded runtime",
+      excludes: "none — count is pendingBatchRows length",
+      value: input.pending,
+    }),
   ];
 }
 
@@ -241,6 +295,12 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
   }
 
   if (paths.writePath !== undefined) {
+    // Under-admission (ruling 581): Guard before runner-config write.
+    const refused = await admitExplicitCliOutWrite(paths.writePath, process.cwd());
+    if (refused !== undefined) {
+      io.err(`batch ${refused}`);
+      return 1;
+    }
     try {
       const config = buildBatchRunnerConfig(jobPath, cliSelection.opts);
       writeBatchRunnerConfig(paths.writePath, config);
@@ -261,7 +321,12 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
   if (resumedFrom !== undefined) {
     io.out(`batch resume: loaded runner-config ${resumedFrom}`);
   }
-  if (selectionActive) io.out(`batch selection: selected ${selected.length} of ${load.rows.length} rows`);
+  if (selectionActive) {
+    io.out(`batch selection: selected ${selected.length} of ${load.rows.length} rows`);
+    for (const block of batchSelectionPublication({ selected: selected.length, total: load.rows.length })) {
+      io.out(block);
+    }
+  }
 
   const startedAt = Date.now();
   const progress = formatBatchProgress(selected, startedAt);
@@ -270,6 +335,9 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
   const pending = pendingBatchRows(selected);
   if (argv.includes("--status")) {
     io.out(`batch status: ${pending.length} pending of ${selected.length} total`);
+    for (const block of batchStatusPublication({ pending: pending.length, total: selected.length })) {
+      io.out(block);
+    }
     io.out(formatBenchmarkManagerReport(selected));
     return 0;
   }
@@ -284,6 +352,7 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
   if (argv.includes("--dry-run")) {
     for (const row of pending) io.out(`would run: ${row.id} · ${summarizeTask(row)}`);
     io.out(`batch dry-run: ${pending.length} row(s) would execute through the guarded runtime`);
+    for (const block of batchDryRunPublication({ pending: pending.length })) io.out(block);
     return 0;
   }
 
@@ -314,11 +383,18 @@ export async function runBatchCli(argv: readonly string[], io: BatchCliIo = DEFA
   // injected rail (tests) wins. The TTL reservation rail is wall-clock based and
   // lives inside SpendLedger, so the batch inherits it unchanged.
   const limitMicroUsd = spendLimitMicroFromEnv(opts.spendEnv ?? process.env);
-  const spendRail: BatchSpendRail | undefined =
-    opts.spend ??
-    (limitMicroUsd > 0
-      ? new SpendLedger(path.resolve(opts.workspace ?? process.cwd()), { limitMicroUsd })
-      : undefined);
+  const spendWorkspace = path.resolve(opts.workspace ?? process.cwd());
+  let spendRail: BatchSpendRail | undefined = opts.spend;
+  if (spendRail === undefined && limitMicroUsd > 0) {
+    // Under-admission (ruling 583): Guard before durable spend.json mutate.
+    const spendRefused = await admitSpendLedgerWrite(spendWorkspace);
+    if (spendRefused !== undefined) {
+      drain.dispose();
+      io.err(`batch ${spendRefused}`);
+      return 1;
+    }
+    spendRail = new SpendLedger(spendWorkspace, { limitMicroUsd });
+  }
   const reserveUsd = opts.reserveUsd ?? DEFAULT_BATCH_RESERVE_USD;
 
   let summary: BatchExecutionSummary;

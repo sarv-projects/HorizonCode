@@ -26,9 +26,32 @@ function draftPath(workspace: string, sessionId: string): string {
   return path.join(stateRoot(workspace), `composer-aborted-draft-${safeSessionId(sessionId)}.json`);
 }
 
-export function saveAbortedComposerDraft(workspace: string, sessionId: string, draft: string): void {
+/**
+ * Under-admission (ruling 586): Guard `fs.write` on the draft path before
+ * materialising. Returns an error string on deny/ask/guard failure.
+ */
+export async function admitComposerDraftWrite(
+  workspace: string,
+  sessionId: string,
+): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("../core/preds-writer");
+  const refused = await admitPredsOutWrite(draftPath(workspace, sessionId), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "composer-draft refused:")
+    .replace(/^preds write denied/, "composer-draft denied")
+    .replace(/^preds fs\.write requires approval/, "composer-draft fs.write requires approval");
+}
+
+export async function saveAbortedComposerDraft(
+  workspace: string,
+  sessionId: string,
+  draft: string,
+): Promise<string | undefined> {
   const text = draft.trimEnd();
-  if (text === "") return;
+  if (text === "") return undefined;
+  const refused = await admitComposerDraftWrite(workspace, sessionId);
+  if (refused !== undefined) return refused;
   const dir = stateRoot(workspace);
   mkdirSync(dir, { recursive: true });
   const target = draftPath(workspace, sessionId);
@@ -41,6 +64,7 @@ export function saveAbortedComposerDraft(workspace: string, sessionId: string, d
   const tmp = target + ".tmp";
   writeFileSync(tmp, JSON.stringify(payload) + "\n", { mode: 0o600, encoding: "utf8" });
   renameSync(tmp, target);
+  return undefined;
 }
 
 /** Read and delete the stashed draft (one-shot). */

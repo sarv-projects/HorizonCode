@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { validateWorktreeName, worktreeAddCommand, worktreeSiblingPath } from "../../src/core/worktree";
+import { validateWorktreeName, worktreeAddCommand, worktreeRemoveCommand, worktreeSiblingPath } from "../../src/core/worktree";
 
 describe("worktree naming", () => {
   test("hostile names are refused", () => {
@@ -16,5 +16,7 @@ describe("worktree naming", () => {
     const cmd = worktreeAddCommand(repo, "feat");
     expect(cmd).toContain("git worktree add");
     expect(cmd).toContain("hz/feat");
+    expect(worktreeRemoveCommand("/tmp/myrepo-feat")).toContain("git worktree remove");
+    expect(worktreeRemoveCommand("/tmp/myrepo-feat")).toContain("--force");
   });
 });

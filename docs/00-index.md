@@ -1,12 +1,10 @@
 # HorizonCode — Specification Index
 
-> **Product:** HorizonCode · **Binary:** `hzcode` · **Status:** design set ratified through RC-17 (2026-11-07) · **v0.1 slice implemented, tested and green; everything else DESIGNED** (implementation levels: `28-implementation-status.md`; audit record: `29-final-audit.md`)
+> **Product:** HorizonCode · **Binary:** `hzcode` · **Goal: NOT COMPLETE** (prototype trust spine / P0 bars open). LICENSE deferred. Never claim shell-net egress **`enforced`**.
 >
-> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Goal **NOT COMPLETE**; rulings **342** in `28` §3. Header counts below = historical 2026-11-10.
+> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Authoritative status: [`28-implementation-status.md`](28-implementation-status.md) §3 (rulings through **732**); honesty: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md); stop-of-day: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Design set ratified through **RC-18** (RC-1…RC-17 plus event-map discipline); much of docs/01–25 remains **DESIGNED** ahead of code.
 >
-> **Implementation note (2026-11-10, branch `docs/handoff` on top of `feat/tui-part3`, pull requests #1 to #28).** Measured on that cut: `bun run typecheck` 0 errors; `bun test` 1800 tests in 148 files, **1792 pass / 8 skip / 0 fail**; `cargo test --locked` 49 unit + 50 integration pass; `hz-kernel --selftest` `SELFTEST OK (25 checks)`; `bash ops/gates.sh` **8/8** green. Nothing is RELEASED. Per-feature map: `28-implementation-status.md`; historical table: `../CURRENT_RUN.md` §5.0; build commands: [`33-handoff.md`](33-handoff.md).
->
-> Reconciled 2026-11-07 (reaudit stage 2, RC-15; corpus rulings now through RC-17).
+> **Gates note:** `bash ops/gates.sh` **8/8** re-verified 2026-11-19 (ruling **648** follow-up) — that is repository-gate VERIFIED, **not** P0/EffectHost/R170/egress done and **not** RELEASED. Historical 2026-11-10 suite counts in older banners are archive only. Build/commands: [`33-handoff.md`](33-handoff.md).
 
 This directory is the authoritative specification for HorizonCode, a coding agent designed as the strict superset of the state of the art, with an execution constitution: model reasoning is separated from the authority to mutate.
 
@@ -47,7 +45,7 @@ This directory is the authoritative specification for HorizonCode, a coding agen
 | 28 | [`28-implementation-status.md`](./28-implementation-status.md) | **Implemented-vs-designed map with evidence commands — the single source of truth for implementation status** |
 | 29 | [`29-final-audit.md`](./29-final-audit.md) | Final deep audit: twelve-repo completeness pass, merged/unique findings, optimization analysis, docs-staleness ledger |
 | 30 | [`30-steal-list.md`](./30-steal-list.md) | Adoption shortlist: the consolidated steal list across aider, mini-swe-agent, hermes-agent and oh-my-pi (pass-3 audits) + the action queue — adopted by RC-15 (NF-071…NF-075; A.9 sources) |
-| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-17)** |
+| — | [`_conventions.md`](./_conventions.md) | Canonical names, packages, crates, capability IDs, events, status levels, and §11 **ratified cross-document decisions (RC-1…RC-18)** |
 
 ---
 

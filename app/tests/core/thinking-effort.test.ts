@@ -57,4 +57,35 @@ describe("thinking-effort C-11", () => {
     expect(r.effort).toBe("minimal");
     expect(r.source).toBe("env");
   });
+
+  test("HZ_THINKING_CALIBRATED=1 routes auto via calibrated local estimate (ruling 541)", () => {
+    const legacy = resolveThinkingEffort({ userText: "do the task", calibratedDifficulty: false });
+    expect(legacy.source).toBe("auto");
+
+    const calibrated = resolveThinkingEffort({
+      userText: "do the task",
+      calibratedDifficulty: true,
+      calibrationFeatures: { toolCount: 12, priorStepOutcomes: ["failure", "failure"] },
+    });
+    expect(calibrated.source).toBe("auto-calibrated");
+    expect(calibrated.effort).toBeDefined();
+    expect(calibrated.effort).not.toBe("xhigh");
+    // Prior failures + tools push calibrated difficulty above the cheap heuristic.
+    expect(["medium", "high"]).toContain(calibrated.effort);
+
+    const fromEnvFlag = resolveThinkingEffort({
+      userText: "rename a typo",
+      calibratedEnv: { HZ_THINKING_CALIBRATED: "1" },
+    });
+    expect(fromEnvFlag.source).toBe("auto-calibrated");
+    expect(fromEnvFlag.effort).not.toBe("xhigh");
+
+    // Explicit env effort still wins over calibrated auto.
+    const envWins = resolveThinkingEffort({
+      userText: "refactor everything",
+      envValue: "minimal",
+      calibratedDifficulty: true,
+    });
+    expect(envWins).toEqual({ effort: "minimal", source: "env" });
+  });
 });

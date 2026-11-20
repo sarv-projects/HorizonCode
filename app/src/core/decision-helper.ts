@@ -13,11 +13,14 @@
  *    §A.9 stays externally blocked). `probability` is a deterministic prior-based
  *    estimate in [0,1], not an empirically calibrated probability.
  *
- * Routing may opt in via `resolveDifficultyScore` / `calibratedDifficultyOptIn`.
- * Nothing here changes `HZ_THINKING_EFFORT` / `HZ_THINKING_AUTO` behavior unless
- * a caller explicitly wires the opt-in (this slice does not wire it).
+ * Routing opts in via `resolveDifficultyScore` / `calibratedDifficultyOptIn`.
+ * Product path: `resolveThinkingEffort` honors `HZ_THINKING_CALIBRATED=1`
+ * (ruling **541**) without changing `HZ_THINKING_EFFORT` / `HZ_THINKING_AUTO`
+ * precedence. Opt-in live judge: `HZ_THINKING_LIVE_JUDGE=1` (ruling **693**).
+ * Empirical corpus fit still OPEN.
  */
 
+import type { ChatMsg } from "../contracts";
 import type { ThinkingRung } from "./thinking-effort";
 import { THINKING_RUNGS, capAtAutoThinkingCeiling } from "./thinking-effort";
 
@@ -78,6 +81,38 @@ export interface CalibrationFeatures {
   toolCount?: number;
   /** Outcomes of earlier steps in this run; failures push difficulty up. */
   priorStepOutcomes?: readonly CalibrationOutcome[];
+}
+
+const TOOL_FAILURE_HINT =
+  /\b(error|failed|denied|refused|HZ_PRECONDITION_FAILED|exception|traceback)\b/i;
+
+/**
+ * Pure session→features bridge for product `resolveThinkingEffort` (ruling 551).
+ * Counts prior tool calls and maps tool-result text to success/failure outcomes.
+ */
+export function calibrationFeaturesFromMessages(
+  messages: readonly ChatMsg[],
+  opts?: { availableToolCount?: number },
+): Omit<CalibrationFeatures, "userText"> {
+  let toolCalls = 0;
+  const priorStepOutcomes: CalibrationOutcome[] = [];
+  for (const msg of messages) {
+    if (msg.role === "assistant" && Array.isArray(msg.toolCalls)) {
+      toolCalls += msg.toolCalls.length;
+    }
+    if (msg.role === "tool") {
+      const text = typeof msg.content === "string" ? msg.content : "";
+      priorStepOutcomes.push(TOOL_FAILURE_HINT.test(text) ? "failure" : "success");
+    }
+  }
+  const available =
+    typeof opts?.availableToolCount === "number" && Number.isFinite(opts.availableToolCount)
+      ? Math.max(0, Math.floor(opts.availableToolCount))
+      : 0;
+  return {
+    toolCount: Math.max(toolCalls, available),
+    priorStepOutcomes,
+  };
 }
 
 /**

@@ -229,8 +229,28 @@ export function pendingBatchRows(rows: readonly BatchJobRow[]): BatchJobRow[] {
   return rows.filter((row) => row.status === "pending" || row.status === "running");
 }
 
-/** Persist one row update by rewriting the JSONL file atomically. */
-export async function upsertBatchJobRow(file: string, id: string, patch: Partial<BatchJobRow>): Promise<void> {
+export async function admitBatchJobWrite(
+  file: string,
+  workspace: string = path.dirname(path.resolve(file)),
+): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(path.resolve(file), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "batch-job refused:")
+    .replace(/^preds write denied/, "batch-job denied")
+    .replace(/^preds fs\.write requires approval/, "batch-job fs.write requires approval");
+}
+
+/** Persist one row update by rewriting the JSONL file atomically (ruling 603 under-admission). */
+export async function upsertBatchJobRow(
+  file: string,
+  id: string,
+  patch: Partial<BatchJobRow>,
+  workspace: string = path.dirname(path.resolve(file)),
+): Promise<void> {
+  const refused = await admitBatchJobWrite(file, workspace);
+  if (refused !== undefined) throw new Error(refused);
   const load = loadBatchJob(file);
   const now = new Date().toISOString();
   let found = false;

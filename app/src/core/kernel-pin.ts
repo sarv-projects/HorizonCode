@@ -88,6 +88,15 @@ export function sha256File(file: string): string {
   return hash.digest("hex");
 }
 
+/** Sha256 hex of a kernel binary path; undefined when unreadable (detach reattach checks). */
+export function hashKernelBinary(binary: string): string | undefined {
+  try {
+    return sha256File(binary);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Parse one sha256sum-style manifest line; undefined when there is none. */
 export function parseKernelPinManifest(text: string): { digest: string; filename?: string } | undefined {
   for (const raw of text.split(/\r?\n/)) {

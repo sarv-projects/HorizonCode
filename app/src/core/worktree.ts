@@ -30,3 +30,8 @@ export function worktreeAddCommand(repoRoot: string, name: string): string {
   const branch = `hz/${name.trim()}`;
   return `git worktree add ${shellQuote(dest)} -b ${shellQuote(branch)}`;
 }
+
+/** Guarded shell command: remove a registered sibling worktree (`--force` for dirty trees). */
+export function worktreeRemoveCommand(dest: string): string {
+  return `git worktree remove ${shellQuote(dest)} --force`;
+}

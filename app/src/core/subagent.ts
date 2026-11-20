@@ -14,7 +14,17 @@
  * caller gets back one thing: the subagent's final report, capped.
  */
 
-import { EventTypes, newId, nowIso, type ApprovalHandler, type Lease, type Provider, type RuntimeEvent, type ToolResult } from "../contracts";
+import {
+  EventTypes,
+  newId,
+  nowIso,
+  type ApprovalHandler,
+  type AskUserHandler,
+  type Lease,
+  type Provider,
+  type RuntimeEvent,
+  type ToolResult,
+} from "../contracts";
 import { sha256Hex } from "./canon";
 // Hooks v1 lifecycle (docs/15 §2.4 H1): subagent.start/subagent.stop mark the
 // child session boundary (session.start/end for the child), OBSERVATION-only
@@ -23,7 +33,7 @@ import { loadHooks, runLifecycleHooks } from "./hooks";
 import { hooksLoadOptions } from "./trust";
 import type { KernelClient } from "./kernel";
 import type { EffectHost } from "./effect-host";
-import { getApprovalHandler, runTurn, streamFor, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
+import { getApprovalHandler, getAskUserHandler, runTurn, streamFor, taskHead, type BudgetLedger, type LoopDeps } from "./loop";
 import type { SessionStore } from "./session";
 import { BASE_TOOL_NAMES } from "../tools";
 import { buildChildPrompt, staticChildPrompt } from "./prompt";
@@ -162,6 +172,8 @@ export interface NestedRunOptions {
   sessionLeases?: Lease[];
   /** The parent's instance approval handler; the process one when absent. */
   approve?: ApprovalHandler;
+  /** The parent's structured `ask_user` handler; the process one when absent. */
+  askUser?: AskUserHandler;
   /**
    * The parent's permission mode (default, accept-edits, read-only): a child is
    * never looser than its parent. Plan mode needs no pass-through because the
@@ -265,6 +277,7 @@ export async function runNested(opts: NestedRunOptions): Promise<ToolResult> {
     // either: the child re-enters approval in both transports.
     sessionLeases: [],
     approve: opts.approve ?? getApprovalHandler(),
+    askUser: opts.askUser ?? getAskUserHandler(),
     permissionMode: childMode,
     systemOverride: buildChildPrompt(opts.workspace, new Date(), { tools: allowed, kernelMode: typeof opts.kernel?.mode === "string" ? opts.kernel.mode : "untrusted" }) +
       (preset !== undefined ? `\n\n${preset.prompt}` : ""),

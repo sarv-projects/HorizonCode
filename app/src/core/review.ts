@@ -63,7 +63,11 @@ import type { ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../contrac
 import { sha256Hex } from "./canon";
 import { sanitizeForDistill } from "./distill-sanitize";
 import type { CurateRefusal } from "./curator";
-import { closeReviewForkJob, openReviewForkJob } from "./review-fork-journal";
+import {
+  closeReviewForkJobGuarded,
+  openReviewForkJobGuarded,
+  type JournalJobRef,
+} from "./review-fork-journal";
 import { estimateStepCostUsd, enrichUsageCost } from "./usage-cost";
 import { metricContract } from "./metrics";
 
@@ -426,7 +430,8 @@ export type ReviewForkFailReason =
   | "spend-limit"
   | "provider-error"
   | "tool-outside-subset"
-  | "proposals-unparseable";
+  | "proposals-unparseable"
+  | "guard-refused";
 
 export interface ReviewForkRunDeps {
   provider: { name: string; stream(req: ProviderRequest): AsyncIterable<ProviderEvent> } | undefined;
@@ -662,12 +667,18 @@ export async function runReviewFork(spec: ReviewForkSpec, deps: ReviewForkRunDep
 
   // Dynamic import keeps the review <-> curator dependency one-way at module
   // load; `curate` is the ONLY application path (canonical rows, no workspace writes).
-  const { curate } = await import("./curator");
-  const curated = curate(proposals, {
-    stateDir: spec.stateDir,
-    transcriptIds: spec.transcriptIds,
-    ...(deps.now !== undefined ? { now: deps.now } : {}),
-  });
+  const { curateGuarded } = await import("./curator");
+  // Admit root is stateDir (proposals live there); sibling-state harnesses
+  // would look "outside" if we keyed Guard on workspace alone.
+  const curated = await curateGuarded(
+    proposals,
+    {
+      stateDir: spec.stateDir,
+      transcriptIds: spec.transcriptIds,
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+    },
+    spec.stateDir,
+  );
   result.status = "ok";
   result.storePath = curated.storePath;
   result.appended = curated.appended.map((row) => ({ digest: row.digest, kind: row.kind, title: row.title }));
@@ -839,7 +850,7 @@ export type DetachedReviewForkOutcome =
  * unchanged. The journal settles at the RESERVED amount — this is NOT a claim
  * of live-provider cost capture or invoice reconciliation.
  */
-export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedReviewForkOutcome {
+export async function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): Promise<DetachedReviewForkOutcome> {
   const jobId = `rfj-${randomHex(8)}-${deps.now ? Date.parse(deps.now()) : Date.now()}`;
   const reserveUsd =
     deps.reserveUsd !== undefined && Number.isFinite(deps.reserveUsd) && deps.reserveUsd > 0
@@ -861,19 +872,33 @@ export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedR
 
   // G-1: record the reservation in the durable journal BEFORE spawning, so a
   // worker crash is recoverable. The id is content-addressed; no random state.
-  const journalRef = openReviewForkJob(
-    deps.stateDir,
-    {
-      reservationId,
-      workspace: deps.workspace,
-      stateDir: deps.stateDir,
-      model: deps.model,
-      providerName: deps.providerName,
-      reserveUsd,
-      systemPrefixSha256: sha256Hex(deps.spec.systemPrefix),
-    },
-    deps.now,
-  );
+  // Under-admission (ruling 611): Guard fs.write before the journal append.
+  let journalRef: JournalJobRef;
+  try {
+    journalRef = await openReviewForkJobGuarded(
+      deps.stateDir,
+      {
+        reservationId,
+        workspace: deps.workspace,
+        stateDir: deps.stateDir,
+        model: deps.model,
+        providerName: deps.providerName,
+        reserveUsd,
+        systemPrefixSha256: sha256Hex(deps.spec.systemPrefix),
+      },
+      deps.now,
+      deps.stateDir,
+    );
+  } catch (err) {
+    try {
+      deps.spend.release(reservationId);
+    } catch {
+      /* best effort */
+    }
+    const detail = errorMessage(err);
+    deps.onNotice?.(`review fork: journal refused: ${detail}`);
+    return { status: "refused", reason: "guard-refused", detail };
+  }
 
   const job: ReviewForkWorkerJob = {
     v: 1,
@@ -891,6 +916,31 @@ export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedR
   const jobsDir = path.join(deps.stateDir, "review-fork-jobs");
   mkdirSync(jobsDir, { recursive: true, mode: 0o700 });
   const jobPath = path.join(jobsDir, `${jobId}.ndjson`);
+  // Under-admission (ruling 589): Guard fs.write before the worker job file.
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  // Scope the admit root to stateDir so a job under <.hz/state>/review-fork-jobs
+  // is workspace-scoped even when tests pass a sibling stateDir.
+  const jobRefused = await admitPredsOutWrite(jobPath, deps.stateDir);
+  if (jobRefused !== undefined) {
+    try {
+      await closeReviewForkJobGuarded(
+        deps.stateDir,
+        journalRef,
+        { kind: "failed", reason: jobRefused },
+        deps.now,
+        deps.stateDir,
+      );
+    } catch {
+      /* journal close best-effort after job admit deny */
+    }
+    try {
+      deps.spend.release(reservationId);
+    } catch {
+      /* best effort */
+    }
+    deps.onNotice?.(`review fork: job file refused: ${jobRefused}`);
+    return { status: "refused", reason: "guard-refused", detail: jobRefused };
+  }
   writeFileSync(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
 
   try {
@@ -901,7 +951,17 @@ export function spawnDetachedReviewFork(deps: DetachedReviewForkDeps): DetachedR
     // Spawn failed: close the journal as failed and release the reservation
     // so the ceiling is not held. A later recovery sees the terminal row and
     // will not try to settle an already-released reservation.
-    closeReviewForkJob(deps.stateDir, journalRef, { kind: "failed", reason: errorMessage(err) }, deps.now);
+    try {
+      await closeReviewForkJobGuarded(
+        deps.stateDir,
+        journalRef,
+        { kind: "failed", reason: errorMessage(err) },
+        deps.now,
+        deps.stateDir,
+      );
+    } catch {
+      /* journal close best-effort after spawn failure */
+    }
     try {
       deps.spend.release(reservationId);
     } catch {
@@ -975,13 +1035,14 @@ export async function runReviewForkWorker(
   // reconcile it exactly once. No live-provider cost capture is attempted.
   if (job.journalJobId !== undefined) {
     try {
-      closeReviewForkJob(
+      await closeReviewForkJobGuarded(
         job.stateDir,
         { jobId: job.journalJobId, reservationId: job.reservationId, reserveUsd: job.reserveUsd },
         result.spend.settled
           ? { kind: "settled", actualUsd: result.spend.actualUsd ?? job.reserveUsd }
           : { kind: "failed", reason: result.reason ?? result.detail ?? "worker did not settle the reservation" },
         deps.now,
+        job.stateDir,
       );
     } catch {
       /* a journal write failure must never fail an already-finished fork;

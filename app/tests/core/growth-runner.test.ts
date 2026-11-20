@@ -16,7 +16,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { canonicalJson, sha256Hex } from "../../src/contracts";
 import { curate, proposalsFilePath, type StoredProposalRow } from "../../src/core/curator";
@@ -138,6 +138,23 @@ describe("--from-postmortems", () => {
     expect(existsSync(proposalsFilePath(stateDir))).toBe(false); // nothing was written for a skip
   });
 
+  test("refuses before write when policy denies fs.write (ruling 561)", async () => {
+    const { workspace, stateDir } = fixture();
+    await onePostmortem(stateDir);
+    const kernelState = path.join(workspace, ".hzcode", "kernel");
+    mkdirSync(kernelState, { recursive: true });
+    writeFileSync(
+      path.join(kernelState, "policy.json"),
+      JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-from-postmortems" }]),
+      "utf8",
+    );
+
+    const c = capture();
+    expect(await runGrowCli(["--from-postmortems"], c.io, { workspace, stateDir })).toBe(4);
+    expect([...c.lines, ...c.errors].join("\n")).toMatch(/denied|test-deny-from-postmortems/i);
+    expect(existsSync(proposalsFilePath(stateDir))).toBe(false);
+  });
+
   test("--list is stable and reports PENDING from a live read of the store", async () => {
     const { workspace, stateDir } = fixture();
     await onePostmortem(stateDir);
@@ -152,6 +169,9 @@ describe("--from-postmortems", () => {
     expect(text).toContain(`PENDING ${row.digest}`);
     expect(text).toContain(row.title);
     expect(text).toContain("1 proposal(s), 0 applied, 1 pending");
+    // H-7 (ruling 620): contracted blocks are emitted on the CLI, not void-only.
+    expect(text).toContain("metric: grow list proposals");
+    expect(text).toContain("value: 1");
   });
 });
 

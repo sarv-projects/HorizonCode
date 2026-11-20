@@ -23,8 +23,13 @@ function goalsDir(workspace: string): string {
   return path.join(stateRoot(workspace), "goals");
 }
 
-function goalPath(workspace: string, sessionId: string): string {
+/** Absolute path of the per-session goal JSON (under-admission target). */
+export function sessionGoalPath(workspace: string, sessionId: string): string {
   return path.join(goalsDir(workspace), `${sessionId}.json`);
+}
+
+function goalPath(workspace: string, sessionId: string): string {
+  return sessionGoalPath(workspace, sessionId);
 }
 
 export function readSessionGoal(workspace: string, sessionId: string): SessionGoal | undefined {

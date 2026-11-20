@@ -1,20 +1,23 @@
 /** curator — archive-as-maximum (G-4) and distill hygiene at the proposal boundary (G-6). Ruling drafts 500/501. */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+  admitCuratorProposalsWrite,
   archiveProposalBatch,
   archiveReadView,
   curatorArchivePath,
+  curate,
+  curateGuarded,
   loadCuratorArchive,
   pinArchivedProposal,
   proposalDigest,
+  proposalsFilePath,
   resolveArchivedProposalPin,
   saveCuratorArchive,
   validateProposal,
-  curate,
 } from "../../src/core/curator";
 import {
   appendProposals,
@@ -274,4 +277,29 @@ describe("curator distill hygiene (G-6, ruling draft 501)", () => {
     if (!verdict.ok) return;
     expect(verdict.proposal.evidence).toEqual(["evt-1"]);
   });
+
+  test("admitCuratorProposalsWrite refuses deny before curate (ruling 607)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hz-curate-deny-"));
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(dir, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(dir, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-curator" }]),
+        "utf8",
+      );
+      const refused = await admitCuratorProposalsWrite(dir, dir);
+      expect(refused).toMatch(/denied|test-deny-curator|curator-proposals/i);
+      await expect(curateGuarded([proposal()], { stateDir: dir, now, transcriptIds: ["evt-1"] }, dir)).rejects.toThrow(
+        /denied|test-deny-curator|curator/i,
+      );
+      expect(existsSync(proposalsFilePath(dir))).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

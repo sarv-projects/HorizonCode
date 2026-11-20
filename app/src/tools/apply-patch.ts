@@ -53,7 +53,7 @@ import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffixes } from "../c
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { acquireLock, targetLockPath } from "../core/file-lock";
-import { recordChange } from "./change-journal";
+import { recordChangeGuarded } from "./change-journal";
 import { canonicalize, parse, type FileOp, type PatchChunk } from "./apply-patch-parser";
 import { isBinary, relPath, resolveRealTarget, type RealTarget } from "./helpers";
 import { noteRead } from "./read-ledger";
@@ -69,7 +69,7 @@ function msg(e: unknown): string {
 }
 
 /**
- * E-1: the same opt-in dirty checkpoint `edit` takes before its write, applied
+ * E-1: the same default-on dirty checkpoint `edit` takes before its write, applied
  * to each path a patch op is about to mutate (add / update / delete / move
  * destination). No flag → no-op; no dirt → no commit. Mirrors edit.ts exactly.
  */
@@ -415,7 +415,7 @@ async function applyOpLocked(
     const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
     const outcome = await writeAtomic(real, content, ctx, real);
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
-    recordChange(ctx.sessionId, { path: resolved, rel, before: null, afterSha256: sha256Hex(content), at: Date.now(), tool: "write" });
+    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before: null, afterSha256: sha256Hex(content), at: Date.now(), tool: "write" });
     noteRead(ctx, real);
     summary.added.push(rel);
     return { ok: true, fuzz: 0, checkpointNote };
@@ -438,7 +438,7 @@ async function applyOpLocked(
     } catch (e) {
       return { ok: false, error: `apply_patch: could not delete ${rel}: ${msg(e)}` };
     }
-    recordChange(ctx.sessionId, { path: resolved, rel, before: guarded.before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
+    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before: guarded.before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
     summary.deleted.push(rel);
     return { ok: true, fuzz: 0, checkpointNote };
   }
@@ -461,7 +461,7 @@ async function applyOpLocked(
     const checkpointNote = dirtyCheckpointPrefix(ctx, rel);
     const outcome = await writeAtomic(real, after, ctx, real);
     if (isRefused(outcome)) return { ok: false, error: outcome.refusal };
-    recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
+    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
     noteRead(ctx, real);
     summary.updated.push(rel);
     return { ok: true, fuzz, checkpointNote };
@@ -493,8 +493,8 @@ async function applyOpLocked(
   } catch (e) {
     return { ok: false, error: `apply_patch: moved content to ${destRel} but could not remove ${rel}: ${msg(e)}` };
   }
-  recordChange(ctx.sessionId, { path: destResolved, rel: destRel, before: destBefore, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
-  recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
+  await recordChangeGuarded(ctx.sessionId, { path: destResolved, rel: destRel, before: destBefore, afterSha256: sha256Hex(after), at: Date.now(), tool: "write" });
+  await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(""), at: Date.now(), tool: "write" });
   noteRead(ctx, destReal);
   summary.moved.push(`${rel} -> ${destRel}`);
   return { ok: true, fuzz, checkpointNote };
@@ -566,7 +566,7 @@ export const applyPatchTool: Tool = {
       if (summary.moved.length > 0) parts.push(`moved ${summary.moved.length} (${summary.moved.join(", ")})`);
 
       const lines = [`Patch applied with fuzz factor ${fuzz}`];
-      // E-1: surface any opt-in dirty-checkpoint notices from the mutated paths.
+      // E-1: surface any dirty-checkpoint notices from the mutated paths.
       if (checkpointNotes !== "") lines.push(checkpointNotes.trimEnd());
       if (parts.length > 0) lines.push(parts.join("; "));
       for (const w of warnings) {

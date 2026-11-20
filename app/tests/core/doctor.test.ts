@@ -13,6 +13,7 @@ import {
   checkRepoLicense,
   doctorFixSuggestion,
   doctorExitCode,
+  doctorPublication,
   runDoctor,
   renderDoctor,
   renderDoctorJson,
@@ -20,6 +21,8 @@ import {
   type DoctorEnv,
   type SpawnResult,
 } from "../../src/core/doctor";
+import { summarizeMemoryBanks } from "../../src/core/memory/store";
+import { summarizeMemoryTopics } from "../../src/core/memory/manifest";
 import { repoRoot } from "./helpers";
 import { CONFIG_ERROR_DOC } from "../../src/core/config";
 import { COMMITTED_CATALOG_SNAPSHOT } from "../../src/core/catalog/catalog";
@@ -78,6 +81,58 @@ test("session.kernel doctor line reports tool.call ↔ receipt pairing", () => {
   expect(line.detail).toMatch(/session tool\.call|fresh or transcript-only/);
 });
 
+test("provider.cache.hit doctor line reports hermetic probe availability", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "provider.cache.hit");
+  expect(["ok", "warn"]).toContain(line.status);
+  expect(line.detail).toContain("hermetic parse/compare OK");
+  expect(line.detail).toContain("live measure off");
+});
+
+test("provider.cache.hit warns when HZ_LIVE_CACHE=1 without keys", () => {
+  const checks = runDoctor(
+    fakeEnv({
+      env: {
+        LANG: "en_US.UTF-8",
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+        HZ_PROVIDER: "anthropic",
+        HZ_KERNEL_PIN: "off",
+        HZ_LIVE_CACHE: "1",
+      },
+    }),
+  );
+  const line = byId(checks, "provider.cache.hit");
+  expect(line.status).toBe("warn");
+  expect(line.detail).toContain("no provider key");
+});
+
+test("provider.responses.steer doctor line reports hermetic wire availability", () => {
+  const checks = runDoctor(fakeEnv());
+  const line = byId(checks, "provider.responses.steer");
+  expect(["ok", "warn"]).toContain(line.status);
+  expect(line.detail).toContain("hermetic wire protocol OK");
+  expect(line.detail).toContain("product steer off");
+});
+
+test("provider.responses.steer warns when HZ_RESPONSES_STEER=1 without OPENAI_API_KEY", () => {
+  const checks = runDoctor(
+    fakeEnv({
+      env: {
+        LANG: "en_US.UTF-8",
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+        HZ_PROVIDER: "openai",
+        HZ_KERNEL_PIN: "off",
+        HZ_RESPONSES_STEER: "1",
+      },
+    }),
+  );
+  const line = byId(checks, "provider.responses.steer");
+  expect(line.status).toBe("warn");
+  expect(line.detail).toContain("OPENAI_API_KEY unset");
+});
+
 test("memory.banks doctor line reports FTS partitions", () => {
   const checks = runDoctor(fakeEnv());
   const line = byId(checks, "memory.banks");
@@ -86,6 +141,24 @@ test("memory.banks doctor line reports FTS partitions", () => {
   expect(line.detail).toContain("user:");
   expect(line.detail).toContain("shared:");
   expect(line.detail).toContain("topics:");
+});
+
+test("doctorPublication contracts memory bank and topic counts (H-7)", () => {
+  const humanBanks = summarizeMemoryBanks(workspace, home);
+  const humanTopics = summarizeMemoryTopics(workspace);
+  const published = doctorPublication([], workspace, home);
+  expect(published.some((b) => b.includes("memory banks inspected"))).toBe(true);
+  expect(published.some((b) => b.includes("memory topic files"))).toBe(true);
+  expect(published.some((b) => b.includes("handoff store present"))).toBe(true);
+  for (const block of published.filter((b) => b.includes("memory ") || b.includes("handoff "))) {
+    expect(block).toContain("metric:");
+    expect(block).toContain("anchor:");
+    expect(block).toContain("population:");
+    expect(block).toContain("excludes:");
+    expect(block).toContain("value:");
+  }
+  expect(humanBanks).not.toContain("metric:");
+  expect(humanTopics).not.toContain("metric:");
 });
 
 test("handoff.store doctor line reports Engram db or missing file", () => {
@@ -114,6 +187,29 @@ test("worktree.pool and workspace.mount doctor lines", () => {
   );
   expect(byId(checks, "worktree.pool").detail).toContain("hz worktree pool");
   expect(byId(checks, "workspace.mount").status).toBe("ok");
+});
+
+test("harness.best_of_n doctor reports opt-in posture", () => {
+  const checks = runDoctor(
+    fakeEnv({
+      env: { ...fakeEnv().env, HZ_BEST_OF_N: "2", HZ_BEST_OF_N_PARALLEL: "1" },
+      run: (cmd, args) => {
+        if (cmd === "git" && args[0] === "worktree") {
+          return {
+            ok: true,
+            status: 0,
+            stdout: `worktree ${workspace}\nHEAD abcdefabcdefabcdefabcdefabcdefabcdefab\nbranch refs/heads/main\n`,
+            stderr: "",
+          };
+        }
+        return OKRUN(cmd);
+      },
+    }),
+  );
+  const line = byId(checks, "harness.best_of_n");
+  expect(line.status).toBe("ok");
+  expect(line.detail).toContain("HZ_BEST_OF_N=2");
+  expect(line.detail).toContain("parallel");
 });
 
 test("workspace.mount warns on nfs", () => {
@@ -148,8 +244,8 @@ test("state.durability documents JSONL fsync; HZ_JSONL_FSYNC=0 warns", () => {
   expect(byId(off, "state.durability").status).toBe("warn");
 });
 
-test("oauth token line when stored", () => {
-  writeOAuthToken(
+test("oauth token line when stored", async () => {
+  await writeOAuthToken(
     { provider: "myllm", accessToken: "secret", obtainedAt: new Date().toISOString(), expiresAt: "2099-01-01T00:00:00.000Z" },
     home,
   );
@@ -364,9 +460,18 @@ test("effect.host doctor distinguishes provisional sandbox-wrap projection", () 
   if (process.platform === "linux") {
     expect(check.detail).toContain("projected Linux sandbox-wrap default");
     expect(check.detail).toContain("HZ_EFFECT_HOST_KERNEL=default");
+    expect(check.detail).toContain("prefers =require when trusted");
   } else {
     expect(check.detail).toContain("HZ_EFFECT_HOST_KERNEL unset");
   }
+});
+
+test("effect.host doctor honesty names trusted-require createRuntime spine (ruling 540)", () => {
+  const off = byId(runDoctor(fakeEnv()), "effect.host");
+  expect(off.detail).toContain("=require when the trusted Rust kernel is active");
+  expect(off.detail).toContain("not probed");
+  const fix = doctorFixSuggestion("effect.host", {});
+  expect(fix?.some((l) => l.includes("prefers =require when trusted Rust kernel"))).toBe(true);
 });
 
 test("effect.postimage.replay doctor names ast_edit kernel route (ruling 320)", () => {
@@ -705,13 +810,21 @@ describe("the real CLI", () => {
     Bun.spawnSync(["bun", main, ...args], { env: { PATH: process.env.PATH ?? "", HOME: home, LANG: "C.UTF-8", ...env }, stdout: "pipe", stderr: "pipe" });
 
   test("--json is machine readable, exits 0, and the key is not in it", () => {
-    const r = run(["doctor", "--json", "--workspace", workspace], { ANTHROPIC_API_KEY: "sk-cli-SECRET-999" });
+    // Pin provider: Bun may load a repo `.env` that sets HZ_PROVIDER=openai and
+    // would otherwise fail closed on a missing OPENAI_API_KEY in this hermetic env.
+    const r = run(["doctor", "--json", "--workspace", workspace], {
+      ANTHROPIC_API_KEY: "sk-cli-SECRET-999",
+      HZ_PROVIDER: "anthropic",
+      // Hermetic: ignore repo kernel.sha256 drift vs local release binary.
+      HZ_KERNEL_PIN: "off",
+    });
     expect(r.exitCode).toBe(0);
     const text = r.stdout.toString();
     expect(text).not.toContain("sk-cli-SECRET-999");
-    const parsed = JSON.parse(text) as { ok: boolean; checks: Array<{ id: string }> };
+    const parsed = JSON.parse(text) as { ok: boolean; checks: Array<{ id: string }>; published?: string[] };
     expect(parsed.ok).toBe(true);
     expect(parsed.checks.map((c) => c.id)).toContain("kernel.selftest");
+    expect(parsed.published?.some((b) => b.includes("saved allows exact-target rows"))).toBe(true);
   });
   test("a broken config makes the command exit 1 and print FAIL", () => {
     writeConfig("{ nope");

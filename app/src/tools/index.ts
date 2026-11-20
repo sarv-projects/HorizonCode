@@ -4,13 +4,16 @@ import type { Tool, ToolExposure, ToolSpec } from "../contracts";
 // Dynamic tools (MCP, docs/09 §4.7) live in their own registry; the static list
 // is the builtins. One lookup order for the whole loop (getTool/toolSpecs).
 import { getMcpTool, mcpToolSpecs } from "../core/mcp/registry";
+import { askUserTool } from "./ask-user";
 import { agentTool } from "./agent";
+import { bestOfNTool } from "./best-of-n";
 import { applyPatchTool } from "./apply-patch";
 import { astEditTool } from "./ast-edit";
 import { astSearchTool } from "./ast-search";
 import { codemodeTool } from "./codemode";
 import { debugTool } from "./debug";
 import { editTool } from "./edit";
+import { gitBlameTool, gitDiffTool, gitLogTool, gitStatusTool } from "./git-read";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
 import { interactiveExecTool } from "./interactive-exec";
@@ -23,10 +26,13 @@ import { presentTool } from "./present";
 import { previewTool } from "./preview";
 import { readTool } from "./read";
 import { repoMapTool } from "./repo-map";
+import { shellBgTool } from "./shell-bg";
 import { shellTool } from "./shell";
 import { todoTool, todoWriteTool } from "./todo";
 import { toolSearchTool } from "./tool-search";
 import { undoTool } from "./undo";
+import { webFetchTool } from "./web-fetch";
+import { webSearchTool } from "./web-search";
 import { writeTool } from "./write";
 
 export const tools: Tool[] = [
@@ -38,10 +44,17 @@ export const tools: Tool[] = [
   globTool,
   repoMapTool,
   presentTool,
+  askUserTool,
   shellTool,
+  shellBgTool,
+  gitStatusTool,
+  gitDiffTool,
+  gitLogTool,
+  gitBlameTool,
   todoTool,
   todoWriteTool,
   agentTool,
+  bestOfNTool,
   codemodeTool,
   previewTool,
   applyPatchTool,
@@ -58,6 +71,8 @@ export const tools: Tool[] = [
   toolSearchTool,
   astSearchTool,
   astEditTool,
+  webFetchTool,
+  webSearchTool,
 ];
 
 /** The seven base tools; the delegation tool is deliberately excluded here. */

@@ -7,6 +7,8 @@
 
 import type { ChatMsg, ToolCall } from "../../../contracts";
 import type { ToolFormat } from "../../config";
+import { textFromChatContent } from "../../chat-content";
+import { toolResultContent } from "../tool-result-content";
 
 function parseArgs(args: string): Record<string, unknown> {
   const t = args.trim();
@@ -62,7 +64,7 @@ export function rewriteHistoryForTextToolconv(messages: ChatMsg[], dialect: Tool
     if (msg.role !== "tool" || !msg.toolCallId || !msg.toolName) continue;
     toolResultsById.set(msg.toolCallId, {
       name: msg.toolName,
-      content: msg.content && msg.content !== "" ? msg.content : "(no output)",
+      content: toolResultContent(msg.content),
     });
   }
 
@@ -71,7 +73,7 @@ export function rewriteHistoryForTextToolconv(messages: ChatMsg[], dialect: Tool
 
   for (const msg of messages) {
     if (msg.role === "system" || msg.role === "user") {
-      out.push({ role: msg.role, content: msg.content ?? "" });
+      out.push({ role: msg.role, content: textFromChatContent(msg.content) });
       continue;
     }
     if (msg.role === "tool") continue;

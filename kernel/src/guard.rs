@@ -1,5 +1,15 @@
 //! Guard: authority evaluation (deny > lease > ask > allow) plus in-memory leases.
 //!
+//! H-4 / ruling 624: every `allow` decision that admits a mutation MUST cite a
+//! one-use lease id (policy allow and allowlist allow mint a bound lease for
+//! *this* check; grants already did). The lease is citation evidence for the
+//! receipt/OwnerLog — it is not re-held for a second effect.
+//!
+//! G1 / ruling 637: docs/11 forbids an `Allow` *variant* — admission is always
+//! an Ask that a lease resolves. The frozen wire still emits `decision:"allow"`
+//! for compatibility; additive `g1:"ask"|"deny"` carries the Ask/Deny-only
+//! vocabulary (`allow` → `g1:"ask"` with required `leaseId`).
+//!
 //! Policy comes from `<state-dir>/policy.json` when present and well formed,
 //! otherwise from `DEFAULT_POLICY` (replicated verbatim from contracts.ts).
 //!
@@ -13,7 +23,9 @@
 //!   1b. a structural `sensitive-write` rule asks for any `fs.write` to a git
 //!      hook/config, `.env*`, lockfile, CI workflow, Makefile/Dockerfile or
 //!      shell profile — even when a policy (or the workspace default) says
-//!      `allow` — and cannot be waived by a lease or grant;
+//!      `allow` — and cannot be waived by a wildcard lease or grant; an
+//!      exact-pattern one-use lease (human "once" approval) is consumed and
+//!      allows the re-check (ruling 659);
 //!   2. else an unexpired, matching lease grants `allow`;
 //!   3. else any matching `ask` rule asks (an ask beats a matching allow);
 //!   4. else any matching `allow` rule grants `allow`;
@@ -67,6 +79,38 @@ const MAX_GRANTS: usize = 256;
 /// for at most this long, and never past the grant it came from.
 const BOUND_LEASE_MS: i64 = 120_000;
 
+/// H-31 / ruling 636: workspace identity stamped onto a held lease at mint so
+/// remount/symlink swaps cannot consume authority under a different `(dev,ino)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaseWorkspaceBinding {
+    pub root: String,
+    pub device: u64,
+    pub inode: u64,
+}
+
+impl LeaseWorkspaceBinding {
+    pub fn from_binding(binding: &crate::workspace_binding::WorkspaceBinding) -> Self {
+        Self {
+            root: binding.root.to_string_lossy().into_owned(),
+            device: binding.device,
+            inode: binding.inode,
+        }
+    }
+
+    /// Re-stat the stamped root; true only when live identity still matches.
+    pub fn still_valid(&self) -> bool {
+        match crate::workspace_binding::WorkspaceBinding::capture(Path::new(&self.root)) {
+            Ok(live) => {
+                live.device == self.device
+                    && live.inode == self.inode
+                    && live.root.to_string_lossy() == self.root
+            }
+            Err(_) => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Lease {
@@ -82,6 +126,13 @@ pub struct Lease {
     /// so a subagent child cannot inherit its parent session's "always" grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// Approval-path attribution (`human`); not cryptographic human identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// Launch-time workspace identity at mint (ruling **636**). Absent on
+    /// legacy leases minted before binding existed — those stay consultable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_binding: Option<LeaseWorkspaceBinding>,
 }
 
 /// A session **grant**: the "always" answer, in the shape docs/11 L7 gives it —
@@ -100,6 +151,8 @@ pub struct Grant {
     pub expiry: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 
 /// The action kinds this kernel's guard vocabulary knows. The protocol refuses
@@ -160,13 +213,52 @@ pub struct GuardDecision {
     pub decision: String,
     pub reason: String,
     pub lease_id: Option<String>,
+    /// H-31 / ruling 629: sha256 over kind|scope|target|(root,device,inode).
+    pub intent_digest: Option<String>,
+    /// Launch-time workspace identity when the kernel is bound (H-31).
+    pub workspace_binding: Option<crate::workspace_binding::WorkspaceBinding>,
 }
 
 impl GuardDecision {
+    /// G1 Ask/Deny-only projection (ruling **637**): frozen `allow` → `ask`.
+    pub fn g1_decision(&self) -> &'static str {
+        match self.decision.as_str() {
+            "deny" => "deny",
+            _ => "ask", // allow (lease-resolved) and ask both map to Ask
+        }
+    }
+
+    fn g1_wire_protocol_v2_enabled() -> bool {
+        std::env::var("HZ_GUARD_G1_WIRE")
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes"
+                )
+            })
+            .unwrap_or(false)
+    }
+
     pub fn to_json(&self) -> Value {
-        let mut out = json!({ "decision": self.decision, "reason": self.reason });
+        let g1 = self.g1_decision();
+        let wire_decision = if Self::g1_wire_protocol_v2_enabled() {
+            g1.to_string()
+        } else {
+            self.decision.clone()
+        };
+        let mut out = json!({
+            "decision": wire_decision,
+            "reason": self.reason,
+            "g1": g1,
+        });
         if let (Some(lease_id), Value::Object(map)) = (&self.lease_id, &mut out) {
             map.insert("leaseId".to_string(), json!(lease_id));
+        }
+        if let (Some(digest), Value::Object(map)) = (&self.intent_digest, &mut out) {
+            map.insert("intentDigest".to_string(), json!(digest));
+        }
+        if let (Some(binding), Value::Object(map)) = (&self.workspace_binding, &mut out) {
+            map.insert("workspaceBinding".to_string(), binding.to_json());
         }
         out
     }
@@ -190,6 +282,9 @@ pub struct Guard {
     state_dir: PathBuf,
     leases: Mutex<Vec<Lease>>,
     grants: Mutex<Vec<Grant>>,
+    /// H-31 / ruling 629: optional launch-time `(root, device, inode)` folded
+    /// into every decision's `intentDigest`.
+    workspace_binding: Option<crate::workspace_binding::WorkspaceBinding>,
 }
 
 impl Guard {
@@ -199,11 +294,75 @@ impl Guard {
             state_dir: state_dir.to_path_buf(),
             leases: Mutex::new(Vec::new()),
             grants: Mutex::new(Vec::new()),
+            workspace_binding: None,
         }
+    }
+
+    /// Bind this Guard to a launch-time workspace identity (H-31).
+    pub fn set_workspace_binding(
+        &mut self,
+        binding: Option<crate::workspace_binding::WorkspaceBinding>,
+    ) {
+        self.workspace_binding = binding;
     }
 
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
+    }
+
+    /// Annotate a raw decision with intent digest + workspace binding (H-31).
+    fn annotate(
+        &self,
+        mut decision: GuardDecision,
+        action: &GuardAction,
+        scope: &str,
+    ) -> GuardDecision {
+        decision.workspace_binding = self.workspace_binding.clone();
+        decision.intent_digest = Some(intent_digest_hex(
+            action,
+            scope,
+            self.workspace_binding.as_ref(),
+        ));
+        decision
+    }
+
+    /// Public check: annotate every decision with H-31 intent digest + binding.
+    pub fn check(
+        &self,
+        action: &GuardAction,
+        scope: Option<&str>,
+        caller_leases: &[Lease],
+        session_id: Option<&str>,
+    ) -> Result<GuardDecision, PolicyError> {
+        // Derive scope from target vs workspace binding — never trust a caller
+        // claim of "workspace" for a path outside the bound root (ruling 658).
+        let scope_str = self.derive_scope(action, scope);
+        let decision =
+            self.check_unguarded(action, Some(&scope_str), caller_leases, session_id)?;
+        Ok(self.annotate(decision, action, &scope_str))
+    }
+
+    /// Authority-side scope for fs.* path actions when a workspace is bound.
+    /// A caller JSON-RPC `scope: "workspace"` cannot widen an outside target.
+    fn derive_scope(&self, action: &GuardAction, claimed: Option<&str>) -> String {
+        let claimed = claimed.filter(|s| !s.is_empty());
+        let path_kind = matches!(
+            action.kind.as_str(),
+            "fs.read" | "fs.write" | "fs.edit" | "fs.delete" | "fs.rename"
+        );
+        if path_kind {
+            if let Some(binding) = &self.workspace_binding {
+                if !path_contained_in(&binding.root, Path::new(&action.target)) {
+                    return "outside".to_string();
+                }
+                return match claimed {
+                    Some("outside") => "outside".to_string(),
+                    Some(s) => s.to_string(),
+                    None => "workspace".to_string(),
+                };
+            }
+        }
+        claimed.unwrap_or("*").to_string()
     }
 
     /// Loaded fresh on every check so policy edits apply without a restart.
@@ -218,7 +377,7 @@ impl Guard {
         }
     }
 
-    pub fn check(
+    fn check_unguarded(
         &self,
         action: &GuardAction,
         scope: Option<&str>,
@@ -234,6 +393,8 @@ impl Guard {
                 decision: "deny".to_string(),
                 reason: unknown_kind_refusal(&action.kind),
                 lease_id: None,
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
 
@@ -253,6 +414,8 @@ impl Guard {
                     action.target
                 ),
                 lease_id: None,
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
         if action.kind == "shell.exec" && shell_references_kernel_state(&action.target, &self.state_dir)
@@ -264,6 +427,8 @@ impl Guard {
                     self.state_dir.display()
                 ),
                 lease_id: None,
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
 
@@ -299,18 +464,29 @@ impl Guard {
                                     policy.fingerprint()
                                 ),
                                 lease_id: None,
-                            });
+                intent_digest: None,
+                workspace_binding: None,
+            });
                         }
                         Some(Decision::Allow) => {
+                            let lease = self.mint_allow_lease(
+                                &action.kind,
+                                &action.target,
+                                session_id,
+                                now_millis(),
+                            );
                             return Ok(GuardDecision {
                                 decision: "allow".to_string(),
                                 reason: format!(
-                                    "allowlist allow: {} matches an allow rule (fingerprint {})",
+                                    "allowlist allow: {} matches an allow rule (fingerprint {}; minted one-use lease {})",
                                     action.target,
-                                    policy.fingerprint()
+                                    policy.fingerprint(),
+                                    lease.lease_id
                                 ),
-                                lease_id: None,
-                            });
+                                lease_id: Some(lease.lease_id),
+                intent_digest: None,
+                workspace_binding: None,
+            });
                         }
                         // Ask or None: no allowlist admission — fall through to
                         // the existing policy/lease/grant/ask flow unchanged.
@@ -358,13 +534,28 @@ impl Guard {
                                 source.as_str()
                             ),
                             lease_id: None,
-                        });
+                intent_digest: None,
+                workspace_binding: None,
+            });
                     }
                     egress::EgressDecision::Allow => {
+                        // H-4 / G1 (rulings 624, 637, 662): every allow cites a
+                        // one-use lease — same as execpolicy Allow + policy allow.
+                        let lease = self.mint_allow_lease(
+                            &action.kind,
+                            &action.target,
+                            session_id,
+                            now_millis(),
+                        );
                         return Ok(GuardDecision {
                             decision: "allow".to_string(),
-                            reason: format!("egress allow: {} matches an allow rule", origin_label),
-                            lease_id: None,
+                            reason: format!(
+                                "egress allow: {} matches an allow rule (minted one-use lease {})",
+                                origin_label, lease.lease_id
+                            ),
+                            lease_id: Some(lease.lease_id),
+                            intent_digest: None,
+                            workspace_binding: None,
                         });
                     }
                     egress::EgressDecision::AllowAndRecord { would } => {
@@ -401,23 +592,8 @@ impl Guard {
                     deny.kind, deny.scope, action.kind, action.target
                 ),
                 lease_id: None,
-            });
-        }
-
-        // H6: structural sensitive-write rule. It sits AFTER the policy deny
-        // check (a deny still wins) and BEFORE leases/grants/allow, so neither a
-        // workspace-allow policy nor a held "always" lease can silently rewrite a
-        // path that decides what code runs or what credentials are exposed. It is
-        // independent of leases by construction: reaching this branch returns
-        // before any lease is consulted (and therefore never consumes one).
-        if action.kind == "fs.write" && is_sensitive_write(Path::new(&action.target)) {
-            return Ok(GuardDecision {
-                decision: "ask".to_string(),
-                reason: format!(
-                    "sensitive-write: {} is a sensitive path (git hooks/config, env file, lockfile, CI workflow, container/build file or shell profile); explicit approval required",
-                    action.target
-                ),
-                lease_id: None,
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
 
@@ -428,6 +604,36 @@ impl Guard {
         // compatibility (the protocol still validates its shape) and is
         // deliberately ignored here.
         let _ = caller_leases;
+
+        // H6 + human-approval re-check (ruling 659): sensitive-write still
+        // blocks policy allow, wildcard leases, and grants. An EXACT-pattern
+        // one-use lease (human "once" approval for this target) is consumed
+        // here so OwnerLog re-check under EffectHost=require can proceed.
+        if action.kind == "fs.write" && is_sensitive_write(Path::new(&action.target)) {
+            if let Some(lease) = self.take_exact_matching_lease(action, session_id, now_ms) {
+                return Ok(GuardDecision {
+                    decision: "allow".to_string(),
+                    reason: format!(
+                        "lease {} (exact) covers sensitive-write {} on {} (consumed)",
+                        lease.lease_id, action.kind, action.target
+                    ),
+                    lease_id: Some(lease.lease_id),
+                    intent_digest: None,
+                    workspace_binding: None,
+                });
+            }
+            return Ok(GuardDecision {
+                decision: "ask".to_string(),
+                reason: format!(
+                    "sensitive-write: {} is a sensitive path (git hooks/config, env file, lockfile, CI workflow, container/build file or shell profile); explicit approval required",
+                    action.target
+                ),
+                lease_id: None,
+                intent_digest: None,
+                workspace_binding: None,
+            });
+        }
+
         // docs/11 L1 reduced form: a lease is consumed at most once. The first
         // matching check takes the lease OUT of the held table and returns its
         // id with the allow; a second identical action finds no lease and falls
@@ -440,6 +646,8 @@ impl Guard {
                     lease.lease_id, lease.pattern, action.kind, action.target
                 ),
                 lease_id: Some(lease.lease_id),
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
 
@@ -460,7 +668,9 @@ impl Guard {
                         grant.lease_id, action.kind, action.target, lease.lease_id
                     ),
                     lease_id: Some(lease.lease_id),
-                });
+                intent_digest: None,
+                workspace_binding: None,
+            });
             }
         }
 
@@ -474,6 +684,8 @@ impl Guard {
                     ask.kind, ask.scope, action.kind, action.target
                 ),
                 lease_id: None,
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
 
@@ -490,15 +702,23 @@ impl Guard {
                         action.kind, action.target
                     ),
                     lease_id: None,
-                });
+                intent_digest: None,
+                workspace_binding: None,
+            });
             }
+            // H-4 / ruling 624: policy allow still admits, but every allow
+            // cites a fresh one-use lease bound to this exact effect. The mint
+            // is not held — same shape as grant-minted leases (L3 reduced).
+            let lease = self.mint_allow_lease(&action.kind, &action.target, session_id, now_ms);
             return Ok(GuardDecision {
                 decision: "allow".to_string(),
                 reason: format!(
-                    "policy allow: {} @ {} (action {} on {})",
-                    allow.kind, allow.scope, action.kind, action.target
+                    "policy allow: {} @ {} (action {} on {}; minted one-use lease {})",
+                    allow.kind, allow.scope, action.kind, action.target, lease.lease_id
                 ),
-                lease_id: None,
+                lease_id: Some(lease.lease_id),
+                intent_digest: None,
+                workspace_binding: None,
             });
         }
 
@@ -509,7 +729,9 @@ impl Guard {
                 action.kind, scope, action.kind, action.target
             ),
             lease_id: None,
-        })
+                intent_digest: None,
+                workspace_binding: None,
+            })
     }
 
     /// Append an allowlist prefix rule at runtime (FEAT-002). File-locked
@@ -546,13 +768,25 @@ impl Guard {
     /// Create and remember a lease; returns it with a fresh uuid v4 id. `owner`
     /// is the session the lease is minted for; a `None` owner mints a legacy
     /// owner-less lease that stays globally consultable (see `Lease::owner`).
-    pub fn issue_lease(&self, kind: &str, pattern: &str, ttl_ms: u64, owner: Option<String>) -> Lease {
+    pub fn issue_lease(
+        &self,
+        kind: &str,
+        pattern: &str,
+        ttl_ms: u64,
+        owner: Option<String>,
+        principal: Option<String>,
+    ) -> Lease {
         let lease = Lease {
             lease_id: Uuid::new_v4().to_string(),
             kind: kind.to_string(),
             pattern: pattern.to_string(),
             expiry: iso_from_unix_millis(now_millis() + clamped_ttl(ttl_ms)),
             owner,
+            principal,
+            workspace_binding: self
+                .workspace_binding
+                .as_ref()
+                .map(LeaseWorkspaceBinding::from_binding),
         };
         if let Ok(mut held) = self.leases.lock() {
             let now_ms = now_millis();
@@ -568,13 +802,21 @@ impl Guard {
     /// Create and remember a session grant (docs/11 L7 reduced form). Same
     /// validation and window as `issue_lease`; its own table, so it is never
     /// consumed by a check.
-    pub fn issue_grant(&self, kind: &str, pattern: &str, ttl_ms: u64, owner: Option<String>) -> Grant {
+    pub fn issue_grant(
+        &self,
+        kind: &str,
+        pattern: &str,
+        ttl_ms: u64,
+        owner: Option<String>,
+        principal: Option<String>,
+    ) -> Grant {
         let grant = Grant {
             lease_id: Uuid::new_v4().to_string(),
             kind: kind.to_string(),
             pattern: pattern.to_string(),
             expiry: iso_from_unix_millis(now_millis() + clamped_ttl(ttl_ms)),
             owner,
+            principal,
         };
         if let Ok(mut held) = self.grants.lock() {
             let now_ms = now_millis();
@@ -598,7 +840,40 @@ impl Guard {
                 && lease.kind == action.kind
                 && pattern_matches(&lease.pattern, &action.target)
         })?;
-        Some(held.remove(index))
+        let lease = held.remove(index);
+        // H-31 / ruling 636: remount or rename-swap of the stamped workspace
+        // burns the held lease (removed above) and refuses authority.
+        if let Some(ref stamp) = lease.workspace_binding {
+            if !stamp.still_valid() {
+                return None;
+            }
+        }
+        Some(lease)
+    }
+
+    /// Exact-pattern one-use lease only (no trailing `*` / prefix match).
+    /// Used so human "once" approvals can clear H6 sensitive-write on re-check
+    /// without letting a broad `*` lease or grant waive the structural rule.
+    fn take_exact_matching_lease(
+        &self,
+        action: &GuardAction,
+        session_id: Option<&str>,
+        now_ms: i64,
+    ) -> Option<Lease> {
+        let mut held = self.leases.lock().ok()?;
+        held.retain(|lease| !lease.is_expired(now_ms));
+        let index = held.iter().position(|lease| {
+            lease_visible_to(lease, session_id)
+                && lease.kind == action.kind
+                && lease.pattern == action.target
+        })?;
+        let lease = held.remove(index);
+        if let Some(ref stamp) = lease.workspace_binding {
+            if !stamp.still_valid() {
+                return None;
+            }
+        }
+        Some(lease)
     }
 
     /// Read-only: the newest active grant covering `action` (display / hydrate).
@@ -646,12 +921,69 @@ impl Guard {
             pattern: target.to_string(),
             expiry: iso_from_unix_millis(now_ms + ttl),
             owner: grant.owner.clone(),
+            principal: grant.principal.clone(),
+            workspace_binding: self
+                .workspace_binding
+                .as_ref()
+                .map(LeaseWorkspaceBinding::from_binding),
+        }
+    }
+
+    /// H-4 / ruling 624: mint a one-use lease citation for a policy or
+    /// allowlist `allow`. Not held — same non-replay rule as `mint_bound_lease`.
+    fn mint_allow_lease(
+        &self,
+        kind: &str,
+        target: &str,
+        session_id: Option<&str>,
+        now_ms: i64,
+    ) -> Lease {
+        Lease {
+            lease_id: Uuid::new_v4().to_string(),
+            kind: kind.to_string(),
+            pattern: target.to_string(),
+            expiry: iso_from_unix_millis(now_ms + BOUND_LEASE_MS),
+            owner: session_id.map(|s| s.to_string()),
+            principal: None,
+            workspace_binding: self
+                .workspace_binding
+                .as_ref()
+                .map(LeaseWorkspaceBinding::from_binding),
         }
     }
 }
 
 fn rule_answer_matches(rule: &PolicyRule, kind: &str, scope: &str) -> bool {
     (rule.kind == kind || rule.kind == "*") && (rule.scope == scope || rule.scope == "*")
+}
+
+/// H-31 / ruling 629: decision digest binds kind, scope, target, and optional
+/// `(root, device, inode)` so a remount/symlink swap cannot inherit authority
+/// citations that were minted against a different workspace identity.
+fn intent_digest_hex(
+    action: &GuardAction,
+    scope: &str,
+    binding: Option<&crate::workspace_binding::WorkspaceBinding>,
+) -> String {
+    let payload = match binding {
+        Some(b) => serde_json::json!({
+            "kind": action.kind,
+            "scope": scope,
+            "target": action.target,
+            "workspaceBinding": {
+                "root": b.root.to_string_lossy(),
+                "device": b.device,
+                "inode": b.inode,
+            }
+        }),
+        None => serde_json::json!({
+            "kind": action.kind,
+            "scope": scope,
+            "target": action.target,
+            "workspaceBinding": null
+        }),
+    };
+    crate::canon::sha256_hex(&crate::canon::canonical_json(&payload))
 }
 
 /* ----------------------------- policy loading ----------------------------- */
@@ -804,10 +1136,16 @@ fn default_policy() -> Vec<PolicyRule> {
 /// visible to a check that carries the same session id, which is what stops a
 /// subagent child from inheriting its parent session's grant (docs/09
 /// R-tools-32: children re-enter approval).
+fn owner_visible_to_session(owner: &str, session_id: Option<&str>) -> bool {
+    session_id
+        .map(|id| id == owner || owner == format!("human:{id}"))
+        .unwrap_or(false)
+}
+
 fn lease_visible_to(lease: &Lease, session_id: Option<&str>) -> bool {
     match &lease.owner {
         None => true,
-        Some(owner) => session_id.map(|id| id == owner).unwrap_or(false),
+        Some(owner) => owner_visible_to_session(owner, session_id),
     }
 }
 
@@ -815,7 +1153,7 @@ fn lease_visible_to(lease: &Lease, session_id: Option<&str>) -> bool {
 fn grant_visible_to(grant: &Grant, session_id: Option<&str>) -> bool {
     match &grant.owner {
         None => true,
-        Some(owner) => session_id.map(|id| id == owner).unwrap_or(false),
+        Some(owner) => owner_visible_to_session(owner, session_id),
     }
 }
 
@@ -1063,7 +1401,6 @@ mod tests {
         dir
     }
 
-    #[cfg(unix)]
     fn write_decision(guard: &Guard, target: &Path) -> GuardDecision {
         guard
             .check(
@@ -1296,19 +1633,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn sensitive_write_cannot_be_waived_by_a_lease_or_grant() {
+    fn sensitive_write_cannot_be_waived_by_a_wildcard_lease_or_grant() {
         let state = scratch("state-sensitive-lease");
         let workspace = scratch("ws-sensitive-lease");
         write_allow_all_policy(&state);
         let guard = Guard::new(&state);
 
-        let lease = guard.issue_lease("fs.write", "*", 60_000, None);
+        let lease = guard.issue_lease("fs.write", "*", 60_000, None, None);
         let decision = write_decision(&guard, &workspace.join("package.json"));
         assert_eq!(decision.decision, "ask", "{}", decision.reason);
         assert!(decision.reason.contains("sensitive-write"));
 
-        // The structural branch ran BEFORE lease consultation, so the lease is
-        // still held: an ordinary write consumes it.
+        // Wildcard lease was not consumed by sensitive-write: ordinary write uses it.
         let ordinary = write_decision(&guard, &workspace.join("notes.txt"));
         assert_eq!(ordinary.decision, "allow", "{}", ordinary.reason);
         assert!(
@@ -1318,13 +1654,87 @@ mod tests {
         );
 
         // A grant is a pre-authorisation, not a bypass: it too cannot lift it.
-        guard.issue_grant("fs.write", "*", 60_000, None);
+        guard.issue_grant("fs.write", "*", 60_000, None, None);
         let decision = write_decision(&guard, &workspace.join(".env"));
         assert_eq!(decision.decision, "ask", "{}", decision.reason);
         assert!(decision.reason.contains("sensitive-write"));
 
         let _ = fs::remove_dir_all(&state);
         let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sensitive_write_exact_human_lease_is_consumed_on_recheck() {
+        let state = scratch("state-sensitive-exact");
+        let workspace = scratch("ws-sensitive-exact");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let target = workspace.join("package.json");
+        let target_s = target.to_string_lossy().to_string();
+
+        let ask = write_decision(&guard, &target);
+        assert_eq!(ask.decision, "ask", "{}", ask.reason);
+        assert!(ask.reason.contains("sensitive-write"));
+
+        let lease = guard.issue_lease("fs.write", &target_s, 60_000, None, None);
+        let allowed = write_decision(&guard, &target);
+        assert_eq!(allowed.decision, "allow", "{}", allowed.reason);
+        assert_eq!(allowed.lease_id.as_deref(), Some(lease.lease_id.as_str()));
+        assert!(allowed.reason.contains("exact"), "{}", allowed.reason);
+
+        // One-use: second check asks again.
+        let again = write_decision(&guard, &target);
+        assert_eq!(again.decision, "ask", "{}", again.reason);
+        assert!(again.reason.contains("sensitive-write"));
+
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn caller_workspace_scope_cannot_widen_outside_target() {
+        let state = scratch("state-scope-bypass");
+        let workspace = scratch("ws-scope-bypass");
+        // Default policy: fs.write@workspace=allow, fs.write@outside=ask.
+        let mut guard = Guard::new(&state);
+        let binding = crate::workspace_binding::WorkspaceBinding::capture(&workspace)
+            .expect("workspace binding");
+        guard.set_workspace_binding(Some(binding));
+
+        let outside_dir = scratch("outside-scope-bypass");
+        let outside = outside_dir.join("hosts");
+        fs::write(&outside, "x").expect("outside file");
+        let action = GuardAction {
+            kind: "fs.write".to_string(),
+            target: outside.to_string_lossy().to_string(),
+        };
+        // Caller fraudulently claims workspace — derived scope must be outside → ask.
+        let decision = guard
+            .check(&action, Some("workspace"), &[], None)
+            .expect("check");
+        assert_eq!(
+            decision.decision, "ask",
+            "outside target must ask under default policy, not allow: {}",
+            decision.reason
+        );
+        let digest_workspace =
+            intent_digest_hex(&action, "workspace", guard.workspace_binding.as_ref());
+        let digest_outside =
+            intent_digest_hex(&action, "outside", guard.workspace_binding.as_ref());
+        assert_eq!(
+            decision.intent_digest.as_deref(),
+            Some(digest_outside.as_str())
+        );
+        assert_ne!(
+            decision.intent_digest.as_deref(),
+            Some(digest_workspace.as_str())
+        );
+
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&workspace);
+        let _ = fs::remove_dir_all(&outside_dir);
     }
 
     #[cfg(unix)]
@@ -1393,5 +1803,219 @@ mod tests {
             decision.reason
         );
         let _ = fs::remove_dir_all(&state);
+    }
+
+    /* ---------------------- H-4: lease-on-allow ---------------------- */
+
+    #[test]
+    fn intent_digest_changes_when_workspace_binding_changes() {
+        let state = scratch("state-intent-digest");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        write_allow_all_policy(&state);
+        let ws_a = scratch("ws-intent-a");
+        let ws_b = scratch("ws-intent-b");
+        let binding_a = crate::workspace_binding::WorkspaceBinding::capture(&ws_a).unwrap();
+        let binding_b = crate::workspace_binding::WorkspaceBinding::capture(&ws_b).unwrap();
+        let mut guard = Guard::new(&state);
+        guard.set_workspace_binding(Some(binding_a.clone()));
+        let target = ws_a.join("note.txt");
+        let a = write_decision(&guard, &target);
+        assert!(a.intent_digest.is_some(), "{a:?}");
+        assert_eq!(a.workspace_binding.as_ref().map(|b| b.inode), Some(binding_a.inode));
+        guard.set_workspace_binding(Some(binding_b.clone()));
+        let b = write_decision(&guard, &target);
+        assert_ne!(
+            a.intent_digest, b.intent_digest,
+            "digest must cover workspace identity"
+        );
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&ws_a);
+        let _ = fs::remove_dir_all(&ws_b);
+    }
+
+    #[test]
+    fn policy_allow_mints_distinct_one_use_lease_citations() {
+        let state = scratch("state-lease-on-allow");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let ws = scratch("ws-lease-on-allow");
+        let target = ws.join("note.txt");
+        let a = write_decision(&guard, &target);
+        let b = write_decision(&guard, &target);
+        assert_eq!(a.decision, "allow", "{}", a.reason);
+        assert_eq!(b.decision, "allow", "{}", b.reason);
+        let la = a.lease_id.expect("first allow mints lease");
+        let lb = b.lease_id.expect("second allow mints lease");
+        assert_ne!(la, lb, "each allow must mint a fresh citation");
+        assert!(a.reason.contains("minted one-use lease"), "{}", a.reason);
+        // Mints are not held: a third check still comes from policy allow
+        // (reason), not "lease … (consumed)".
+        let c = write_decision(&guard, &target);
+        assert!(c.reason.contains("policy allow"), "{}", c.reason);
+        assert!(!c.reason.contains("(consumed)"), "{}", c.reason);
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn g1_wire_projects_allow_to_ask_with_lease_citation() {
+        // G1 / ruling 637: frozen decision remains "allow"; additive g1 is Ask/Deny-only.
+        let state = scratch("state-g1-wire");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let ws = scratch("ws-g1-wire");
+        let allowed = write_decision(&guard, &ws.join("ok.txt"));
+        assert_eq!(allowed.decision, "allow");
+        assert_eq!(allowed.g1_decision(), "ask");
+        assert!(allowed.lease_id.is_some());
+        let json = allowed.to_json();
+        assert_eq!(json["g1"], json!("ask"));
+        assert!(json.get("leaseId").is_some());
+        write_deny_all_policy(&state);
+        let guard_deny = Guard::new(&state);
+        let denied = write_decision(&guard_deny, &ws.join("no.txt"));
+        assert_eq!(denied.decision, "deny");
+        assert_eq!(denied.g1_decision(), "deny");
+        assert_eq!(denied.to_json()["g1"], json!("deny"));
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn g1_wire_v2_projects_decision_when_hz_guard_g1_wire_set() {
+        let state = scratch("state-g1-wire-v2");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let ws = scratch("ws-g1-wire-v2");
+        let allowed = write_decision(&guard, &ws.join("ok.txt"));
+        let prev = std::env::var("HZ_GUARD_G1_WIRE").ok();
+        std::env::set_var("HZ_GUARD_G1_WIRE", "1");
+        let json = allowed.to_json();
+        if let Some(p) = prev {
+            std::env::set_var("HZ_GUARD_G1_WIRE", p);
+        } else {
+            std::env::remove_var("HZ_GUARD_G1_WIRE");
+        }
+        assert_eq!(allowed.decision, "allow");
+        assert_eq!(json["decision"], json!("ask"));
+        assert_eq!(json["g1"], json!("ask"));
+        assert!(json.get("leaseId").is_some());
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn human_approval_owner_visible_to_matching_session() {
+        let state = scratch("state-human-owner");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let ws = scratch("ws-human-owner");
+        let target = ws.join("x.txt").to_string_lossy().to_string();
+        let lease = guard.issue_lease(
+            "fs.write",
+            &target,
+            60_000,
+            Some("human:sess-9".into()),
+            Some("human".into()),
+        );
+        assert_eq!(lease.principal.as_deref(), Some("human"));
+        let ok = guard
+            .check(
+                &GuardAction {
+                    kind: "fs.write".into(),
+                    target: target.clone(),
+                },
+                Some("workspace"),
+                &[],
+                Some("sess-9"),
+            )
+            .expect("check");
+        assert_eq!(ok.decision, "allow");
+        assert_eq!(ok.lease_id.as_deref(), Some(lease.lease_id.as_str()));
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn g1_wire_v2_off_keeps_frozen_allow_on_decision_field() {
+        let state = scratch("state-g1-wire-legacy");
+        fs::create_dir_all(state.join("events")).expect("state dirs");
+        write_allow_all_policy(&state);
+        let guard = Guard::new(&state);
+        let ws = scratch("ws-g1-wire-legacy");
+        let allowed = write_decision(&guard, &ws.join("ok.txt"));
+        let prev = std::env::var("HZ_GUARD_G1_WIRE").ok();
+        std::env::remove_var("HZ_GUARD_G1_WIRE");
+        let json = allowed.to_json();
+        if let Some(p) = prev {
+            std::env::set_var("HZ_GUARD_G1_WIRE", p);
+        }
+        assert_eq!(json["decision"], json!("allow"));
+        assert_eq!(json["g1"], json!("ask"));
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn held_lease_refuses_after_workspace_rename_swap() {
+        // H-31 / ruling 636: a held lease stamped with (dev,ino) must not
+        // admit after the bound root is rename-swapped to a different inode.
+        let parent = scratch("lease-revalidate-parent");
+        let state = parent.join("state");
+        let ws = parent.join("ws");
+        let decoy = parent.join("decoy");
+        fs::create_dir_all(state.join("events")).unwrap();
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&decoy).unwrap();
+        write_allow_all_policy(&state);
+        let binding = crate::workspace_binding::WorkspaceBinding::capture(&ws).unwrap();
+        let mut guard = Guard::new(&state);
+        guard.set_workspace_binding(Some(binding));
+        let target = ws.join("note.txt");
+        fs::write(&target, "ok").unwrap();
+        let lease = guard.issue_lease(
+            "fs.write",
+            &target.to_string_lossy(),
+            60_000,
+            Some("s1".into()),
+            None,
+        );
+        assert!(
+            lease.workspace_binding.is_some(),
+            "issued lease must stamp workspace binding"
+        );
+        // Rename-swap the workspace root (rmdir+mkdir often reuses inodes).
+        fs::rename(&ws, parent.join("ws.old")).unwrap();
+        fs::rename(&decoy, &ws).unwrap();
+        fs::write(&target, "swapped").unwrap();
+        let decision = guard
+            .check(
+                &GuardAction {
+                    kind: "fs.write".to_string(),
+                    target: target.to_string_lossy().into_owned(),
+                },
+                Some("workspace"),
+                &[],
+                Some("s1"),
+            )
+            .expect("check");
+        // Policy may still mint a *fresh* allow citation; the burned held lease
+        // must not appear as the authorizing token.
+        assert!(
+            !decision.reason.contains(&lease.lease_id),
+            "stale held lease must not authorize after remount; got {}",
+            decision.reason
+        );
+        assert!(
+            !decision.reason.contains("(consumed)"),
+            "must not consume under swapped identity: {}",
+            decision.reason
+        );
+        let _ = fs::remove_dir_all(&parent);
     }
 }

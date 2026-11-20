@@ -149,31 +149,13 @@ export class ResponsesSteerWire {
   #dispatchAck(msg: Record<string, unknown>): void {
     const next = this.#pending.shift();
     if (next === undefined) return;
+    const ack = steerAckFromServerMessage(msg);
+    if (ack === null) {
+      this.#pending.unshift(next);
+      return;
+    }
     clearTimeout(next.timer);
-    const type = msg.type;
-    if (type === "response.steer.accepted" || type === "response.steer.pending") {
-      const steer = (msg.steer ?? {}) as Record<string, unknown>;
-      next.resolve({
-        accepted: true,
-        steerId: typeof steer.id === "string" ? steer.id : undefined,
-        pending: type === "response.steer.pending",
-        requiredInput: Array.isArray(msg.required_input) ? msg.required_input : undefined,
-      });
-      return;
-    }
-    if (type === "response.steer.failed") {
-      const steer = (msg.steer ?? {}) as Record<string, unknown>;
-      const error = (msg.error ?? {}) as Record<string, unknown>;
-      next.resolve({
-        accepted: false,
-        steerId: typeof steer.id === "string" ? steer.id : undefined,
-        error: typeof error.message === "string" ? error.message : "steer failed",
-        errorCode: typeof error.code === "string" ? error.code : undefined,
-      });
-      return;
-    }
-    // Any other frame is not an acknowledgement: keep the pending steer.
-    this.#pending.unshift(next);
+    next.resolve(ack);
   }
 
   #rejectPending(reason: string): void {
@@ -252,4 +234,111 @@ export async function pumpResponsesSteering(
     if (result.accepted) claim.accept();
     else claim.reject();
   }
+}
+
+/** Classify a server JSON frame as a steer acknowledgement (for doctor self-check + wire). */
+export function steerAckFromServerMessage(msg: Record<string, unknown>): SteerResult | null {
+  const type = msg.type;
+  if (type === "response.steer.accepted" || type === "response.steer.pending") {
+    const steer = (msg.steer ?? {}) as Record<string, unknown>;
+    return {
+      accepted: true,
+      steerId: typeof steer.id === "string" ? steer.id : undefined,
+      pending: type === "response.steer.pending",
+      requiredInput: Array.isArray(msg.required_input) ? msg.required_input : undefined,
+    };
+  }
+  if (type === "response.steer.failed") {
+    const steer = (msg.steer ?? {}) as Record<string, unknown>;
+    const error = (msg.error ?? {}) as Record<string, unknown>;
+    return {
+      accepted: false,
+      steerId: typeof steer.id === "string" ? steer.id : undefined,
+      error: typeof error.message === "string" ? error.message : "steer failed",
+      errorCode: typeof error.code === "string" ? error.code : undefined,
+    };
+  }
+  return null;
+}
+
+export interface HermeticResponsesSteerSelfCheck {
+  ok: boolean;
+  summary: string;
+  cases: number;
+  failures: string[];
+}
+
+/** Offline wire sanity — ack classification + frame invariants only; full injectable socket path is in `responses-steer-wire.test.ts`. */
+export function hermeticResponsesSteerWireSelfCheck(): HermeticResponsesSteerSelfCheck {
+  const failures: string[] = [];
+  const tryCase = (name: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (e) {
+      failures.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  tryCase("empty api key", () => {
+    try {
+      new ResponsesSteerWire({ apiKey: "" });
+      throw new Error("expected throw");
+    } catch (e) {
+      if (!(e instanceof Error) || !e.message.includes("API key")) throw e;
+    }
+  });
+
+  tryCase("steer ack accepted", () => {
+    const ack = steerAckFromServerMessage({
+      type: "response.steer.accepted",
+      steer: { id: "steer_1" },
+    });
+    if (ack === null || !ack.accepted || ack.steerId !== "steer_1") {
+      throw new Error("expected accepted ack");
+    }
+  });
+
+  tryCase("steer ack pending", () => {
+    const ack = steerAckFromServerMessage({ type: "response.steer.pending", steer: { id: "steer_p" } });
+    if (ack === null || !ack.accepted || !ack.pending) throw new Error("expected pending ack");
+  });
+
+  tryCase("steer ack failed", () => {
+    const ack = steerAckFromServerMessage({
+      type: "response.steer.failed",
+      error: { code: "invalid_input", message: "bad" },
+    });
+    if (ack === null || ack.accepted || ack.errorCode !== "invalid_input") {
+      throw new Error("expected failed ack");
+    }
+  });
+
+  tryCase("steer frame legality", () => {
+    const frame = { type: "response.steer", previous_response_id: "resp_1", input: "steer text" };
+    if (Object.keys(frame).sort().join(",") !== "input,previous_response_id,type") {
+      throw new Error("unexpected frame keys");
+    }
+  });
+
+  tryCase("non-ack ignored", () => {
+    const ack = steerAckFromServerMessage({ type: "response.created", response: { id: "resp_1" } });
+    if (ack !== null) throw new Error("response.created must not classify as steer ack");
+  });
+
+  tryCase("constants", () => {
+    if (!RESPONSES_WS_URL.startsWith("wss://") || RESPONSES_STEER_MODELS.length < 1) {
+      throw new Error("steer constants missing");
+    }
+  });
+
+  const cases = 7;
+  const ok = failures.length === 0;
+  return {
+    ok,
+    cases,
+    failures,
+    summary: ok
+      ? `hermetic wire protocol OK (${cases} cases)`
+      : `hermetic self-check failed: ${failures.join("; ")}`,
+  };
 }

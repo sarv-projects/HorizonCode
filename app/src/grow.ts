@@ -94,7 +94,7 @@
  * new persisted run-record schema; the durable record is the kernel receipt.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { GuardAction, GuardDecision, Receipt, ToolContext } from "./contracts";
@@ -103,6 +103,7 @@ import {
   claimedPathsIn,
   curate,
   loadProposals,
+  proposalsFilePath,
   type StoredProposalRow,
 } from "./core/curator";
 import {
@@ -115,15 +116,21 @@ import {
   readMemoryBankNoteText,
   type CuratorApplyError,
 } from "./core/curator-apply";
+import { curatorArchivePath } from "./core/curator-archive";
 import { KernelClient } from "./core/kernel";
 import { scopeFor } from "./core/loop";
-import { writeDreamPlan } from "./core/memory/dream";
-import { memoryDreamConsolidationEnabled, runDreamConsolidation } from "./core/memory/dream-consolidation";
+import { previewDreamPlan } from "./core/memory/dream";
+import {
+  dreamConsolidationPath,
+  memoryDreamConsolidationEnabled,
+  runDreamConsolidation,
+} from "./core/memory/dream-consolidation";
+import { metricContract } from "./core/metrics";
 import { kernelStateDir, workspaceStateDir } from "./core/paths";
 import { loadPostmortems, postmortemPath, type PostmortemRecord } from "./core/postmortem";
 import { TITLE_MAX_CHARS, type ReviewProposalV1 } from "./core/review";
 import { isRefused, writeAtomic } from "./tools/atomic-write";
-import { recordChange } from "./tools/change-journal";
+import { recordChangeGuarded } from "./tools/change-journal";
 import { noteRead } from "./tools/read-ledger";
 
 /* ------------------------------ vocabulary ------------------------------ */
@@ -136,6 +143,204 @@ export const GROW_TOOL = "grow";
 export const LIBRARY_DIR = "library";
 /** The shortest id prefix `--apply` accepts (a shorter one is a usage error). */
 export const MIN_PROPOSAL_ID_PREFIX = 8;
+
+/** H-7: contract grow `--list` summary counts (ruling 555); human lines stay byte-identical. */
+export function growListPublication(input: {
+  proposals: number;
+  applied: number;
+  pending: number;
+  unknown: number;
+}): string[] {
+  const anchor = "none — first grow list inspect (no prior list of this store to compare against)";
+  const population = "proposals currently recorded in the growth store for this workspace";
+  const excludes =
+    "receipts-unreadable rows counted as unknown; no proposal bodies or library files are measured";
+  return [
+    metricContract({
+      metric: "grow list proposals",
+      anchor,
+      population,
+      excludes,
+      value: input.proposals,
+    }),
+    metricContract({
+      metric: "grow list applied",
+      anchor,
+      population,
+      excludes,
+      value: input.applied,
+    }),
+    metricContract({
+      metric: "grow list pending",
+      anchor,
+      population,
+      excludes,
+      value: input.pending,
+    }),
+    metricContract({
+      metric: "grow list unknown",
+      anchor,
+      population,
+      excludes,
+      value: input.unknown,
+    }),
+  ];
+}
+
+/** H-7: contract grow `--dream` counts (ruling 557). */
+export function growDreamPublication(input: {
+  factCount: number;
+  empty: boolean;
+  consolidationEnabled: boolean;
+  appended: number;
+  skippedDuplicate: number;
+  noop: boolean;
+}): string[] {
+  const anchor = "none — first grow --dream summary (no prior dream run of this workspace to compare against)";
+  const population = "dream plan + optional memory/dream.md consolidation for this workspace";
+  const excludes =
+    "consolidation counts are zero when HZ dream consolidation is off; plan write is never an apply";
+  const blocks = [
+    metricContract({
+      metric: "grow dream plan facts",
+      anchor,
+      population,
+      excludes,
+      value: input.factCount,
+    }),
+    metricContract({
+      metric: "grow dream plan empty",
+      anchor,
+      population,
+      excludes,
+      value: input.empty ? 1 : 0,
+    }),
+  ];
+  if (input.consolidationEnabled) {
+    blocks.push(
+      metricContract({
+        metric: "grow dream consolidation appended",
+        anchor,
+        population,
+        excludes,
+        value: input.appended,
+      }),
+      metricContract({
+        metric: "grow dream consolidation duplicates skipped",
+        anchor,
+        population,
+        excludes,
+        value: input.skippedDuplicate,
+      }),
+      metricContract({
+        metric: "grow dream consolidation noop",
+        anchor,
+        population,
+        excludes,
+        value: input.noop ? 1 : 0,
+      }),
+    );
+  }
+  return blocks;
+}
+
+/**
+ * H-7: contract grow `--apply` outcome counts (ruling 558).
+ * Human dry-run / applied / refused lines stay byte-identical.
+ */
+export function growApplyPublication(input: {
+  dryRun: boolean;
+  applied: boolean;
+  alreadyApplied: boolean;
+  bytesWritten: number;
+}): string[] {
+  const anchor = "none — first grow --apply summary (no prior apply of this proposal to compare against)";
+  const population = "one grow --apply invocation for a resolved proposal id";
+  const excludes =
+    "refusal reasons are not numeric; bytesWritten is 0 on dry-run / already-applied / refuse";
+  return [
+    metricContract({
+      metric: "grow apply dry-run",
+      anchor,
+      population,
+      excludes,
+      value: input.dryRun ? 1 : 0,
+    }),
+    metricContract({
+      metric: "grow apply applied",
+      anchor,
+      population,
+      excludes,
+      value: input.applied ? 1 : 0,
+    }),
+    metricContract({
+      metric: "grow apply already-applied",
+      anchor,
+      population,
+      excludes,
+      value: input.alreadyApplied ? 1 : 0,
+    }),
+    metricContract({
+      metric: "grow apply bytes written",
+      anchor,
+      population,
+      excludes,
+      value: input.bytesWritten,
+    }),
+  ];
+}
+
+/** H-7: contract grow `--from-postmortems` summary counts (ruling 555). */
+export function growFromPostmortemsPublication(input: {
+  postmortems: number;
+  appended: number;
+  duplicates: number;
+  refused: number;
+  skipped: number;
+}): string[] {
+  const anchor =
+    "none — first grow --from-postmortems summary (no prior curation of this store to compare against)";
+  const population = "post-mortems loaded for this grow --from-postmortems run";
+  const excludes =
+    "corrupt stores refuse before counts; skipped records are counted separately from curator refusals";
+  return [
+    metricContract({
+      metric: "grow from-postmortems post-mortems",
+      anchor,
+      population,
+      excludes,
+      value: input.postmortems,
+    }),
+    metricContract({
+      metric: "grow from-postmortems appended",
+      anchor,
+      population,
+      excludes,
+      value: input.appended,
+    }),
+    metricContract({
+      metric: "grow from-postmortems duplicates",
+      anchor,
+      population,
+      excludes,
+      value: input.duplicates,
+    }),
+    metricContract({
+      metric: "grow from-postmortems refused",
+      anchor,
+      population,
+      excludes,
+      value: input.refused,
+    }),
+    metricContract({
+      metric: "grow from-postmortems skipped",
+      anchor,
+      population,
+      excludes,
+      value: input.skipped,
+    }),
+  ];
+}
 
 const DEFAULT_IO: GrowCliIo = {
   out: (line) => console.log(line),
@@ -473,6 +678,15 @@ function runList(io: GrowCliIo, workspace: string, stateDir: string): number {
     `summary: ${load.proposals.length} proposal(s), ${applied} applied, ${pending} pending` +
       (unknown > 0 ? `, ${unknown} unknown` : ""),
   );
+  // H-7 (ruling 620): emit contracted blocks on the grow CLI (not void-only).
+  for (const block of growListPublication({
+    proposals: load.proposals.length,
+    applied,
+    pending,
+    unknown,
+  })) {
+    io.out(block);
+  }
   return 0;
 }
 
@@ -494,6 +708,18 @@ async function runFromPostmortems(io: GrowCliIo, workspace: string, stateDir: st
 
   const built = proposalsFromPostmortems(load.postmortems, { workspace, stateDir });
   for (const skip of built.skipped) io.err(`skipped ${skip.id}: ${skip.reason}`);
+
+  // Under-admission (ruling 561): Guard fs.write on the curator store + archive
+  // before curate mutates disk — deny/ask refuse with exit 4 and no append.
+  const kernel = new KernelClient({ workspace });
+  await kernel.start();
+  for (const target of [proposalsFilePath(stateDir), curatorArchivePath(stateDir)]) {
+    const denied = await admitGrowFsWrite(kernel, workspace, target);
+    if (denied) {
+      io.err(`refused: ${denied}`);
+      return 4;
+    }
+  }
 
   let result: ReturnType<typeof curate>;
   try {
@@ -519,6 +745,16 @@ async function runFromPostmortems(io: GrowCliIo, workspace: string, stateDir: st
     `summary: ${load.postmortems.length} post-mortem(s), ${result.appended.length} appended, ` +
       `${result.duplicates.length} duplicate(s), ${result.refused.length} refused, ${built.skipped.length} skipped`,
   );
+  // H-7 (ruling 620): emit contracted blocks on the grow CLI.
+  for (const block of growFromPostmortemsPublication({
+    postmortems: load.postmortems.length,
+    appended: result.appended.length,
+    duplicates: result.duplicates.length,
+    refused: result.refused.length,
+    skipped: built.skipped.length,
+  })) {
+    io.out(block);
+  }
   return result.refused.length > 0 ? 1 : 0;
 }
 
@@ -543,6 +779,29 @@ async function readExistingText(file: string): Promise<ExistingText> {
 }
 
 /** The minimal tool context the write effect path needs. */
+/** Guard `fs.write` before grow mutates disk (ruling 560). Returns refusal text. */
+async function admitGrowFsWrite(
+  kernel: KernelClient,
+  workspace: string,
+  target: string,
+): Promise<string | undefined> {
+  const action: GuardAction = { kind: "fs.write", target };
+  const scope = scopeFor(action, workspace);
+  let decision: GuardDecision;
+  try {
+    decision = await kernel.checkGuard(action, scope);
+  } catch (err) {
+    return `the guard could not decide (${errorMessage(err)})`;
+  }
+  if (decision.decision === "ask") {
+    return "unattended grow never self-approves; allow the path in policy or apply via the TUI";
+  }
+  if (decision.decision === "deny") {
+    return `denied by policy: ${decision.reason !== undefined && decision.reason !== "" ? decision.reason : "no reason given"}`;
+  }
+  return undefined;
+}
+
 function growToolContext(kernel: KernelClient, workspace: string): ToolContext {
   return {
     cwd: workspace,
@@ -646,6 +905,9 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
       printCuratorApplyRefusal(io, err);
       return 2;
     }
+    for (const block of growApplyPublication({ dryRun: true, applied: false, alreadyApplied: false, bytesWritten: 0 })) {
+      io.out(block);
+    }
     return 2;
   }
 
@@ -660,6 +922,9 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
   const appliedReceipt = receipts.applied.get(proposalArgsDigest(id));
   if (appliedReceipt !== undefined) {
     io.out(`already applied: proposal ${id} carries receipt #${appliedReceipt.seq} (${appliedReceipt.id})`);
+    for (const block of growApplyPublication({ dryRun: false, applied: false, alreadyApplied: true, bytesWritten: 0 })) {
+      io.out(block);
+    }
     return 0;
   }
 
@@ -675,6 +940,9 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
     const merged = mergeMemoryBankNoteAppend(existingText, row);
     if (merged === null) {
       io.out(`already recorded: proposal ${id} is present in ${rel}`);
+      for (const block of growApplyPublication({ dryRun: false, applied: false, alreadyApplied: true, bytesWritten: 0 })) {
+        io.out(block);
+      }
       return 0;
     }
     content = merged;
@@ -720,7 +988,7 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
       return 1;
     }
 
-    recordChange(ctx.sessionId, {
+    await recordChangeGuarded(ctx.sessionId, {
       path: target,
       rel,
       before: existingText,
@@ -746,9 +1014,13 @@ async function runApply(io: GrowCliIo, workspace: string, stateDir: string, idAr
       return 1;
     }
 
+    const bytesWritten = Buffer.byteLength(content, "utf8");
     io.out(`grow --apply ${id} · guard=allow (scope ${scope}) · kernel=${kernel.mode}`);
-    io.out(`applied ${rel} (${Buffer.byteLength(content, "utf8")} bytes) · receipt #${receipt.seq} (${receipt.id})`);
+    io.out(`applied ${rel} (${bytesWritten} bytes) · receipt #${receipt.seq} (${receipt.id})`);
     io.out(`summary: proposal ${id} applied`);
+    for (const block of growApplyPublication({ dryRun: false, applied: true, alreadyApplied: false, bytesWritten })) {
+      io.out(block);
+    }
     return 0;
   } finally {
     await kernel.close().catch(() => undefined);
@@ -809,23 +1081,72 @@ export async function runGrowCli(argv: readonly string[], io: GrowCliIo = DEFAUL
   if (list) return runList(io, workspace, stateDir);
   if (fromPostmortems) return runFromPostmortems(io, workspace, stateDir);
   if (dream) {
-    const result = writeDreamPlan(workspace);
-    io.out(
-      `grow --dream: wrote ${result.planPath}` +
-        (result.empty ? " (empty — no facts)" : ` (${result.factCount} fact(s); not applied)`),
-    );
-    if (memoryDreamConsolidationEnabled()) {
-      const consolidation = runDreamConsolidation(workspace, { dryRun: false });
-      if (consolidation.noop) {
-        io.out(`grow --dream: memory/dream.md unchanged (${consolidation.skippedDuplicate} duplicate snippet(s))`);
-      } else {
-        io.out(
-          `grow --dream: appended ${consolidation.appended} snippet(s) to ${consolidation.dreamPath}` +
-            (consolidation.skippedDuplicate > 0 ? ` (${consolidation.skippedDuplicate} duplicate(s) skipped)` : ""),
-        );
+    const preview = previewDreamPlan(workspace);
+    const kernel = new KernelClient({ workspace });
+    try {
+      await kernel.start();
+      const planDenied = await admitGrowFsWrite(kernel, workspace, preview.planPath);
+      if (planDenied) {
+        io.err(`refused: ${planDenied}`);
+        return 4;
       }
+      const dir = path.dirname(preview.planPath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(preview.planPath, preview.content, { mode: 0o600 });
+      io.out(
+        `grow --dream: wrote ${preview.planPath}` +
+          (preview.empty ? " (empty — no facts)" : ` (${preview.factCount} fact(s); not applied)`),
+      );
+      const consolidationEnabled = memoryDreamConsolidationEnabled();
+      let appended = 0;
+      let skippedDuplicate = 0;
+      let noop = true;
+      if (consolidationEnabled) {
+        const planned = runDreamConsolidation(workspace, { dryRun: true });
+        appended = planned.appended;
+        skippedDuplicate = planned.skippedDuplicate;
+        noop = planned.noop;
+        if (!planned.noop) {
+          const dreamDenied = await admitGrowFsWrite(
+            kernel,
+            workspace,
+            planned.dreamPath || dreamConsolidationPath(workspace),
+          );
+          if (dreamDenied) {
+            io.err(`refused: ${dreamDenied}`);
+            return 4;
+          }
+          const consolidation = runDreamConsolidation(workspace, { dryRun: false });
+          appended = consolidation.appended;
+          skippedDuplicate = consolidation.skippedDuplicate;
+          noop = consolidation.noop;
+          io.out(
+            `grow --dream: appended ${consolidation.appended} snippet(s) to ${consolidation.dreamPath}` +
+              (consolidation.skippedDuplicate > 0
+                ? ` (${consolidation.skippedDuplicate} duplicate(s) skipped)`
+                : ""),
+          );
+        } else {
+          io.out(
+            `grow --dream: memory/dream.md unchanged (${planned.skippedDuplicate} duplicate snippet(s))`,
+          );
+        }
+      }
+      // H-7 (ruling 620): emit contracted blocks on the grow CLI.
+      for (const block of growDreamPublication({
+        factCount: preview.factCount,
+        empty: preview.empty,
+        consolidationEnabled,
+        appended,
+        skippedDuplicate,
+        noop,
+      })) {
+        io.out(block);
+      }
+      return 0;
+    } finally {
+      await kernel.close().catch(() => undefined);
     }
-    return 0;
   }
   return runApply(io, workspace, stateDir, applyId as string, argv.includes("--yes"));
 }

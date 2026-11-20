@@ -27,7 +27,7 @@ import { kernelStateDir, readSpawnLedger, spawnLedgerPath, spawnOwned } from "..
 import { planToolOutputCap, writeSpillFile } from "../../src/core/output-budget";
 import { postmortemPath, postmortemsDir, recordPostmortem } from "../../src/core/postmortem";
 import { SessionStore } from "../../src/core/session";
-import { loadHistory, rememberHistory } from "../../src/tui/interactive";
+import { admitHistoryWrite, loadHistory, rememberHistory } from "../../src/tui/interactive";
 import { cleanupTemps, permissionBitsBind, tempDir } from "./helpers";
 
 afterAll(cleanupTemps);
@@ -83,15 +83,19 @@ describe.skipIf(!onUnix)("spill permissions", () => {
     const plan = planToolOutputCap(full, { maxBytes: 64, maxTokens: 16, spillDir });
     const file = plan.spill?.file ?? "";
     expect(file.startsWith(spillDir + path.sep)).toBe(true);
+    // Ruling 584: plan no longer materialises; persist via writeSpillFile (loop uses writeSpillSafely after admit).
+    expect(existsSync(file)).toBe(false);
+    writeSpillFile({ file, contents: plan.spill!.contents });
     expect(existsSync(file)).toBe(true);
     expect(readFileSync(file, "utf8")).toBe(full); // the full output, not the cap
     expect(modeOf(spillDir)).toBe(0o700);
     expect(modeOf(file)).toBe(0o600);
 
-    // A loose spill is tightened the next time the plan touches it, bytes intact.
+    // A loose spill is tightened the next time writeSpillFile touches it, bytes intact.
     chmodSync(file, 0o644);
     const again = planToolOutputCap(full, { maxBytes: 64, maxTokens: 16, spillDir });
     expect(again.spill?.file).toBe(file);
+    writeSpillFile({ file, contents: again.spill!.contents });
     expect(modeOf(file)).toBe(0o600);
     expect(readFileSync(file, "utf8")).toBe(full); // never rewritten
   });
@@ -386,13 +390,14 @@ describe.skipIf(!onUnix)("curator permissions", () => {
 /* ------------------------------- history file ------------------------------- */
 
 describe.skipIf(!onUnix)("interactive history permissions", () => {
-  test("rememberHistory writes 0600 and tightens a loose file; loadHistory tightens on open", () => {
-    const file = path.join(tempDir("hz-perm-history-"), "history");
-    rememberHistory(file, "first entry");
+  test("rememberHistory writes 0600 and tightens a loose file; loadHistory tightens on open", async () => {
+    const ws = tempDir("hz-perm-history-");
+    const file = path.join(ws, "history");
+    await rememberHistory(file, "first entry", ws);
     expect(modeOf(file)).toBe(0o600);
 
     chmodSync(file, 0o644);
-    rememberHistory(file, "second entry");
+    await rememberHistory(file, "second entry", ws);
     expect(modeOf(file)).toBe(0o600);
 
     // A loose history file is tightened when the next run loads it.
@@ -402,4 +407,28 @@ describe.skipIf(!onUnix)("interactive history permissions", () => {
     expect(modeOf(file)).toBe(0o600);
     expect((rl as unknown as { history: string[] }).history).toEqual(["second entry", "first entry"]);
   });
+
+  test("admitHistoryWrite refuses deny before persist (ruling 601)", async () => {
+    const ws = tempDir("hz-perm-history-deny-");
+    const file = path.join(ws, "history");
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(ws, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(ws, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-history" }]),
+        "utf8",
+      );
+      const refused = await admitHistoryWrite(file, ws);
+      expect(refused).toMatch(/denied|test-deny-history|history/i);
+      const writeRefused = await rememberHistory(file, "should not land", ws);
+      expect(writeRefused).toMatch(/denied|test-deny-history|history/i);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
 });

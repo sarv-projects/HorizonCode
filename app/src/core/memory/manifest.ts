@@ -9,6 +9,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { sanitizeText } from "../../tui/style";
+import { metricContract } from "../metrics";
 import { stateRoot } from "../paths";
 
 export const MEMORY_FILE = "MEMORY.md";
@@ -97,6 +98,40 @@ export function summarizeMemoryTopics(workspace: string): string {
   const count = listMemoryTopicFiles(workspace).length;
   if (count === 0) return "no memory/*.md topic files";
   return `${count} topic file(s); query attach ≤${MEMORY_TOPIC_QUERY_LIMIT}; no-match prefetch ≤${MEMORY_TOPIC_PICKER_LIMIT} blurbs (embeddings not built)`;
+}
+
+/**
+ * H-7 parallel surface for memory topic file counts (ruling 546).
+ * Human `summarizeMemoryTopics` stays byte-identical.
+ */
+export function memoryTopicsPublication(workspace: string): string[] {
+  const count = listMemoryTopicFiles(workspace).length;
+  const anchor = "none — first memory-topics inspect (no prior report of this workspace to compare against)";
+  const population = `memory topic files under state/memory for workspace ${workspace}`;
+  const excludes = "symlinks and dotfiles are filtered; embeddings not built";
+  return [
+    metricContract({
+      metric: "memory topic files",
+      anchor,
+      population,
+      excludes,
+      value: count,
+    }),
+    metricContract({
+      metric: "memory topic query attach limit",
+      anchor,
+      population,
+      excludes,
+      value: MEMORY_TOPIC_QUERY_LIMIT,
+    }),
+    metricContract({
+      metric: "memory topic picker limit",
+      anchor,
+      population,
+      excludes,
+      value: MEMORY_TOPIC_PICKER_LIMIT,
+    }),
+  ];
 }
 
 /** List non-symlink `*.md` topic files under `.hz/state/memory/` (or legacy). */

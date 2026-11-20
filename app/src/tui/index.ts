@@ -14,6 +14,7 @@ export type { HeadlessOptions } from "./headless";
 export { runPrint, filesInDiff, PRINT_FORMATS } from "./print";
 export type { PrintFormat, PrintOptions, PrintResult } from "./print";
 export { createApprovalHandler, createApprovalUi, installApprovalHandler } from "./approval";
+export { createAskUserHandler, installAskUserHandler } from "./ask-user";
 export type { ApprovalUi } from "./approval";
 export { createRenderer } from "./render";
 export type { RenderOptions, Renderer } from "./render";

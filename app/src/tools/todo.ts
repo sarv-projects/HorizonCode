@@ -1,6 +1,6 @@
 /** `todo` — session-scoped todo checklist. */
 
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import {
   branchKeyForWorkspace,
   durableTodosEnabled,
@@ -8,6 +8,7 @@ import {
   saveBranchTodos,
   type DurableTodoRow,
 } from "../core/durable-todos";
+import { handoffDbPath } from "../core/memory/handoff";
 
 interface Todo {
   id: string;
@@ -110,6 +111,43 @@ function syncDurable(workspace: string, list: Todo[]): void {
     ...(t.dropped ? { dropped: true, dropReason: t.dropReason } : {}),
   }));
   saveBranchTodos(workspace, branch, rows);
+}
+
+/**
+ * Opt-in durable persistence writes `handoffs.db`. Admit that path before
+ * mutating disk so session-state todo calls cannot bypass Guard.
+ */
+async function admitFsWrite(
+  ctx: ToolContext,
+  target: string,
+  title: string,
+): Promise<string | undefined> {
+  const action: GuardAction = { kind: "fs.write", target };
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return `denied by policy${decision.reason ? `: ${decision.reason}` : ""}`;
+  }
+  if (decision.decision === "ask") {
+    const approved = await ctx.approve({ title, detail: target, kind: "fs.write" }, action);
+    if (!approved) return "declined by user";
+  }
+  return undefined;
+}
+
+async function syncDurableGuarded(ctx: ToolContext, list: Todo[]): Promise<string | undefined> {
+  if (!durableTodosEnabled()) return undefined;
+  const dbDenied = await admitFsWrite(ctx, handoffDbPath(ctx.workspace), "Persist durable todos");
+  if (dbDenied !== undefined) return dbDenied;
+  // Ruling 599: branch-track JSON is a second durable path beside handoffs.db.
+  const { durableBranchTrackPath } = await import("../core/durable-todos");
+  const trackDenied = await admitFsWrite(
+    ctx,
+    durableBranchTrackPath(ctx.workspace),
+    "Persist durable todo branch track",
+  );
+  if (trackDenied !== undefined) return trackDenied;
+  syncDurable(ctx.workspace, list);
+  return undefined;
 }
 
 const MAX_MERGE_OPS = 32;
@@ -218,8 +256,25 @@ export function importSnapshottedTodos(
     added += 1;
     bump(sessionId);
   }
-  if (added > 0 && workspace !== undefined) syncDurable(workspace, list);
+  // Durable disk sync is intentionally not done here — callers that need
+  // `HZ_TODO_DURABLE=1` persistence must use `importSnapshottedTodosGuarded`
+  // so `handoffs.db` is Guard-admitted first. `workspace` is retained for API
+  // compatibility with existing call sites.
+  void workspace;
   return { added, skipped };
+}
+
+/** Rehydrate session todos, then persist under Guard when durable is on. */
+export async function importSnapshottedTodosGuarded(
+  ctx: ToolContext,
+  lines: string[],
+): Promise<{ added: number; skipped: number } | { error: string }> {
+  const stats = importSnapshottedTodos(ctx.sessionId, lines, undefined);
+  if (stats.added === 0 || !durableTodosEnabled()) return stats;
+  const list = items(ctx.sessionId);
+  const err = await syncDurableGuarded(ctx, list);
+  if (err !== undefined) return { error: err };
+  return stats;
 }
 
 /** Hydrate an empty session list from branch-scoped durable storage (opt-in). */
@@ -290,7 +345,8 @@ export const todoTool: Tool = {
         if (dup) return fail(`duplicate open todo: ${dup.id} (same text)`);
         list.push({ id: nextId(list), text, done: false });
         bump(ctx.sessionId);
-        syncDurable(ctx.workspace, list);
+        const durableErr = await syncDurableGuarded(ctx, list);
+        if (durableErr !== undefined) return fail(durableErr);
         return { ok: true, output: checklist(list) };
       }
 
@@ -302,7 +358,8 @@ export const todoTool: Tool = {
           if (err !== undefined) return fail(`ops[${i}]: ${err}`);
         }
         bump(ctx.sessionId);
-        syncDurable(ctx.workspace, list);
+        const durableErr = await syncDurableGuarded(ctx, list);
+        if (durableErr !== undefined) return fail(durableErr);
         return { ok: true, output: checklist(list) };
       }
 
@@ -314,7 +371,8 @@ export const todoTool: Tool = {
         if (item.dropped) return fail(`todo already dropped: ${id}`);
         item.done = true;
         bump(ctx.sessionId);
-        syncDurable(ctx.workspace, list);
+        const durableErr = await syncDurableGuarded(ctx, list);
+        if (durableErr !== undefined) return fail(durableErr);
         return { ok: true, output: checklist(list) };
       }
 
@@ -330,7 +388,8 @@ export const todoTool: Tool = {
         item.dropped = true;
         item.dropReason = reason;
         bump(ctx.sessionId);
-        syncDurable(ctx.workspace, list);
+        const durableErr = await syncDurableGuarded(ctx, list);
+        if (durableErr !== undefined) return fail(durableErr);
         return { ok: true, output: checklist(list) };
       }
 

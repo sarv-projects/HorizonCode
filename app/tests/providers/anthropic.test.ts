@@ -420,48 +420,55 @@ describe("anthropic request shape", () => {
     const tools: ToolSpec[] = [
       { name: "read", description: "read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
     ];
-
-    await withServer(() => sseResponse(textTurn()), async (server) => {
-      await collect(
-        providerFor(server, { baseUrl: `${server.baseUrl}///` }),
-        makeRequest({
-          system: "be brief",
-          maxTokens: 128,
-          tools,
-          messages: [
-            { role: "user", content: "hello" },
-            { role: "assistant", content: "reading", toolCalls: [{ id: "toolu_1", name: "read", arguments: '{"path":"a.ts"}' }] },
-            { role: "tool", content: "file body", toolCallId: "toolu_1", toolName: "read" },
-          ],
-        }),
-      );
-
-      expect(server.requests).toHaveLength(1);
-      const request = server.requests[0]!;
-      expect(request.method).toBe("POST");
-      expect(request.path).toBe("/v1/messages");
-      expect(request.headers["x-api-key"]).toBe("sk-ant-test");
-      expect(request.headers["anthropic-version"]).toBe("2023-06-01");
-      expect(request.headers["content-type"]).toBe("application/json");
-      expect(request.body).toEqual({
-        model: "hz-test-model",
-        max_tokens: 128,
-        stream: true,
-        system: "be brief",
-        messages: [
-          { role: "user", content: [{ type: "text", text: "hello" }] },
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "reading" },
-              { type: "tool_use", id: "toolu_1", name: "read", input: { path: "a.ts" } },
+    // Opt out of product-default cache breakpoints so this asserts the baseline wire shape.
+    const prevBreakpoints = process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
+    process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = "0";
+    try {
+      await withServer(() => sseResponse(textTurn()), async (server) => {
+        await collect(
+          providerFor(server, { baseUrl: `${server.baseUrl}///` }),
+          makeRequest({
+            system: "be brief",
+            maxTokens: 128,
+            tools,
+            messages: [
+              { role: "user", content: "hello" },
+              { role: "assistant", content: "reading", toolCalls: [{ id: "toolu_1", name: "read", arguments: '{"path":"a.ts"}' }] },
+              { role: "tool", content: "file body", toolCallId: "toolu_1", toolName: "read" },
             ],
-          },
-          { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "file body" }] },
-        ],
-        tools: [{ name: "read", description: "read a file", input_schema: tools[0]!.parameters }],
+          }),
+        );
+
+        expect(server.requests).toHaveLength(1);
+        const request = server.requests[0]!;
+        expect(request.method).toBe("POST");
+        expect(request.path).toBe("/v1/messages");
+        expect(request.headers["x-api-key"]).toBe("sk-ant-test");
+        expect(request.headers["anthropic-version"]).toBe("2023-06-01");
+        expect(request.headers["content-type"]).toBe("application/json");
+        expect(request.body).toEqual({
+          model: "hz-test-model",
+          max_tokens: 128,
+          stream: true,
+          system: "be brief",
+          messages: [
+            { role: "user", content: [{ type: "text", text: "hello" }] },
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "reading" },
+                { type: "tool_use", id: "toolu_1", name: "read", input: { path: "a.ts" } },
+              ],
+            },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "file body" }] },
+          ],
+          tools: [{ name: "read", description: "read a file", input_schema: tools[0]!.parameters }],
+        });
       });
-    });
+    } finally {
+      if (prevBreakpoints === undefined) delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
+      else process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = prevBreakpoints;
+    }
   });
 
   test("HZ_ANTHROPIC_CACHE_SYSTEM=1 sends system as a cached block array", async () => {
@@ -479,9 +486,9 @@ describe("anthropic request shape", () => {
     }
   });
 
-  test("HZ_ANTHROPIC_CACHE_BREAKPOINTS=1 stamps message cache_control", async () => {
+  test("Anthropic cache breakpoints stamp by default; =0 opts out", async () => {
     const prev = process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
-    process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = "1";
+    delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;
     try {
       await withServer(() => sseResponse(textTurn()), async (server) => {
         await collect(
@@ -506,6 +513,13 @@ describe("anthropic request shape", () => {
         expect(body.system).toEqual([{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }]);
         const toolResult = body.messages[2]!.content[0]!;
         expect(toolResult.cache_control).toEqual({ type: "ephemeral" });
+      });
+
+      process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS = "0";
+      await withServer(() => sseResponse(textTurn()), async (server) => {
+        await collect(providerFor(server), makeRequest({ system: "sys", messages: [{ role: "user", content: "hi" }] }));
+        const body = server.requests[0]!.body as { system: unknown };
+        expect(body.system).toBe("sys");
       });
     } finally {
       if (prev === undefined) delete process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS;

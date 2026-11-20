@@ -9,12 +9,21 @@
  */
 
 import * as path from "node:path";
-import { realpathish } from "./paths";
+import { isMcpToolName, mcpToolClaimsReadOnly } from "./mcp/registry";
+import { resourcePathsOverlap } from "./resource-path-overlap";
 import { postimagePathForTool } from "./receipt-postimage";
 import { applyPatchKernelProjections } from "./effect-kernel-tool-projection";
 import type { EffectHost, EffectRecord } from "./effect-host";
 
 const GATE_TOOLS = new Set(["write", "edit", "apply_patch", "ast_edit", "multi_edit"]);
+
+/** SQLite / session-store mutators — fail-closed under R170 gates (ruling **690**). */
+const SQLITE_MUTATION_TOOLS = new Set([
+  "memory_remember",
+  "memory_forget",
+  "handoff_create",
+  "handoff_resume",
+]);
 
 function workspaceBoundedPath(workspace: string, raw: string): string | undefined {
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(workspace, raw);
@@ -55,6 +64,39 @@ export function observePendingTargetForTool(
   return undefined;
 }
 
+/**
+ * Best-effort workspace paths an MCP mutating call might touch from its args.
+ * Returns `[]` when read-only; `undefined` when paths cannot be proven safe.
+ */
+export function mcpMutationResourceTargets(
+  args: Record<string, unknown>,
+  workspace: string,
+): string[] | undefined {
+  const explicit = shellExplicitResourceTarget(args, workspace);
+  if (explicit) return [explicit];
+  if (typeof args.patch === "string" || typeof args.input === "string") {
+    return mutationResourceTargets("apply_patch", args, workspace);
+  }
+  if (Array.isArray(args.paths)) {
+    const paths = new Set<string>();
+    for (const p of args.paths) {
+      if (typeof p !== "string" || p.trim() === "") continue;
+      const resolved = workspaceBoundedPath(workspace, p);
+      if (!resolved) return undefined;
+      paths.add(resolved);
+    }
+    if (paths.size > 0) return [...paths];
+  }
+  return undefined;
+}
+
+/** True for built-in file mutators, SQLite mutators, and non-read-only MCP tools (rulings 683, 690). */
+export function isR170MutatingTool(tool: string): boolean {
+  if (GATE_TOOLS.has(tool)) return true;
+  if (SQLITE_MUTATION_TOOLS.has(tool)) return true;
+  return isMcpToolName(tool) && !mcpToolClaimsReadOnly(tool);
+}
+
 /** All workspace paths a mutation might touch, not merely the final receipt
  * postimage. An unparseable/multi-target command returns undefined (unsafe to
  * claim disjoint from a blocked resource). Rename includes source AND target. */
@@ -66,6 +108,12 @@ export function mutationResourceTargets(
   // A shell command may write ANY path regardless of cwd or explicit path
   // hints; treating a declared cwd as exhaustive evidence is unsafe.
   if (tool === "shell" || tool === "bash") return undefined;
+  // SQLite mutators touch session DB paths we do not project here — fail closed.
+  if (SQLITE_MUTATION_TOOLS.has(tool)) return undefined;
+  if (isMcpToolName(tool)) {
+    if (mcpToolClaimsReadOnly(tool)) return [];
+    return mcpMutationResourceTargets(args, workspace);
+  }
   if (tool === "apply_patch") {
     const projections = applyPatchKernelProjections(args);
     if (!projections || projections.length === 0) return undefined;
@@ -142,15 +190,6 @@ export function effectIdsWithObservePendingOnPath(
   return hits.sort((a, b) => a.localeCompare(b));
 }
 
-function resourcePathsOverlap(a: string, b: string): boolean {
-  // Resolve existing symlink aliases before comparing. A write to alias.ts
-  // must not bypass a barrier protecting the file it points at.
-  const ra = realpathish(a);
-  const rb = realpathish(b);
-  if (ra === rb) return true;
-  return ra.startsWith(rb + path.sep) || rb.startsWith(ra + path.sep);
-}
-
 /** Same-path overlap against any observe-pending resource key on the host. */
 export function observePendingEffectIdsOverlappingPath(
   host: EffectHost | undefined,
@@ -215,7 +254,7 @@ export function r170ResourceGateRefusal(
   frozenKeys: Set<string>,
   host?: EffectHost,
 ): string | undefined {
-  if (!GATE_TOOLS.has(tool) || frozenKeys.size === 0) return undefined;
+  if (!isR170MutatingTool(tool) || frozenKeys.size === 0) return undefined;
   const targets = mutationResourceTargets(tool, args, workspace);
   if (!targets) {
     return `HZ_PRECONDITION_FAILED: blocked_by_unknown: refusing ${tool} — ` +

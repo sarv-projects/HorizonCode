@@ -10,7 +10,7 @@ import {
   readWorkspaceMcpConfig,
 } from "../../src/core/config";
 import { startMcpManager } from "../../src/core/mcp";
-import { bindWorkspaceTrustRecord, collectWorkspaceTrustDigests, workspaceMcpConfigFile } from "../../src/core/trust";
+import { admitTrustStoreWrite, bindWorkspaceTrustRecord, collectWorkspaceTrustDigests, workspaceMcpConfigFile } from "../../src/core/trust";
 
 let workspace: string;
 let home: string;
@@ -37,7 +37,7 @@ describe("trusted workspace mcp.json load", () => {
       mcpFile,
       JSON.stringify({ servers: [{ id: "ws-srv", command: "true", args: [] }] }),
     );
-    bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
+    await bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
 
     const base = loadConfig({ HOME: home } as NodeJS.ProcessEnv, path.join(home, "missing.json"));
     const config = augmentConfigWithTrustedWorkspace(
@@ -85,4 +85,28 @@ describe("trusted workspace providers.json merge", () => {
     const merged = mergeProviderRegistries(user, ws);
     expect(merged?.providers.map((p) => p.id)).toEqual(["a", "b"]);
   });
+
+  test("admitTrustStoreWrite refuses deny before persist (ruling 593)", async () => {
+    workspace = mkdtempSync(path.join(tmpdir(), "hz-trust-deny-ws-"));
+    home = mkdtempSync(path.join(tmpdir(), "hz-trust-deny-home-"));
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(home, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(home, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-trust" }]),
+        "utf8",
+      );
+      const refused = await admitTrustStoreWrite(home);
+      expect(refused).toMatch(/denied|test-deny-trust|trust-store/i);
+      const bindRefused = await bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
+      expect(bindRefused).toMatch(/denied|test-deny-trust|trust-store/i);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
+
 });

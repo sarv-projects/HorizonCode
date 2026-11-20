@@ -3,7 +3,13 @@
 //! sidecar-bearing receipts; legacy rows remain readable but unbound.
 use serde_json::{json, Value};
 
-const BINDINGS: &[&str] = &["effectId", "postimageDigest", "postimagePath", "childEffectIds"];
+const BINDINGS: &[&str] = &[
+    "effectId",
+    "postimageDigest",
+    "postimagePath",
+    "childEffectIds",
+    "parentReceiptId",
+];
 const V1_FIELDS: &[&str] = &[
     "id", "seq", "ts", "action", "tool", "argsDigest", "resultDigest", "prevHash", "leaseId",
 ];
@@ -27,7 +33,8 @@ pub fn check_version(record: &Value) -> Result<bool, String> {
     }
     let keys = record.as_object().ok_or_else(|| "HZ_PRECONDITION_FAILED: receipt not an object".to_string())?;
     for name in keys.keys() {
-        if name != "hash" && name != "schemaVersion" && !BINDINGS.contains(&name.as_str())
+        if name != "hash" && name != "schemaVersion" && name != "issuerStamp"
+            && !BINDINGS.contains(&name.as_str())
             && !V1_FIELDS.contains(&name.as_str()) {
             return Err(format!("HZ_PRECONDITION_FAILED: unexpected receipt v2 field {name}"));
         }
@@ -55,6 +62,11 @@ pub fn check_version(record: &Value) -> Result<bool, String> {
             if !seen.insert(name) {
                 return Err("HZ_PRECONDITION_FAILED: receipt v2 childEffectIds duplicate".into());
             }
+        }
+    }
+    if let Some(parent) = record.get("parentReceiptId") {
+        if parent.as_str().is_none_or(str::is_empty) {
+            return Err("HZ_PRECONDITION_FAILED: receipt v2 parentReceiptId invalid".into());
         }
     }
     Ok(true)
@@ -102,6 +114,13 @@ mod tests {
         receipt["childEffectIds"] = json!(["c2", "c1"]);
         assert_ne!(hash(&receipt).unwrap(), child_hash);
         receipt["childEffectIds"] = json!(["c1", "c1"]);
+        assert!(hash(&receipt).is_err());
+        receipt["childEffectIds"] = json!(["c1"]);
+        receipt["parentReceiptId"] = json!("rcp_parent");
+        let parent_hash = hash(&receipt).unwrap();
+        receipt["parentReceiptId"] = json!("rcp_forged");
+        assert_ne!(hash(&receipt).unwrap(), parent_hash);
+        receipt["parentReceiptId"] = json!("");
         assert!(hash(&receipt).is_err());
     }
 }

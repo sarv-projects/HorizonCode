@@ -113,7 +113,7 @@ export async function tryRunFullscreenLocalSlash(
       case "notify": {
         const home = process.env.HOME?.trim() || homedir();
         const cfg = loadConfig(process.env, defaultConfigPath(home), workspace);
-        runNotifyCommand(arg, renderer, cfg.notify, (prefs) => persistNotifyConfig(prefs, home));
+        runNotifyCommand(arg, renderer, cfg.notify, (prefs) => { void persistNotifyConfig(prefs, home); });
         return true;
       }
       case "mode":
@@ -147,7 +147,7 @@ export async function tryRunFullscreenLocalSlash(
         return true;
       case "status":
         showStatus(renderer, ctx);
-        if ((ctx.unknownCount ?? 0) > 0) runUnknownCommand(runtime, renderer);
+        if ((ctx.unknownCount ?? 0) > 0) void runUnknownCommand(runtime, renderer);
         return true;
       case "unknown": {
         const sub = parseUnknownSlashArgs(arg);
@@ -158,7 +158,7 @@ export async function tryRunFullscreenLocalSlash(
             return true;
           }
         }
-        runUnknownCommand(runtime, renderer, arg);
+        await runUnknownCommand(runtime, renderer, arg);
         return true;
       }
       case "worktree":

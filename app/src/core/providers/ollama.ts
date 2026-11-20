@@ -30,8 +30,10 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../../contracts";
+import { textFromChatContent } from "../chat-content";
 import { parseJsonObject } from "../json-repair";
 import { classifyProviderFailure } from "./failure-codes";
+import { maybeDumpProviderRequest } from "./request-dump";
 import {
   DEFAULT_RETRY_ATTEMPTS,
   backoffDelay,
@@ -102,7 +104,7 @@ export function toOllamaMessages(messages: ChatMsg[]): OllamaMessage[] {
   for (const msg of messages) {
     if (!msg) continue;
     if (msg.role === "system" || msg.role === "user") {
-      out.push({ role: msg.role, content: msg.content ?? "" });
+      out.push({ role: msg.role, content: textFromChatContent(msg.content) });
       continue;
     }
     if (msg.role === "assistant") {
@@ -368,6 +370,7 @@ async function* streamOllama(
   if (tools.length > 0) body.tools = tools;
   const maxTokens = req.maxTokens && req.maxTokens > 0 ? req.maxTokens : (settings.maxTokens ?? 0);
   if (maxTokens > 0) body.options = { num_predict: maxTokens };
+  await maybeDumpProviderRequest("ollama", body);
 
   const url = `${baseUrl}/api/chat`;
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/x-ndjson" };

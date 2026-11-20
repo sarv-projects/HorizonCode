@@ -95,7 +95,7 @@ async function refreshOAuthAccessTokenLocked(
     } else if (stored.expiresAt) {
       next.expiresAt = stored.expiresAt;
     }
-    writeOAuthToken(next, home);
+    await writeOAuthToken(next, home);
     notifyOAuthAccountRotated({ providerId: provider, reason: "retryable_failures" });
     return credentialFromStore(provider, home);
   });

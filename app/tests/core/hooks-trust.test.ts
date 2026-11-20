@@ -87,14 +87,14 @@ describe("workspace hook trust", () => {
     expect(loadTrustStore(home).records).toHaveLength(0);
   });
 
-  test("digest change revokes workspace hooks until re-bound", () => {
+  test("digest change revokes workspace hooks until re-bound", async () => {
     workspace = mkdtempSync(path.join(tmpdir(), "hz-hook-trust-"));
     home = mkdtempSync(path.join(tmpdir(), "hz-hook-home-"));
     wsHooks();
     const resolved = path.resolve(workspace);
     const digest = digestWorkspaceHooks(workspace);
     expect(digest).not.toBeNull();
-    bindWorkspaceHooksDigest(home, workspace, digest!);
+    await bindWorkspaceHooksDigest(home, workspace, digest!);
     wsHooks(JSON.stringify({ hooks: { sessionStart: [{ command: "false" }] } }));
     const notes: string[] = [];
     expect(
@@ -115,7 +115,7 @@ describe("workspace hook trust", () => {
     const resolved = path.resolve(workspace);
     const digest = digestWorkspaceHooks(workspace);
     expect(digest).not.toBeNull();
-    bindWorkspaceHooksDigest(home, workspace, digest!);
+    await bindWorkspaceHooksDigest(home, workspace, digest!);
     wsHooks(JSON.stringify({ hooks: { sessionStart: [{ command: "false" }] } }));
     const receipts: string[] = [];
     const ok = await ensureWorkspaceHookTrust(
@@ -138,7 +138,7 @@ describe("workspace hook trust", () => {
     wsHooks();
     const resolved = path.resolve(workspace);
     const digest = digestWorkspaceHooks(workspace)!;
-    bindWorkspaceHooksDigest(home, workspace, digest);
+    await bindWorkspaceHooksDigest(home, workspace, digest);
     wsHooks(JSON.stringify({ hooks: { sessionStart: [{ command: "false" }] } }));
     const ok = await ensureWorkspaceHookTrust(workspace, [resolved], home);
     expect(ok).toBe(false);

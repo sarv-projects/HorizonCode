@@ -58,11 +58,11 @@ function writeSkill(root: string, file: string, content: string): void {
   writeFileSync(path.join(dir, file), content, "utf8");
 }
 
-function skillTrust(): WorkspaceTrustOptions {
+async function skillTrust(): Promise<WorkspaceTrustOptions> {
   // The production gate requires the digest binding in trust.json, not only
   // the folder listing. Bind the current on-disk skills here, after the test
   // has written them, so the fixture reflects a real approved workspace.
-  bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
+  await bindWorkspaceTrustRecord(home, workspace, collectWorkspaceTrustDigests(workspace));
   return { home, trustedWorkspaceHooks: [path.resolve(workspace)] };
 }
 
@@ -84,54 +84,54 @@ function fakeContext(overrides: Partial<ToolContext> = {}): ToolContext {
 /* -------------------------------- skills -------------------------------- */
 
 describe("skills", () => {
-  test("discovers frontmatter skills, filename skills, and skips malformed files", () => {
+  test("discovers frontmatter skills, filename skills, and skips malformed files", async () => {
     writeSkill(workspace, "deploy.md", "---\nname: deploy\ndescription: Ship it safely\n---\nStep one.\nStep two.\n");
     writeSkill(workspace, "notes.md", "Just a body, no frontmatter.\n");
     writeSkill(workspace, "bad name.md", "no safe filename either\n");
 
-    const skills = listSkills(workspace, skillTrust());
+    const skills = listSkills(workspace, await skillTrust());
     const names = skills.map((s) => s.name).sort();
     expect(names).toEqual(["deploy", "notes"]);
 
-    const deploy = getSkill(workspace, "deploy", skillTrust());
+    const deploy = getSkill(workspace, "deploy", await skillTrust());
     expect(deploy?.description).toBe("Ship it safely");
     expect(deploy?.body).toContain("Step one.");
     expect(deploy?.source.endsWith("deploy.md")).toBe(true);
-    expect(getSkill(workspace, "notes", skillTrust())?.description).toBe("");
+    expect(getSkill(workspace, "notes", await skillTrust())?.description).toBe("");
   });
 
-  test("a workspace skill shadows a home skill with the same name", () => {
+  test("a workspace skill shadows a home skill with the same name", async () => {
     writeSkill(home, "same.md", "---\nname: same\ndescription: from home\n---\nbody\n");
     writeSkill(workspace, "same.md", "---\nname: same\ndescription: from workspace\n---\nbody\n");
-    expect(getSkill(workspace, "same", skillTrust())?.description).toBe("from workspace");
+    expect(getSkill(workspace, "same", await skillTrust())?.description).toBe("from workspace");
   });
 
-  test("the prompt section is empty with no skills and capped at 12 with a note", () => {
-    expect(skillsPromptSection(workspace, skillTrust())).toBe("");
+  test("the prompt section is empty with no skills and capped at 12 with a note", async () => {
+    expect(skillsPromptSection(workspace, await skillTrust())).toBe("");
     for (let i = 1; i <= 14; i += 1) {
       const n = String(i).padStart(2, "0");
       writeSkill(workspace, `skill-${n}.md`, `---\nname: skill-${n}\ndescription: number ${n}\n---\nbody\n`);
     }
-    const section = skillsPromptSection(workspace, skillTrust());
+    const section = skillsPromptSection(workspace, await skillTrust());
     expect(section).toContain("## Available skills");
     expect(section).toContain("skill-01 — number 01");
     expect(section).toContain("(2 more not listed)");
     expect(section.split("\n").filter((line) => line.startsWith("- skill-")).length).toBe(12);
   });
 
-  test("slash activation resolves the skill and strips the action; unknown or partial names do not", () => {
+  test("slash activation resolves the skill and strips the action; unknown or partial names do not", async () => {
     writeSkill(workspace, "deploy.md", "---\nname: deploy\ndescription: x\n---\nbody\n");
-    const hit = resolveSkillForMessage(workspace, "  /deploy push the service\nand watch it\n", skillTrust());
+    const hit = resolveSkillForMessage(workspace, "  /deploy push the service\nand watch it\n", await skillTrust());
     expect(hit?.skill.name).toBe("deploy");
     expect(hit?.action).toBe("push the service\nand watch it");
 
-    const bare = resolveSkillForMessage(workspace, "/deploy", skillTrust());
+    const bare = resolveSkillForMessage(workspace, "/deploy", await skillTrust());
     expect(bare?.skill.name).toBe("deploy");
     expect(bare?.action).toBe("");
 
-    expect(resolveSkillForMessage(workspace, "/deployment now", skillTrust())).toBeUndefined();
-    expect(resolveSkillForMessage(workspace, "plain text", skillTrust())).toBeUndefined();
-    expect(resolveSkillForMessage(workspace, "/unknown-skill x", skillTrust())).toBeUndefined();
+    expect(resolveSkillForMessage(workspace, "/deployment now", await skillTrust())).toBeUndefined();
+    expect(resolveSkillForMessage(workspace, "plain text", await skillTrust())).toBeUndefined();
+    expect(resolveSkillForMessage(workspace, "/unknown-skill x", await skillTrust())).toBeUndefined();
   });
 
   test("the active-skill section carries the body, capped at the contract size", () => {

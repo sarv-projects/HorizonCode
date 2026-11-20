@@ -42,6 +42,7 @@ import * as path from "node:path";
 import type { GuardAction, Tool, ToolSpec, ToolContext, ToolResult } from "../../contracts";
 import { canonicalJson, sha256Hex } from "../canon";
 import { stripToolOutputContinuationArgs } from "../output-budget";
+import { effectHostMcpInvokeMutatingRefusal } from "../effect-host-mcp-invoke";
 import { McpError, McpServerDownError, McpTransportError, type McpToolCaller, type McpToolInfo } from "./client";
 
 export type { McpToolInfo } from "./client";
@@ -179,6 +180,14 @@ export function getMcpTool(name: string): Tool | undefined {
 }
 
 /**
+ * True only when the server registered `annotations.readOnlyHint === true`.
+ * Unregistered or absent hint is treated as mutating (R-tools-19 conservative).
+ */
+export function mcpToolClaimsReadOnly(name: string): boolean {
+  return entries.get(name)?.readOnly === true;
+}
+
+/**
  * True for every name in the `mcp__` namespace — registered or not. A name that
  * is not registered is still an MCP name for admission purposes; the loop then
  * refuses the call because no tool resolves for it.
@@ -257,6 +266,10 @@ async function executeMcpTool(
   const target = `${serverId}:${toolName}`;
   const entry = entries.get(full);
   if (entry === undefined) return fail(`MCP tool ${full} is not registered (the server disconnected)`);
+
+  // P0-1 / ruling **721**: defense in depth if loop preflight was bypassed.
+  const invokeRefusal = effectHostMcpInvokeMutatingRefusal(full);
+  if (invokeRefusal !== undefined) return fail(invokeRefusal);
 
   // The admission is the kind + the exact server:tool, carrying the call's full
   // intent so this check rides the loop's decision for the same call.

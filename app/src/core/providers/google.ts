@@ -28,6 +28,7 @@
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec } from "../../contracts";
 import { parseJsonObject } from "../json-repair";
 import { classifyProviderFailure } from "./failure-codes";
+import { maybeDumpProviderRequest } from "./request-dump";
 import {
   DEFAULT_RETRY_ATTEMPTS,
   backoffDelay,
@@ -235,6 +236,7 @@ async function* streamGoogle(
   if (tools.length > 0) body.tools = tools;
   const maxTokens = req.maxTokens && req.maxTokens > 0 ? req.maxTokens : (settings.maxTokens ?? 0);
   if (maxTokens > 0) body.generationConfig = { maxOutputTokens: maxTokens };
+  await maybeDumpProviderRequest("google", body);
 
   const transport: FetchLike = settings.fetch ?? ((target, init) => fetch(target, init));
   const policy = settings.retry ?? {};

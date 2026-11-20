@@ -112,7 +112,7 @@ export async function writeAtomic(
   let opened: VerifiedWrite | { refusal: string };
   try {
     // O_EXCL: never adopt a file (or symlink) someone else planted at the temp name.
-    opened = await openVerifiedWrite(tmp, ctx, { exclusive: true });
+    opened = await openVerifiedWrite(tmp, ctx, { exclusive: true, expectedReal: target });
   } catch (e) {
     return { ok: false, refusal: `could not create a temporary file next to ${resolved}: ${msg(e)}` };
   }

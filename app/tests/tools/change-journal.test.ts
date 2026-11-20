@@ -24,6 +24,7 @@ import {
   JOURNAL_COMPACT_BYTES,
   MAX_JOURNAL_ENTRIES,
   __resetJournalForTests,
+  admitChangeJournalWrite,
   consumeChange,
   consumeEntry,
   journalPath,
@@ -31,6 +32,8 @@ import {
   lastChange,
   lastChangeFor,
   recordChange,
+  recordChangeGuarded,
+  consumeChangeGuarded,
   reloadFromDisk,
   type ChangeEntry,
 } from "../../src/tools/change-journal";
@@ -255,4 +258,57 @@ describe("change-journal", () => {
     __resetJournalForTests();
     expect(reloadFromDisk(ws).entries.map((e) => e.rel)).toEqual(["a.txt"]);
   });
+
+  test("admitChangeJournalWrite refuses deny before persist (ruling 605)", async () => {
+    const ws = makeWorkspace({});
+    __resetJournalForTests();
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(ws, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(ws, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-journal" }]),
+        "utf8",
+      );
+      const refused = await admitChangeJournalWrite(ws);
+      expect(refused).toMatch(/denied|test-deny-journal|change-journal/i);
+      const guarded = await recordChangeGuarded("s-deny", synthetic(ws, "a.txt", null, 1000));
+      expect(guarded).toMatch(/denied|test-deny-journal|change-journal/i);
+      expect(existsSync(journalPath(ws))).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
+
+  test("consumeChangeGuarded refuses tombstone on deny (ruling 609)", async () => {
+    const ws = makeWorkspace({});
+    __resetJournalForTests();
+    // Create legacy `.hzcode` before the journal write so policy + journal share one tree.
+    const kernelState = path.join(ws, ".hzcode", "kernel");
+    mkdirSync(kernelState, { recursive: true });
+    recordChange("s-one", synthetic(ws, "a.txt", null, 1000));
+    expect(existsSync(journalPath(ws))).toBe(true);
+    const before = readFileSync(journalPath(ws), "utf8");
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(ws, "no-such-hz-kernel");
+    try {
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-tombstone" }]),
+        "utf8",
+      );
+      const entry = reloadFromDisk(ws).entries[0]!;
+      const ok = await consumeChangeGuarded("s-one", entry);
+      expect(ok).toBe(true);
+      // Deny → memory removal only; on-disk journal stays without a consume tombstone.
+      expect(readFileSync(journalPath(ws), "utf8")).toBe(before);
+      expect(before).not.toContain('"consume"');
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
 });

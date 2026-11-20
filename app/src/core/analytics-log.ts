@@ -134,14 +134,35 @@ export interface AppendAnalyticsOptions extends Partial<Pick<AnalyticsEventV1, L
   now?: () => string;
 }
 
+export async function admitAnalyticsLogWrite(
+  file: string,
+  workspace: string,
+): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(file, workspace);
+  if (refused === undefined) return undefined;
+  // Enabling HZ_ANALYTICS_LOG / --analytics-log is the operator consent for this
+  // observability file. Ask cannot be resolved on this non-interactive path;
+  // deny still refuses (ruling 600).
+  if (/requires approval/i.test(refused)) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "analytics-log refused:")
+    .replace(/^preds write denied/, "analytics-log denied")
+    .replace(/^preds fs\.write requires approval/, "analytics-log fs.write requires approval");
+}
+
 /**
- * Append one NDJSON row when enabled. Best-effort: failures are swallowed so
- * observability never blocks the session. Returns the path written, or undefined.
+ * Append one NDJSON row when enabled. Best-effort: failures and Guard deny are
+ * swallowed so observability never blocks the session (ruling 600 under-admission).
+ * Returns the path written, or undefined.
  */
-export function appendAnalyticsEvent(opts: AppendAnalyticsOptions): string | undefined {
+export async function appendAnalyticsEvent(opts: AppendAnalyticsOptions): Promise<string | undefined> {
   const env = opts.env ?? process.env;
   const file = resolveAnalyticsLogPath(opts.workspace, env, opts.cliPath);
   if (file === undefined) return undefined;
+
+  const refused = await admitAnalyticsLogWrite(file, opts.workspace);
+  if (refused !== undefined) return undefined;
 
   const row: AnalyticsEventV1 = {
     v: 1,

@@ -40,7 +40,11 @@ import {
   buildEvalApproval,
   buildFrozenSplit,
 } from "./core/eval-approval";
-import { upsertPredsRecord, type PredsRecordV1 } from "./core/preds-writer";
+import {
+  admitExplicitCliOutWrite,
+  upsertPredsRecord,
+  type PredsRecordV1,
+} from "./core/preds-writer";
 import { resolveSubmitCommand, submitPredictions } from "./core/swebench-submit";
 import {
   submitWithOfficialHarness,
@@ -198,6 +202,32 @@ export function evalRunPublication(run: Awaited<ReturnType<typeof runEvalSet>>, 
   ];
 }
 
+/** H-7: contracted form of the SWE-bench submit success line (ruling 568). */
+export function swebenchSubmitPublication(input: {
+  predictionCount: number;
+  harness: string;
+}): string[] {
+  const anchor = "none — this submit invocation (no prior submit to compare against)";
+  const population = `${input.predictionCount} prediction(s) written to preds.json for this submit`;
+  const excludes = "none — count is the preds.json record total handed to the harness";
+  return [
+    metricContract({
+      metric: "swebench submit prediction count",
+      anchor,
+      population,
+      excludes,
+      value: input.predictionCount,
+    }),
+    metricContract({
+      metric: "swebench submit harness id",
+      anchor,
+      population,
+      excludes,
+      value: input.harness,
+    }),
+  ];
+}
+
 export async function runEvalCli(
   argv: readonly string[],
   io: EvalCliIo = DEFAULT_IO,
@@ -221,6 +251,12 @@ export async function runEvalCli(
     }
     try {
       const spec = parseRatchetGateSpec(readFileSync(ratchetSpec, "utf8"), ratchetSpec);
+      // Under-admission (ruling 582): Guard before decision-log append.
+      const logRefused = await admitExplicitCliOutWrite(spec.decisionLog, process.cwd());
+      if (logRefused !== undefined) {
+        io.err(`eval ratchet ${logRefused}`);
+        return 1;
+      }
       const report = runRatchetGate(spec);
       io.out(`ratchet: ${report.verdict} · variant=${report.variantId} · round=${report.round} · ${report.reason}`);
       for (const block of report.published) io.out(block);
@@ -386,6 +422,17 @@ export async function runEvalCli(
     return 2;
   }
 
+  // Under-admission (ruling 579): Guard fs.write on --preds-out before any upsert.
+  let predsWriteAllowed = false;
+  if (predsOut !== undefined && predsOut !== "") {
+    const refused = await admitExplicitCliOutWrite(predsOut, process.cwd());
+    if (refused !== undefined) {
+      io.err(`eval ${refused}`);
+      return 1;
+    }
+    predsWriteAllowed = true;
+  }
+
   const byCase = new Map(run.results.map((result) => [result.caseId, result]));
   for (const observation of handle.observations()) {
     const result = byCase.get(observation.caseId);
@@ -395,7 +442,7 @@ export async function runEvalCli(
       `${result?.passed === true ? "PASS" : "FAIL"} ${observation.caseId} · terminal=${observation.terminal} · tools=${tools} · ${observation.durationMs}ms${kept}`,
     );
     for (const failure of result?.failures ?? []) io.out(`     ${failure.kind}: ${failure.detail}`);
-    if (predsOut !== undefined && predsOut !== "") {
+    if (predsWriteAllowed) {
       const record: PredsRecordV1 = {
         instance_id: observation.caseId,
         model_name_or_path: observation.model,
@@ -407,7 +454,7 @@ export async function runEvalCli(
           sessionId: observation.sessionId,
         },
       };
-      upsertPredsRecord(predsOut, record);
+      upsertPredsRecord(predsOut!, record);
     }
   }
 
@@ -427,10 +474,22 @@ export async function runEvalCli(
         });
         io.out(`swebench submit: OK · ${submitted.predictionCount} prediction(s) · harness=swebench-official`);
         io.out(`swebench harness argv: ${submitted.argv.join(" ")}`);
+        for (const block of swebenchSubmitPublication({
+          predictionCount: submitted.predictionCount,
+          harness: "swebench-official",
+        })) {
+          io.out(block);
+        }
       } else {
         const command = resolveSubmitCommand(submitCmd !== undefined ? { submitCmd } : {});
         const submitted = submitPredictions({ predsFile: predsOut!, command });
         io.out(`swebench submit: OK · ${submitted.predictionCount} prediction(s) · harness=${command}`);
+        for (const block of swebenchSubmitPublication({
+          predictionCount: submitted.predictionCount,
+          harness: command,
+        })) {
+          io.out(block);
+        }
       }
     } catch (err) {
       io.err(`swebench submit refused: ${err instanceof Error ? err.message : String(err)}`);
@@ -462,6 +521,12 @@ export async function runEvalCli(
     for (const failure of run.aggregate.suiteFailures) io.out(`     ${failure.kind}: ${failure.detail}`);
   }
   if (metricsOut !== undefined && metricsOut !== "") {
+    // Under-admission (ruling 580): Guard before --metrics-out write.
+    const metricsRefused = await admitExplicitCliOutWrite(metricsOut, process.cwd());
+    if (metricsRefused !== undefined) {
+      io.err(`eval metrics ${metricsRefused}`);
+      return 1;
+    }
     const report = {
       cases: run.results.map((r) => ({
         caseId: r.caseId,
@@ -522,6 +587,12 @@ export async function runEvalCli(
       io.err(`--split-seed requires --held-out-fraction (frozen split)\n${USAGE}`);
       return 2;
     }
+    // Under-admission (ruling 580): Guard before --write-approval write.
+    const approvalRefused = await admitExplicitCliOutWrite(writeApprovalPath, process.cwd());
+    if (approvalRefused !== undefined) {
+      io.err(`eval approval ${approvalRefused}`);
+      return 1;
+    }
     const approval = buildEvalApproval(cases, undefined, frozenSplit);
     writeFileSync(writeApprovalPath, `${JSON.stringify(approval, null, 2)}\n`, "utf8");
     const splitNote =
@@ -540,6 +611,12 @@ export async function runEvalCli(
   if (autoSpecPath !== undefined) {
     try {
       const spec = parseRatchetGateSpec(readFileSync(autoSpecPath, "utf8"), autoSpecPath);
+      // Under-admission (ruling 582): Guard before decision-log append.
+      const logRefused = await admitExplicitCliOutWrite(spec.decisionLog, process.cwd());
+      if (logRefused !== undefined) {
+        io.err(`eval ratchet-auto ${logRefused}`);
+        return 1;
+      }
       const report = runAutoRatchet({ spec, resultFile: metricsOut! });
       io.out(`ratchet-auto: ${report.verdict} · variant=${report.variantId} · round=${report.round} · ${report.reason}`);
       io.out(

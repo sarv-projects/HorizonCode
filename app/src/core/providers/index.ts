@@ -19,6 +19,7 @@ import { createMockProvider } from "./mock";
 import { createOllamaProvider } from "./ollama";
 import { createOpenAiProvider } from "./openai";
 import { createOpenAiCompatibleProvider } from "./openai-compatible";
+import { wrapProviderWithResponsesSteer } from "./responses-steer-product";
 import { formatterFromResolvedConfig } from "./message-formatter";
 import { wrapAnthropicToolProvider } from "./toolconv/wrap-anthropic";
 import { wrapDeepseekToolProvider } from "./toolconv/wrap-deepseek";
@@ -160,13 +161,15 @@ export function makeProvider(config: HzConfig, opts: MakeProviderOptions = {}): 
           : missingKeyProvider("anthropic", "ANTHROPIC_API_KEY"),
         config,
       );
-    case "openai":
-      return withToolFormat(
-        config.apiKey
-          ? createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, messageFormatter: formatter })
-          : missingKeyProvider("openai", "OPENAI_API_KEY"),
-        config,
-      );
+    case "openai": {
+      const openai = config.apiKey
+        ? wrapProviderWithResponsesSteer(
+            createOpenAiProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, messageFormatter: formatter }),
+            { apiKey: config.apiKey },
+          )
+        : missingKeyProvider("openai", "OPENAI_API_KEY");
+      return withToolFormat(openai, config);
+    }
     case "google":
       return withToolFormat(
         config.apiKey

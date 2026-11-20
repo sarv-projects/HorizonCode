@@ -19,7 +19,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import type { ProviderFailureCode } from "../contracts";
+import type { ChatMsgContent, ProviderFailureCode } from "../contracts";
+import { chatContentText } from "./chat-content";
 import { estimateTokens } from "./output-budget";
 import { SessionStore } from "./session";
 
@@ -67,7 +68,7 @@ export type ConventionalCommitSubject = {
 /** Minimal turn shape for commit-message conversation excerpts. */
 export type CommitConversationTurn = {
   role: string;
-  content?: string | null;
+  content?: ChatMsgContent | null;
 };
 
 export function stagedDiff(workspace: string): { diff: string; truncated: boolean } | { error: string } {
@@ -96,7 +97,7 @@ export function formatCommitConversationExcerpt(
   const turns: Array<{ role: "user" | "assistant"; text: string }> = [];
   for (const msg of messages) {
     if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const text = String(msg.content ?? "").trim();
+    const text = chatContentText(msg.content).trim();
     if (text === "") continue;
     turns.push({ role: msg.role, text });
   }

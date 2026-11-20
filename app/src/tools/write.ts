@@ -33,11 +33,11 @@ import type { Stats } from "node:fs";
 import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
-import { withFileLock, targetLockPath } from "../core/file-lock";
+import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
 import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
-import { recordChange } from "./change-journal";
+import { recordChangeGuarded } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { detectLineEnding, normalizeLineEndings } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
@@ -57,10 +57,10 @@ function msg(e: unknown): string {
 }
 
 /**
- * E-1: the same opt-in dirty checkpoint `edit` takes before its write. When
- * `HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=1`, any pre-existing dirt on this path is
- * committed first so an overwrite cannot destroy unrecoverable work. No flag →
- * no-op (byte-identical output); no dirt → no commit. Mirrors edit.ts exactly.
+ * E-1: the same default-on dirty checkpoint `edit` takes before its write.
+ * Pre-existing dirt on this path is committed first so an overwrite cannot
+ * destroy unrecoverable work (`HZ_GIT_DIRTY_COMMIT_BEFORE_EDIT=0` opts out).
+ * No dirt → no commit. Mirrors edit.ts exactly.
  */
 function dirtyCheckpointPrefix(ctx: ToolContext, rel: string): string {
   const cp = checkpointDirtyPathBeforeEdit(ctx.workspace, rel);
@@ -191,7 +191,7 @@ export const writeTool: Tool = {
       let outLines = 0;
       let outBytes = 0;
       let checkpointNote = "";
-      const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
+      const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
         // Staleness across the window in which the user was deciding (docs/09 §8.2's
         // rule, extended to `write`): a concurrent change is a Conflict, not a
         // silent overwrite with "success".
@@ -271,7 +271,7 @@ export const writeTool: Tool = {
         const outcome = await writeAtomic(real, toWrite, ctx, real);
         if (isRefused(outcome)) return fail(outcome.refusal);
 
-        recordChange(ctx.sessionId, {
+        await recordChangeGuarded(ctx.sessionId, {
           path: resolved,
           rel,
           before: preimageText,

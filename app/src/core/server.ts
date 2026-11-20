@@ -42,7 +42,9 @@
  *     driver-lease claim/release (S42–S44). SINGLE-ATTACH stand-in: one
  *     subscriber per session, LAST subscriber wins (a new `session.subscribe`
  *     for a session replaces the previous connection's stream for it);
- *   - the ACP bridge (S89) and the remaining §3.2 method families.
+ *   - remaining §3.2 method families beyond single-attach.
+ *   ACP v2 agent attach lives in `acp-agent.ts` / `hzcode acp` (ruling **642**),
+ *   not inside this NDJSON server protocol.
  */
 
 import * as readline from "node:readline";

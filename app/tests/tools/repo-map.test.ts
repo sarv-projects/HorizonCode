@@ -215,7 +215,10 @@ describe("the tool", () => {
     expect(r1.output).toContain("src/a.ts:");
     expect(r1.output).toContain("[repo_map: 3 files");
     expect(bodyOf(r2.output)).toBe(bodyOf(r1.output));
-    expect(ctx.guardCalls.length).toBe(2);
+    // Under-admission (**564**): each execute admits fs.read for the map walk
+    // plus fs.write for the durable index — two executes → four guard calls.
+    expect(ctx.guardCalls.length).toBe(4);
+    expect(ctx.guardCalls.filter((c) => c.kind === "fs.read").length).toBe(2);
     expect(ctx.guardCalls[0]?.kind).toBe("fs.read");
     // The tool resolves the index through paths.ts: <workspace>/.hz/state/repo-map/index.json.
     expect(repoMapCachePath(ws)).toBe(path.join(ws, ".hz", "state", "repo-map", "index.json"));

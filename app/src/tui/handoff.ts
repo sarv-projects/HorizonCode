@@ -7,6 +7,7 @@
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { metricContract } from "../core/metrics";
 import { stateRoot } from "../core/paths";
 import type { TuiScreenMode } from "./screen-mode";
 
@@ -26,7 +27,26 @@ function handoffPath(workspace: string): string {
   return path.join(stateRoot(workspace), FILE);
 }
 
-export function writeTuiHandoff(workspace: string, payload: Omit<TuiHandoff, "version" | "writtenAt">): void {
+/**
+ * Under-admission (ruling 588): Guard `fs.write` on `tui-handoff.json` before
+ * materialising. Returns an error string on deny/ask/guard failure.
+ */
+export async function admitTuiHandoffWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("../core/preds-writer");
+  const refused = await admitPredsOutWrite(handoffPath(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "tui-handoff refused:")
+    .replace(/^preds write denied/, "tui-handoff denied")
+    .replace(/^preds fs\.write requires approval/, "tui-handoff fs.write requires approval");
+}
+
+export async function writeTuiHandoff(
+  workspace: string,
+  payload: Omit<TuiHandoff, "version" | "writtenAt">,
+): Promise<string | undefined> {
+  const refused = await admitTuiHandoffWrite(workspace);
+  if (refused !== undefined) return refused;
   const full: TuiHandoff = {
     version: 1,
     ...payload,
@@ -38,6 +58,20 @@ export function writeTuiHandoff(workspace: string, payload: Omit<TuiHandoff, "ve
   const tmp = target + ".tmp";
   writeFileSync(tmp, JSON.stringify(full) + "\n", { mode: 0o600, encoding: "utf8" });
   renameSync(tmp, target);
+  return undefined;
+}
+
+/** H-7: contracted draft-byte count for `hzcode tui relaunch` (ruling 615). */
+export function tuiRelaunchPublication(input: { draftBytes: number }): string[] {
+  return [
+    metricContract({
+      metric: "tui relaunch draft bytes",
+      anchor: "none — this tui relaunch consume",
+      population: "UTF-16 code units in the consumed handoff draft string",
+      excludes: "session id / mode / event cursor are not counted here",
+      value: input.draftBytes,
+    }),
+  ];
 }
 
 /** Read and delete the handoff file (one-shot). */

@@ -18,8 +18,8 @@
  * Big tool outputs can therefore be filtered and reduced inside the program
  * instead of landing in the model's context.
  *
- * Only the seven base tools are reachable from a program — no `code_mode`
- * inside `code_mode`, no `agent`, no `preview`.
+ * Base seven plus read-only extras (`repo_map`, `ast_search`, `lsp`) — no
+ * `code_mode` inside `code_mode`, no `agent`, no `preview` (ruling **670**).
  *
  * Frame grammar, one control frame per stdout line (upstream is keyed and
  * downstream carries no key — the program cannot inject into its own stdin):
@@ -51,16 +51,29 @@ import * as path from "node:path";
 import type { GuardAction, GuardDecision, Tool, ToolContext, ToolResult } from "../contracts";
 import { canonicalJson, digestOf, sha256Hex } from "../core/canon";
 import { kernelStateDir, sandboxSpawnRoPaths, spawnOwned, type OwnedProc } from "../core/owned-spawn";
-import { SandboxUnavailableError, sandboxEnforcementPosture } from "../core/sandbox-spawn";
+import { hostIsWsl, type SandboxChildNetMode } from "../core/sandbox-child-net";
+import {
+  SandboxUnavailableError,
+  emitSandboxNoticeOnce,
+  sandboxEnforcementPosture,
+  type SandboxEnforcementOptions,
+  type SandboxEnforcementPosture,
+} from "../core/sandbox-spawn";
+import { CodemodeSessionKv } from "./codemode-kv";
 import { scrubEnv } from "./helpers";
+import { astSearchTool } from "./ast-search";
 import { editTool } from "./edit";
 import { globTool } from "./glob";
 import { grepTool } from "./grep";
+import { lspTool } from "./lsp";
 import { readTool } from "./read";
+import { repoMapTool } from "./repo-map";
 import { shellTool } from "./shell";
 import { todoTool } from "./todo";
 import { writeTool } from "./write";
 import { ptcLimitTerminationMessage, ptcSubCallAllowance } from "./codemode-ptc";
+import { codemodeTypedStubsEnabled, renderCodemodeCompactStubs } from "./codemode-stubs";
+import type { ToolSpec } from "../contracts";
 
 const CHILD = path.join(import.meta.dir, "codemode-child.ts");
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -175,7 +188,7 @@ export class StdoutFramer {
   }
 }
 
-/** The tools a program may call. Base seven only — never code_mode itself. */
+/** Tools a program may call — base seven + read-only extras (ruling **670**). Never code_mode/agent. */
 const BASE_TOOLS = new Map<string, Tool>([
   ["read", readTool],
   ["write", writeTool],
@@ -184,7 +197,67 @@ const BASE_TOOLS = new Map<string, Tool>([
   ["glob", globTool],
   ["shell", shellTool],
   ["todo", todoTool],
+  ["repo_map", repoMapTool],
+  ["ast_search", astSearchTool],
+  ["lsp", lspTool],
 ]);
+
+/** Read-only tools added beyond the base seven (ruling 670). */
+export const CODEMODE_READONLY_EXTRAS = ["repo_map", "ast_search", "lsp"] as const;
+
+/** Tool names reachable from a code_mode program (sorted). */
+export function codemodeAllowedToolNames(): string[] {
+  return [...BASE_TOOLS.keys()].sort();
+}
+
+export interface CodeModeSandboxResolution {
+  posture: SandboxEnforcementPosture;
+  childNet: SandboxChildNetMode;
+  /** False when WSL (or host) could not apply a network-off child net. */
+  networkConfined: boolean;
+}
+
+/**
+ * Prefer network-off; on WSL when that canary fails, retry with the host-default
+ * child net and emit an explicit notice — FS/process sandbox only, never claim
+ * shell-net enforced.
+ */
+export async function resolveCodeModeSandbox(
+  kernel: ToolContext["kernel"],
+  baseOpts: SandboxEnforcementOptions,
+): Promise<CodeModeSandboxResolution> {
+  const strict = await sandboxEnforcementPosture(kernel, { ...baseOpts, childNet: "off" });
+  if (strict.enforced) {
+    return { posture: strict, childNet: "off", networkConfined: true };
+  }
+
+  const wsl = baseOpts.wsl ?? hostIsWsl();
+  if (!wsl) {
+    return { posture: strict, childNet: "off", networkConfined: false };
+  }
+
+  const relaxedEnv: Record<string, string | undefined> = { ...(baseOpts.env ?? process.env) };
+  // An explicit `off` in the ambient env is what failed the strict probe; retry with
+  // the WSL default (`on`) instead of re-requesting an impossible netns wrap.
+  delete relaxedEnv.HZ_SANDBOX_CHILD_NET;
+  const relaxed = await sandboxEnforcementPosture(kernel, {
+    ...baseOpts,
+    env: relaxedEnv,
+    childNet: undefined,
+    wsl: true,
+  });
+  if (relaxed.enforced) {
+    for (const notice of relaxed.canary?.notes ?? []) emitSandboxNoticeOnce(notice);
+    const childNet = relaxed.canary?.childNet ?? "on";
+    return {
+      posture: relaxed,
+      childNet,
+      networkConfined: childNet === "off",
+    };
+  }
+
+  return { posture: strict, childNet: "off", networkConfined: false };
+}
 
 /**
  * The guard action a call implies — the same mapping the loop uses for direct
@@ -207,9 +280,15 @@ export function actionForCall(name: string, args: Record<string, unknown>, cwd: 
       return file ? { kind: "fs.read", target: resolved(file) } : undefined;
     }
     case "glob":
-    case "grep": {
+    case "grep":
+    case "repo_map":
+    case "ast_search": {
       const root = argString("path", "dir", "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
+    }
+    case "lsp": {
+      const file = argString("path", "file");
+      return file ? { kind: "fs.read", target: resolved(file) } : { kind: "fs.read", target: resolved(".") };
     }
     case "write":
     case "edit": {
@@ -279,20 +358,49 @@ interface WireMessage {
   rpcId?: unknown;
   name?: unknown;
   args?: unknown;
+  key?: unknown;
+  value?: unknown;
   done?: unknown;
   result?: unknown;
   error?: unknown;
 }
 
+/**
+ * Stub specs derived from the live BASE_TOOLS schemas (ruling 645) — never
+ * hand-code param names (edit uses `old`/`new`, not `old_string`/`new_string`).
+ */
+function stubSpecsFromBaseTools(): ToolSpec[] {
+  return [...BASE_TOOLS.values()].map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
+}
+
+function codemodeDescription(): string {
+  const base =
+    "Run a JavaScript program in an isolated Bun subprocess to chain tool calls, filter large outputs, and " +
+    "compute. Use `await tools.call(name, args)` to call tools; `await tools.kv.set/get` for out-of-context state; " +
+    "console.log is collected; `return` a value to get it back.";
+  if (!codemodeTypedStubsEnabled()) return base;
+  // Compact signatures only — full .d.ts must not bloat every-turn tool schemas (≤1024).
+  const stubs = renderCodemodeCompactStubs(stubSpecsFromBaseTools());
+  return `${base} ${stubs}`;
+}
+
 export const codemodeTool: Tool = {
   name: "code_mode",
-  description:
-    "Run a JavaScript program in an isolated Bun subprocess to chain tool calls, filter large outputs, and " +
-    "compute. Use `await tools.call(name, args)` to call tools; console.log is collected; `return` a value to get it back.",
+  get description() {
+    return codemodeDescription();
+  },
   parameters: {
     type: "object",
     properties: {
-      code: { type: "string", description: "Async function body. `tools.call(name, args)` bridges to the tools; return the value you want back." },
+      code: {
+        type: "string",
+        description:
+          "Async function body. `tools.call(name, args)` bridges to the tools; `tools.kv` holds large intermediates; return the value you want back.",
+      },
       timeout_ms: { type: "number", description: `Wall-clock budget (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}).` },
     },
     required: ["code"],
@@ -311,19 +419,18 @@ export const codemodeTool: Tool = {
 
     // OS confinement is a REQUIREMENT, not an optimization. The child runs
     // model-authored JavaScript with ambient Bun privileges, so code_mode runs
-    // ONLY under a live-verified hz-sandbox-exec (workspace-write FS fence,
-    // network off). A kernel report is not enough: the posture helper also
-    // spawns `hz-sandbox-exec -- /bin/true` with the exact policy. If that
-    // canary fails, refuse and do not spawn — never run the program unsandboxed.
-    const posture = await sandboxEnforcementPosture(ctx.kernel, {
+    // ONLY under a live-verified hz-sandbox-exec (workspace-write FS fence;
+    // network-off when the host permits). On WSL (CLONE_NEWNET EPERM) the netns
+    // wrap is skipped with a clear notice — FS/process only, never shell-net enforced.
+    const sandboxBase: SandboxEnforcementOptions = {
       fsRoot: ctx.cwd,
       fsMode: "workspace-write",
       roPaths: sandboxSpawnRoPaths(ctx.cwd, kernelStateDir(ctx.workspace), process.env.HZ_SANDBOX_FS_RO_PATHS),
-      childNet: "off",
       requireTrusted: true,
-    });
-    if (!posture.enforced) {
-      const reason = posture.reason ?? "the sandbox canary did not pass";
+    };
+    const sandbox = await resolveCodeModeSandbox(ctx.kernel, sandboxBase);
+    if (!sandbox.posture.enforced) {
+      const reason = sandbox.posture.reason ?? "the sandbox canary did not pass";
       const message =
         "code_mode refused: model-authored JavaScript requires a verified OS sandbox " +
         `(workspace-write FS, network off), but confinement could not be proven: ${reason}. ` +
@@ -334,6 +441,10 @@ export const codemodeTool: Tool = {
         error: "SANDBOX_UNAVAILABLE: code_mode requires a verified OS sandbox",
       };
     }
+    const networkHonesty = sandbox.networkConfined
+      ? undefined
+      : "[code_mode] network egress is NOT confined on this host; FS/process sandbox only.";
+    const sessionKv = new CodemodeSessionKv(ctx.workspace, ctx.sessionId);
     if (ctx.signal.aborted) return { ok: false, output: "code_mode aborted", error: "aborted" };
 
     // The bootstrap half of the frame protocol: it travels in the child's
@@ -353,7 +464,7 @@ export const codemodeTool: Tool = {
         stateDir: kernelStateDir(ctx.workspace),
         label: "code_mode",
         cwd: ctx.cwd,
-        env: { ...scrubEnv(), HZ_SANDBOX_CHILD_NET: "off", [FRAME_KEY_ENV]: bootstrapKey },
+        env: { ...scrubEnv(), HZ_SANDBOX_CHILD_NET: sandbox.childNet, [FRAME_KEY_ENV]: bootstrapKey },
         stdio: { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         detached: true,
         sandboxWrap: "required",
@@ -458,7 +569,7 @@ export const codemodeTool: Tool = {
         }
       };
 
-      const reply = (rpcId: unknown, result: ToolResult): void => {
+      const reply = (rpcId: unknown, result: ToolResult & { value?: unknown }): void => {
         if (typeof rpcId !== "number") return;
         writeText(JSON.stringify({ rpcId, result }) + "\n");
       };
@@ -543,6 +654,23 @@ export const codemodeTool: Tool = {
         reply(message.rpcId, result);
       };
 
+      const handleKvRpc = async (message: WireMessage): Promise<void> => {
+        const key = typeof message.key === "string" ? message.key : String(message.key ?? "");
+        if (message.rpc === "kv.get") {
+          reply(message.rpcId, { ok: true, output: "", value: sessionKv.get(key) });
+          return;
+        }
+        if (message.rpc === "kv.set") {
+          try {
+            sessionKv.set(key, message.value);
+            reply(message.rpcId, { ok: true, output: "" });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            reply(message.rpcId, { ok: false, output: msg, error: msg });
+          }
+        }
+      };
+
       /**
        * The one frame a child may send before the run key exists. Accepting it is
        * what hands the program over: no model code has run yet, so no
@@ -572,11 +700,19 @@ export const codemodeTool: Tool = {
           rpcChain = rpcChain.then(() => handleRpc(message));
           return;
         }
+        if (message.rpc === "kv.get" || message.rpc === "kv.set") {
+          rpcChain = rpcChain.then(() => handleKvRpc(message));
+          return;
+        }
         if (message.done === true) {
           const ms = Date.now() - started;
           const resultText = truncate(safeJson(message.result), RESULT_CAP);
           const logText = logs.length > 0 ? `\n--- logs ---\n${truncate(logs.join("\n"), LOG_CAP)}` : "";
-          finish({ ok: true, output: `code_mode: ${calls} tool call(s) in ${ms}ms${logText}\n--- result ---\n${resultText}` });
+          const netNote = networkHonesty !== undefined ? `\n${networkHonesty}` : "";
+          finish({
+            ok: true,
+            output: `code_mode: ${calls} tool call(s) in ${ms}ms${netNote}${logText}\n--- result ---\n${resultText}`,
+          });
           return;
         }
         if (message.done === false) {

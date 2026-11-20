@@ -8,15 +8,17 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ThinkingEcho, ToolCall, ToolSpec } from "../../contracts";
+import { wireAnthropicContentBlocks, wireAnthropicToolResultContent } from "../chat-content";
 import { anthropicSystemField } from "./anthropic-cache";
 import { applyAnthropicRequestCacheBreakpoints } from "./anthropic-cache-wire";
 import { anthropicToolArguments, anthropicToolInput } from "./anthropic-tool-args";
-import { formatObservationMessages, toolResultContent } from "./tool-result-content";
+import { formatObservationMessages, NO_TOOL_OUTPUT, toolResultContent, toolResultIsMultipart } from "./tool-result-content";
 import type { MessageFormatter } from "./message-formatter";
 import { toolInputErrorEvent, validateFinalToolArguments } from "./tool-call-assembly";
 import { parseJsonObject } from "../json-repair";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { classifyProviderFailure } from "./failure-codes";
+import { maybeDumpProviderRequest } from "./request-dump";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
 import {
@@ -50,7 +52,13 @@ const DEFAULT_MAX_TOKENS = 4096;
 type AnthropicBlock =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content:
+        | string
+        | Array<{ type: "text"; text: string } | { type: "image"; source: Record<string, unknown> }>;
+    }
   | { type: "thinking"; thinking: string; signature?: string }
   | { type: "redacted_thinking"; data: string };
 
@@ -95,7 +103,8 @@ export function toAnthropicMessages(messages: ChatMsg[], formatter?: MessageForm
     if (!msg) continue;
     if (msg.role === "system") continue; // delivered as the top-level system prompt
     if (msg.role === "user") {
-      push("user", [{ type: "text", text: msg.content ?? "" }]);
+      const blocks = wireAnthropicContentBlocks(msg.content) as AnthropicBlock[];
+      push("user", blocks.length > 0 ? blocks : [{ type: "text", text: "" }]);
       continue;
     }
     if (msg.role === "assistant") {
@@ -117,9 +126,12 @@ export function toAnthropicMessages(messages: ChatMsg[], formatter?: MessageForm
     }
     // tool result
     if (!msg.toolCallId) continue; // unusable without the id it answers
-    push("user", [
-      { type: "tool_result", tool_use_id: msg.toolCallId, content: toolResultContent(msg.content) },
-    ]);
+    const toolBody = toolResultIsMultipart(msg.content)
+      ? wireAnthropicToolResultContent(msg.content)
+      : toolResultContent(msg.content);
+    const normalizedToolBody =
+      typeof toolBody === "string" ? (toolBody !== "" ? toolBody : NO_TOOL_OUTPUT) : toolBody.length > 0 ? toolBody : NO_TOOL_OUTPUT;
+    push("user", [{ type: "tool_result", tool_use_id: msg.toolCallId, content: normalizedToolBody }]);
   }
   return out;
 }
@@ -178,6 +190,7 @@ async function* streamAnthropic(
   };
   if (cached.system !== undefined && cached.system !== "") body.system = cached.system;
   if (Array.isArray(wire.tools) && wire.tools.length > 0) body.tools = toAnthropicTools(wire.tools);
+  await maybeDumpProviderRequest("anthropic", body);
 
   let response: Response;
   const retries: string[] = [];

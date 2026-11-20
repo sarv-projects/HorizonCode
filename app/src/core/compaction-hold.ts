@@ -53,6 +53,12 @@ export class CompactionHoldBuffer {
     return this.held?.summary ?? null;
   }
 
+  /** True when the next compaction for this elided prefix will swap in the held summary. */
+  wouldSwap(elided: readonly ChatMsg[]): boolean {
+    const key = compactionHoldKey(elided);
+    return this.held?.key === key;
+  }
+
   clear(): void {
     this.held = null;
   }

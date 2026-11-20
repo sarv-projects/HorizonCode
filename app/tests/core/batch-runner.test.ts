@@ -24,7 +24,7 @@ import {
 } from "../../src/core/batch-runner";
 import { HARNESS_PRICE_TABLE_REVISION, usageCostEventFields } from "../../src/core/usage-cost";
 import { SpendLedger } from "../../src/core/spend-ledger";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -140,6 +140,33 @@ describe("batch runner", () => {
     expect(load.rows[0]?.status).toBe("done");
     expect(pendingBatchRows(load.rows)).toHaveLength(0);
   });
+
+  test("admitBatchJobWrite refuses deny before upsert (ruling 603)", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "batch-deny-"));
+    const file = path.join(dir, "job.jsonl");
+    writeFileSync(file, `${JSON.stringify({ id: "x", task: "t", status: "pending" })}\n`);
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(dir, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(dir, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-batch-job" }]),
+        "utf8",
+      );
+      const { admitBatchJobWrite } = await import("../../src/core/batch-runner");
+      const refused = await admitBatchJobWrite(file, dir);
+      expect(refused).toMatch(/denied|test-deny-batch-job|batch-job/i);
+      await expect(upsertBatchJobRow(file, "x", { status: "done" }, dir)).rejects.toThrow(
+        /denied|test-deny-batch-job|batch-job/i,
+      );
+      expect(loadBatchJob(file).rows[0]?.status).toBe("pending");
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
 
   test("J-2 runner-config snapshot round-trips selection and refuses hash drift", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "batch-cfg-"));
@@ -360,7 +387,12 @@ describe("batch worker pool (J-2 concurrency)", () => {
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);
         ran.push(row.id);
-        await new Promise((r) => setTimeout(r, 8));
+        // Under-admission starts a KernelClient per row persist; a fixed 8ms
+        // sleep no longer overlaps on a loaded host. Spin until overlap or 2s.
+        const start = Date.now();
+        while (maxInFlight < 2 && Date.now() - start < 2_000) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
         inFlight -= 1;
         return { terminal: "succeeded" };
       },
@@ -434,8 +466,11 @@ describe("batch worker pool (J-2 concurrency)", () => {
         return { terminal: "succeeded" };
       },
     });
-    // Let a and b get dispatched and held in flight.
-    await new Promise((r) => setTimeout(r, 12));
+    // Let a and b get dispatched and held in flight (admit latency >> 12ms).
+    const dispatchDeadline = Date.now() + 5_000;
+    while (ran.length < 2 && Date.now() < dispatchDeadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     expect(ran.slice().sort()).toEqual(["a", "b"]);
     controller.abort(); // stop claiming c/d while a,b are in flight
     resolveRelease(); // let the in-flight rows settle

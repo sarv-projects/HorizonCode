@@ -9,6 +9,7 @@
  */
 
 import type { ChatMsg } from "../../contracts";
+import { textFromChatContent } from "../chat-content";
 import type { CacheableBlock } from "./cache-breakpoints";
 
 const RESUMABLE_TRUNCATION = /\bnextOffset:\s*\d+/;
@@ -23,7 +24,7 @@ function toolResultTextMayStillGrow(content: string): boolean {
 export function toolResultMayStillGrow(msg: ChatMsg, index: number, messages: readonly ChatMsg[]): boolean {
   if (msg.role !== "tool") return false;
   if (index !== messages.length - 1) return false;
-  return toolResultTextMayStillGrow(msg.content ?? "");
+  return toolResultTextMayStillGrow(textFromChatContent(msg.content));
 }
 
 /**

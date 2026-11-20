@@ -31,10 +31,11 @@
  *   - zombie grace: an unreaped zombie still has a /proc entry with matching
  *     startTicks and passes. Its work is over by then, so the caller's own
  *     liveness bookkeeping (subprocess exited) is the authority there.
- *   - platforms without /proc: identity is unavailable, so recordIdentity
- *     returns undefined and verifyIdentity refuses.
- *   - macOS/Windows births; hermes-style monotonic create_time re-anchor when
- *     btime moves under sleep-wake without a new boot_id.
+ *   - native Windows: identity is unavailable (ruling **707** honesty).
+ *   - macOS: reduced `ps` lstart + kern.boottime jiffies only — never boot-id
+ *     tokens (`boot-birth-honesty.ts`).
+ *   - hermes-style monotonic create_time re-anchor when sleep-wake moves clocks
+ *     without a new boot anchor (still OPEN on all platforms).
  *
  * Tick granularity: two processes born within the same tick (10 ms at USER_HZ
  * 100) share a startTicks value, so startTicks identifies a *birth event*, not
@@ -43,6 +44,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { type DarwinBirthReaders, readDarwinProcessFacts } from "./boot-birth-honesty";
 
 /** A process birth identity: the pid and its starttime in clock ticks. */
 export interface ProcessIdentity {
@@ -81,12 +83,15 @@ export interface BootProcReaders {
  * or no /proc on this platform), when the pid field disagrees with the
  * request, or when the numbers do not parse.
  */
-export function readProcessFacts(pid: number): ProcessFacts | undefined {
+export function readProcessFacts(pid: number, darwinReaders?: DarwinBirthReaders): ProcessFacts | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   let raw: string;
   try {
     raw = readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch {
+    if (process.platform === "darwin") {
+      return readDarwinProcessFacts(pid, darwinReaders);
+    }
     return undefined;
   }
   const open = raw.indexOf("(");
@@ -173,12 +178,19 @@ export function resolveBootAnchor(readers?: BootProcReaders): BootAnchor | undef
  * not "no identity needed" — and must not reserve work for the process.
  * When `btime` is readable, attaches `bootId` (ruling 473).
  */
-export function recordIdentity(pid: number, readers?: BootProcReaders): ProcessIdentity | undefined {
-  const facts = readProcessFacts(pid);
+export function recordIdentity(
+  pid: number,
+  readers?: BootProcReaders,
+  darwinReaders?: DarwinBirthReaders,
+): ProcessIdentity | undefined {
+  const facts = readProcessFacts(pid, darwinReaders);
   if (facts === undefined) return undefined;
   const identity: ProcessIdentity = { pid, startTicks: facts.startTicks };
-  const anchor = resolveBootAnchor(readers);
-  if (anchor !== undefined) identity.bootId = anchor.bootId;
+  // Boot-id tokens are Linux /proc only — never mint on Darwin or Windows (707).
+  if (process.platform === "linux") {
+    const anchor = resolveBootAnchor(readers);
+    if (anchor !== undefined) identity.bootId = anchor.bootId;
+  }
   return identity;
 }
 
@@ -218,7 +230,10 @@ export function verifyIdentity(
   }
   const facts = readProcessFacts(identity.pid);
   if (facts === undefined) {
-    return { ok: false, reason: `pid ${identity.pid} has no live /proc entry (process gone, or /proc unavailable)` };
+    return {
+      ok: false,
+      reason: `pid ${identity.pid} has no live process entry (process gone, or birth facts unavailable)`,
+    };
   }
   if (facts.startTicks !== identity.startTicks) {
     return {

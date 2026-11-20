@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { join } from "node:path";
 import {
   ANALYTICS_LOG_FILE,
+  admitAnalyticsLogWrite,
   analyticsEventCatalogue,
   analyticsFieldCatalogue,
   analyticsLogEnabled,
@@ -28,21 +30,21 @@ const baseConfig: HzConfig = {
 };
 
 describe("analytics-log (I-4 / ruling 468)", () => {
-  test("off by default — no path, no file", () => {
+  test("off by default — no path, no file", async () => {
     const ws = freshWorkspace();
     expect(analyticsLogEnabled(ws, {})).toBe(false);
     expect(resolveAnalyticsLogPath(ws, {})).toBeUndefined();
-    expect(appendAnalyticsEvent({ workspace: ws, event: "session.start", env: {} })).toBeUndefined();
+    expect(await appendAnalyticsEvent({ workspace: ws, event: "session.start", env: {} })).toBeUndefined();
     expect(existsSync(defaultAnalyticsLogPath(ws))).toBe(false);
   });
 
-  test("HZ_ANALYTICS_LOG=1 writes NDJSON under workspace state", () => {
+  test("HZ_ANALYTICS_LOG=1 writes NDJSON under workspace state", async () => {
     const ws = freshWorkspace();
     const env = { HZ_ANALYTICS_LOG: "1", HZ_JSONL_FSYNC: "0" };
     const expected = join(workspaceStateDir(ws), ANALYTICS_LOG_FILE);
     expect(resolveAnalyticsLogPath(ws, env)).toBe(expected);
 
-    const written = appendAnalyticsEvent({
+    const written = await appendAnalyticsEvent({
       workspace: ws,
       event: "session.start",
       sessionId: "s1",
@@ -93,12 +95,12 @@ describe("analytics-log (I-4 / ruling 468)", () => {
     expect(env.HZ_ANALYTICS_LOG).toBe(custom);
   });
 
-  test("append is best-effort and stacks multiple events", () => {
+  test("append is best-effort and stacks multiple events", async () => {
     const ws = freshWorkspace();
     mkdirSync(workspaceStateDir(ws), { recursive: true });
     const env = { HZ_ANALYTICS_LOG: "1", HZ_JSONL_FSYNC: "0" };
-    appendAnalyticsEvent({ workspace: ws, event: "cli.flag", flag: "show-repo-map", env });
-    appendAnalyticsEvent({ workspace: ws, event: "session.end", sessionId: "s1", env });
+    await appendAnalyticsEvent({ workspace: ws, event: "cli.flag", flag: "show-repo-map", env });
+    await appendAnalyticsEvent({ workspace: ws, event: "session.end", sessionId: "s1", env });
     const text = readFileSync(defaultAnalyticsLogPath(ws), "utf8");
     const rows = text
       .trim()
@@ -126,13 +128,13 @@ describe("analytics-log (I-4 / ruling 468)", () => {
     }
   });
 
-  test("I-4 richer rows: scalar facts are recorded, unknown fields are dropped", () => {
+  test("I-4 richer rows: scalar facts are recorded, unknown fields are dropped", async () => {
     const ws = freshWorkspace();
     const env = { HZ_ANALYTICS_LOG: "1", HZ_JSONL_FSYNC: "0" };
     // A caller cannot declare these in the typed options; spread a plain map so
     // the runtime allowlist is what stands between them and the log.
     const smuggled: Record<string, unknown> = { content: "the secret chat text", apiKey: "sk-LEAK" };
-    const written = appendAnalyticsEvent({
+    const written = await appendAnalyticsEvent({
       ...smuggled,
       workspace: ws,
       event: "batch.row",
@@ -173,6 +175,54 @@ describe("analytics-log (I-4 / ruling 468)", () => {
     expect(analyticsRowFields({ sessionId: "  ", flag: "" })).toEqual({});
     expect(analyticsRowFields({ provider: "mock", costMicroUsd: 12 })).toEqual({ provider: "mock", costMicroUsd: 12 });
   });
+
+  test("admitAnalyticsLogWrite refuses deny before persist (ruling 600)", async () => {
+    const ws = freshWorkspace();
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(ws, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(ws, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-analytics" }]),
+        "utf8",
+      );
+      const file = defaultAnalyticsLogPath(ws);
+      const refused = await admitAnalyticsLogWrite(file, ws);
+      expect(refused).toMatch(/denied|test-deny-analytics|analytics-log/i);
+      const written = await appendAnalyticsEvent({
+        workspace: ws,
+        event: "session.start",
+        env: { HZ_ANALYTICS_LOG: "1", HZ_JSONL_FSYNC: "0" },
+      });
+      expect(written).toBeUndefined();
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
+
+  test("admitAnalyticsLogWrite treats ask as allow (opt-in is consent)", async () => {
+    const ws = freshWorkspace();
+    const kernelState = path.join(ws, ".hzcode", "kernel");
+    mkdirSync(kernelState, { recursive: true });
+    writeFileSync(
+      path.join(kernelState, "policy.json"),
+      JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "ask" }]),
+      "utf8",
+    );
+    const file = path.join(ws, "analytics-ask.ndjson");
+    expect(await admitAnalyticsLogWrite(file, ws)).toBeUndefined();
+    const written = await appendAnalyticsEvent({
+      workspace: ws,
+      event: "session.start",
+      env: { HZ_ANALYTICS_LOG: file, HZ_JSONL_FSYNC: "0" },
+    });
+    expect(written).toBe(file);
+    expect(existsSync(file)).toBe(true);
+  }, 20_000);
 
   test("/settings reports analytics log off or path", () => {
     const ws = freshWorkspace();

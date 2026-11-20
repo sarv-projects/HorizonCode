@@ -90,6 +90,7 @@ interface RpcResult {
   ok: boolean;
   output: string;
   error?: string;
+  value?: unknown;
 }
 
 const LOG_CAP = 20000;
@@ -248,20 +249,24 @@ function flushAndExit(code: number): void {
 
 let rpcCounter = 0;
 
-/** tools.call(name, args) — one request/response round trip with the parent. */
-function callTool(name: unknown, args: unknown): Promise<RpcResult> {
+/** Parent RPC round trip (tool.call, kv.get, kv.set). */
+function parentRpc(frame: Record<string, unknown>): Promise<RpcResult> {
   const rpcId = rpcCounter + 1;
   rpcCounter = rpcId;
   const promise = new Promise<RpcResult>((resolve) => {
     pending.set(rpcId, resolve);
   });
-  writeFrame({
+  writeFrame({ ...frame, rpcId });
+  return promise;
+}
+
+/** tools.call(name, args) — one request/response round trip with the parent. */
+function callTool(name: unknown, args: unknown): Promise<RpcResult> {
+  return parentRpc({
     rpc: "tool.call",
-    rpcId,
     name: typeof name === "string" ? name : String(name ?? ""),
     args: args !== null && typeof args === "object" && !Array.isArray(args) ? args : {},
   });
-  return promise;
 }
 
 /* ------------------------------ logging ------------------------------ */
@@ -330,12 +335,32 @@ function handleLine(line: string): void {
 
 type AsyncFnCtor = new (...args: string[]) => (...args: unknown[]) => Promise<unknown>;
 
+/**
+ * Session KV bridged to the parent (persists across code_mode runs in a session).
+ */
+function makeRunKv(): {
+  get(key: string): Promise<unknown>;
+  set(key: string, value: unknown): Promise<void>;
+} {
+  return {
+    async get(key: string): Promise<unknown> {
+      const result = await parentRpc({ rpc: "kv.get", key: String(key) });
+      if (!result.ok) throw new Error(result.error ?? result.output ?? "kv.get failed");
+      return result.value;
+    },
+    async set(key: string, value: unknown): Promise<void> {
+      const result = await parentRpc({ rpc: "kv.set", key: String(key), value });
+      if (!result.ok) throw new Error(result.error ?? result.output ?? "kv.set failed");
+    },
+  };
+}
+
 async function runProgram(code: string): Promise<void> {
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as AsyncFnCtor;
   let result: unknown;
   try {
     const program = new AsyncFunction("tools", "console", code);
-    result = await program({ call: callTool }, captureConsole);
+    result = await program({ call: callTool, kv: makeRunKv() }, captureConsole);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     writeFrame({ done: false, error: message });

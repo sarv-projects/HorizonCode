@@ -282,6 +282,7 @@ describe("every tool passes an admission", () => {
       tool_search: { query: "preview dev server" },
       ast_search: { pat: "foo($A)" },
       ast_edit: { path: "a.ts", pat: "foo($A)", out: "bar($A)" },
+      web_fetch: { url: "https://example.com/docs" },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {

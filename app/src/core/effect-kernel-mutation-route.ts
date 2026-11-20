@@ -6,18 +6,19 @@
  * approval in `loop.ts`. One-step Add/exact-Update/Delete/Move,
  * same-file exact multi-hunk Update collapsed into one whole-file write,
  * and structural `ast_edit` one/multiple complete matches may kernel-route.
- * Multi-file/fuzzy/ambiguous operations remain unsupported. Ineligible or disabled routes may use Bun in non-strict mode; a
+ * Multi-file/ambiguous/Bun-only-first-hit fuzz remain unsupported. Ineligible or disabled routes may use Bun in non-strict mode; a
  * Rust refusal or uncertain kernel transport result NEVER falls back to Bun.
  * Kernel still owns the routed write bytes; TS
  * records the change journal after settled write/edit (**281**); kernel owns
  * temp+rename atomic write under sandboxRoot (**283**). Since ruling **349**,
  * explicit Rust refusals and lost effect.execute replies NEVER fall back to Bun,
- * and unsupported multi-operation apply_patch refuses BEFORE any write
- * without atomic fs.batch ownership. Rule 353 adds a safe subset: whole-file
- * atomic writes for same-file exact multi-hunks and complete multi-site AST
- * rewrites with Rust-verified original preimage digests.
- * Full edit.ts repair ladder stays on Bun; kernel path has optional reduced
- * repair via `HZ_EFFECT_HOST_EDIT_REPAIR`.
+ * and unsupported multi-operation apply_patch (rename/Bun-first-hit/mixed) refuses
+ * BEFORE any write. Ruling **353** collapses same-file exact multi-hunks into
+ * one whole-file write; ruling **539** routes multi-file exact Add/Update
+ * projections through one reduced kernel `fs.batch` under a single OwnerLog lock.
+ * Ruling **646**: same-file multi-hunk + multi-file batch also accept *kernel-unique*
+ * fuzzy chunks (trim/relative-indent/unicode-fold/line-patch/dominant/Levenshtein)
+ * when `HZ_EFFECT_HOST_EDIT_REPAIR=1` resolves them — Bun first-hit score fuzz stays Bun-only.
  */
 
 import { existsSync } from "node:fs";
@@ -28,14 +29,25 @@ import { KernelRefusal, type KernelClient } from "./kernel";
 import type { KernelExecutePostimageObserve } from "./receipt-postimage";
 import { analyzeShellCompound } from "./shell-split";
 import { formatExecOutputForModel } from "../tools/exec-output-format";
-import { bindJournalWorkspace, recordChange } from "../tools/change-journal";
+import {
+  BEFORE_MAX_BYTES,
+  bindJournalWorkspace,
+  consumeChangeGuarded,
+  recordChangeGuarded,
+  reloadFromDisk,
+  unpersistedEntries,
+  type ChangeEntry,
+} from "../tools/change-journal";
+import { relPath, resolvePath, resolveRealTarget } from "../tools/helpers";
 import { parse } from "../tools/apply-patch-parser";
 import {
   classifyApplyPatchChunkKernelFuzz,
   resolveKernelApplyPatchChunkEdit,
 } from "../tools/apply-patch-kernel-fuzz";
 import {
+  applyPatchArgsEligibleForKernelRoute,
   applyPatchKernelProjections,
+  applyPatchProjectionMissRequireDetail,
   astEditKernelProjection,
   astEditKernelAtomicMultiProjection,
   refreshApplyPatchFileCache,
@@ -174,6 +186,74 @@ export function shellKernelRouteMissRequireDetail(
   }
 }
 
+/** Shape classes that must not Bun-fallback when EffectHost is on (ruling **652**). */
+const SHELL_NO_AMBIENT_MISS = new Set<ShellKernelRouteMissReason>([
+  "compound",
+  "unparsed",
+  "metachar",
+  "inline_env",
+  "interpreter",
+]);
+
+export const EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE =
+  "[effect-host-kernel] HZ_EFFECT_HOST_KERNEL on: refused — compound/interpreter shell cannot ambient Bun-fallback";
+
+/**
+ * P0-1 / ruling **652**: when EffectHost mutation routing is on (`=1`/`=default`/
+ * `=require`), refuse compound/interpreter/metachar shell instead of ambient Bun
+ * fallback. `timeoutMs` and kernel-unavailable simple argv still Bun under
+ * non-require (require already refuses those via **649**).
+ */
+export function effectHostNoAmbientCompoundShellRefusal(
+  tool: string,
+  args: Record<string, unknown>,
+  kernelRouted: boolean,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  if (!effectHostKernelMutationEnabled(env)) return undefined;
+  if (tool !== "shell" || kernelRouted) return undefined;
+  const command = typeof args.command === "string" ? args.command : "";
+  const miss = classifyShellKernelRouteMiss(command, { timeoutMs: args.timeoutMs });
+  if (miss === undefined || !SHELL_NO_AMBIENT_MISS.has(miss.reason)) return undefined;
+  const mode = effectHostKernelMode(env);
+  if (mode === "require") {
+    // require path already names these via effectHostKernelRequireRefusal
+    return undefined;
+  }
+  return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHELL_NOTICE} (${shellKernelRouteMissRequireDetail(miss).replace(/ under require$/, " when EffectHost is on")})`;
+}
+
+export const EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE =
+  "[effect-host-kernel] HZ_EFFECT_HOST_KERNEL on: refused — shape-ineligible mutation cannot ambient Bun-fallback";
+
+/**
+ * P0-1 / ruling **667**: when EffectHost mutation routing is on (`=1`/`=default`),
+ * refuse write/edit/apply_patch that cannot kernel-route at the args shape
+ * instead of ambient Bun fallback (require uses **649** preflight/refusal).
+ * Eligible shapes that miss kernel transport still Bun-fallback under non-require.
+ */
+export function effectHostNoAmbientShapeIneligibleMutationRefusal(
+  tool: string,
+  args: Record<string, unknown>,
+  kernelRouted: boolean,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  if (!effectHostKernelMutationEnabled(env)) return undefined;
+  if (kernelRouted) return undefined;
+  const mode = effectHostKernelMode(env);
+  if (mode === "require") return undefined;
+  if (tool === "write" && !writeArgsEligibleForKernelRoute(args)) {
+    return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE} (write args ineligible for kernel fs.write)`;
+  }
+  if (tool === "edit" && !editArgsEligibleForKernelRoute(args)) {
+    return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE} (edit args ineligible for kernel fs.edit)`;
+  }
+  if (tool === "apply_patch" && !applyPatchArgsEligibleForKernelRoute(args)) {
+    return `${EFFECT_HOST_KERNEL_NO_AMBIENT_SHAPE_MUTATION_NOTICE} (${applyPatchProjectionMissRequireDetail("shape_ineligible")})`;
+  }
+  return undefined;
+}
+
 export type KernelExecuteObserveSnap = KernelExecutePostimageObserve & {
   exitCode?: number;
   stdoutDigest?: string;
@@ -292,7 +372,7 @@ async function recordKernelFsJournal(
   if (afterSha256 === undefined) return false;
   bindJournalWorkspace(sessionId, workspace);
   try {
-    recordChange(sessionId, {
+    await recordChangeGuarded(sessionId, {
       path: resolved,
       rel,
       before: preimage.before,
@@ -313,6 +393,7 @@ export async function tryKernelWriteRoute(
   sessionId: string,
   effectId: string,
   args: Record<string, unknown>,
+  opts?: { skipJournal?: boolean },
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const rel = specPathInWorkspace(workspace, String(args.path));
   if (rel === undefined) return undefined;
@@ -356,7 +437,8 @@ export async function tryKernelWriteRoute(
       },
     });
     let journalRecordFailed: boolean | undefined;
-    if (result.verdict === "settled") {
+    const journalSkipped = opts?.skipJournal === true;
+    if (result.verdict === "settled" && !journalSkipped) {
       const afterSha256 = await afterSha256ForKernelMutation(resolved, result.contentDigest);
       const recorded = await recordKernelFsJournal(
         sessionId,
@@ -375,7 +457,7 @@ export async function tryKernelWriteRoute(
       `${KERNEL_ROUTE_TAG} kernel fs.write ${result.verdict}${
         result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
       }`,
-      { journalSkipped: false, journalRecordFailed },
+      { journalSkipped, journalRecordFailed },
     );
   } catch (error) {
     return refusedKernelRoute(error, false);
@@ -606,6 +688,7 @@ export async function tryKernelDeleteRoute(
   sessionId: string,
   effectId: string,
   args: Record<string, unknown>,
+  opts?: { skipJournal?: boolean },
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const rel = specPathInWorkspace(workspace, String(args.path));
   if (rel === undefined) return undefined;
@@ -637,7 +720,8 @@ export async function tryKernelDeleteRoute(
     });
     const afterSha256 = sha256Hex("");
     let journalRecordFailed: boolean | undefined;
-    if (result.verdict === "settled") {
+    const journalSkipped = opts?.skipJournal === true;
+    if (result.verdict === "settled" && !journalSkipped) {
       const recorded = await recordKernelFsJournal(
         sessionId,
         workspace,
@@ -655,17 +739,135 @@ export async function tryKernelDeleteRoute(
       `${KERNEL_ROUTE_TAG} kernel fs.delete ${result.verdict}${
         result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
       }`,
-      { journalSkipped: false, journalRecordFailed },
+      { journalSkipped, journalRecordFailed },
     );
   } catch (error) {
     return refusedKernelRoute(error, false);
   }
 }
 
-/** One-file, multiple exact hunks can be one *atomic file* mutation.
+function newestChangeEntry(candidates: ChangeEntry[]): ChangeEntry | undefined {
+  if (candidates.length === 0) return undefined;
+  let best = candidates[0]!;
+  for (const candidate of candidates.slice(1)) {
+    if (candidate.at >= best.at) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * P0-1 / ruling **650**: route `undo` through kernel `fs.write` / `fs.delete`
+ * (skip re-journal; consume the live undo entry on settle). Returns undefined
+ * only when EffectHost mutation routing is off for the caller to skip.
+ */
+export async function tryKernelUndoRoute(
+  kernel: KernelClient,
+  workspace: string,
+  sessionId: string,
+  effectId: string,
+  args: Record<string, unknown>,
+): Promise<KernelMutationRouteOutcome | undefined> {
+  const softFail = (message: string): KernelMutationRouteOutcome => ({
+    journalSkipped: true,
+    kernelObserve: {},
+    result: { ok: false, output: message, error: message },
+  });
+
+  try {
+    const scope =
+      typeof args.path === "string" && args.path !== "" ? resolvePath(workspace, args.path) : undefined;
+    bindJournalWorkspace(sessionId, workspace);
+    const load = reloadFromDisk(workspace);
+    const candidates = [...load.entries, ...unpersistedEntries(sessionId)];
+    const entry =
+      scope !== undefined
+        ? newestChangeEntry(candidates.filter((e) => e.path === scope))
+        : newestChangeEntry(candidates);
+    if (entry === undefined) {
+      return softFail(
+        scope !== undefined
+          ? `nothing to undo for ${relPath(workspace, scope)}: this workspace's change journal holds no live change to it`
+          : "nothing to undo: this workspace's change journal holds no live change",
+      );
+    }
+    const rel = entry.rel;
+    if (entry.beforeUnreadable === true) {
+      return softFail(
+        `cannot undo the last change to ${rel}: its previous bytes were not restorable text ` +
+          `(binary or non-UTF-8), so the journal cannot put them back; the file is untouched`,
+      );
+    }
+    if (entry.nonRestorable === true) {
+      return softFail(
+        `cannot undo the last change to ${rel}: its previous content was larger than the journal keeps ` +
+          `(nonRestorable: over the ${BEFORE_MAX_BYTES / 1024} KB per-entry cap), so it cannot be put back`,
+      );
+    }
+
+    const target = resolveRealTarget(workspace, entry.path, workspace);
+    const real = target.real;
+    let current: string;
+    try {
+      current = (await readFile(real)).toString("utf8");
+    } catch {
+      return softFail(
+        `HZ_PRECONDITION_FAILED: undo refused: ${rel} is gone or unreadable; ` +
+          `the recorded change expected sha256 ${entry.afterSha256} -- refusing to touch the path`,
+      );
+    }
+    const actual = sha256Hex(current);
+    if (actual !== entry.afterSha256) {
+      return softFail(
+        `HZ_PRECONDITION_FAILED: undo refused: ${rel} changed since the recorded change wrote it ` +
+          `(expected sha256 ${entry.afterSha256}; actual sha256 ${actual}); refusing to overwrite a concurrent edit`,
+      );
+    }
+
+    let outcome: KernelMutationRouteOutcome | undefined;
+    if (entry.before === null) {
+      outcome = await tryKernelDeleteRoute(
+        kernel,
+        workspace,
+        sessionId,
+        effectId,
+        { path: real },
+        { skipJournal: true },
+      );
+    } else {
+      outcome = await tryKernelWriteRoute(
+        kernel,
+        workspace,
+        sessionId,
+        effectId,
+        { path: real, content: entry.before, expectedPreimageDigest: entry.afterSha256 },
+        { skipJournal: true },
+      );
+    }
+    if (outcome === undefined) {
+      return softFail(`${KERNEL_ROUTE_TAG} kernel undo route unavailable for ${rel}`);
+    }
+    if (outcome.result.ok) {
+      await consumeChangeGuarded(sessionId, entry);
+      const restored =
+        entry.before === null
+          ? `Removed ${rel} (kernel undo; existed only because of the last recorded ${entry.tool})`
+          : `Restored ${rel} to its content before the last recorded ${entry.tool} (kernel undo)`;
+      return {
+        ...outcome,
+        journalSkipped: true,
+        result: { ok: true, output: restored },
+      };
+    }
+    return outcome;
+  } catch (error) {
+    return refusedKernelRoute(error, true);
+  }
+}
+
+/** One-file, multiple hunks can be one *atomic file* mutation.
  * Compute the entire postimage WITHOUT writing. Every hunk must resolve to a
- * unique exact line window in the evolving in-memory copy. This deliberately
- * excludes fuzzy/tied/cross-file/move operations, not claiming fs.batch parity.
+ * unique kernel window (exact, or unique repair under `HZ_EFFECT_HOST_EDIT_REPAIR`)
+ * in the evolving in-memory copy. Excludes Bun-first-hit / tied / cross-file / move.
  * The original SHA-256 is pinned through to Rust's independent OwnerLog CAS.
  */
 async function projectSingleFileAtomicPatch(
@@ -702,16 +904,368 @@ async function projectSingleFileAtomicPatch(
 
   let current = original;
   for (const chunk of op.chunks) {
-    if (chunk.oldLines.length === 0 ||
-      classifyApplyPatchChunkKernelFuzz(current, chunk) !== "exact") return undefined;
-    const exact = resolveKernelApplyPatchChunkEdit(current, chunk);
-    if (!exact || exact.old.length === 0) return undefined;
-    const position = current.indexOf(exact.old);
-    if (position < 0 || current.indexOf(exact.old, position + 1) !== -1) return undefined;
-    current = current.slice(0, position) + exact.new + current.slice(position + exact.old.length);
+    if (chunk.oldLines.length === 0) return undefined;
+    if (classifyApplyPatchChunkKernelFuzz(current, chunk) === "bun_fuzz_only") return undefined;
+    const resolved = resolveKernelApplyPatchChunkEdit(current, chunk, process.env);
+    if (!resolved || resolved.old.length === 0) return undefined;
+    const position = current.indexOf(resolved.old);
+    if (position < 0 || current.indexOf(resolved.old, position + 1) !== -1) return undefined;
+    current = current.slice(0, position) + resolved.new + current.slice(position + resolved.old.length);
   }
   if (current === original) return undefined;
   return { path: rel, content: current, expectedPreimageDigest: sha256Hex(original) };
+}
+
+type ExactBatchWrite = {
+  path: string;
+  content: string;
+  expectedPreimageDigest: string | null;
+  tool: "write" | "edit";
+  before: string | null;
+  /**
+   * Exact Update hunks → ordered kernel `fs.edit` ops in the same batch
+   * (rulings 552/553). Empty/undefined keeps full-file `fs.write`.
+   */
+  edits?: Array<{ oldString: string; newString: string }>;
+};
+
+type ExactBatchRename = {
+  kind: "rename";
+  from: string;
+  to: string;
+  expectedPreimageDigest: string | null;
+  before: string | null;
+};
+
+type ExactBatchDelete = {
+  kind: "delete";
+  path: string;
+  expectedPreimageDigest: string;
+  before: string;
+};
+
+type ExactBatchPlan = {
+  writes: ExactBatchWrite[];
+  renames: ExactBatchRename[];
+  deletes: ExactBatchDelete[];
+};
+
+/** Multi-file Add/Update/Move/Delete → one reduced kernel `fs.batch`
+ * (write/edit/rename/delete). Kernel-unique repair hunks allowed under
+ * `HZ_EFFECT_HOST_EDIT_REPAIR` (**646**); Bun-first-hit / ambiguous → undefined.
+ */
+async function projectMultiFileExactBatchPlan(
+  workspace: string,
+  args: Record<string, unknown>,
+): Promise<ExactBatchPlan | undefined> {
+  const patchText =
+    typeof args.input === "string" && args.input !== ""
+      ? args.input
+      : typeof args.patch === "string" && args.patch !== ""
+        ? args.patch
+        : undefined;
+  if (!patchText) return undefined;
+  const parsed = parse(patchText);
+  if (!parsed.ok || parsed.patch.ops.length === 0) return undefined;
+  // Single Update+Move (edit then rename) is a multi-op kernel batch even when
+  // the patch has one FileOp; otherwise require ≥2 FileOps.
+  if (parsed.patch.ops.length < 2) {
+    const only = parsed.patch.ops[0];
+    if (!(only?.kind === "update" && only.movePath !== undefined)) return undefined;
+  }
+
+  const writes: ExactBatchWrite[] = [];
+  const renames: ExactBatchRename[] = [];
+  const deletes: ExactBatchDelete[] = [];
+  for (const op of parsed.patch.ops) {
+    if (op.kind === "delete") {
+      const rel = specPathInWorkspace(workspace, op.path);
+      if (!rel || rel === ".") return undefined;
+      const absolute = path.resolve(workspace, rel);
+      let beforeBuffer: Buffer;
+      try {
+        beforeBuffer = await readFile(absolute);
+      } catch {
+        return undefined;
+      }
+      if (beforeBuffer.includes(0)) return undefined;
+      const original = beforeBuffer.toString("utf8");
+      if (!Buffer.from(original, "utf8").equals(beforeBuffer)) return undefined;
+      deletes.push({
+        kind: "delete",
+        path: rel,
+        expectedPreimageDigest: sha256Hex(original),
+        before: original,
+      });
+      continue;
+    }
+    if (op.kind === "add") {
+      const rel = specPathInWorkspace(workspace, op.path);
+      if (!rel || rel === ".") return undefined;
+      const content = op.addBody.join("\n") + (op.addBody.length > 0 ? "\n" : "");
+      writes.push({
+        path: rel,
+        content,
+        expectedPreimageDigest: null,
+        tool: "write",
+        before: null,
+      });
+      continue;
+    }
+    if (op.kind === "update") {
+      const rel = specPathInWorkspace(workspace, op.path);
+      if (!rel || rel === ".") return undefined;
+      const absolute = path.resolve(workspace, rel);
+      let beforeBuffer: Buffer;
+      try {
+        beforeBuffer = await readFile(absolute);
+      } catch {
+        return undefined;
+      }
+      if (beforeBuffer.includes(0)) return undefined;
+      const original = beforeBuffer.toString("utf8");
+      if (!Buffer.from(original, "utf8").equals(beforeBuffer)) return undefined;
+      let current = original;
+      const edits: Array<{ oldString: string; newString: string }> = [];
+      for (const chunk of op.chunks) {
+        const bytesOld = chunk.oldLines.join("\n");
+        const bytesNew = chunk.newLines.join("\n");
+        if (bytesOld === bytesNew) continue;
+        if (chunk.oldLines.length === 0) return undefined;
+        if (classifyApplyPatchChunkKernelFuzz(current, chunk) === "bun_fuzz_only") {
+          return undefined;
+        }
+        const resolved = resolveKernelApplyPatchChunkEdit(current, chunk, process.env);
+        if (!resolved || resolved.old.length === 0) return undefined;
+        const position = current.indexOf(resolved.old);
+        if (position < 0 || current.indexOf(resolved.old, position + 1) !== -1) return undefined;
+        current = current.slice(0, position) + resolved.new + current.slice(position + resolved.old.length);
+        edits.push({ oldString: resolved.old, newString: resolved.new });
+      }
+      if (op.movePath !== undefined) {
+        const relTo = specPathInWorkspace(workspace, op.movePath);
+        if (!relTo || relTo === "." || relTo === rel) return undefined;
+        if (edits.length > 0) {
+          writes.push({
+            path: rel,
+            content: current,
+            expectedPreimageDigest: sha256Hex(original),
+            tool: "edit",
+            before: original,
+            edits,
+          });
+        }
+        renames.push({
+          kind: "rename",
+          from: rel,
+          to: relTo,
+          expectedPreimageDigest: edits.length > 0 ? null : sha256Hex(original),
+          before: edits.length > 0 ? null : original,
+        });
+        continue;
+      }
+      if (edits.length === 0 || current === original) return undefined;
+      writes.push({
+        path: rel,
+        content: current,
+        expectedPreimageDigest: sha256Hex(original),
+        tool: "edit",
+        before: original,
+        // Exact hunks → ordered fs.edit ops (kernel applies same-path edits sequentially).
+        edits,
+      });
+      continue;
+    }
+    // unknown — not exact write/rename/delete batch
+    return undefined;
+  }
+  if (writes.length + renames.length + deletes.length < 2) return undefined;
+  return { writes, renames, deletes };
+}
+
+async function tryKernelFsBatchWriteRoute(
+  kernel: KernelClient,
+  workspace: string,
+  sessionId: string,
+  effectId: string,
+  plan: ExactBatchPlan,
+): Promise<KernelMutationRouteOutcome> {
+  const { writes, renames, deletes } = plan;
+  try {
+    // Local stale check before RPC so Bun/LocalKernel never mutates a drifted plan.
+    for (const w of writes) {
+      const resolved = path.resolve(workspace, w.path);
+      if (w.expectedPreimageDigest === null) {
+        if (existsSync(resolved)) {
+          const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: stale or unreadable expected preimage; write refused before kernel execution`;
+          return {
+            journalSkipped: false,
+            kernelObserve: {},
+            result: { ok: false, output: message, error: message },
+          };
+        }
+      } else {
+        const preimage = await readUtf8Preimage(resolved);
+        if (
+          preimage.before === null ||
+          sha256Hex(preimage.before) !== w.expectedPreimageDigest
+        ) {
+          const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: stale or unreadable expected preimage; write refused before kernel execution`;
+          return {
+            journalSkipped: false,
+            kernelObserve: {},
+            result: { ok: false, output: message, error: message },
+          };
+        }
+      }
+    }
+    for (const ren of renames) {
+      if (ren.expectedPreimageDigest === null) continue;
+      const resolved = path.resolve(workspace, ren.from);
+      const preimage = await readUtf8Preimage(resolved);
+      if (
+        preimage.before === null ||
+        sha256Hex(preimage.before) !== ren.expectedPreimageDigest
+      ) {
+        const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: stale or unreadable expected preimage; rename refused before kernel execution`;
+        return {
+          journalSkipped: false,
+          kernelObserve: {},
+          result: { ok: false, output: message, error: message },
+        };
+      }
+    }
+    for (const del of deletes) {
+      const resolved = path.resolve(workspace, del.path);
+      const preimage = await readUtf8Preimage(resolved);
+      if (
+        preimage.before === null ||
+        sha256Hex(preimage.before) !== del.expectedPreimageDigest
+      ) {
+        const message = `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: stale or unreadable expected preimage; delete refused before kernel execution`;
+        return {
+          journalSkipped: false,
+          kernelObserve: {},
+          result: { ok: false, output: message, error: message },
+        };
+      }
+    }
+    const batchOps: Array<Record<string, unknown>> = [];
+    for (const w of writes) {
+      if (w.edits && w.edits.length > 0) {
+        for (const e of w.edits) {
+          batchOps.push({
+            kind: "fs.edit",
+            path: w.path,
+            oldString: e.oldString,
+            newString: e.newString,
+            expectedPreimageDigest: w.expectedPreimageDigest,
+          });
+        }
+      } else {
+        batchOps.push({
+          kind: "fs.write",
+          path: w.path,
+          text: w.content,
+          expectedPreimageDigest: w.expectedPreimageDigest,
+        });
+      }
+    }
+    for (const ren of renames) {
+      batchOps.push({
+        kind: "fs.rename",
+        from: ren.from,
+        to: ren.to,
+        ...(ren.expectedPreimageDigest !== null
+          ? { expectedPreimageDigest: ren.expectedPreimageDigest }
+          : {}),
+      });
+    }
+    for (const del of deletes) {
+      batchOps.push({
+        kind: "fs.delete",
+        path: del.path,
+        expectedPreimageDigest: del.expectedPreimageDigest,
+      });
+    }
+    const result = await kernel.executeEffect({
+      effectId,
+      sandboxRoot: workspace,
+      dispatch: {
+        kind: "fs.batch",
+        spec: { ops: batchOps },
+      },
+    });
+    let journalRecordFailed: boolean | undefined;
+    if (result.verdict === "settled") {
+      for (let i = 0; i < writes.length; i += 1) {
+        const w = writes[i]!;
+        const renamedTo = renames.find((r) => r.from === w.path)?.to;
+        const journalRel = renamedTo ?? w.path;
+        const resolved = path.resolve(workspace, journalRel);
+        const digest =
+          Array.isArray(result.contentDigests) && typeof result.contentDigests[i] === "string"
+            ? (result.contentDigests[i] as string)
+            : result.contentDigest;
+        const afterSha256 = await afterSha256ForKernelMutation(resolved, digest);
+        const recorded = await recordKernelFsJournal(
+          sessionId,
+          workspace,
+          resolved,
+          journalRel,
+          w.tool,
+          { before: w.before },
+          afterSha256,
+        );
+        if (!recorded) journalRecordFailed = true;
+      }
+      for (const ren of renames) {
+        if (writes.some((w) => w.path === ren.from)) continue;
+        const resolved = path.resolve(workspace, ren.to);
+        const afterSha256 = await afterSha256ForKernelMutation(resolved, result.contentDigest);
+        const recorded = await recordKernelFsJournal(
+          sessionId,
+          workspace,
+          resolved,
+          ren.to,
+          "write",
+          { before: ren.before },
+          afterSha256,
+        );
+        if (!recorded) journalRecordFailed = true;
+      }
+      for (const del of deletes) {
+        const resolved = path.resolve(workspace, del.path);
+        const recorded = await recordKernelFsJournal(
+          sessionId,
+          workspace,
+          resolved,
+          del.path,
+          "write",
+          { before: del.before },
+          sha256Hex(""),
+        );
+        if (!recorded) journalRecordFailed = true;
+      }
+    }
+    const pathsJoined = [
+      ...writes.map((w) => w.path),
+      ...renames.map((r) => `${r.from}→${r.to}`),
+      ...deletes.map((d) => `delete:${d.path}`),
+    ].join(", ");
+    const opCount = writes.length + renames.length + deletes.length;
+    const okOutput = `${KERNEL_ROUTE_TAG} apply_patch ${opCount} op(s) via kernel fs.batch (${pathsJoined})`;
+    return outcomeFromExecuteResult(
+      result,
+      okOutput,
+      `${KERNEL_ROUTE_TAG} kernel fs.batch ${result.verdict}${
+        result.postimageObservationStable === false ? " (postimage observation unstable)" : ""
+      }`,
+      { journalSkipped: false, journalRecordFailed },
+    );
+  } catch (error) {
+    return refusedKernelRoute(error, false);
+  }
 }
 
 export async function tryKernelApplyPatchRoute(
@@ -723,11 +1277,10 @@ export async function tryKernelApplyPatchRoute(
 ): Promise<KernelMutationRouteOutcome | undefined> {
   const projections = applyPatchKernelProjections(args);
   if (!projections || projections.length === 0) return undefined;
-  // An exact same-file multi-hunk Update is reducible to ONE kernel-owned
-  // atomic fs.write: validate every hunk on a private in-memory copy, then
-  // pin the original bytes' SHA-256 all the way through Rust OwnerLog.
-  // This is not general fs.batch: all cross-file/rename/fuzzy multi-op plans
-  // still refuse BEFORE the first mutation (no partial patch).
+  // Same-file multi-hunk Update → ONE kernel-owned atomic fs.write (exact or
+  // kernel-unique repair under HZ_EFFECT_HOST_EDIT_REPAIR — ruling **646**).
+  // Multi-file Add/Update/Move/Delete → reduced kernel fs.batch (539/630/631/646).
+  // Bun-first-hit / ambiguous still refuse BEFORE mutation.
   if (projections.length > 1) {
     const atomic = await projectSingleFileAtomicPatch(workspace, args, projections);
     if (atomic) {
@@ -737,15 +1290,19 @@ export async function tryKernelApplyPatchRoute(
           ...outcome,
           result: {
             ok: true,
-            output: `${KERNEL_ROUTE_TAG} apply_patch ${projections.length} exact hunks committed via one atomic kernel fs.write (${atomic.path})`,
+            output: `${KERNEL_ROUTE_TAG} apply_patch ${projections.length} hunks committed via one atomic kernel fs.write (${atomic.path})`,
           },
         };
       }
       return outcome;
     }
+    const batch = await projectMultiFileExactBatchPlan(workspace, args);
+    if (batch) {
+      return tryKernelFsBatchWriteRoute(kernel, workspace, sessionId, effectId, batch);
+    }
     const message =
       `${KERNEL_ROUTE_TAG} HZ_PRECONDITION_FAILED: multi-operation apply_patch requires an atomic kernel batch; ` +
-      "unsupported, stale, fuzzy or ambiguous plan refused before executing any operation";
+      "unsupported, stale, Bun-first-hit fuzzy or ambiguous plan refused before executing any operation";
     return {
       journalSkipped: false,
       kernelObserve: {},
@@ -814,8 +1371,7 @@ export async function tryKernelApplyPatchRoute(
     }
   }
 
-  // The preflight rejects >1 projections. A single settled operation is
-  // the only honest kernel apply_patch result until fs.batch is implemented.
+  // Single-projection path: one settled kernel op (multi-file uses fs.batch above).
   return lastOutcome ? { ...lastOutcome, journalRecordFailed } : undefined;
 }
 

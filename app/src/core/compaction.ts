@@ -38,8 +38,9 @@
  */
 
 import type { ChatMsg } from "../contracts";
+import { textFromChatContent } from "./chat-content";
 import { pruneToolResultsForCompaction } from "./compaction-pruner";
-import type { CompactionHoldBuffer } from "./compaction-hold";
+import type { CompactionHoldBuffer, ElidedSummariser } from "./compaction-hold";
 import { summariseElidedWithHold } from "./compaction-hold";
 import { estimateTokens, FRAMING_CHARGE_TOKENS } from "./output-budget";
 
@@ -377,7 +378,7 @@ export function pinnedConstraintsFrom(messages: readonly ChatMsg[]): PinnedConst
   for (const message of list) {
     if (message === null || typeof message !== "object") continue;
     scannedMessages += 1;
-    const content = typeof message.content === "string" ? message.content : "";
+    const content = textFromChatContent(message.content);
     if (content.trim() === "") continue;
 
     const isStatementMessage = taskStatement === null && message.role === "user";
@@ -440,7 +441,7 @@ export function renderPinnedBlock(pinned: PinnedConstraints): string {
 export function tokensIn(messages: readonly ChatMsg[]): number {
   let total = 0;
   for (const message of messages) {
-    total += FRAMING_CHARGE_TOKENS + estimateTokens(typeof message?.content === "string" ? message.content : "");
+    total += FRAMING_CHARGE_TOKENS + estimateTokens(textFromChatContent(message?.content));
     for (const call of message?.toolCalls ?? []) total += estimateTokens(typeof call?.arguments === "string" ? call.arguments : "");
   }
   return total;
@@ -466,11 +467,11 @@ export function maskSecrets(text: string): string {
 
 export function summariseElided(elided: readonly ChatMsg[], total: number, limit: number): string {
   const byRole = countByRole(elided);
-  const firstUser = elided.find((message) => message?.role === "user" && (message.content ?? "").trim() !== "");
+  const firstUser = elided.find((message) => message?.role === "user" && textFromChatContent(message.content).trim() !== "");
   let lastUser: ChatMsg | undefined;
   for (let i = elided.length - 1; i >= 0; i -= 1) {
     const message = elided[i];
-    if (message?.role === "user" && (message.content ?? "").trim() !== "") {
+    if (message?.role === "user" && textFromChatContent(message.content).trim() !== "") {
       lastUser = message;
       break;
     }
@@ -487,8 +488,8 @@ export function summariseElided(elided: readonly ChatMsg[], total: number, limit
   // Body lines are optional detail: each section is omitted when empty, and the
   // whole block is cut at MAX_SUMMARY_CHARS line by line (never mid-line).
   const body: string[] = [];
-  if (firstUser) body.push(`- first elided request: "${echo(firstUser.content)}"`);
-  if (lastUser && lastUser !== firstUser) body.push(`- last elided request: "${echo(lastUser.content)}"`);
+  if (firstUser) body.push(`- first elided request: "${echo(textFromChatContent(firstUser.content))}"`);
+  if (lastUser && lastUser !== firstUser) body.push(`- last elided request: "${echo(textFromChatContent(lastUser.content))}"`);
   if (activity.tools.length > 0) body.push(`- tools called in the elided turns: ${activity.tools.join(", ")}`);
   if (activity.files.size > 0) {
     const { shown, omitted } = newest([...activity.files], MAX_SUMMARY_FILES);
@@ -536,6 +537,12 @@ export interface CompactionOptions {
   limit: number;
   /** When set, compaction swaps in a held elision summary when the prefix matches. */
   holdBuffer?: CompactionHoldBuffer;
+  /**
+   * Optional elided-prefix summariser (ruling 689: LLM semantic compaction).
+   * Hold-then-swap still wins when the held key matches; otherwise this runs
+   * instead of `summariseElided`.
+   */
+  elidedSummariser?: ElidedSummariser;
 }
 
 /** The one line the UI shows. Kept under ~250 chars so a notice stays a notice. */
@@ -600,7 +607,8 @@ export function compactHistory(messages: ChatMsg[], options: CompactionOptions):
 
   const pinned = pinnedConstraintsFrom(list);
   const prunedElided = pruneToolResultsForCompaction(elided);
-  const { summary, holdSwap } = summariseElidedWithHold(prunedElided, list.length, limit, options.holdBuffer);
+  const fallback = options.elidedSummariser ?? summariseElided;
+  const { summary, holdSwap } = summariseElidedWithHold(prunedElided, list.length, limit, options.holdBuffer, fallback);
   const first = window[0] as ChatMsg;
   // Merge rather than prepend: one user turn, so user/assistant alternation is
   // preserved and the pinned block is the first thing every request carries.

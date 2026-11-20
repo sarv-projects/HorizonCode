@@ -15,7 +15,9 @@ import type {
   ActorRef,
   ApprovalHandler,
   ApprovalRequest,
+  AskUserHandler,
   ChatMsg,
+  ChatMsgContent,
   DelegateRunner,
   GuardAction,
   GuardDecision,
@@ -37,6 +39,13 @@ import type {
 } from "../contracts";
 import { EventTypes, newId, nowIso, type ToolCardDetail } from "../contracts";
 import { AdmissionQueue, admissionToolDispatchRefusal } from "./admission";
+import {
+  chatContentHasImage,
+  chatContentText,
+  stripImagesFromHistory,
+  textFromChatContent,
+} from "./chat-content";
+import { assessVisionPosture, historyHasImages, visionHonestyNotice } from "./vision-posture";
 import { unpairedToolCallTail } from "./session";
 import { parseToolArguments, TRUNCATION_TOLERANT_TOOLS, type ToolArguments } from "./json-repair";
 import { exposureOf, getTool, isDiscovered, toolSpecs } from "../tools";
@@ -59,7 +68,7 @@ import { previewQuirks } from "./providers/quirks";
 import { enrichUsageCost, estimateStepCostUsd, usageCostEventFields } from "./usage-cost";
 import { loadConfig } from "./config";
 import { createPostEditDiagnosticsNotice } from "./post-edit-diagnostics";
-import { SpendLedger, SpendLimitError, spendLimitMicroFromEnv } from "./spend-ledger";
+import { admitSpendLedgerWrite, SpendLedger, SpendLimitError, spendLimitMicroFromEnv } from "./spend-ledger";
 import { negotiateReasoningEffort } from "./catalog/accepts-settings";
 import { type ThinkingRung, toProviderReasoningEffort } from "./thinking-effort";
 import { canonicalJson, sha256Hex } from "./canon";
@@ -78,7 +87,13 @@ import {
   resultDigestEvidenceNotice,
   toolResultDigest,
 } from "./effect-evidence";
-import { effectHostKernelRequireRefusal } from "./effect-host-posture";
+import {
+  effectHostHooksSuppressedNotice,
+  effectHostKernelRequirePreflight,
+  effectHostKernelRequireRefusal,
+  effectHostNoAmbientToolPreflight,
+  effectHostRequireSuppressHooks,
+} from "./effect-host-posture";
 import {
   classifyApplyPatchKernelProjectionMiss,
   classifyAstEditKernelProjectionMiss,
@@ -87,6 +102,8 @@ import { EffectHost, createEffectId } from "./effect-host";
 import { mirrorEffectReconcileToKernel } from "./effect-kernel-reconcile";
 import {
   effectReconcileBlockObservePendingRefusal,
+  effectReconcileBlockObservationHookRefusal,
+  effectReconcileBlockPreToolHookRefusal,
   effectReconcileBlockRefusal,
   latchEffectReconcileBlock,
 } from "./effect-reconcile-block";
@@ -96,11 +113,14 @@ import {
   editArgsEligibleForKernelRoute,
   effectHostKernelMutationEnabled,
   effectHostKernelRequireMode,
+  effectHostNoAmbientCompoundShellRefusal,
+  effectHostNoAmbientShapeIneligibleMutationRefusal,
   shellArgsEligibleForKernelRoute,
   tryKernelApplyPatchRoute,
   tryKernelAstEditRoute,
   tryKernelEditRoute,
   tryKernelShellRoute,
+  tryKernelUndoRoute,
   tryKernelWriteRoute,
   writeArgsEligibleForKernelRoute,
 } from "./effect-kernel-mutation-route";
@@ -111,8 +131,10 @@ import {
 // The window's compaction: one replacement for the silent slice, imported here
 // and nowhere else (compaction.ts holds the pinning, the summary and the
 // report; the loop only chooses the window size).
-import { COMPACTION_EVENT, compactHistory, elidedPrefixForCompaction, maskSecrets, tokensIn } from "./compaction";
+import { COMPACTION_EVENT, elidedPrefixForCompaction, maskSecrets, tokensIn } from "./compaction";
+import { compactHistoryWithTokenFit, tokenAwareHistoryLimit } from "./history-token-budget";
 import { CompactionHoldBuffer, compactionHoldEnabled } from "./compaction-hold";
+import { llmCompactionEnabled, resolveLlmCompactionSummariser } from "./compaction-llm";
 import {
   CONTEXT_WINDOW_COMPACTION_NOTICE,
   emergencyHistoryLimit,
@@ -162,7 +184,12 @@ import {
   type HooksConfig,
 } from "./hooks";
 import { hooksLoadOptions } from "./trust";
-import { recordPostmortem, type FailureClass, type TranscriptEvent } from "./postmortem";
+import {
+  postmortemsDir,
+  recordPostmortem,
+  type FailureClass,
+  type TranscriptEvent,
+} from "./postmortem";
 import { buildRunCompletePayload, RUN_COMPLETE_EVENT } from "./receipt-run-terminal";
 // SAFETY-RAILS (FEAT-002): three self-contained loop-level guards, wired here
 // minimally — loop-detection before dispatch, repeat-tool after execute, and
@@ -185,6 +212,15 @@ import { EmptyResponseTracker, MAX_EMPTY_RESPONSES } from "./guards/empty-respon
 import { attemptsRemainingNote, MistakeTracker } from "./guards/mistake-tracker";
 import { RepeatToolGuard } from "./guards/repeat-tool";
 import { truncatedToolCallMessage } from "./guards/truncated-tool-batch";
+import {
+  assessEngineeringViability,
+  engineeringBrainEnabled,
+  formatViabilityInterrupt,
+} from "./engineering-viability";
+import { buildMutationSymbolImpact } from "./engineering-critic-impact";
+import { resolveAdversarialCritic } from "./engineering-critic-llm";
+import { formatCriticInterrupt } from "./engineering-critic";
+import { maybeAutoEmitVerificationArtifactAfterTurn } from "./verification-artifact-auto";
 import { runClassedToolBatchFifo } from "./tool-batch-fifo";
 // Tier-3 speculative execution (docs/28 ruling 47): an OFF-BY-DEFAULT coordinator
 // that may pre-run ONLY provably side-effect-free tool calls ahead of commit.
@@ -194,6 +230,7 @@ import { runClassedToolBatchFifo } from "./tool-batch-fifo";
 // byte-identical to today's NF-072 batch run.
 import {
   SpeculativeOperationCoordinator,
+  fingerprintCandidate,
   makeCandidate,
   speculationEffectForToolCall,
   type SpeculativeHost,
@@ -212,15 +249,26 @@ import {
   windowForModel,
 } from "./output-budget";
 import type { KernelClient } from "./kernel";
-import { resolvedInside, resolveSymlinkChain } from "./kernel";
+import { KNOWN_GUARD_KINDS, resolvedInside, resolveSymlinkChain } from "./kernel";
+import { mintHumanApprovalLease } from "./human-approval-principal";
+import { guardEffectivelyAllows } from "./guard-g1-wire";
+import { guardG1LegacyWireMismatchNotice } from "./guard-g1-wire-honesty";
 import type { PermissionMode } from "./permission-mode";
-import { modeAutoApproves, modeRefusal } from "./permission-mode";
+import { modeRefusal } from "./permission-mode";
+import {
+  envelopeAutoApproves,
+  envelopeTierForAutonomyName,
+  permissionModeAutoApproves,
+} from "./autonomy-envelope";
 import { planModeShellRefusal } from "./command-guard";
+import { isVerificationShellCommand } from "./verification-shell";
 import { noteConversationMessage } from "../tools/repo-map-context";
+import { foldPermissionEffects, type PermissionEffect } from "./permission-vocabulary";
 import { guardActionsForShellCommand, shellCompoundRefusal } from "./shell-split";
 import { invisibleUnicodeError } from "../tools/helpers";
+import { searchRequestUrl } from "../tools/web-search";
 import { deterministicClassifier, guardianLine, guardianModeFromEnv, proposedFromGuardAction, reviewAction } from "./guardian";
-import { blobSpillEnabled } from "./blobs";
+import { blobSpillEnabled, putBlobForWorkspace } from "./blobs";
 import { realpathish, spillDir as workspaceSpillDir, workspaceStateDir } from "./paths";
 import type { SessionStore } from "./session";
 import { drainFormatted, formatInterjection, type InterjectionBuffer } from "./interjection";
@@ -260,6 +308,19 @@ export function setApprovalHandler(fn: ApprovalHandler): void {
 
 export function getApprovalHandler(): ApprovalHandler {
   return approvalHandler;
+}
+
+/* ---------------------------- ask_user registry --------------------------- */
+
+/** Structured user-input handler (TUI / protocol client). Fails closed when absent. */
+let askUserHandler: AskUserHandler | undefined;
+
+export function setAskUserHandler(fn: AskUserHandler | undefined): void {
+  askUserHandler = typeof fn === "function" ? fn : undefined;
+}
+
+export function getAskUserHandler(): AskUserHandler | undefined {
+  return askUserHandler;
 }
 
 /* -------------------------------- helpers -------------------------------- */
@@ -545,22 +606,32 @@ function argString(args: Record<string, unknown>, ...names: string[]): string | 
 }
 
 /**
- * The first file path an `apply_patch` body names, for a stable coarse
- * admission target (the tool re-guards every file itself). Reads only the
- * freeform grammar's `*** Add/Update/Delete File:` headers; returns undefined
- * when none is present (a malformed patch the parser will reject downstream).
+ * Every file path an `apply_patch` body names (Add/Update/Delete), in order,
+ * de-duplicated. Used for multi-resource loop admission (ruling 567) so the
+ * fold sees every target before ask; the tool still re-guards each file.
  */
-function firstApplyPatchPath(input: string): string | undefined {
+export function applyPatchPaths(input: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
   for (const raw of input.split("\n")) {
     const line = raw.trim();
-    for (const marker of ["*** Add File: ", "*** Update File: ", "*** Delete File: "]) {
+    for (const marker of ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]) {
       if (line.startsWith(marker)) {
         const p = line.slice(marker.length).trim();
-        if (p !== "") return p;
+        if (p !== "" && !seen.has(p)) {
+          seen.add(p);
+          out.push(p);
+        }
+        break;
       }
     }
   }
-  return undefined;
+  return out;
+}
+
+/** First path named by an `apply_patch` body, when any. */
+function firstApplyPatchPath(input: string): string | undefined {
+  return applyPatchPaths(input)[0];
 }
 
 /**
@@ -631,6 +702,20 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const command = argString(args, "command", "cmd");
       return command ? { kind: "shell.exec", target: command } : undefined;
     }
+    case "shell_bg": {
+      const op = argString(args, "op");
+      if (op !== "kill") return undefined;
+      const pid = typeof args.pid === "number" ? args.pid : typeof args.pid === "string" ? Number(args.pid) : undefined;
+      if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return undefined;
+      return { kind: "shell.exec", target: `shell_bg: kill background pid ${pid}` };
+    }
+    case "git_status":
+    case "git_diff":
+    case "git_log":
+    case "git_blame": {
+      const root = argString(args, "cwd") ?? ".";
+      return { kind: "fs.read", target: resolved(root) };
+    }
     case "agent": {
       const task = argString(args, "task") ?? "";
       return { kind: "spawn", target: taskHead(task === "" ? "(no task)" : task) };
@@ -700,7 +785,17 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
     case "handoff_create": {
       return { kind: "fs.write", target: handoffDbPath(workspace) };
     }
-    case "handoff_resume":
+    case "handoff_resume": {
+      // Read-only resume is fs.read. Mutating flags write durable todos /
+      // handoffs.db — admit as fs.write so the loop cannot treat them as reads.
+      const mutatesDurable =
+        args.rehydrate_todos === true ||
+        (typeof args.merge_durable_branch === "string" && args.merge_durable_branch.trim() !== "");
+      return {
+        kind: mutatesDurable ? "fs.write" : "fs.read",
+        target: handoffDbPath(workspace),
+      };
+    }
     case "handoff_search": {
       return { kind: "fs.read", target: handoffDbPath(workspace) };
     }
@@ -751,6 +846,24 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const file = argString(args, "path", "file");
       return file ? { kind: "fs.write", target: resolved(file) } : undefined;
     }
+    case "web_fetch": {
+      const url = argString(args, "url");
+      if (url === undefined) return undefined;
+      try {
+        const href = new URL(url.trim()).href;
+        return { kind: "net.fetch", target: href };
+      } catch {
+        return { kind: "net.fetch", target: url.trim() };
+      }
+    }
+    case "web_search": {
+      const query = argString(args, "query");
+      if (query === undefined || query.trim() === "") return undefined;
+      const { guardTargetForWebSearchQuery } = require("../tools/web-search-posture") as typeof import("../tools/web-search-posture");
+      const href = guardTargetForWebSearchQuery(query.trim(), process.env);
+      if (href === undefined) return undefined;
+      return { kind: "net.fetch", target: href };
+    }
     default:
       return undefined;
   }
@@ -772,7 +885,17 @@ export function taskHead(text: string, max = 120): string {
  * `write`/`close` are mapped here and `write` guards each typed input line as
  * shell.exec inside the tool (a start approval never covers later input).
  */
-export const SESSION_STATE_TOOLS: readonly string[] = ["todo", "todo_write", "present", "preview", "undo", "shell_session", "tool_search"] as const;
+export const SESSION_STATE_TOOLS: readonly string[] = [
+  "todo",
+  "todo_write",
+  "present",
+  "preview",
+  "undo",
+  "shell_session",
+  "shell_bg",
+  "tool_search",
+  "ask_user",
+] as const;
 
 /** What one tool call's admission is: a guard action, or session-state. */
 export type ToolAdmission =
@@ -817,6 +940,14 @@ export function admissionFor(name: string, args: Record<string, unknown>, worksp
     if (name === "debug" && argString(args, "op") === "launch") {
       const spawn = debugLaunchSpawnAction(args, workspace);
       return spawn !== undefined ? { kind: "guard", action, also: [spawn] } : { kind: "guard", action };
+    }
+    if (name === "apply_patch" && action.kind === "fs.write") {
+      const input = typeof args.input === "string" ? args.input : "";
+      const paths = applyPatchPaths(input);
+      if (paths.length > 1) {
+        const also = paths.slice(1).map((p) => ({ kind: "fs.write" as const, target: path.resolve(workspace, p) }));
+        return { kind: "guard", action, also };
+      }
     }
     return { kind: "guard", action };
   }
@@ -873,10 +1004,10 @@ export const PINNED_TASK_MAX_CHARS = 1200;
  */
 export function pinnedTaskStatement(messages: ChatMsg[]): string | undefined {
   const first = (Array.isArray(messages) ? messages : []).find(
-    (msg) => msg.role === "user" && typeof msg.content === "string" && msg.content.trim() !== "",
+    (msg) => msg.role === "user" && textFromChatContent(msg.content).trim() !== "",
   );
   if (first === undefined) return undefined;
-  const text = (first.content ?? "").trim();
+  const text = textFromChatContent(first.content).trim();
   const bounded = text.length <= PINNED_TASK_MAX_CHARS ? text : `${text.slice(0, PINNED_TASK_MAX_CHARS)}\u2026`;
   return `Pinned task statement — the first user turn, kept in context after older turns are trimmed:\n${bounded}`;
 }
@@ -939,7 +1070,7 @@ async function logEffectLeaseIssued(
     oneUse?: boolean;
     expiresAt?: string;
     grantId?: string;
-    source: "grant_bound" | "kernel_transfer";
+    source: "grant_bound" | "kernel_transfer" | "approval_batch";
   },
 ): Promise<void> {
   await logEvent(
@@ -1215,7 +1346,12 @@ export class GuardGate {
      * turns a kernel deny into anything else.
      */
     private readonly mode?: PermissionMode,
+    private readonly autonomyPreset?: string,
+    /** Optional once-per-gate honesty notice (G1 legacy wire; ruling 716). */
+    private readonly onG1WireHonesty?: (message: string) => void,
   ) {}
+
+  private g1LegacyWireNoticed = false;
 
   private familyOf(action: GuardAction): string {
     return `${action.kind}\u0000${action.target}\u0000${this.contextOf(action)}`;
@@ -1302,8 +1438,13 @@ export class GuardGate {
         // Fail closed: an unreachable guard is a deny, never a silent allow.
         return { decision: "deny" as const, reason: `guard unavailable: ${errorMessage(err)}` };
       }
-      if (decision.decision === "ask") this.pending = action;
-      else if (decision.decision === "allow") this.remember(action, { leaseId: decision.leaseId });
+      const g1Notice = guardG1LegacyWireMismatchNotice(decision);
+      if (g1Notice !== undefined && this.onG1WireHonesty !== undefined && !this.g1LegacyWireNoticed) {
+        this.g1LegacyWireNoticed = true;
+        this.onG1WireHonesty(g1Notice);
+      }
+      if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) this.pending = action;
+      else if (guardEffectivelyAllows(decision)) this.remember(action, { leaseId: decision.leaseId });
       return decision;
     });
   }
@@ -1346,7 +1487,11 @@ export class GuardGate {
     // accept-edits answers an in-workspace fs.write ask. Reached only after the
     // kernel said "ask" and AFTER the guardian above, so HORIZON_GUARDIAN=enforce
     // refuses here too (a deny returns before approve is ever called).
-    if (modeAutoApproves(this.mode, waiting, this.workspace, pathInsideWorkspace)) {
+    const tier = envelopeTierForAutonomyName(this.autonomyPreset);
+    if (
+      envelopeAutoApproves(tier, this.mode, waiting, this.workspace, pathInsideWorkspace) ||
+      permissionModeAutoApproves(tier, this.mode, waiting, this.workspace, pathInsideWorkspace)
+    ) {
       this.remember(waiting as GuardAction, { leaseId: undefined });
       if (this.pending !== null && this.pending === waiting) this.pending = null;
       return true;
@@ -1359,7 +1504,30 @@ export class GuardGate {
     } catch {
       ok = false;
     }
-    if (ok && waiting) this.remember(waiting, { leaseId: undefined });
+    if (ok && waiting) {
+      let leaseId: string | undefined;
+      const exactTarget = typeof waiting.target === "string" ? waiting.target : "";
+      const canMint =
+        exactTarget !== "" &&
+        !exactTarget.endsWith("*") &&
+        (KNOWN_GUARD_KINDS as readonly string[]).includes(waiting.kind);
+      if (canMint && typeof this.sessionId === "string" && this.sessionId !== "") {
+        try {
+          const lease = await mintHumanApprovalLease(
+            this.kernel,
+            waiting.kind,
+            exactTarget,
+            this.sessionId,
+            SESSION_LEASE_TTL_MS,
+          );
+          this.leases.push(lease);
+          leaseId = lease.leaseId;
+        } catch {
+          /* turn cache still records approval; mint is best-effort */
+        }
+      }
+      this.remember(waiting, { leaseId });
+    }
     if (this.pending !== null && this.pending === waiting) this.pending = null;
     return ok;
   }
@@ -1367,6 +1535,16 @@ export class GuardGate {
   /** The lease that covered this action, when the kernel granted one. */
   leaseFor(action: GuardAction): string | undefined {
     return this.cached(action)?.leaseId;
+  }
+
+  /**
+   * Record a human-approved action as allowed for this turn (ruling 577).
+   * Used after a single multi-resource ask so sibling targets do not re-prompt
+   * inside the tool via `ctx.guard` / `ctx.approve`.
+   */
+  markAllowed(action: GuardAction, leaseId?: string): void {
+    this.remember(action, { leaseId });
+    if (this.pending !== null && this.pending === action) this.pending = null;
   }
 }
 
@@ -1564,6 +1742,8 @@ export interface LoopDeps {
    * carried by `planMode` above. Narrows/auto-answers above the kernel guard.
    */
   permissionMode?: PermissionMode;
+  /** Config autonomy preset id (`autonomy-envelope.ts` tier for GuardGate). */
+  autonomy?: string;
   /** Loaded hooks (tests inject; absent = loaded once per run from config). */
   hooks?: HooksConfig;
   /** User-config workspace hook trust list (docs/33 §6.2). */
@@ -1584,13 +1764,20 @@ export interface LoopDeps {
    */
   checkAcceptsSettings?: boolean;
   /**
-   * Tier-3 speculative execution (docs/28 ruling 47): OFF BY DEFAULT and NOT
-   * YET READ by the turn path. The field and the `buildSpeculationHost` /
-   * `speculativeCandidatesFor` helpers are primitives for a future consumer;
-   * today the flag changes nothing (ruling 65 records why it stays unwired).
-   * The ordinary NF-072 batch is unchanged.
+   * Tier-3 speculative execution (docs/28 ruling 47; wired ruling 668): OFF BY
+   * DEFAULT — enable with `HZ_SPECULATIVE_EXECUTION=1` or this field. When on,
+   * side-effect-free reads may start during the provider stream; kept results
+   * replace the batch `executeTool` path when fingerprints match.
    */
   speculativeExecution?: boolean;
+  /**
+   * Opt-in LLM semantic compaction for elided history (ruling 685): OFF BY
+   * DEFAULT — enable with `HZ_LLM_COMPACTION=1` or this field. One weak-or-main
+   * provider call per compaction; fails closed to deterministic `summariseElided`.
+   */
+  llmCompaction?: boolean;
+  /** Runtime/TUI hook for `ask_user`; falls back to approve when absent. */
+  askUser?: AskUserHandler;
   /**
    * Mid-turn steering buffer (docs/30 §8 #8): drained at step boundaries into
    * synthetic user messages. Absent = no interjection path (subagents, tests).
@@ -1698,6 +1885,88 @@ export function speculativeCandidatesFor(calls: ToolCall[], workspace: string): 
   return out;
 }
 
+/** True when `LoopDeps.speculativeExecution` or `HZ_SPECULATIVE_EXECUTION=1`. */
+export function speculativeExecutionEnabled(
+  deps: LoopDeps,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (deps.speculativeExecution === true) return true;
+  return env.HZ_SPECULATIVE_EXECUTION === "1";
+}
+
+/**
+ * One provider-stream lane: admit speculable tool_call events during streaming,
+ * reconcile after commit, and offer kept results to the batch loop.
+ */
+export class TurnSpeculationLane {
+  private readonly coordinator: SpeculativeOperationCoordinator;
+  private readonly admits: Promise<void>[] = [];
+  private readonly kept = new Map<string, SpeculativeRunResult>();
+
+  private constructor(coordinator: SpeculativeOperationCoordinator) {
+    this.coordinator = coordinator;
+  }
+
+  static create(
+    deps: LoopDeps,
+    gate: GuardGate,
+    faults: RunFaults,
+    env: Record<string, string | undefined> = process.env,
+  ): TurnSpeculationLane | undefined {
+    if (!speculativeExecutionEnabled(deps, env)) return undefined;
+    const host = buildSpeculationHost(deps, gate, faults);
+    return new TurnSpeculationLane(new SpeculativeOperationCoordinator(host));
+  }
+
+  /** Fire-and-forget admit while the provider stream is still open. */
+  noteToolCall(call: ToolCall, workspace: string): void {
+    const parsed = parseCall(call);
+    if (parsed.error !== undefined) return;
+    const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
+    if (effect === undefined) return;
+    const candidate = makeCandidate({ id: call.id, name: call.name, args: parsed.args, effect });
+    const admit = this.coordinator
+      .admit(candidate)
+      .then(() => undefined)
+      .catch(() => undefined);
+    this.admits.push(admit);
+  }
+
+  async finalize(calls: ToolCall[], workspace: string): Promise<void> {
+    await Promise.all(this.admits);
+    const committed: { id: string; fingerprint: string }[] = [];
+    for (const call of calls) {
+      const parsed = parseCall(call);
+      if (parsed.error !== undefined) continue;
+      const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
+      if (effect === undefined) continue;
+      committed.push({ id: call.id, fingerprint: fingerprintCandidate(call.name, parsed.args, effect) });
+    }
+    for (const id of this.coordinator.reconcile(committed)) {
+      const outcome = this.coordinator.outcomeFor(id);
+      if (outcome?.result !== undefined) this.kept.set(id, outcome.result);
+    }
+  }
+
+  consume(call: ToolCall, workspace: string): ToolResult | undefined {
+    const cached = this.kept.get(call.id);
+    if (cached === undefined) return undefined;
+    const parsed = parseCall(call);
+    if (parsed.error !== undefined) return undefined;
+    const effect = speculationEffectForToolCall(call.name, parsed.args, workspace);
+    if (effect === undefined) return undefined;
+    const fp = fingerprintCandidate(call.name, parsed.args, effect);
+    const outcome = this.coordinator.outcomeFor(call.id);
+    if (outcome?.fingerprint !== fp || outcome.state !== "completed") return undefined;
+    return { ok: cached.ok, output: cached.output, error: cached.error };
+  }
+
+  /** Test hook: whether a call id was kept after reconcile. */
+  hasKept(callId: string): boolean {
+    return this.kept.has(callId);
+  }
+}
+
 /** The coordinator type re-exported for callers that enable speculation. */
 export { SpeculativeOperationCoordinator };
 
@@ -1781,8 +2050,6 @@ export class RunFaults {
  * verification invoked from inside a `code_mode` program is invisible to this
  * counter, which sees only top-level tool calls.
  */
-const VERIFICATION_SHAPE =
-  /(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun|deno|npx)\s+(?:run\s+)?(?:test|tests|lint|typecheck|type-check|check|build|tsc)|(?:^|[\s;&|(])(?:pytest|jest|vitest|mocha|cargo|go\s+test|make|tsc|eslint|ruff|mypy|flake8)\b/;
 
 /** Audit-trail event: the turn ended with todo items open and was re-opened once (T-3). */
 export const PENDING_TODOS_EVENT = "run.pending_todos_reminder";
@@ -1835,7 +2102,7 @@ class RunEvidence {
    * command, including a non-zero exit — a failing test run is still a check).
    */
   noteCommand(command: unknown): void {
-    if (this.verified === undefined && typeof command === "string" && VERIFICATION_SHAPE.test(command)) {
+    if (this.verified === undefined && typeof command === "string" && isVerificationShellCommand(command)) {
       this.verified = command;
     }
   }
@@ -1876,6 +2143,48 @@ class RunEvidence {
   openPlan(): { open: number; added: number } | undefined {
     return this.todosOpen > 0 && this.todosAdded > 0 ? { open: this.todosOpen, added: this.todosAdded } : undefined;
   }
+
+  /** Paths mutated this turn (ruling 640 critic input). */
+  changedPaths(): string[] {
+    return [...this.changed];
+  }
+
+  /** Verification-shaped command recorded this turn, if any. */
+  verifiedCommand(): string | undefined {
+    return this.verified;
+  }
+}
+
+const CRITIC_EVIDENCE_PER_FILE = 48_000;
+const CRITIC_EVIDENCE_TOTAL = 200_000;
+
+/**
+ * Load capped excerpts of mutated paths for the adversarial critic
+ * (`evidenceText` / ruling 645 enforced_egress_claim). Best-effort: missing
+ * files are skipped; never throws into the turn exit path.
+ */
+function criticEvidenceText(workspace: string, paths: readonly string[]): string | undefined {
+  if (paths.length === 0) return undefined;
+  const chunks: string[] = [];
+  let total = 0;
+  for (const rel of paths) {
+    if (total >= CRITIC_EVIDENCE_TOTAL) break;
+    const candidate = rel.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rel) ? rel : `${workspace}/${rel}`;
+    try {
+      const raw = readFileSync(candidate, "utf8");
+      const slice = raw.length > CRITIC_EVIDENCE_PER_FILE ? raw.slice(0, CRITIC_EVIDENCE_PER_FILE) : raw;
+      const block = `--- ${rel}\n${slice}`;
+      if (total + block.length > CRITIC_EVIDENCE_TOTAL) {
+        chunks.push(block.slice(0, Math.max(0, CRITIC_EVIDENCE_TOTAL - total)));
+        break;
+      }
+      chunks.push(block);
+      total += block.length;
+    } catch {
+      // skip unreadable / deleted paths
+    }
+  }
+  return chunks.length > 0 ? chunks.join("\n") : undefined;
 }
 
 /**
@@ -1914,19 +2223,20 @@ async function logEvent(
   }
 }
 
-async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string): Promise<void> {
-  if (prompt === "") return;
+async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: ChatMsgContent): Promise<void> {
+  const flat = chatContentText(prompt);
+  if (flat === "" && !chatContentHasImage(prompt)) return;
   // B-2: the current message's file mentions are the conversation-derived
   // `conversationFiles` signal (aider get_file_mentions). Combined with the
   // file-touching tool ledger it decides whether the repo-map budget expands.
-  noteConversationMessage(deps.sessionId, prompt);
+  noteConversationMessage(deps.sessionId, flat);
   const first = deps.store.messageCount(deps.sessionId) === 0;
   deps.store.appendMessage(deps.sessionId, { role: "user", content: prompt });
   await logEvent(deps, faults, EventTypes.messageStart, { role: "user" }, { kind: "human", id: "user" });
   // The raw prompt lives in the transcript (authority); the audit log keeps a
   // digest, its size, and a short masked preview.
-  const inputAudit = textAuditFields(prompt);
-  const inputPreview = truncateForEvent(maskSecrets(prompt), USER_PROMPT_PREVIEW_CHARS);
+  const inputAudit = textAuditFields(flat);
+  const inputPreview = truncateForEvent(maskSecrets(flat), USER_PROMPT_PREVIEW_CHARS);
   await logEvent(
     deps,
     faults,
@@ -1940,7 +2250,7 @@ async function beginUserTurn(deps: LoopDeps, faults: RunFaults, prompt: string):
     },
     { kind: "human", id: "user" },
   );
-  if (first) deps.store.touchSession(deps.sessionId, titleFromText(prompt));
+  if (first) deps.store.touchSession(deps.sessionId, titleFromText(flat));
 }
 
 /** Abort an in-flight provider stream when mid-turn steer arrives (C-9 reduced). */
@@ -1968,6 +2278,7 @@ async function collectAssistant(
   deps: LoopDeps,
   faults: RunFaults,
   history: ChatMsg[],
+  speculation?: TurnSpeculationLane,
   rails?: {
     /** The task statement, pinned against trimming (see `pinnedTaskStatement`). */
     pinned?: string;
@@ -1986,6 +2297,11 @@ async function collectAssistant(
      * is NEVER a forgeable user message.
      */
     hookContext?: string;
+    /** Token-aware provider-view message window for `/context` honesty (729). */
+    historyLimit?: number;
+    defaultHistoryLimit?: number;
+    tokenFitCompaction?: boolean;
+    llmCompactionActive?: boolean;
     /**
      * Lazily discovered nested AGENTS.md/CLAUDE.md fragments (attributed,
      * untrusted, bounded). Append-only across the run and first on the rail so
@@ -2056,7 +2372,10 @@ async function collectAssistant(
     estimatedInput: inputEstimate,
     maxOutput: maxTokens,
     messages: history.length,
-    historyLimit: HISTORY_LIMIT,
+    historyLimit: rails?.historyLimit ?? HISTORY_LIMIT,
+    ...(rails?.defaultHistoryLimit !== undefined ? { defaultHistoryLimit: rails.defaultHistoryLimit } : {}),
+    ...(rails?.tokenFitCompaction === true ? { tokenFitCompaction: true } : {}),
+    ...(rails?.llmCompactionActive === true ? { llmCompactionActive: true } : {}),
   });
   const streamCut = new AbortController();
   const liveSteer =
@@ -2074,11 +2393,21 @@ async function collectAssistant(
   for (const warning of negotiatedEffort.warnings) {
     emit(deps.callbacks, { type: "notice", message: warning });
   }
+  let wireHistory = history;
+  const visionPosture = assessVisionPosture(deps.provider.name, deps.model, process.env);
+  if (historyHasImages(history)) {
+    if (visionPosture.support === false) {
+      emit(deps.callbacks, { type: "notice", message: visionHonestyNotice(visionPosture, "dispatch") });
+      wireHistory = stripImagesFromHistory(history);
+    } else if (visionPosture.support === "unknown") {
+      emit(deps.callbacks, { type: "notice", message: visionHonestyNotice(visionPosture, "dispatch") });
+    }
+  }
   const request: ProviderRequest = {
     model: deps.model,
     system: basePrompt + extra + rail,
     maxTokens,
-    messages: history,
+    messages: wireHistory,
     tools: specs,
     signal: providerStreamSignal(deps.signal, streamCut),
     ...(negotiatedEffort.effort !== undefined ? { reasoningEffort: negotiatedEffort.effort } : {}),
@@ -2100,11 +2429,13 @@ async function collectAssistant(
           emit(deps.callbacks, { type: "assistant.thinking", text: event.text });
         }
       } else if (event.type === "tool_call") {
-        turn.toolCalls.push({
+        const call: ToolCall = {
           id: event.id && event.id !== "" ? event.id : `call_${turn.toolCalls.length + 1}`,
           name: event.name,
           arguments: typeof event.arguments === "string" ? event.arguments : "",
-        });
+        };
+        turn.toolCalls.push(call);
+        speculation?.noteToolCall(call, deps.workspace);
       } else if (event.type === "notice") {
         // A retry on the way in, or any other provider-side fact the human should
         // know: surface it rather than swallowing it into the transcript.
@@ -2449,6 +2780,33 @@ async function executeTool(
     };
   }
 
+  // P0-1 / ruling 649: under =require, refuse ambient and shape-ineligible tools
+  // before Guard ask and pre-tool hooks (hooks must not side-effect a dead path).
+  const requirePreflight = effectHostKernelRequirePreflight(call.name, parsed.args);
+  if (requirePreflight !== undefined) {
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return {
+      result: { ok: false, output: requirePreflight, error: requirePreflight },
+      expected: true,
+    };
+  }
+
+  // P0-1 / ruling 653: under =default/=1, refuse never-routable tools before Guard.
+  const noAmbientTool = effectHostNoAmbientToolPreflight(call.name);
+  if (noAmbientTool !== undefined) {
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return {
+      result: { ok: false, output: noAmbientTool, error: noAmbientTool },
+      expected: true,
+    };
+  }
+
   const admission = admissionFor(call.name, parsed.args, deps.workspace);
   if (admission !== undefined && admission.kind === "guard" && admission.action.kind === "shell.exec") {
     const splitRefusal = shellCompoundRefusal(admission.action.target);
@@ -2463,6 +2821,8 @@ async function executeTool(
   }
   let leaseId: string | undefined;
   let admitted: GuardAction | undefined;
+  /** Full batch the loop admitted (ruling 577): tool-level checks ride any sibling. */
+  let admittedBatch: GuardAction[] = [];
   if (admission.kind === "guard") {
     const primary = withCallIntent(admission.action, parsed.args, deps.workspace);
     const extras = (admission.also ?? []).map((a) => withCallIntent(a, parsed.args, deps.workspace));
@@ -2472,6 +2832,10 @@ async function executeTool(
         : [primary];
     const toAdmit = [...primaryChecks, ...extras];
     admitted = primary;
+    admittedBatch = toAdmit;
+    // Multi-resource projector (ruling 563): check every resource first, then
+    // fold deny > ask > allow so a later deny never follows a premature ask.
+    const batch: Array<{ action: GuardAction; decision: GuardDecision }> = [];
     for (const action of toAdmit) {
       const decision = await gate.check(action);
       leaseId = decision.leaseId ?? gate.leaseFor(action) ?? leaseId;
@@ -2512,79 +2876,198 @@ async function executeTool(
           ...(minted.grantId !== undefined ? { grantId: minted.grantId } : {}),
         });
       }
-      if (decision.decision === "deny") {
-        const denied = `DENIED by policy: ${decision.reason ?? action.kind}`;
-        return { result: { ok: false, output: denied, error: denied }, expected: true };
+      batch.push({ action, decision });
+    }
+    const folded = foldPermissionEffects(batch.map((entry) => entry.decision.decision as PermissionEffect));
+    if (folded === "deny") {
+      const deniedEntry = batch.find((entry) => entry.decision.decision === "deny") ?? batch[0]!;
+      const denied = `DENIED by policy: ${deniedEntry.decision.reason ?? deniedEntry.action.kind}`;
+      return { result: { ok: false, output: denied, error: denied }, expected: true };
+    }
+    if (folded === "ask") {
+      const resources = toAdmit.map((action) => action.target).filter((target) => target.trim() !== "");
+      // Reviewable before writing: a write/edit ask carries the projected diff
+      // when it can be computed cheaply; any problem (unreadable file, no
+      // exact match) silently omits it — the ask itself is unchanged.
+      let approvalPreview: string | undefined;
+      if (call.name === "write" || call.name === "edit") {
+        const projected = projectChange(call.name, parsed.args, deps.workspace);
+        if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
       }
-      if (decision.decision === "ask") {
-        const request = approvalRequestFor(call.name, action, deps.workspace);
-        // Reviewable before writing: a write/edit ask carries the projected diff
-        // when it can be computed cheaply; any problem (unreadable file, no
-        // exact match) silently omits it — the ask itself is unchanged.
-        let approvalPreview: string | undefined;
-        if (call.name === "write" || call.name === "edit") {
-          const projected = projectChange(call.name, parsed.args, deps.workspace);
-          if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
-        }
-        const linkLease = decision.leaseId ?? gate.leaseFor(action) ?? leaseId;
-        const asked: ApprovalRequest & { preview?: string } = {
-          ...request,
-          effectId,
-          tool: call.name,
-          ...(linkLease !== undefined ? { leaseId: linkLease } : {}),
-          ...(approvalPreview !== undefined ? { preview: approvalPreview } : {}),
-        };
-        await logEvent(
-          deps,
-          faults,
-          EventTypes.approvalRequest,
-          { callId: call.id, tool: call.name, kind: action.kind, target: action.target, title: request.title },
-          { kind: "system", id: "hz-guard" },
-        );
-        // D-6: a typed, additive `approval` RuntimeEvent for the canonical turn
-        // frame layer. The durable hz.guard.approval.* append above is unchanged;
-        // an older consumer ignores this variant and the session.event stream
-        // keeps its byte-identical shape.
-        emit(deps.callbacks, {
-          type: "approval",
-          message: request.title,
+      const askEntries = batch.filter((entry) => entry.decision.decision === "ask");
+      // §8 #6 / ruling 577: one human decision covers the whole multi-resource
+      // ask batch (projector still lists every resource).
+      const primary = askEntries[0]!;
+      const request = {
+        ...approvalRequestFor(call.name, primary.action, deps.workspace),
+        ...(resources.length > 1 ? { resources } : {}),
+      };
+      const linkLease = primary.decision.leaseId ?? gate.leaseFor(primary.action) ?? leaseId;
+      const asked: ApprovalRequest & { preview?: string } = {
+        ...request,
+        effectId,
+        tool: call.name,
+        ...(linkLease !== undefined ? { leaseId: linkLease } : {}),
+        ...(approvalPreview !== undefined ? { preview: approvalPreview } : {}),
+      };
+      await logEvent(
+        deps,
+        faults,
+        EventTypes.approvalRequest,
+        {
           callId: call.id,
           tool: call.name,
-        });
-        const approved = await gate.approve(asked, action);
-        // I-4 / ruling 506 residual: `guard.decision` local analytics (terminal
-        // is the closed decision token). No tool name / path / preview text is
-        // copied — only scalar, content-free fields. Lazy import avoids a module
-        // cycle (analytics-log -> event-catalogue -> loop).
-        const { appendAnalyticsEvent } = await import("./analytics-log");
-        appendAnalyticsEvent({
-          workspace: deps.workspace,
-          event: "guard.decision",
-          sessionId: deps.sessionId,
-          terminal: approved ? "approved" : "declined",
-          errorCode: action.kind,
-        });
+          kind: primary.action.kind,
+          target: primary.action.target,
+          title: request.title,
+          ...(resources.length > 1 ? { resources } : {}),
+        },
+        { kind: "system", id: "hz-guard" },
+      );
+      // D-6: a typed, additive `approval` RuntimeEvent for the canonical turn
+      // frame layer. The durable hz.guard.approval.* append above is unchanged;
+      // an older consumer ignores this variant and the session.event stream
+      // keeps its byte-identical shape.
+      emit(deps.callbacks, {
+        type: "approval",
+        message: request.title,
+        callId: call.id,
+        tool: call.name,
+      });
+      const approved = await gate.approve(asked, primary.action);
+      // I-4 / ruling 506 residual: `guard.decision` local analytics (terminal
+      // is the closed decision token). No tool name / path / preview text is
+      // copied — only scalar, content-free fields. Lazy import avoids a module
+      // cycle (analytics-log -> event-catalogue -> loop).
+      const { appendAnalyticsEvent } = await import("./analytics-log");
+      await appendAnalyticsEvent({
+        workspace: deps.workspace,
+        event: "guard.decision",
+        sessionId: deps.sessionId,
+        terminal: approved ? "approved" : "declined",
+        errorCode: primary.action.kind,
+      });
+      for (const entry of askEntries) {
         await logEvent(
           deps,
           faults,
           EventTypes.approvalDecision,
-          { callId: call.id, tool: call.name, kind: action.kind, decision: approved ? "approved" : "declined" },
+          {
+            callId: call.id,
+            tool: call.name,
+            kind: entry.action.kind,
+            decision: approved ? "approved" : "declined",
+            ...(resources.length > 1 ? { resources } : {}),
+          },
           { kind: "human", id: "user" },
         );
         await logEffectGuardDecision(deps, faults, {
           effectId,
           callId: call.id,
           tool: call.name,
-          action,
+          action: entry.action,
           decision: approved ? "allow" : "deny",
           reason: approved ? "user_approved" : "user_declined",
         });
-        if (!approved) {
-          return { result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" }, expected: true };
+      }
+      if (approved && toAdmit.length > 1) {
+        // Atomic multi-resource leases (**682** / 577 residual): one yes plans a
+        // held one-use lease per admitted exact target; mint is all-or-nothing —
+        // partial mint failure drops the batch leases and keeps turn-cache only.
+        type BatchLeasePlan = {
+          action: (typeof toAdmit)[number];
+          existingLeaseId: string | undefined;
+          needsMint: boolean;
+        };
+        const plans: BatchLeasePlan[] = toAdmit.map((action) => {
+          const batchEntry = batch.find(
+            (entry) => entry.action.kind === action.kind && entry.action.target === action.target,
+          );
+          const existingLeaseId = batchEntry?.decision.leaseId ?? gate.leaseFor(action);
+          const needsMint =
+            existingLeaseId === undefined &&
+            action.target !== "" &&
+            !action.target.endsWith("*") &&
+            (KNOWN_GUARD_KINDS as readonly string[]).includes(action.kind);
+          return { action, existingLeaseId, needsMint };
+        });
+        const minted: Lease[] = [];
+        let mintFailed = false;
+        if (typeof deps.sessionId === "string" && deps.sessionId !== "") {
+          try {
+            for (const plan of plans) {
+              if (!plan.needsMint) continue;
+              minted.push(
+                await mintHumanApprovalLease(
+                  deps.kernel,
+                  plan.action.kind,
+                  plan.action.target,
+                  deps.sessionId,
+                  SESSION_LEASE_TTL_MS,
+                ),
+              );
+            }
+          } catch {
+            mintFailed = true;
+            minted.length = 0;
+          }
+        } else if (plans.some((p) => p.needsMint)) {
+          mintFailed = true;
         }
-        leaseId = gate.leaseFor(action);
+        if (!mintFailed && minted.length > 0) {
+          let mintIdx = 0;
+          for (const plan of plans) {
+            let actionLeaseId = plan.existingLeaseId;
+            if (plan.needsMint) {
+              const lease = minted[mintIdx++]!;
+              deps.sessionLeases.push(lease);
+              actionLeaseId = lease.leaseId;
+              await logEffectLeaseIssued(deps, faults, {
+                effectId,
+                callId: call.id,
+                tool: call.name,
+                leaseId: lease.leaseId,
+                kind: plan.action.kind,
+                target: plan.action.target,
+                expiresAt: lease.expiry,
+                source: "approval_batch",
+              });
+            }
+            gate.markAllowed(plan.action, actionLeaseId);
+            if (actionLeaseId !== undefined) leaseId = actionLeaseId;
+          }
+        } else {
+          for (const plan of plans) {
+            gate.markAllowed(plan.action, plan.existingLeaseId);
+            if (plan.existingLeaseId !== undefined) leaseId = plan.existingLeaseId;
+          }
+        }
+      } else if (approved) {
+        for (const entry of askEntries) {
+          gate.markAllowed(entry.action);
+          leaseId = gate.leaseFor(entry.action) ?? leaseId;
+        }
+      }
+      if (!approved) {
+        return {
+          result: { ok: false, output: "DECLINED by the user", error: "DECLINED by the user" },
+          expected: true,
+        };
       }
     }
+  }
+
+  const reconcilePreToolRefusal = effectReconcileBlockPreToolHookRefusal(
+    deps.workspace,
+    deps.sessionId,
+    hooks,
+    deps.effectHost,
+  );
+  if (reconcilePreToolRefusal !== undefined) {
+    return {
+      result: { ok: false, output: reconcilePreToolRefusal, error: reconcilePreToolRefusal },
+      expected: true,
+    };
   }
 
   // hooks v1: the admitted call, once Guard/approval allowed it. A pre hook can
@@ -2629,6 +3112,14 @@ async function executeTool(
       );
     } else if (call.name === "ast_edit" && astEditArgsEligibleForKernelRoute(parsed.args)) {
       routed = await tryKernelAstEditRoute(
+        deps.kernel,
+        deps.workspace,
+        deps.sessionId,
+        effectId,
+        parsed.args,
+      );
+    } else if (call.name === "undo") {
+      routed = await tryKernelUndoRoute(
         deps.kernel,
         deps.workspace,
         deps.sessionId,
@@ -2684,6 +3175,32 @@ async function executeTool(
     }
   }
 
+  // P0-1 / ruling 652: compound/interpreter shell must not Bun-fallback under =default/=1.
+  const noAmbientShell = effectHostNoAmbientCompoundShellRefusal(call.name, parsed.args, kernelRouted);
+  if (noAmbientShell) {
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: noAmbientShell, error: noAmbientShell }, expected: true, leaseId };
+  }
+
+  // P0-1 / ruling 667: shape-ineligible write/edit/apply_patch must not Bun-fallback under =default/=1.
+  const noAmbientShape = effectHostNoAmbientShapeIneligibleMutationRefusal(
+    call.name,
+    parsed.args,
+    kernelRouted,
+  );
+  if (noAmbientShape) {
+    deps.effectHost?.recordExecute(
+      effectId,
+      effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: false }),
+    );
+    return { result: { ok: false, output: noAmbientShape, error: noAmbientShape }, expected: true, leaseId };
+  }
+
+  const rideParent = (a: GuardAction): GuardAction | undefined =>
+    admittedBatch.find((x) => x.kind === a.kind && x.target === a.target) ?? admitted;
   const context: ToolContext = {
     cwd: deps.workspace,
     workspace: deps.workspace,
@@ -2691,10 +3208,9 @@ async function executeTool(
     signal: deps.signal,
     // B-2: the model's context window drives the repo-map no-files budget cap.
     contextWindowTokens: windowForModel(deps.model),
-    // A tool-level check rides exactly the loop decision for this call when it
-    // admits the same action; it is never answered by a sibling's cache entry
-    // or by a stale entry from a different cwd (see GuardGate.check).
-    guard: (a: GuardAction) => gate.check(a, admitted),
+    // A tool-level check rides the loop decision for this call when it admits
+    // the same kind+target — including multi-resource siblings (ruling 577).
+    guard: (a: GuardAction) => gate.check(a, rideParent(a)),
     approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
     receipt: (rec: ReceiptInput) => deps.kernel.issueReceipt(rec),
     delegate: deps.delegate,
@@ -2709,13 +3225,14 @@ async function executeTool(
             workspace: deps.workspace,
             cwd: deps.workspace,
             hooks: {
-              guard: (a: GuardAction) => gate.check(a, admitted),
+              guard: (a: GuardAction) => gate.check(a, rideParent(a)),
               approve: (req: ApprovalRequest, action?: GuardAction) => gate.approve(req, action),
             },
             signal: deps.signal,
             configLoader: () => loadConfig().lsp,
           })
         : undefined,
+    askUser: deps.askUser,
   };
 
   try {
@@ -2939,6 +3456,7 @@ async function runToolCall(
   // whose arguments did not parse, the tighter of the mistake and format caps).
   // Absent for callers that run no mistake tracker.
   attemptsAfterFailure?: (formatError: boolean) => number,
+  speculation?: TurnSpeculationLane,
 ): Promise<ToolCallOutcome> {
   const parsed = parseCall(call);
   // First-admission reconciliation must run BEFORE the current effect begins
@@ -2976,7 +3494,17 @@ async function runToolCall(
   );
 
   const todoVerBefore = todoVersion(deps.sessionId);
-  const executed = await executeTool(deps, gate, call, parsed, faults, hooks, effectId, true);
+  const prefetched = speculation?.consume(call, deps.workspace);
+  const executed: Awaited<ReturnType<typeof executeTool>> =
+    prefetched !== undefined
+      ? (() => {
+          deps.effectHost?.recordExecute(
+            effectId,
+            effectExecuteRecordDetail(call.name, parsed.args, deps.workspace, { ok: prefetched.ok }),
+          );
+          return { result: prefetched, leaseId: undefined };
+        })()
+      : await executeTool(deps, gate, call, parsed, faults, hooks, effectId, true);
   const result = executed.result;
   if (
     result.ok &&
@@ -3079,8 +3607,38 @@ async function runToolCall(
       ? planToolOutputFromOffset(fullOutput, outputOffset, capOpts)
       : planToolOutputCap(fullOutput, capOpts);
   if (plan.spill) {
-    const refusal = writeSpillSafely(plan.spill.file, plan.spill.contents);
-    if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
+    // Under-admission (ruling 584): Guard fs.write before materialising a spill/blob.
+    // Uses the turn's GuardGate so ask can ride the same approve path as tools.
+    const spillAction: GuardAction = { kind: "fs.write", target: path.resolve(plan.spill.file) };
+    let spillDecision = await gate.check(spillAction);
+    if (spillDecision.decision === "ask") {
+      const approved = await gate.approve(approvalRequestFor("spill", spillAction, deps.workspace), spillAction);
+      if (approved) {
+        gate.markAllowed(spillAction);
+        spillDecision = { decision: "allow", reason: "user_approved" };
+      } else {
+        spillDecision = { decision: "deny", reason: "user_declined" };
+      }
+    }
+    if (spillDecision.decision !== "allow") {
+      const why =
+        spillDecision.reason !== undefined && spillDecision.reason !== ""
+          ? spillDecision.reason
+          : spillDecision.decision;
+      emit(deps.callbacks, { type: "notice", message: `spill refused: ${why}` });
+    } else if (blobSpillEnabled()) {
+      try {
+        putBlobForWorkspace(deps.workspace, plan.spill.contents);
+      } catch (err) {
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `spill refused: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    } else {
+      const refusal = writeSpillSafely(plan.spill.file, plan.spill.contents);
+      if (refusal !== undefined) emit(deps.callbacks, { type: "notice", message: refusal });
+    }
   }
   // The outcome the batch loop's mistake accounting reads. Computed here so the
   // model-facing text can name the remaining budget only for failures that
@@ -3114,19 +3672,30 @@ async function runToolCall(
   // hooks v1 post point (H1 tool.post): an observation hook sees the
   // model-facing text; a failure here is a notice, never a blocked step (H4).
   // Any H9 bounded/attributed context notes are collected for the next request.
-  const postFragments = await runPostToolHooks(hooks, {
-    sessionId: deps.sessionId,
-    workspace: deps.workspace,
-    callId: call.id,
-    tool: call.name,
-    args: parsed.args,
-    ok: result.ok,
-    ms: Date.now() - started,
-    outputExcerpt: content,
-    onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
-    onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
-  });
-  for (const fragment of postFragments) hookFragments.push(fragment);
+  const postHookRefusal = effectReconcileBlockObservationHookRefusal(
+    deps.workspace,
+    deps.sessionId,
+    hooks,
+    deps.effectHost,
+    { point: "postTool", tool: call.name },
+  );
+  if (postHookRefusal !== undefined) {
+    emit(deps.callbacks, { type: "notice", message: postHookRefusal });
+  } else {
+    const postFragments = await runPostToolHooks(hooks, {
+      sessionId: deps.sessionId,
+      workspace: deps.workspace,
+      callId: call.id,
+      tool: call.name,
+      args: parsed.args,
+      ok: result.ok,
+      ms: Date.now() - started,
+      outputExcerpt: content,
+      onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+      onEvent: (type, payload) => void logEvent(deps, faults, type, payload, { kind: "system", id: "hz-hook" }),
+    });
+    for (const fragment of postFragments) hookFragments.push(fragment);
+  }
 
   try {
     deps.store.appendMessage(deps.sessionId, { role: "tool", content, toolCallId: call.id, toolName: call.name });
@@ -3305,7 +3874,7 @@ function classifyFailure(exit: RunExit): FailureClass {
  */
 export async function runTurn(
   deps: LoopDeps,
-  userText: string,
+  userPrompt: string | ChatMsgContent,
 ): Promise<{ text: string; aborted: boolean; exit: RunExit }> {
   let text = "";
   let aborted = false;
@@ -3318,8 +3887,27 @@ export async function runTurn(
   // NF-073: one terminal outcome per run, in the RC-7 vocabulary.
   let exit: RunExit = { terminal: "succeeded", detail: "turn_end" };
   let lastProviderFailureCode: ProviderFailureCode | undefined;
+  const prompt: ChatMsgContent =
+    typeof userPrompt === "string" ? userPrompt.trim() : userPrompt;
+  const promptFlat = chatContentText(prompt);
   try {
-    const prompt = typeof userText === "string" ? userText.trim() : "";
+    // Engineering Brain pre-flight (ruling 639): harness viability gate before
+    // mutate ladder. Opt-in via HZ_ENGINEERING_BRAIN or autonomy compose.
+    if (engineeringBrainEnabled(process.env) && promptFlat !== "") {
+      const viability = assessEngineeringViability(promptFlat);
+      if (viability.verdict === "VIABLE_WITH_TRADEOFFS") {
+        emit(deps.callbacks, { type: "notice", message: viability.summary });
+      } else if (viability.verdict === "NOT_VIABLE") {
+        const interrupt = formatViabilityInterrupt(viability);
+        emit(deps.callbacks, { type: "notice", message: viability.summary });
+        emit(deps.callbacks, { type: "assistant.delta", text: interrupt });
+        return {
+          text: interrupt,
+          aborted: false,
+          exit: { terminal: "failed", detail: "engineering_viability" },
+        };
+      }
+    }
     // Model->tool routing (docs/28; research A.7): resolve the rule table ONCE
     // for this run from the active model + provider and fold the decision into
     // deps.toolFilter. The composed filter is consulted at BOTH toolFilter
@@ -3377,13 +3965,23 @@ export async function runTurn(
           if (!message.startsWith("no per-model instruction template")) emit(deps.callbacks, { type: "notice", message });
         },
       });
-      const mem = memoryPromptSection(deps.workspace, prompt);
+      const mem = memoryPromptSection(deps.workspace, promptFlat);
       const base = perModel === "" ? projectBlocks : `${projectBlocks}\n\n${perModel}\n`;
       if (mem === undefined) return base;
       return `${base}\n\n${mem}\n`;
     })();
 
-    const gate = new GuardGate(deps.workspace, deps.kernel, deps.sessionLeases, () => deps.approve ?? getApprovalHandler(), deps.sessionId, deps.permissionMode);
+    const gate = new GuardGate(
+      deps.workspace,
+      deps.kernel,
+      deps.sessionLeases,
+      () => deps.approve ?? getApprovalHandler(),
+      deps.sessionId,
+      deps.permissionMode,
+      deps.autonomy,
+      (message) => emit(deps.callbacks, { type: "notice", message }),
+    );
+    const speculationLane = TurnSpeculationLane.create(deps, gate, faults);
     // Plan mode rides the system rail: the model is told what staging means on
     // every step, so a long planning turn cannot drift into treating a staged
     // change as applied (the rail survives trims; history does not).
@@ -3394,7 +3992,7 @@ export async function runTurn(
     // Hooks are config-backed and loaded ONCE per run (absent config = zero
     // cost, zero spawns). A malformed config is a fail-closed refusal state
     // carried by the loader, not an exception here.
-    const hooks =
+    const loadedHooks =
       deps.hooks ??
       loadHooks(
         deps.workspace,
@@ -3402,6 +4000,12 @@ export async function runTurn(
           emit(deps.callbacks, { type: "notice", message }),
         ),
       );
+    // P0-1 / rulings 651+666: whenever EffectHost is on, Bun hook spawns are ambient — suppress.
+    const hooksSuppressed = effectHostRequireSuppressHooks(loadedHooks);
+    const hooks = hooksSuppressed.hooks;
+    if (hooksSuppressed.suppressed) {
+      emit(deps.callbacks, { type: "notice", message: effectHostHooksSuppressedNotice() });
+    }
     // H9 (docs/15 §2.4): observation-hook context notes gathered this run,
     // carried into the NEXT provider request as one attributed untrusted block
     // (never a forgeable user turn). Fragments are consumed once rendered.
@@ -3411,6 +4015,17 @@ export async function runTurn(
     // lifecycle hook may observe and may return an H9 note; it can never block
     // (H4), so its only effect here is a notice/event and a collected fragment.
     const emitLifecycle = async (point: "turnStart" | "turnEnd" | "compactPre" | "compactPost", detail?: Record<string, unknown>): Promise<void> => {
+      const lifecycleRefusal = effectReconcileBlockObservationHookRefusal(
+        deps.workspace,
+        deps.sessionId,
+        hooks,
+        deps.effectHost,
+        { point },
+      );
+      if (lifecycleRefusal !== undefined) {
+        emit(deps.callbacks, { type: "notice", message: lifecycleRefusal });
+        return;
+      }
       const fragments = await runLifecycleHooks(hooks, {
         point,
         sessionId: deps.sessionId,
@@ -3442,6 +4057,14 @@ export async function runTurn(
     // workspace. It is constructed only when a ceiling is configured, so the
     // default path pays nothing.
     const spendLimitMicroUsd = spendLimitMicroFromEnv(process.env);
+    // Under-admission (ruling 583): Guard before durable spend.json mutate.
+    if (spendLimitMicroUsd > 0) {
+      const spendRefused = await admitSpendLedgerWrite(deps.workspace);
+      if (spendRefused !== undefined) {
+        emit(deps.callbacks, { type: "notice", message: `spend ledger refused: ${spendRefused}` });
+        return { text: "", aborted: false, exit: { terminal: "failed", detail: "spend_ledger_refused" } };
+      }
+    }
     const spendLedger = spendLimitMicroUsd > 0
       ? new SpendLedger(deps.workspace, { limitMicroUsd: spendLimitMicroUsd })
       : undefined;
@@ -3568,7 +4191,26 @@ export async function runTurn(
       // elided the whole transcript down to one message. No typecheck existed
       // to catch the missing argument; the pipeline now has one.)
       const rawHistory = deps.store.history(deps.sessionId);
-      const view = compactHistory(rawHistory, { limit: historyLimit, holdBuffer: compactionHold });
+      // Ruling 668: token-aware message window (not only fixed HISTORY_LIMIT=80).
+      historyLimit = tokenAwareHistoryLimit(
+        rawHistory,
+        deps.contextWindowTokens ?? windowForModel(deps.model),
+        { defaultLimit: HISTORY_LIMIT },
+      );
+      const llmCompactionActive = llmCompactionEnabled(deps);
+      const elidedSummariser = llmCompactionActive
+        ? await resolveLlmCompactionSummariser(deps, rawHistory, historyLimit, compactionHold)
+        : undefined;
+      const compactionOptions = {
+        limit: historyLimit,
+        holdBuffer: compactionHold,
+        ...(elidedSummariser !== undefined ? { elidedSummariser } : {}),
+      };
+      const contextWindowForHistory = deps.contextWindowTokens ?? windowForModel(deps.model);
+      const fitted = compactHistoryWithTokenFit(rawHistory, compactionOptions, contextWindowForHistory);
+      historyLimit = fitted.limit;
+      const tokenFitCompaction = fitted.tokenFitApplied;
+      const view = fitted.result;
       // B-5: sync rewritten provider view to the longest byte-stable prefix of
       // the previous dispatch (compact / emergency shrink / steer append).
       const synced = historySync.sync(view.history);
@@ -3683,7 +4325,7 @@ export async function runTurn(
       }
       let turn: Awaited<ReturnType<typeof collectAssistant>>;
       try {
-        turn = await collectAssistant(deps, faults, history, {
+        turn = await collectAssistant(deps, faults, history, speculationLane, {
           pinned,
           budgetLine: budgetCountdownLine(ledger.countdown()),
           corrective: combinedCorrective === "" ? undefined : combinedCorrective,
@@ -3693,6 +4335,10 @@ export async function runTurn(
           planLine,
           hookContext,
           nestedInstructions: lazy === undefined ? undefined : renderLazyInstructionBlock(lazy.all()),
+          historyLimit,
+          defaultHistoryLimit: HISTORY_LIMIT,
+          ...(tokenFitCompaction ? { tokenFitCompaction: true } : {}),
+          ...(llmCompactionActive ? { llmCompactionActive: true } : {}),
         });
       } catch (err) {
         if (spendLedger !== undefined && spendReservationId !== undefined) {
@@ -3704,6 +4350,9 @@ export async function runTurn(
           spendReservationId = undefined;
         }
         throw err;
+      }
+      if (speculationLane !== undefined && turn.toolCalls.length > 0) {
+        await speculationLane.finalize(turn.toolCalls, deps.workspace);
       }
       if (spendLedger !== undefined && spendReservationId !== undefined) {
         const actualUsd = turn.usage
@@ -3735,7 +4384,7 @@ export async function runTurn(
         // non-content fields cross into the NDJSON log (no text/keys/paths).
         // Lazy import avoids a module cycle (analytics-log -> event-catalogue -> loop).
         const { appendAnalyticsEvent } = await import("./analytics-log");
-        appendAnalyticsEvent({
+        await appendAnalyticsEvent({
           workspace: deps.workspace,
           event: "provider.usage",
           sessionId: deps.sessionId,
@@ -4035,10 +4684,21 @@ export async function runTurn(
       const batchFifo = await runClassedToolBatchFifo(turn.toolCalls, {
         signal: deps.signal,
         runCall: async (call) => {
-          const outcome = await runToolCall(deps, gate, call, faults, evidence, hooks, hookFragments, lazy, (formatError) => {
+          const outcome = await runToolCall(
+            deps,
+            gate,
+            call,
+            faults,
+            evidence,
+            hooks,
+            hookFragments,
+            lazy,
+            (formatError) => {
             const mistakeLeft = mistakes.remaining - 1;
             return formatError ? Math.min(mistakeLeft, MAX_CONSECUTIVE_FORMAT_ERRORS - consecutiveFormatErrors - 1) : mistakeLeft;
-          });
+            },
+            speculationLane,
+          );
           appendedTokens += outcome.tokens;
           if (outcome.fingerprint !== "") {
             stepOutcomeParts.push({ name: call.name, fingerprint: outcome.fingerprint });
@@ -4243,6 +4903,42 @@ export async function runTurn(
   // fail-closed), never `succeeded`. The audit event records the files and the
   // claim. This runs BEFORE the fault fold, so a failed event-log write still
   // downgrades the exit below.
+  // Engineering Brain adversarial critic (ruling 640): fresh-path harness
+  // review of mutations — P0 fails the turn; P1 notices only.
+  if (
+    engineeringBrainEnabled(process.env) &&
+    exit.terminal === "succeeded" &&
+    evidence.changedPaths().length > 0
+  ) {
+    const changed = evidence.changedPaths();
+    const symbolImpact = buildMutationSymbolImpact(deps.workspace, changed);
+    const critic = await resolveAdversarialCritic({
+      input: {
+        goal: promptFlat,
+        changedPaths: changed,
+        verifiedCommand: evidence.verifiedCommand(),
+        // Ruling 661: wire evidenceText so enforced_egress_claim can scan added
+        // lines / file excerpts (ruling 645). Cap per file to keep the harness cheap.
+        evidenceText: criticEvidenceText(deps.workspace, changed),
+        symbolImpactSummary: symbolImpact?.summary,
+        symbolHighBlastRadius: symbolImpact?.highBlastRadius,
+      },
+      provider: deps.provider,
+      mainModel: deps.model,
+      signal: deps.signal,
+    });
+    if (critic.verdict === "PASS_WITH_NOTES") {
+      const notes = symbolImpact?.summary
+        ? `${critic.summary}\n${symbolImpact.summary}`
+        : critic.summary;
+      emit(deps.callbacks, { type: "notice", message: notes });
+    } else if (critic.verdict === "FAIL") {
+      const interrupt = formatCriticInterrupt(critic, symbolImpact?.summary);
+      emit(deps.callbacks, { type: "notice", message: critic.summary });
+      emit(deps.callbacks, { type: "assistant.delta", text: interrupt });
+      exit = { terminal: "failed", detail: "engineering_critic" };
+    }
+  }
   const unverified = exit.terminal === "succeeded" ? evidence.unverified() : undefined;
   const claimed = exit.terminal === "succeeded" ? evidence.claimWithoutVerification() : undefined;
   if (claimed !== undefined) exit = { terminal: "unknown", detail: "unverified_completion" };
@@ -4292,34 +4988,67 @@ export async function runTurn(
   // noticed rather than swallowed. (A succeeded run records nothing: the
   // lesson store is for failures; "noteworthy ≠ failed" stays available by
   // calling recordPostmortem directly.)
+  // Under-admission (ruling 562): Guard fs.write on the postmortems dir before
+  // creating a record — deny/ask skip the write and emit a notice.
   if (exit.terminal !== "succeeded") {
     try {
-      const rows = deps.store.history(deps.sessionId);
-      const events: TranscriptEvent[] = rows.map((msg, index) => ({
-        seq: index + 1,
-        role: msg.role,
-        text: typeof msg.content === "string" ? msg.content : "",
-      }));
-      const toolCounts: Record<string, number> = {};
-      for (const msg of rows) {
-        const toolName = (msg as { toolName?: unknown }).toolName;
-        if (msg.role === "tool" && typeof toolName === "string" && toolName !== "") {
-          toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1;
-        }
+      const stateDir = workspaceStateDir(deps.workspace);
+      const pmDir = postmortemsDir(stateDir);
+      const action: GuardAction = { kind: "fs.write", target: pmDir };
+      let decision: GuardDecision;
+      try {
+        decision = await deps.kernel.checkGuard(action, scopeFor(action, deps.workspace));
+      } catch (err) {
+        emit(deps.callbacks, {
+          type: "notice",
+          message: `could not record a post-mortem: the guard could not decide (${errorMessage(err)})`,
+        });
+        decision = { decision: "deny", reason: "guard-error" };
       }
-      await recordPostmortem({
-        stateDir: workspaceStateDir(deps.workspace),
-        sessionId: deps.sessionId,
-        terminal: exit.terminal,
-        detail: exit.detail,
-        transcript: events,
-        toolCalls: toolCounts,
-        failureClass: classifyFailure(exit),
-      });
+      if (decision.decision !== "allow") {
+        const why =
+          decision.decision === "ask"
+            ? "unattended post-mortem never self-approves; allow the path in policy"
+            : `denied by policy: ${decision.reason !== undefined && decision.reason !== "" ? decision.reason : "no reason given"}`;
+        emit(deps.callbacks, { type: "notice", message: `could not record a post-mortem: ${why}` });
+      } else {
+        const rows = deps.store.history(deps.sessionId);
+        const events: TranscriptEvent[] = rows.map((msg, index) => ({
+          seq: index + 1,
+          role: msg.role,
+          text: typeof msg.content === "string" ? msg.content : "",
+        }));
+        const toolCounts: Record<string, number> = {};
+        for (const msg of rows) {
+          const toolName = (msg as { toolName?: unknown }).toolName;
+          if (msg.role === "tool" && typeof toolName === "string" && toolName !== "") {
+            toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1;
+          }
+        }
+        await recordPostmortem({
+          stateDir,
+          sessionId: deps.sessionId,
+          terminal: exit.terminal,
+          detail: exit.detail,
+          transcript: events,
+          toolCalls: toolCounts,
+          failureClass: classifyFailure(exit),
+        });
+      }
     } catch (err) {
       emit(deps.callbacks, { type: "notice", message: `could not record a post-mortem: ${errorMessage(err)}` });
     }
   }
+  await maybeAutoEmitVerificationArtifactAfterTurn({
+    workspace: deps.workspace,
+    sessionId: deps.sessionId,
+    goal: promptFlat,
+    exitTerminal: exit.terminal,
+    changedPaths: evidence.changedPaths(),
+    verifiedCommand: evidence.verifiedCommand(),
+    onNotice: (message) => emit(deps.callbacks, { type: "notice", message }),
+    env: process.env,
+  });
   maybeEmitSessionKernelReconcile(deps);
   try {
     await logEvent(

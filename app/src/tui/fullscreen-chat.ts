@@ -813,7 +813,7 @@ export async function runFullscreenExperimentalChat(
         insetScrollUp = effect.insetScrollUp;
         paint();
       } else if (effect.kind === "show_unknown") {
-        runUnknownCommand(runtime, renderer);
+        void runUnknownCommand(runtime, renderer);
       } else if (effect.kind === "dismiss_modal_overlay") {
         requestOverlayMouseDismiss?.();
       }
@@ -880,7 +880,7 @@ export async function runFullscreenExperimentalChat(
         if (consumed) {
           editorText = "";
           inputHistory = pushFullscreenHistoryEntry(inputHistory, slashLine);
-          rememberHistory(historyFile, slashLine);
+          await rememberHistory(historyFile, slashLine, opts.workspace);
           paint();
           return;
         }
@@ -916,7 +916,7 @@ export async function runFullscreenExperimentalChat(
     pendingSubmitText = undefined;
     editorText = "";
     inputHistory = pushFullscreenHistoryEntry(inputHistory, text);
-    rememberHistory(historyFile, text);
+    await rememberHistory(historyFile, text, opts.workspace);
     paint();
     await sendTurn(text);
   };

@@ -50,6 +50,7 @@ import { fileURLToPath } from "node:url";
 import { canonicalJson, sha256Hex } from "../canon";
 import { userConfigDir } from "../paths";
 import curatedSnapshot from "./models-dev.curated.json";
+import { metricContract } from "../metrics";
 
 /** opencode's build-time floor (packages/core/script/models-snapshot.ts). */
 export const MINIMUM_PROVIDERS = 100;
@@ -465,6 +466,49 @@ export function getCatalogCacheRevision(): number {
 }
 
 /** Write the validated cache atomically (mode 0600). */
+
+/** H-7: contracted form of `hzcode models refresh` outcome (ruling 598). */
+export function modelsRefreshPublication(input: {
+  providerCount: number;
+  unchanged: boolean;
+}): string[] {
+  const anchor = "none — this models-refresh invocation";
+  const population = "providers in the fetched/cached models catalog for this refresh";
+  const excludes = "none — unchanged is a boolean outcome of 304/same-digest short-circuit";
+  return [
+    metricContract({
+      metric: "models refresh providers",
+      anchor,
+      population,
+      excludes,
+      value: input.providerCount,
+    }),
+    metricContract({
+      metric: "models refresh unchanged",
+      anchor,
+      population,
+      excludes,
+      value: input.unchanged ? 1 : 0,
+    }),
+  ];
+}
+
+/** H-7: contracted form of `hzcode --list-models` count (ruling 602). */
+export function modelsListPublication(input: { listed: number; provider: string }): string[] {
+  const anchor = "none — this --list-models invocation";
+  const population = `model ids listed for provider ${input.provider} after optional substring filter`;
+  const excludes = "none — every id printed (or the empty-list notice) is counted";
+  return [
+    metricContract({
+      metric: "models list count",
+      anchor,
+      population,
+      excludes,
+      value: input.listed,
+    }),
+  ];
+}
+
 export function writeCatalogCache(catalog: Catalog, meta: Omit<CatalogCacheMeta, "providerCount" | "modelCount">, home: string = homedir()): string {
   const file = catalogCachePath(home);
   const dir = path.dirname(file);

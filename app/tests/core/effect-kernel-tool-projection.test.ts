@@ -275,6 +275,20 @@ describe("classifyApplyPatchKernelProjectionMiss (ruling 323)", () => {
     expect(applyPatchProjectionMissRequireDetail("shape_ineligible")).toContain("kernel-eligible");
   });
 
+  test("names bun_first_hit_score_fuzz when mixed qualifying scores (ruling 687)", async () => {
+    writeFileSync(path.join(workspace, "src.txt"), "alfa betz\nalfa beta\nalfa beta\n", "utf8");
+    const patch = `*** Begin Patch
+*** Update File: src.txt
+@@
+-alpha beta
++alpha beta fixed
+*** End Patch`;
+    expect(applyPatchArgsEligibleForKernelRoute({ input: patch })).toBe(true);
+    expect(await classifyApplyPatchKernelProjectionMiss(workspace, { input: patch })).toBe(
+      "bun_first_hit_score_fuzz",
+    );
+  });
+
   test("names bun_fuzz_only when chunk is below Levenshtein threshold", async () => {
     writeFileSync(path.join(workspace, "src.txt"), "short\n", "utf8");
     const patch = `*** Begin Patch
@@ -285,7 +299,8 @@ describe("classifyApplyPatchKernelProjectionMiss (ruling 323)", () => {
 *** End Patch`;
     expect(applyPatchArgsEligibleForKernelRoute({ input: patch })).toBe(true);
     expect(await classifyApplyPatchKernelProjectionMiss(workspace, { input: patch })).toBe("bun_fuzz_only");
-    expect(applyPatchProjectionMissRequireDetail("bun_fuzz_only")).toContain("Bun-only fuzz");
+    expect(applyPatchProjectionMissRequireDetail("bun_fuzz_only")).toContain("below-threshold");
+    expect(applyPatchProjectionMissRequireDetail("bun_first_hit_score_fuzz")).toContain("first-hit score fuzz");
   });
 
   test("returns undefined when exact update resolves", async () => {

@@ -92,16 +92,28 @@ export function buildDreamPlanMarkdown(workspace: string, facts: readonly string
   return lines.join("\n");
 }
 
+/** Preview a dream plan path + markdown without writing (ruling 560 under-admission). */
+export function previewDreamPlan(workspace: string): DreamPlanResult & { content: string } {
+  const facts = collectFacts(workspace);
+  const root = stateRoot(workspace);
+  const dir = path.join(root, DREAM_DIR);
+  const planPath = path.join(dir, `plan-${stamp()}.md`);
+  return {
+    planPath,
+    factCount: facts.length,
+    empty: facts.length === 0,
+    content: buildDreamPlanMarkdown(workspace, facts),
+  };
+}
+
 /**
  * Write a dream plan under `<stateRoot>/dream/plan-<stamp>.md`.
  * Never mutates MEMORY.md or the FTS index.
  */
 export function writeDreamPlan(workspace: string): DreamPlanResult {
-  const facts = collectFacts(workspace);
-  const root = stateRoot(workspace);
-  const dir = path.join(root, DREAM_DIR);
+  const preview = previewDreamPlan(workspace);
+  const dir = path.dirname(preview.planPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const planPath = path.join(dir, `plan-${stamp()}.md`);
-  writeFileSync(planPath, buildDreamPlanMarkdown(workspace, facts), { mode: 0o600 });
-  return { planPath, factCount: facts.length, empty: facts.length === 0 };
+  writeFileSync(preview.planPath, preview.content, { mode: 0o600 });
+  return { planPath: preview.planPath, factCount: preview.factCount, empty: preview.empty };
 }

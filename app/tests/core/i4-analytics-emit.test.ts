@@ -135,10 +135,10 @@ describe("I-4 richer analytics emitted from call sites", () => {
     }
   });
 
-  test("the allowlist drops non-catalogue fields even when a caller supplies them", () => {
+  test("the allowlist drops non-catalogue fields even when a caller supplies them", async () => {
     // Direct seam test: a caller trying to smuggle content/keys is silently
     // truncated to allowlisted scalar fields.
-    appendAnalyticsEvent({
+    await appendAnalyticsEvent({
       workspace,
       event: "config.invalid",
       sessionId: "s1",

@@ -43,6 +43,8 @@ export function cargoKernelVersion(): string | undefined {
 export const ENV_KEYS = [
   "HOME",
   "HZ_KERNEL_BIN",
+  "HZ_KERNEL_SOCKET",
+  "HZ_KERNEL_DETACH",
   "HZ_STATE_DIR",
   "HZ_PROVIDER",
   "HZ_MODEL",
@@ -57,8 +59,11 @@ export const ENV_KEYS = [
   "HZ_EFFECT_HOST_KERNEL",
   "HZ_EFFECT_HOST_EDIT_REPAIR",
   "HZ_EFFECT_RECONCILE_BLOCK",
+  "HZ_EFFECT_R170_BUN",
+  "HZ_EFFECT_R170_BUN_TIMEOUT_MS",
   "HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING",
   "HZ_EFFECT_OWNER_FAULT_AFTER_PREPARE",
+  "HZ_HUMAN_PRINCIPAL_STRICT",
   // Sandbox wiring tests toggle these globally; missing restoration previously
   // caused later hook, MCP, LSP and child-spawn suites to inherit confinement.
   "HZ_SANDBOX_EXEC",

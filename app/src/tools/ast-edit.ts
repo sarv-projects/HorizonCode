@@ -26,7 +26,7 @@ import { sha256Hex } from "../core/canon";
 import { MAX_MATCHES, MAX_SOURCE_BYTES, langFromPath, rewriteMatches } from "./ast-match";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { withFileLock, targetLockPath } from "../core/file-lock";
-import { recordChange } from "./change-journal";
+import { recordChangeGuarded } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { noteRead, wasRead } from "./read-ledger";
 
@@ -173,7 +173,7 @@ export const astEditTool: Tool = {
         const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
-        recordChange(ctx.sessionId, {
+        await recordChangeGuarded(ctx.sessionId, {
           path: resolved,
           rel,
           before,

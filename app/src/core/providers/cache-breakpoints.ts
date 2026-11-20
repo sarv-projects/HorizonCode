@@ -9,6 +9,7 @@
  */
 
 import type { ChatMsg } from "../../contracts";
+import { textFromChatContent } from "../chat-content";
 import { cacheableMessagesCutIndex } from "./cacheable-messages-prefix";
 
 export const BREAKPOINT_CAP = 4;
@@ -95,7 +96,7 @@ export function applyCacheBreakpoints<T extends Record<string, unknown>>(
 export function chatMessagesToCacheableBlocks(messages: readonly ChatMsg[]): CacheableBlock[] {
   return messages.map((m) => ({
     kind: m.role === "tool" ? "tool_result" : m.role === "user" ? "stable" : "other",
-    text: m.content ?? "",
+    text: textFromChatContent(m.content),
   }));
 }
 

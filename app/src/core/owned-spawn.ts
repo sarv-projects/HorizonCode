@@ -47,6 +47,7 @@ import { appendJsonl } from "./jsonl-append";
 import * as path from "node:path";
 import { kernelStateDir as resolveKernelStateDir, userConfigDir } from "./paths";
 import { workspaceHooksFile } from "./trust";
+import { spawnBirthLedgerNotice } from "./boot-birth-honesty";
 import { birthIdentityOf, readProcessFacts, recordIdentity, type ProcessIdentity } from "./worker-identity";
 import { startOwnerDeathSupervisor } from "./supervisor";
 import type { SandboxSpawnKernel } from "../contracts";
@@ -648,14 +649,18 @@ export async function spawnOwned(cmd: string[], opts: SpawnOwnedOptions): Promis
 
   const facts = readProcessFacts(pid);
   const identity: ProcessIdentity | undefined = recordIdentity(pid);
+  const birthIdentity = birthIdentityOf(identity);
   const entry: SpawnLedgerEntry = {
     pid,
     pgid: facts?.pgid ?? null,
-    birthIdentity: birthIdentityOf(identity),
+    birthIdentity,
     label: opts.label,
     ts: new Date().toISOString(),
     cmd: argv.join(" "),
   };
+  if (process.platform !== "linux" || birthIdentity === null) {
+    console.warn(`[spawn] ${spawnBirthLedgerNotice(process.platform, birthIdentity)}`);
+  }
 
   try {
     await appendLedgerRow(opts.stateDir, entry);

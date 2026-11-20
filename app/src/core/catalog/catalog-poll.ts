@@ -10,6 +10,7 @@ import type { GuardDecision } from "../../contracts";
 import {
   CATALOG_PATH,
   DEFAULT_CATALOG_SOURCE,
+  catalogCachePath,
   type CatalogFetchGuard,
   fetchLiveCatalog,
   getCatalogCacheRevision,
@@ -40,6 +41,24 @@ export function makeModelsCatalogPollNetGuard(
   };
 }
 
+/** Fail-closed Guard for catalog cache `fs.write` (ruling 576; background cannot `ask`). */
+export function makeModelsCatalogPollCacheWriteGuard(
+  checkFsWrite: (target: string) => Promise<GuardDecision>,
+  home: string = homedir(),
+): (target: string) => Promise<void> {
+  const expected = catalogCachePath(home);
+  return async (target: string) => {
+    if (target !== expected) throw new Error(`unexpected catalog cache path: ${target}`);
+    const guard = await checkFsWrite(target);
+    if (guard.decision === "deny") {
+      throw new Error(`fs.write denied — ${guard.reason ?? "cache write policy"}`);
+    }
+    if (guard.decision === "ask") {
+      throw new Error("fs.write requires approval (background poll cannot prompt)");
+    }
+  };
+}
+
 export function parseModelsPollIntervalMs(env: Record<string, string | undefined> = process.env as Record<string, string | undefined>): number | undefined {
   const raw = typeof env.HZ_MODELS_POLL_MS === "string" ? env.HZ_MODELS_POLL_MS.trim() : "";
   if (raw === "") return undefined;
@@ -58,6 +77,8 @@ export type ModelsCatalogPollOpts = {
   fetchLive?: typeof fetchLiveCatalog;
   /** Consulted before HTTP (runtime wires kernel `net.fetch`). */
   assertNetFetch?: CatalogFetchGuard;
+  /** Consulted before cache write (ruling 576). */
+  assertCacheWrite?: (target: string) => Promise<void>;
 };
 
 /** One conditional refresh (injected `fetchLive` for tests). */
@@ -84,6 +105,8 @@ export async function runModelsCatalogPollOnce(opts: ModelsCatalogPollOpts = {})
       opts.onNotice?.("models catalog poll: body unchanged (same digest)");
       return;
     }
+    const cacheFile = catalogCachePath(home);
+    if (opts.assertCacheWrite) await opts.assertCacheWrite(cacheFile);
     writeCatalogCache(
       res.catalog,
       { fetchedAt: new Date().toISOString(), source: "poll", etag: res.etag, digest: res.digest },

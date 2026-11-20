@@ -1,12 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { EffectHost } from "../../src/core/effect-host";
 import { collectUnknownEffectRows } from "../../src/core/effect-unknown-list";
+import { stateRoot } from "../../src/core/paths";
 import { formatUnknownInspectorLines, formatReceiptChainInspectLines } from "../../src/tui/unknown-inspector";
 import { runUnknownCommand } from "../../src/tui/unknown-slash";
 import { parseUnknownSlashArgs } from "../../src/tui/unknown-slash-parse";
 import type { Runtime } from "../../src/contracts";
 import { createRenderer } from "../../src/tui/render";
 import { strip } from "../../src/tui/style";
+
+const temps: string[] = [];
+afterEach(() => {
+  for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
+});
 
 describe("unknown inspector (ruling 264)", () => {
   test("collectUnknownEffectRows lists only unresolved effects", () => {
@@ -55,7 +64,7 @@ describe("unknown inspector (ruling 264)", () => {
     expect(lines.some((l) => l.includes("── Effect record ──"))).toBe(true);
   });
 
-  test("runUnknownCommand prints via renderer", () => {
+  test("runUnknownCommand prints via renderer", async () => {
     const chunks: string[] = [];
     const renderer = createRenderer({ wrap: false, out: (c) => void chunks.push(c) });
     const host = new EffectHost();
@@ -65,9 +74,47 @@ describe("unknown inspector (ruling 264)", () => {
       sessionId: "s",
       unknownEffects: () => collectUnknownEffectRows(host),
     } as unknown as Runtime;
-    runUnknownCommand(rt, renderer);
+    await runUnknownCommand(rt, renderer);
     const text = strip(chunks.join(""));
     expect(text).toContain(id);
     expect(text).toContain("shell");
+  });
+
+  test("export refuses before write when policy denies fs.write (ruling 571)", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "hz-unk-export-"));
+    temps.push(workspace);
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(workspace, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(workspace, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-unknown-export" }]),
+        "utf8",
+      );
+      const chunks: string[] = [];
+      const renderer = createRenderer({ wrap: false, out: (c) => void chunks.push(c) });
+      const host = new EffectHost();
+      const id = "00000000-0000-4000-8000-0000000000aa";
+      host.begin(id, "write", "call-x");
+      host.recordAllow(id);
+      host.recordExecute(id, { ok: true });
+      const rt = {
+        sessionId: "sess-export",
+        workspace,
+        unknownEffects: () => collectUnknownEffectRows(host),
+        getEffectRecord: (effectId: string) => host.getRecord(effectId),
+      } as unknown as Runtime;
+      await runUnknownCommand(rt, renderer, "export");
+      expect(strip(chunks.join(""))).toMatch(/export refused|denied|test-deny-unknown-export/i);
+      const exportsDir = path.join(stateRoot(workspace), "exports");
+      if (existsSync(exportsDir)) {
+        expect(readdirSync(exportsDir).filter((n) => n.includes("unknown-evidence"))).toEqual([]);
+      }
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
   });
 });

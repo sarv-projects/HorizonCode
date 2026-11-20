@@ -105,12 +105,38 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Under-admission for the review-fork journal JSONL (ruling 611). */
+export async function admitReviewForkJournalWrite(
+  stateDir: string,
+  workspace: string = stateDir,
+): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(reviewForkJournalPath(stateDir), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "review-fork-journal refused:")
+    .replace(/^preds write denied/, "review-fork-journal denied")
+    .replace(/^preds fs\.write requires approval/, "review-fork-journal fs.write requires approval");
+}
+
 /** Append one canonical-JSON row, fsync'd, owner-only (no rewrite of prior rows). */
 export function appendJournalEvent(stateDir: string, event: ReviewForkJournalEvent): void {
   const file = reviewForkJournalPath(stateDir);
   ensurePrivateDir(path.dirname(file));
   appendJsonlSync(file, `${canonicalJson(event)}\n`);
   chmodPrivateFile(file);
+}
+
+/** Product path: admit then append (ruling 611). */
+export async function appendJournalEventGuarded(
+  stateDir: string,
+  event: ReviewForkJournalEvent,
+  workspace: string = stateDir,
+): Promise<string | undefined> {
+  const refused = await admitReviewForkJournalWrite(stateDir, workspace);
+  if (refused !== undefined) return refused;
+  appendJournalEvent(stateDir, event);
+  return undefined;
 }
 
 /** The reference a caller needs to close a job later (no need to re-read the journal). */
@@ -176,6 +202,31 @@ export function closeReviewForkJob(
         };
   appendJournalEvent(stateDir, event);
   return event;
+}
+
+/** Product path: admit then open (ruling 611). */
+export async function openReviewForkJobGuarded(
+  stateDir: string,
+  content: ReviewForkJobContent,
+  now: () => string = nowIso,
+  workspace: string = stateDir,
+): Promise<JournalJobRef> {
+  const refused = await admitReviewForkJournalWrite(stateDir, workspace);
+  if (refused !== undefined) throw new Error(refused);
+  return openReviewForkJob(stateDir, content, now);
+}
+
+/** Product path: admit then close (ruling 611). */
+export async function closeReviewForkJobGuarded(
+  stateDir: string,
+  ref: JournalJobRef,
+  outcome: ReviewForkJobOutcome,
+  now: () => string = nowIso,
+  workspace: string = stateDir,
+): Promise<ReviewForkJournalEvent> {
+  const refused = await admitReviewForkJournalWrite(stateDir, workspace);
+  if (refused !== undefined) throw new Error(refused);
+  return closeReviewForkJob(stateDir, ref, outcome, now);
 }
 
 function isJournalEvent(value: unknown): value is ReviewForkJournalEvent {

@@ -45,7 +45,8 @@ function chatCompletionsUrl(baseUrl: string): string {
   return root.endsWith("/v1") ? `${root}/chat/completions` : `${root}/v1/chat/completions`;
 }
 
-function sample(usage: unknown): CacheProbeSample {
+/** Parse provider `usage` blobs across OpenAI-compatible cache-token dialects (hermetic / doctor). */
+export function parseCacheProbeUsage(usage: unknown): CacheProbeSample {
   const u = (usage ?? {}) as Record<string, unknown>;
   const details = (u.prompt_tokens_details ?? {}) as Record<string, unknown>;
   const completionDetails = (u.completion_tokens_details ?? {}) as Record<string, unknown>;
@@ -79,7 +80,94 @@ async function send(req: CacheProbeRequest, doFetch: typeof fetch): Promise<Cach
   });
   if (!response.ok) throw new Error(`cache probe HTTP ${response.status}: ${await response.text()}`);
   const body = (await response.json()) as { usage?: unknown };
-  return sample(body.usage);
+  return parseCacheProbeUsage(body.usage);
+}
+
+/** Compare two provider samples — never claims a hit unless cached tokens strictly rise. */
+export function compareCacheProbeSamples(
+  first: CacheProbeSample,
+  second: CacheProbeSample,
+): Pick<CacheProbeResult, "cacheHitObserved" | "note"> {
+  const cacheHitObserved = second.cachedTokens > first.cachedTokens;
+  const note = cacheHitObserved
+    ? `cached tokens rose ${first.cachedTokens} -> ${second.cachedTokens} on the identical prefix`
+    : first.cachedTokens > 0
+      ? `first send already reported ${first.cachedTokens} cached tokens; provider warmed the prefix before the second send`
+      : "no cached tokens reported on either send — do not claim a cache hit";
+  return { cacheHitObserved, note };
+}
+
+export interface HermeticCacheHitProbeSelfCheck {
+  ok: boolean;
+  /** Short human summary for doctor / CLI. */
+  summary: string;
+  cases: number;
+  failures: string[];
+}
+
+/** Offline parse/compare sanity — no network, no API keys. */
+export function hermeticCacheHitProbeSelfCheck(): HermeticCacheHitProbeSelfCheck {
+  const failures: string[] = [];
+  const tryCase = (name: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (e) {
+      failures.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  tryCase("openai prompt_tokens_details", () => {
+    const s = parseCacheProbeUsage({
+      prompt_tokens: 12,
+      completion_tokens: 1,
+      prompt_tokens_details: { cached_tokens: 8 },
+    });
+    if (s.cachedTokens !== 8) throw new Error(`expected 8, got ${s.cachedTokens}`);
+  });
+  tryCase("deepseek prompt_cache_hit_tokens", () => {
+    const s = parseCacheProbeUsage({ prompt_cache_hit_tokens: 16, prompt_tokens: 20, completion_tokens: 2 });
+    if (s.cachedTokens !== 16) throw new Error(`expected 16, got ${s.cachedTokens}`);
+  });
+  tryCase("compare rising hit", () => {
+    const c = compareCacheProbeSamples(
+      { inputTokens: 1, cachedTokens: 0, outputTokens: 1 },
+      { inputTokens: 1, cachedTokens: 9, outputTokens: 1 },
+    );
+    if (!c.cacheHitObserved) throw new Error("expected hit");
+  });
+  tryCase("compare zero — fail closed", () => {
+    const c = compareCacheProbeSamples(
+      { inputTokens: 1, cachedTokens: 0, outputTokens: 1 },
+      { inputTokens: 1, cachedTokens: 0, outputTokens: 1 },
+    );
+    if (c.cacheHitObserved) throw new Error("must not claim hit");
+    if (!c.note.includes("do not claim")) throw new Error("note must refuse claim");
+  });
+  tryCase("compare warmed-first-send", () => {
+    const c = compareCacheProbeSamples(
+      { inputTokens: 1, cachedTokens: 32, outputTokens: 1 },
+      { inputTokens: 1, cachedTokens: 32, outputTokens: 1 },
+    );
+    if (c.cacheHitObserved) throw new Error("must not treat warmed first send as rising hit");
+  });
+
+  const cases = 5;
+  const ok = failures.length === 0;
+  return {
+    ok,
+    cases,
+    failures,
+    summary: ok
+      ? `hermetic parse/compare OK (${cases} cases)`
+      : `hermetic self-check failed: ${failures.join("; ")}`,
+  };
+}
+
+export function liveCacheProbeRequested(env: Record<string, string | undefined>): boolean {
+  const v = env.HZ_LIVE_CACHE;
+  if (typeof v !== "string") return false;
+  const t = v.trim().toLowerCase();
+  return t === "1" || t === "true" || t === "on";
 }
 
 /**
@@ -92,11 +180,6 @@ export async function probeCacheHit(req: CacheProbeRequest): Promise<CacheProbeR
   const doFetch = req.fetch ?? fetch;
   const first = await send(req, doFetch);
   const second = await send(req, doFetch);
-  const cacheHitObserved = second.cachedTokens > first.cachedTokens;
-  const note = cacheHitObserved
-    ? `cached tokens rose ${first.cachedTokens} -> ${second.cachedTokens} on the identical prefix`
-    : first.cachedTokens > 0
-      ? `first send already reported ${first.cachedTokens} cached tokens; provider warmed the prefix before the second send`
-      : "no cached tokens reported on either send — do not claim a cache hit";
+  const { cacheHitObserved, note } = compareCacheProbeSamples(first, second);
   return { first, second, cacheHitObserved, note };
 }

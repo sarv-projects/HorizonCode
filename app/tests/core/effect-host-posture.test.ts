@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   effectHostDoctorFixLines,
   effectHostDoctorPosture,
+  effectHostKernelRequirePreflight,
   effectHostKernelRequireRefusal,
   effectHostPrototypeHonestyDoctorHint,
   effectHostPrototypeHonestyRecommendRequire,
@@ -11,6 +12,13 @@ import {
 import { effectHostKernelMode, effectHostKernelMutationEnabled, effectHostKernelRequireMode } from "../../src/core/effect-kernel-mutation-route";
 import { restoreEnv, setEnv, snapshotEnv } from "./helpers";
 
+describe("effectHostRequireSuppressHooks (rulings 651 + 666)", () => {
+  test("doctor residual documents hook suppress whenever EffectHost is on", () => {
+    expect(effectHostDoctorPosture({}).detail).toContain("user hooks suppressed whenever EffectHost is on");
+    expect(effectHostDoctorPosture({}).detail).not.toContain("hooks still Bun");
+  });
+});
+
 describe("effectHostKernelMode", () => {
   test("require enables mutation routing and refuse gate", () => {
     const snap = snapshotEnv();
@@ -19,6 +27,43 @@ describe("effectHostKernelMode", () => {
       expect(effectHostKernelMode()).toBe("require");
       expect(effectHostKernelMutationEnabled()).toBe(true);
       expect(effectHostKernelRequireMode()).toBe(true);
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+});
+
+describe("effectHostKernelRequirePreflight (ruling 649)", () => {
+  test("refuses ambient tools under require but defers eligible write", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "require" });
+      // undo is kernel-routed (**650**) — preflight must not refuse it early.
+      expect(effectHostKernelRequirePreflight("undo", {})).toBeUndefined();
+      expect(effectHostKernelRequirePreflight("code_mode", { code: "return 1;" })).toContain("code_mode");
+      expect(effectHostKernelRequirePreflight("mcp__x__y", {})).toContain("OwnerLog-admitted");
+      expect(
+        effectHostKernelRequirePreflight("shell", { command: "echo a && echo b" }),
+      )?.toContain("compound");
+      // Shape-eligible write must reach kernel route attempt — not preflight-refused.
+      expect(
+        effectHostKernelRequirePreflight("write", { path: "a.txt", content: "x\n" }),
+      ).toBeUndefined();
+      expect(
+        effectHostKernelRequirePreflight("apply_patch", {
+          input: "*** Begin Patch\n*** Update File: src.txt\n@@\n-old\n+new\n*** End Patch",
+        }),
+      ).toBeUndefined();
+    } finally {
+      restoreEnv(snap);
+    }
+  });
+
+  test("preflight is inert when EffectHost is off", () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "0" });
+      expect(effectHostKernelRequirePreflight("undo", {})).toBeUndefined();
     } finally {
       restoreEnv(snap);
     }
@@ -55,16 +100,25 @@ describe("effectHostKernelRequireRefusal", () => {
   test("require refuses unclassified built-in and MCP effect paths by default", () => {
     const snap = snapshotEnv();
     try {
-      setEnv({ HZ_EFFECT_HOST_KERNEL: "require" });
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "require", HZ_TODO_DURABLE: "" });
       for (const tool of [
-        "undo", "shell_session", "code_mode", "preview", "agent",
-        "debug", "lsp", "lint", "present", "todo", "handoff_create",
+        "shell_session", "code_mode", "preview", "agent",
+        "debug", "lsp", "lint", "handoff_create",
         "handoff_resume", "mcp__untrusted__write", "future_custom_tool",
       ]) {
         const refusal = effectHostKernelRequireRefusal(tool, {}, false);
         expect(refusal).toContain(EFFECT_HOST_KERNEL_REQUIRE_NOTICE);
-        expect(refusal).toContain(`no kernel EffectHost route for ${tool}`);
+        if (tool.startsWith("mcp__")) {
+          expect(refusal).toContain("OwnerLog-admitted");
+        } else {
+          expect(refusal).toContain(`no kernel EffectHost route for ${tool}`);
+        }
       }
+      // Session-only present/todo are local; durable todo still refuses.
+      expect(effectHostKernelRequireRefusal("present", {}, false)).toBeUndefined();
+      expect(effectHostKernelRequireRefusal("todo", {}, false)).toBeUndefined();
+      setEnv({ HZ_TODO_DURABLE: "1" });
+      expect(effectHostKernelRequireRefusal("todo", {}, false)).toContain(EFFECT_HOST_KERNEL_REQUIRE_NOTICE);
       for (const local of [
         "read", "grep", "glob", "repo_map", "ast_search",
         "memory_search", "handoff_search", "tool_search",
@@ -99,7 +153,15 @@ describe("effectHostKernelRequireRefusal", () => {
           false,
           { applyPatchProjectionMiss: "bun_fuzz_only" },
         ),
-      )?.toContain("Bun-only fuzz");
+      )?.toContain("below-threshold");
+      expect(
+        effectHostKernelRequireRefusal(
+          "apply_patch",
+          { input: "*** Begin Patch\n*** Update File: src.txt\n@@\n-old\n+new\n*** End Patch" },
+          false,
+          { applyPatchProjectionMiss: "bun_first_hit_score_fuzz" },
+        ),
+      )?.toContain("first-hit score fuzz");
       expect(
         effectHostKernelRequireRefusal("shell", { command: "bash -c 'echo hi'" }, false),
       )?.toContain("interpreter");
@@ -133,7 +195,11 @@ describe("effectHostDoctorPosture", () => {
     expect(req.detail.toLowerCase()).toContain("fail-closed");
     expect(req.detail).toContain("apply_patch");
     expect(req.detail.toLowerCase()).toContain("metavar");
+    expect(req.detail.toLowerCase()).toContain("code_mode");
+    expect(req.detail.toLowerCase()).toContain("fs.rename");
+    expect(req.detail.toLowerCase()).toContain("fs.delete");
     expect(req.hint).not.toContain("multi-metavar");
+    expect(req.hint.toLowerCase()).toContain("code_mode");
     expect(def.hint.toLowerCase()).toContain("same-file");
     expect(def.hint).toContain("EOF-anchored");
     expect(def.detail.toLowerCase()).toContain("ambient bun");
@@ -151,11 +217,14 @@ describe("effectHostDoctorPosture", () => {
     expect(on.detail.toLowerCase()).toContain("line-patch");
   });
 
-  test("unset doctor documents createRuntime spine (ruling 340)", () => {
+  test("unset doctor documents createRuntime spine (rulings 340/540)", () => {
     expect(effectHostDoctorPosture({}).detail).toContain("createRuntime");
     expect(effectHostDoctorPosture({}).detail).toContain("340");
+    expect(effectHostDoctorPosture({}).detail).toContain("540");
+    expect(effectHostDoctorPosture({}).detail).toContain("=require when the trusted Rust kernel is active");
     const fix = effectHostDoctorFixLines({});
     expect(fix.some((l) => l.includes("effectHostKernel"))).toBe(true);
+    expect(fix.some((l) => l.includes("prefers =require when trusted Rust kernel"))).toBe(true);
   });
 
   test("doctor --fix effect.host suggests EDIT_REPAIR for dominant score rung (ruling 312)", () => {

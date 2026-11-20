@@ -9,6 +9,7 @@
  */
 
 import type { ChatMsg, ContextUsage } from "../contracts";
+import { chatContentText } from "./chat-content";
 import type { CompactionRecordV1 } from "./compaction-journal";
 import { COMPACTION_SEPARATOR, SUMMARY_HEADING } from "./compaction";
 import { crossCheckElidedJournal, type ElidedCrossCheck } from "./elided-journal-crosscheck";
@@ -68,7 +69,7 @@ export function contextChunkRows(
   let compaction = 0;
   let compactionBlocks = 0;
   for (const m of history) {
-    const content = m.content ?? "";
+    const content = chatContentText(m.content);
     const summary = extractCompactionSummary(content);
     let remainder = content;
     if (summary !== undefined) {

@@ -22,6 +22,7 @@ import { describeMode, parsePermissionMode, permissionModeError } from "./core/p
 import {
   doctorExitCode,
   doctorFixSuggestion,
+  doctorPublication,
   realDoctorEnv,
   renderDoctor,
   renderDoctorJson,
@@ -29,19 +30,34 @@ import {
 } from "./core/doctor";
 import { createServer } from "./core/server";
 import { liveStdin } from "./core/stdin-live";
+import { AcpAgent, parseAcpLine } from "./core/acp-agent";
+import { createRuntime } from "./core/index";
+import {
+  defaultH2HTasks,
+  h2hLiveEnabled,
+  runHeadToHeadBench,
+  writeH2HReport,
+} from "./core/head-to-head-bench";
+import {
+  buildVerificationArtifact,
+  screenshotEntry,
+  writeVerificationArtifact,
+} from "./core/verification-artifact";
+import { captureBrowserScreenshot } from "./core/browser-cdp";
 import { needsOnboarding, onboardingNoticeLines } from "./tui/interactive";
 import { hasSeenOnboarding, markOnboardingSeen } from "./core/onboarding-state";
 import {
   PRINT_FORMATS,
   createApprovalUi,
   installApprovalHandler,
+  installAskUserHandler,
   runFullscreenExperimentalChat,
   runHeadless,
   runInteractive,
   runPrint,
 } from "./tui";
-import { checkKeymapOverrides, defaultKeymap } from "./tui/keymap";
-import { consumeTuiHandoff } from "./tui/handoff";
+import { checkKeymapOverrides, defaultKeymap, keybindCheckPublication } from "./tui/keymap";
+import { consumeTuiHandoff, tuiRelaunchPublication } from "./tui/handoff";
 import { isFullscreenChatMode, resolveTuiScreenMode, type TuiScreenMode } from "./tui/screen-mode";
 import type { PrintFormat } from "./tui";
 import { errorMessage } from "./tui/style";
@@ -59,6 +75,7 @@ import {
   defaultConfigPath,
   loadConfig,
   loadUserEnvFile,
+  configCheckPublication,
   renderConfigCheck,
 } from "./core/config";
 import {
@@ -70,10 +87,10 @@ import {
   decodeReviewForkWorkerJob,
   runReviewForkWorker,
 } from "./core/review";
-import { SpendLedger } from "./core/spend-ledger";
+import { admitSpendLedgerWrite, SpendLedger } from "./core/spend-ledger";
 import { makeProvider } from "./core/providers";
-import { buildShowPromptsRequest, renderShowPrompts } from "./core/show-prompts";
-import { buildShowRepoMap } from "./core/show-repo-map";
+import { buildShowPromptsRequest, renderShowPrompts, showPromptsPublication } from "./core/show-prompts";
+import { buildShowRepoMapResult, showRepoMapPublication } from "./core/show-repo-map";
 import {
   appendAttributionToMessage,
   resolveCommitAttribution,
@@ -105,16 +122,33 @@ import {
   loadCatalog,
   readCatalogCache,
   summarizeCatalogDiff,
+  modelsListPublication,
+  modelsRefreshPublication,
   writeCatalogCache,
 } from "./core/catalog/catalog";
 import { KernelClient } from "./core/kernel";
-import { effectReconcileExitCode, renderEffectReconcile } from "./core/effect-cli";
-import { renderReceiptShow } from "./core/receipt-cli";
-import { exportSessionCli, forkSessionCli, renderSessionList } from "./core/session-cli";
 import {
-  buildSessionVerifyReport,
+  effectReconcileExitCode,
+  effectReconcilePublication,
+  renderEffectReconcile,
+} from "./core/effect-cli";
+import { inspectReceiptShow, receiptShowPublication, renderReceiptShow } from "./core/receipt-cli";
+import {
+  exportSessionCli,
+  forkSessionCli,
+  formatSessionList,
+  listSessionsPage,
+  renderSessionList,
+  sessionForkPublication,
+  sessionListPublication,
+  sessionExportPublication,
+} from "./core/session-cli";
+import {
+  buildSessionVerifyReportAsync,
   renderSessionVerify,
+  sessionVerifyAutoEmitLine,
   sessionVerifyExitCode,
+  sessionVerifyPublication,
 } from "./core/session-verify-cli";
 
 const VERSION = "0.1.0";
@@ -124,6 +158,9 @@ const HELP = [
   "",
   "  hzcode [message]     start chatting (optionally with an opening message)",
   "  hzcode serve         run the single-attach server (NDJSON JSON-RPC on stdio)",
+  "  hzcode acp           ACP v2 agent on stdio (Zed/JetBrains/VS Code/Neovim hosts)",
+  "  hzcode h2h [--live] [--tasks N]  head-to-head bench scaffold (dry-run default)",
+  "  hzcode verify-artifact --goal <text> [--plan ...] [--diff ...] [--test ...] [--browser-url <url>]",
   "  hzcode config check  report unknown and rejected keys in the config file",
   "  hzcode keybind check  validate optional keybind overrides JSON (docs/33 §5.19)",
   "  hzcode commit        write a commit message for the staged diff and commit it through the guard (--preview, --receipt)",
@@ -447,6 +484,153 @@ async function runServe(opts: CliOptions, workspace: string): Promise<number> {
   return terminated ? 143 : 0;
 }
 
+/**
+ * `hzcode acp` — Agent Client Protocol v2 agent on stdio (ruling 642).
+ * IDE hosts attach without a custom fork. Prompts run through createRuntime.
+ */
+async function runAcp(opts: CliOptions, workspace: string): Promise<number> {
+  const agent = new AcpAgent({
+    onNotification: (notification) => {
+      process.stdout.write(`${JSON.stringify(notification)}\n`);
+    },
+    promptHandler: async ({ prompt, cwd, onAgentMessageChunk }) => {
+      const runtime = await createRuntime({
+        workspace: cwd || workspace,
+        mock: opts.mock === true,
+        model: opts.model,
+        allowUntrusted: true,
+      });
+      try {
+        const notices: string[] = [];
+        const out = await runtime.send(prompt, {
+          onEvent(ev) {
+            if (ev.type === "notice") notices.push(ev.message);
+            if (ev.type === "assistant.delta") {
+              onAgentMessageChunk?.(ev.text);
+            }
+          },
+        });
+        const text = out.text.trim() !== "" ? out.text : notices.join("\n") || "(empty ACP turn)";
+        return { stopReason: out.aborted ? "cancelled" : "end_turn", text };
+      } finally {
+        await runtime.close().catch(() => undefined);
+      }
+    },
+  });
+
+  process.stderr.write(`hzcode acp: ACP v2 agent on stdio (workspace ${workspace})\n`);
+  const input = liveStdin();
+  for await (const chunk of input) {
+    const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    for (const line of text.split(/\n/)) {
+      let raw: unknown | null;
+      try {
+        raw = parseAcpLine(line);
+      } catch (err) {
+        process.stdout.write(
+          `${JSON.stringify({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32700, message: `parse error: ${errorMessage(err)}` },
+          })}\n`,
+        );
+        continue;
+      }
+      if (raw === null) continue;
+      const response = await agent.handleMessage(raw);
+      if (response !== null) process.stdout.write(`${JSON.stringify(response)}\n`);
+    }
+  }
+  return 0;
+}
+
+/** `hzcode h2h` — reproducible head-to-head bench scaffold (ruling 644). */
+async function runH2hCommand(args: string[]): Promise<number> {
+  let live = h2hLiveEnabled(process.env);
+  let tasks = 25;
+  let workspace = process.cwd();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--live") live = true;
+    else if (a === "--tasks" && args[i + 1]) {
+      tasks = Number(args[++i]);
+      if (!Number.isFinite(tasks)) {
+        process.stderr.write("hzcode h2h: --tasks needs a number\n");
+        return 2;
+      }
+    } else if (a === "--workspace" && args[i + 1]) workspace = path.resolve(args[++i]!);
+    else if (a === "--help" || a === "-h") {
+      process.stdout.write("usage: hzcode h2h [--live] [--tasks N] [--workspace <path>]\n");
+      return 0;
+    }
+  }
+  const report = runHeadToHeadBench({ tasks: defaultH2HTasks(tasks), live });
+  try {
+    const out = await writeH2HReport(workspace, report);
+    process.stdout.write(`${report.summary}\n`);
+    process.stdout.write(`wrote ${out}\n`);
+    return 0;
+  } catch (err) {
+    process.stderr.write(`hzcode h2h: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+}
+
+/** `hzcode verify-artifact` — build a Verification Artifact (ruling 643). */
+async function runVerifyArtifactCommand(args: string[]): Promise<number> {
+  let goal = "";
+  let plan = "";
+  let diff = "";
+  let testOut = "";
+  let browserUrl: string | undefined;
+  let workspace = process.cwd();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--goal" && args[i + 1]) goal = args[++i]!;
+    else if (a === "--plan" && args[i + 1]) plan = args[++i]!;
+    else if (a === "--diff" && args[i + 1]) diff = args[++i]!;
+    else if (a === "--test" && args[i + 1]) testOut = args[++i]!;
+    else if (a === "--browser-url" && args[i + 1]) browserUrl = args[++i]!;
+    else if (a === "--workspace" && args[i + 1]) workspace = path.resolve(args[++i]!);
+    else if (a === "--help" || a === "-h") {
+      process.stdout.write(
+        "usage: hzcode verify-artifact --goal <text> [--plan ...] [--diff ...] [--test ...] [--browser-url <url>] [--workspace <path>]\n",
+      );
+      return 0;
+    }
+  }
+  if (goal.trim() === "") {
+    process.stderr.write("hzcode verify-artifact: --goal is required\n");
+    return 2;
+  }
+  const screenshots = [];
+  if (browserUrl !== undefined) {
+    const shot = await captureBrowserScreenshot({ workspace, navigateUrl: browserUrl });
+    if (shot.ok === false) {
+      process.stderr.write(`hzcode verify-artifact: browser capture failed: ${shot.error}\n`);
+      return 1;
+    }
+    screenshots.push(screenshotEntry(shot.path, fs.readFileSync(shot.path), `url=${shot.url}`));
+  }
+  const artifact = buildVerificationArtifact({
+    goal,
+    plan: plan || undefined,
+    diffSummary: diff || undefined,
+    testOutput: testOut || undefined,
+    browserScreenshots: screenshots,
+  });
+  try {
+    const out = await writeVerificationArtifact(workspace, artifact);
+    process.stdout.write(`verification artifact ${artifact.artifactDigest.slice(0, 16)}… → ${out}\n`);
+    return 0;
+  } catch (err) {
+    process.stderr.write(
+      `hzcode verify-artifact: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
+}
+
 /** `hzcode doctor [--json] [--workspace <path>]`: diagnose only, exit 1 on any FAIL. */
 function runDoctorCommand(args: string[]): number {
   let json = false;
@@ -485,6 +669,23 @@ function runDoctorCommand(args: string[]): number {
   }
   const env = realDoctorEnv(path.resolve(workspace), process.env, { allowUntrusted });
   const checks = runDoctor(env);
+  const liveCache = env.env.HZ_LIVE_CACHE;
+  const liveCacheOn =
+    typeof liveCache === "string" && ["1", "true", "on"].includes(liveCache.trim().toLowerCase());
+  if (liveCacheOn && fixCheck === undefined) {
+    process.stderr.write(
+      "hzcode doctor: HZ_LIVE_CACHE=1 — live cache-hit probe is opt-in; doctor reports hermetic status only (see provider.cache.hit)\n",
+    );
+  }
+  const responsesSteer = env.env.HZ_RESPONSES_STEER;
+  const responsesSteerOn =
+    typeof responsesSteer === "string" &&
+    ["1", "true", "yes", "on"].includes(responsesSteer.trim().toLowerCase());
+  if (responsesSteerOn && fixCheck === undefined) {
+    process.stderr.write(
+      "hzcode doctor: HZ_RESPONSES_STEER=1 — Responses steer is opt-in; doctor reports hermetic wire status only (see provider.responses.steer)\n",
+    );
+  }
   if (fixCheck !== undefined) {
     const lines = doctorFixSuggestion(fixCheck, env.env as Record<string, string | undefined>);
     if (lines === undefined) {
@@ -495,7 +696,17 @@ function runDoctorCommand(args: string[]): number {
     for (const line of lines) process.stdout.write(`${line}\n`);
     return 0;
   }
-  process.stdout.write((json ? renderDoctorJson(checks) : renderDoctor(checks)) + "\n");
+  const ws = path.resolve(workspace);
+  process.stdout.write(
+    (json
+      ? renderDoctorJson(checks, ws, env.home)
+      : renderDoctor(checks)) + "\n",
+  );
+  if (!json) {
+    for (const block of doctorPublication(checks, ws, env.home)) {
+      process.stdout.write(`${block}\n`);
+    }
+  }
   return doctorExitCode(checks);
 }
 
@@ -541,8 +752,13 @@ function runEffectCommand(args: string[]): number {
   }
   workspace = path.resolve(workspace);
   try {
-    process.stdout.write(`${renderEffectReconcile(workspace, { sessionId, probe })}\n`);
-    return effectReconcileExitCode(workspace, { sessionId, probe });
+    const opts = { sessionId, probe };
+    process.stdout.write(`${renderEffectReconcile(workspace, opts)}\n`);
+    // H-7 (ruling 613): emit contracted blocks on the CLI (human table stays first).
+    for (const block of effectReconcilePublication(workspace, opts)) {
+      process.stdout.write(`${block}\n`);
+    }
+    return effectReconcileExitCode(workspace, opts);
   } catch (err) {
     process.stderr.write(`hzcode effect reconcile: ${errorMessage(err)}\n`);
     return 1;
@@ -581,7 +797,11 @@ function runReceiptCommand(args: string[]): number {
     return 2;
   }
   try {
-    process.stdout.write(`${renderReceiptShow(workspace, receiptId)}\n`);
+    const shown = inspectReceiptShow(workspace, receiptId);
+    process.stdout.write(`${shown.text}\n`);
+    for (const block of receiptShowPublication({ found: true, chainOk: shown.chainOk })) {
+      process.stdout.write(`${block}\n`);
+    }
     return 0;
   } catch (err) {
     process.stderr.write(`hzcode receipt show: ${errorMessage(err)}\n`);
@@ -589,7 +809,7 @@ function runReceiptCommand(args: string[]): number {
   }
 }
 
-function runSessionCommand(args: string[]): number {
+async function runSessionCommand(args: string[]): Promise<number> {
   if (args.length === 0) {
     process.stderr.write(
       "usage: hzcode session list [--workspace <path>] | hzcode session fork <id> [--at n] | hzcode session export <id> [-o path] | hzcode session verify <id> [--workspace <path>]\n",
@@ -624,7 +844,11 @@ function runSessionCommand(args: string[]): number {
     return 2;
   }
   if (verb === "list") {
-    process.stdout.write(`${renderSessionList(workspace)}\n`);
+    const page = listSessionsPage(workspace);
+    process.stdout.write(`${formatSessionList(page.rows)}\n`);
+    for (const block of sessionListPublication({ listed: page.rows.length, limit: page.limit })) {
+      process.stdout.write(`${block}\n`);
+    }
     return 0;
   }
   if (verb === "export") {
@@ -649,12 +873,13 @@ function runSessionCommand(args: string[]): number {
       }
     }
     try {
-      const result = exportSessionCli(workspace, sessionId, { out });
+      const result = await exportSessionCli(workspace, sessionId, { out });
       process.stdout.write(
         `exported ${result.messageCount} message(s), ${result.checkpointCount} checkpoint(s)` +
           (result.eventCount > 0 ? `, ${result.eventCount} event(s)` : "") +
           ` → ${result.path}\n`,
       );
+      for (const block of sessionExportPublication(result)) process.stdout.write(`${block}\n`);
       return 0;
     } catch (err) {
       process.stderr.write(`hzcode session export: ${errorMessage(err)}\n`);
@@ -672,8 +897,12 @@ function runSessionCommand(args: string[]): number {
       return 2;
     }
     try {
-      const report = buildSessionVerifyReport(workspace, sessionId);
-      process.stdout.write(`${renderSessionVerify(report)}\n`);
+      const report = await buildSessionVerifyReportAsync(workspace, sessionId);
+      const autoEmitLine = await sessionVerifyAutoEmitLine(report);
+      process.stdout.write(
+        `${renderSessionVerify(report)}${autoEmitLine !== undefined ? `\n${autoEmitLine}` : ""}\n`,
+      );
+      for (const block of sessionVerifyPublication(report)) process.stdout.write(`${block}\n`);
       return sessionVerifyExitCode(report);
     } catch (err) {
       process.stderr.write(`hzcode session verify: ${errorMessage(err)}\n`);
@@ -714,19 +943,20 @@ function runSessionCommand(args: string[]): number {
   return 2;
 }
 
-function runConfigCommand(args: string[]): number {
+async function runConfigCommand(args: string[]): Promise<number> {
   if (args[0] !== "check" || args.length > 2) {
     process.stderr.write("usage: hzcode config check [file]\n");
     return 2;
   }
   const check = args[1] !== undefined ? checkConfigFile(path.resolve(args[1])) : checkConfigFile();
   process.stdout.write(renderConfigCheck(check) + "\n");
+  for (const block of configCheckPublication(check)) process.stdout.write(block + "\n");
   // I-4 / ruling 506 residual: `config.invalid` local analytics from the config
   // call site. Only the observed error-code token crosses into the log — never
   // the rejected key/value text, the file path, or any secret.
   const invalid = check.unknown.length > 0 || check.rejected.length > 0;
   if (invalid) {
-    appendAnalyticsEvent({
+    await appendAnalyticsEvent({
       workspace: process.cwd(),
       event: "config.invalid",
       errorCode: check.rejected.length > 0 ? "rejected" : "unknown-key",
@@ -800,6 +1030,7 @@ async function runWorktreeBootstrap(opts: CliOptions, workspace: string): Promis
     const ui = createApprovalUi(Boolean(process.stdin.isTTY));
     ui.runtime = runtime;
     installApprovalHandler(ui);
+    installAskUserHandler(ui);
     if (typeof extras.runGuardedShell !== "function") {
       process.stderr.write("hzcode: worktree: this build cannot run a guarded command\n");
       return 1;
@@ -892,6 +1123,10 @@ function runTuiCommand(args: string[]): number {
   process.stdout.write(
     `relaunch handoff consumed: session ${handoff.sessionId}, mode ${handoff.mode}, draft ${handoff.draft.length} bytes\n`,
   );
+  // H-7 (ruling 615): emit contracted draft-byte count after the human line.
+  for (const block of tuiRelaunchPublication({ draftBytes: handoff.draft.length })) {
+    process.stdout.write(`${block}\n`);
+  }
   return 0;
 }
 
@@ -922,17 +1157,33 @@ function runKeybindCommand(args: string[]): number {
       return 1;
     }
   }
-  const errors = checkKeymapOverrides(overrides, defaultKeymap());
+  const km = defaultKeymap();
+  const errors = checkKeymapOverrides(overrides, km);
+  const n = Object.keys(overrides).length;
   if (errors.length > 0) {
     for (const err of errors) process.stderr.write(`hzcode keybind check: ${err}\n`);
+    for (const block of keybindCheckPublication({
+      overrideCount: n,
+      actionCount: km.actions.length,
+      errorCount: errors.length,
+    })) {
+      process.stdout.write(`${block}\n`);
+    }
     return 1;
   }
-  const n = Object.keys(overrides).length;
   process.stdout.write(
     n === 0
-      ? `keybind check ok (defaults, ${defaultKeymap().actions.length} actions)\n`
+      ? `keybind check ok (defaults, ${km.actions.length} actions)\n`
       : `keybind check ok (${n} override(s))\n`,
   );
+  // H-7 (ruling 616): emit contracted counts after the human line.
+  for (const block of keybindCheckPublication({
+    overrideCount: n,
+    actionCount: km.actions.length,
+    errorCount: 0,
+  })) {
+    process.stdout.write(`${block}\n`);
+  }
   return 0;
 }
 
@@ -967,11 +1218,28 @@ async function runModelsCommand(args: string[]): Promise<number> {
     });
     if (fetched.notModified) {
       process.stdout.write(`models cache unchanged (304) at ${catalogCachePath()}\n`);
+      for (const block of modelsRefreshPublication({ providerCount: prev?.meta.providerCount ?? 0, unchanged: true })) process.stdout.write(`${block}\n`);
       return 0;
     }
     if (fetched.digest !== undefined && fetched.digest === prev?.meta.digest) {
       process.stdout.write(`models cache unchanged (same digest) at ${catalogCachePath()}\n`);
+      for (const block of modelsRefreshPublication({ providerCount: prev?.meta.providerCount ?? 0, unchanged: true })) process.stdout.write(`${block}\n`);
       return 0;
+    }
+    // Under-admission (ruling 576): Guard fs.write on the user catalog cache.
+    const cacheTarget = catalogCachePath();
+    const writeGuard = await kernel.checkGuard({ kind: "fs.write", target: cacheTarget });
+    if (writeGuard.decision === "deny") {
+      process.stderr.write(
+        `hzcode models refresh: cache write denied — ${writeGuard.reason ?? "fs.write"}\n`,
+      );
+      return 1;
+    }
+    if (writeGuard.decision === "ask") {
+      process.stderr.write(
+        "hzcode models refresh: cache fs.write requires approval (not available in this command); allow the path in policy\n",
+      );
+      return 1;
     }
     const file = writeCatalogCache(fetched.catalog, {
       fetchedAt: new Date().toISOString(),
@@ -984,6 +1252,9 @@ async function runModelsCommand(args: string[]): Promise<number> {
     process.stdout.write(
       `models cache updated: ${n} providers → ${file}${diffLine !== undefined ? `\ncatalog diff: ${diffLine}` : ""}\n`,
     );
+    for (const block of modelsRefreshPublication({ providerCount: n, unchanged: false })) {
+      process.stdout.write(`${block}\n`);
+    }
     return 0;
   } catch (err) {
     process.stderr.write(`hzcode models refresh: ${errorMessage(err)}\n`);
@@ -1035,6 +1306,7 @@ async function runSuggestCommand(args: string[]): Promise<number> {
     const ui = createApprovalUi(false);
     ui.runtime = runtime;
     installApprovalHandler(ui);
+    installAskUserHandler(ui);
     const res = await runtime.send(suggestPrompt(request), { onEvent: () => {} });
     const line = cleanSuggestedCommand(res.text);
     if (res.aborted || line === "") {
@@ -1122,6 +1394,7 @@ async function runCommitCommand(rawArgs: string[]): Promise<number> {
     const ui = createApprovalUi(Boolean(process.stdin.isTTY));
     ui.runtime = runtime;
     installApprovalHandler(ui);
+    installAskUserHandler(ui);
     // E-3 reduced (ruling 480): weak-model-first then main on token/context limit.
     const prompt = commitPrompt(staged.diff, staged.truncated, context.join(" "), conversationExcerpt);
     // E-3: HZ_WEAK_MODEL overrides the packaged default weak-model map.
@@ -1207,6 +1480,11 @@ async function runReviewForkWorkerEntry(jobPath: string): Promise<number> {
     const job = decodeReviewForkWorkerJob(raw);
     if (job === undefined) return 0;
     const limitMicroUsd = process.env.HZ_SPEND_LIMIT_USD !== undefined ? Number(process.env.HZ_SPEND_LIMIT_USD) : 0;
+    // Under-admission (ruling 583): Guard before durable spend.json mutate.
+    if (Number.isFinite(limitMicroUsd) && limitMicroUsd > 0) {
+      const spendRefused = await admitSpendLedgerWrite(job.workspace);
+      if (spendRefused !== undefined) return 0;
+    }
     const ledger = new SpendLedger(job.workspace, {
       limitMicroUsd: Number.isFinite(limitMicroUsd) && limitMicroUsd > 0 ? limitMicroUsd : undefined,
     });
@@ -1274,13 +1552,13 @@ async function main(): Promise<number> {
   if (rawArgs[0] === "suggest") return runSuggestCommand(rawArgs.slice(1));
   if (rawArgs[0] === "models") return runModelsCommand(rawArgs.slice(1));
   if (rawArgs[0] === "login" || rawArgs[0] === "logout") return runLoginCommand(rawArgs);
-  if (rawArgs[0] === "config") return runConfigCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "config") return await runConfigCommand(rawArgs.slice(1));
   if (rawArgs[0] === "keybind") return runKeybindCommand(rawArgs.slice(1));
   if (rawArgs[0] === "tui") return runTuiCommand(rawArgs.slice(1));
   if (rawArgs[0] === "doctor") return runDoctorCommand(rawArgs.slice(1));
   if (rawArgs[0] === "receipt") return runReceiptCommand(rawArgs.slice(1));
   if (rawArgs[0] === "effect") return runEffectCommand(rawArgs.slice(1));
-  if (rawArgs[0] === "session") return runSessionCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "session") return await runSessionCommand(rawArgs.slice(1));
   if (rawArgs[0] === "serve") {
     const serveOpts = parseArgs(rawArgs.slice(1));
     if (serveOpts.errors.length > 0) {
@@ -1300,6 +1578,16 @@ async function main(): Promise<number> {
     }
     return runServe(serveOpts, serveWorkspace);
   }
+  if (rawArgs[0] === "acp") {
+    const acpOpts = parseArgs(rawArgs.slice(1));
+    if (acpOpts.errors.length > 0) {
+      for (const message of acpOpts.errors) process.stderr.write(`hzcode: ${message}\n`);
+      return 2;
+    }
+    return runAcp(acpOpts, path.resolve(acpOpts.workspace));
+  }
+  if (rawArgs[0] === "h2h") return await runH2hCommand(rawArgs.slice(1));
+  if (rawArgs[0] === "verify-artifact") return await runVerifyArtifactCommand(rawArgs.slice(1));
 
   const opts = parseArgs(process.argv.slice(2));
 
@@ -1353,20 +1641,33 @@ async function main(): Promise<number> {
   if (opts.reviewFork) {
     process.env.HZ_REVIEW_FORK = "1";
     process.env.HZ_REVIEW_FORK_DETACHED = "1";
-    appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "review-fork" });
+    await appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "review-fork" });
   }
 
   if (opts.showPrompts) {
     const config = cliConfig(workspace, opts);
     const request = buildShowPromptsRequest({ workspace, config, model: config.model });
     process.stdout.write(renderShowPrompts(request));
-    appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "show-prompts" });
+    // H-7 (ruling 619): emit contracted tools/messages/maxTokens/system chars.
+    for (const block of showPromptsPublication(request)) {
+      process.stdout.write(`${block}\n`);
+    }
+    await appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "show-prompts" });
     return 0;
   }
 
   if (opts.showRepoMap) {
-    process.stdout.write(buildShowRepoMap({ workspace }));
-    appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "show-repo-map" });
+    const shown = buildShowRepoMapResult({ workspace });
+    process.stdout.write(shown.text);
+    // H-7 (ruling 618): emit contracted empty/budget/chars after the map body.
+    for (const block of showRepoMapPublication({
+      empty: shown.empty,
+      budgetTokens: shown.budgetTokens,
+      mapChars: shown.mapChars,
+    })) {
+      process.stdout.write(`${block}\n`);
+    }
+    await appendAnalyticsEvent({ workspace, event: "cli.flag", flag: "show-repo-map" });
     return 0;
   }
 
@@ -1380,6 +1681,9 @@ async function main(): Promise<number> {
       process.stdout.write(`(no models for provider ${provider}${hint})\n`);
     } else {
       for (const id of ids) process.stdout.write(`${id}\n`);
+    }
+    for (const block of modelsListPublication({ listed: ids.length, provider })) {
+      process.stdout.write(`${block}\n`);
     }
     return 0;
   }
@@ -1409,7 +1713,7 @@ async function main(): Promise<number> {
   // and fullscreen show it only on the first interactive run in a workspace.
   const shouldShowOnboarding = interactive && needsOnboarding(config) && !hasSeenOnboarding(workspace);
   const onboardingNotice = shouldShowOnboarding ? onboardingNoticeLines() : undefined;
-  if (shouldShowOnboarding) markOnboardingSeen(workspace);
+  if (shouldShowOnboarding) void markOnboardingSeen(workspace);
 
   const screenMode = resolveTuiScreenMode(process.env as Record<string, string | undefined>, opts.tuiScreenMode);
   let printPrompt = "";
@@ -1466,6 +1770,7 @@ async function main(): Promise<number> {
   if (!installApprovalHandler(ui)) {
     process.stderr.write("hzcode: this build has no approval hook \u2014 actions that need a yes will be refused\n");
   }
+  installAskUserHandler(ui);
 
   // SIGTERM -> graceful shutdown: stop the current turn, close the session, and
   // exit 143 (docs/14 §3.2) — a supervisor that stopped the run must be able to

@@ -4,8 +4,8 @@
  * Walks parent→child `childEffectIds` from ONE verified receipts.jsonl snapshot
  * (same honesty as **360**). Recurses into each trusted child's own
  * `childEffectIds` within a depth/node budget. Does NOT authenticate an issuer
- * principal, bind parentReceiptId contracts, or keyed attestation. Nested
- * event-stream replay is a sibling module (**478** / `receipt-nested-event-stream-replay.ts`).
+ * principal or keyed attestation. Nested event-stream replay is a sibling
+ * module (**478**). Mutual `parentReceiptId` checks added under **657**.
  */
 
 import type { Receipt } from "../contracts";
@@ -18,6 +18,8 @@ import {
   readVerifiedReceiptSnapshotSync,
   type VerifiedReceiptSnapshot,
 } from "./receipt-chain-verify";
+import { verifyParentReceiptIssuerStamps } from "./receipt-issuer-verify";
+import { verifyParentReceiptLinksInSnapshot } from "./receipt-parent-link-verify";
 
 export const NESTED_RECEIPT_REPLAY_DEFAULT_DEPTH = 4;
 export const NESTED_RECEIPT_REPLAY_MAX_NODES = 256;
@@ -266,6 +268,47 @@ export function replayNestedChildReceipts(
       refused: roots.length,
       maxDepth,
       residual: RESIDUAL,
+    };
+  }
+
+  // Ruling 657: parentReceiptId mutual links must hold on the same snapshot.
+  const parentLinks = verifyParentReceiptLinksInSnapshot(snapshot.receipts);
+  let parentLinkRefuse: string | undefined;
+  if (parentLinks.ok === false) parentLinkRefuse = parentLinks.reason;
+  if (parentLinkRefuse !== undefined) {
+    return {
+      ok: false,
+      rootEffectIds: roots,
+      nodes: roots.map((effectId) => ({
+        effectId,
+        depth: 0,
+        evidence: "broken_chain" as const,
+        children: [],
+      })),
+      visited: roots.length,
+      trusted: 0,
+      refused: roots.length,
+      maxDepth,
+      residual: `${RESIDUAL}; parentReceiptId link refused: ${parentLinkRefuse}`,
+    };
+  }
+
+  const issuer = verifyParentReceiptIssuerStamps(snapshot.receipts, { workspace });
+  if (issuer.ok === false) {
+    return {
+      ok: false,
+      rootEffectIds: roots,
+      nodes: roots.map((effectId) => ({
+        effectId,
+        depth: 0,
+        evidence: "broken_chain" as const,
+        children: [],
+      })),
+      visited: roots.length,
+      trusted: 0,
+      refused: roots.length,
+      maxDepth,
+      residual: `${RESIDUAL}; issuer attestation refused: ${issuer.reason}`,
     };
   }
 

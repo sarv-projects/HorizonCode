@@ -1,6 +1,7 @@
 // H-4 / ruling 517 residual: type-only formatter seam (no runtime cycle back
 // through the converter modules).
-import type { ChatMsg } from "../../contracts";
+import type { ChatMsg, ChatMsgContent } from "../../contracts";
+import { chatContentHasImage, textFromChatContent } from "../chat-content";
 import type { MessageFormatter } from "./message-formatter";
 
 /**
@@ -21,7 +22,19 @@ export const NO_TOOL_OUTPUT = "(no output)";
 
 /** Non-empty string → itself; empty / missing / non-string → sentinel. */
 export function toolResultContent(raw: unknown): string {
-  return typeof raw === "string" && raw !== "" ? raw : NO_TOOL_OUTPUT;
+  if (typeof raw === "string" && raw !== "") return raw;
+  if (Array.isArray(raw)) {
+    const text = textFromChatContent(raw as ChatMsgContent);
+    return text !== "" ? text : NO_TOOL_OUTPUT;
+  }
+  return NO_TOOL_OUTPUT;
+}
+
+/** True when a tool result should use multipart provider wire (images). */
+export function toolResultIsMultipart(raw: unknown): raw is ChatMsgContent {
+  if (typeof raw === "string" || raw === undefined || raw === null) return false;
+  if (Array.isArray(raw)) return chatContentHasImage(raw as ChatMsgContent);
+  return chatContentHasImage(raw as ChatMsgContent);
 }
 
 // H-4 / ruling 517 residual: a small pure seam at the point where tool results

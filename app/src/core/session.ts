@@ -26,7 +26,8 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import * as path from "node:path";
-import type { ChatMsg, ToolCall } from "../contracts";
+import type { ChatContentPart, ChatMsg, ToolCall } from "../contracts";
+import { contentForStorage, contentFromStorage } from "./chat-content";
 import { newId, nowIso } from "../contracts";
 import { withFileLockSync } from "./file-lock";
 import { sessionDbPath } from "./paths";
@@ -147,6 +148,8 @@ interface MessageMeta {
   toolCallId?: string;
   toolName?: string;
   toolCalls?: ToolCall[];
+  /** ADDITIVE: multimodal parts when `content` column holds flattened text only. */
+  contentParts?: ChatContentPart[];
   /** ADDITIVE: signed thinking echo fields, replayed by toAnthropicMessages. */
   thinking?: string;
   thinkingSignature?: string;
@@ -319,11 +322,18 @@ export function safeTruncationBoundary(rows: readonly BoundaryRow[], keepCount: 
 }
 
 /** Rows -> ChatMsg, restoring the fields the providers need to replay a turn. */
+function isContentPart(value: unknown): value is ChatContentPart {
+  if (value === null || typeof value !== "object") return false;
+  const t = (value as { type?: unknown }).type;
+  return t === "text" || t === "image_url" || t === "image";
+}
+
 export function rowToChatMsg(row: MessageRow): ChatMsg {
   const role: ChatMsg["role"] =
     row.role === "system" || row.role === "assistant" || row.role === "tool" ? row.role : "user";
-  const msg: ChatMsg = { role, content: row.content ?? "" };
   const meta = parseMeta(row.meta);
+  const parts = Array.isArray(meta.contentParts) ? meta.contentParts.filter(isContentPart) : [];
+  const msg: ChatMsg = { role, content: contentFromStorage(row.content, parts.length > 0 ? parts : undefined) };
   if (typeof meta.toolCallId === "string" && meta.toolCallId !== "") msg.toolCallId = meta.toolCallId;
   if (typeof meta.toolName === "string" && meta.toolName !== "") msg.toolName = meta.toolName;
   if (Array.isArray(meta.toolCalls)) {
@@ -348,6 +358,8 @@ export function rowToChatMsg(row: MessageRow): ChatMsg {
 
 function metaFor(msg: ChatMsg): string | null {
   const meta: MessageMeta = {};
+  const stored = contentForStorage(msg.content);
+  if (stored.parts && stored.parts.length > 0) meta.contentParts = stored.parts;
   if (msg.toolCallId) meta.toolCallId = msg.toolCallId;
   if (msg.toolName) meta.toolName = msg.toolName;
   if (msg.toolCalls && msg.toolCalls.length > 0) meta.toolCalls = msg.toolCalls;
@@ -571,11 +583,12 @@ export class SessionStore {
   appendMessage(sessionId: string, msg: ChatMsg): string {
     const id = newId();
     const ts = nowIso();
+    const stored = contentForStorage(msg.content);
     this.db.run("INSERT INTO messages (id, session_id, role, content, ts, meta) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
       sessionId,
       msg.role,
-      msg.content ?? "",
+      stored.storedText,
       ts,
       metaFor(msg),
     ]);

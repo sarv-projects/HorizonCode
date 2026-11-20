@@ -9,6 +9,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest } from "../../contracts";
+import { textFromChatContent } from "../chat-content";
 
 export const MOCK_GREETING = "Hi! I am HzCode running in mock mode. Configure a provider key to talk to a real model.";
 /** Said before the single tool call, so the turn reads like a conversation. */
@@ -59,7 +60,7 @@ export function createMockProvider(): Provider {
 
       // Second turn of the single tool exchange: summarize the result and stop.
       if (last && last.role === "tool") {
-        yield { type: "text", text: summarize(last.toolName ?? "tool", last.content ?? "") };
+        yield { type: "text", text: summarize(last.toolName ?? "tool", textFromChatContent(last.content)) };
         yield { type: "done", stopReason: "end" };
         return;
       }

@@ -15,13 +15,13 @@
 import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
-import { withFileLock, targetLockPath } from "../core/file-lock";
+import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
 import { isRefused, writeAtomic } from "./atomic-write";
 import {
   checkpointDirtyPathBeforeEdit,
   formatLintFixCommitSuffix,
 } from "../core/git-dirty-checkpoint";
-import { recordChange } from "./change-journal";
+import { recordChangeGuarded } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
 import { resolveAnchor } from "./hashline";
 import { detectLineEnding } from "./line-endings";
@@ -652,7 +652,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
     if (!approved) return fail("declined by user");
   }
 
-  const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
+  const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
     let actualSha256: string;
     try {
       actualSha256 = sha256Hex((await readFile(real)).toString("utf8"));
@@ -670,7 +670,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
     if ((await readFile(real)).toString("utf8") !== after) {
       return fail(`verification failed: ${rel} does not match the intended content`);
     }
-    recordChange(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
+    await recordChangeGuarded(ctx.sessionId, { path: resolved, rel, before, afterSha256: sha256Hex(after), at: Date.now(), tool: "edit" });
     return undefined;
   }).catch((e: unknown) => fail(msg(e)));
   if (locked !== undefined) return locked;
@@ -837,7 +837,7 @@ export const editTool: Tool = {
       // Cross-process (core/file-lock.ts): verify -> write -> journal is one critical
       // section per target file, taken AFTER approval. A second process that changed
       // the file first is caught by the sha256 check below, never clobbered.
-      const locked = await withFileLock(targetLockPath(ctx.workspace, real), async (): Promise<ToolResult | undefined> => {
+      const locked = await withBunMutationDiskCriticalSection(ctx.workspace, real, async (): Promise<ToolResult | undefined> => {
         // docs/09 §8.2 (R-tools-48): the preimage is checked immediately before
         // the write — a file changed during the guard/approval window is a
         // `Conflict`, and nothing is written. A stale edit may not silently
@@ -865,7 +865,7 @@ export const editTool: Tool = {
         const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);
 
-        recordChange(ctx.sessionId, {
+        await recordChangeGuarded(ctx.sessionId, {
           path: resolved,
           rel,
           before,

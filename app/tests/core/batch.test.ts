@@ -118,6 +118,8 @@ describe("concurrency classes (NF-072)", () => {
     expect(concurrencyClassOf("write")).toBe("exclusive");
     expect(concurrencyClassOf("todo")).toBe("exclusive");
     expect(concurrencyClassOf("agent")).toBe("exclusive");
+    expect(concurrencyClassOf("agent", { profile: "explore" })).toBe("shared");
+    expect(concurrencyClassOf("agent", { profile: "code" })).toBe("exclusive");
     expect(concurrencyClassOf("code_mode")).toBe("exclusive");
     expect(concurrencyClassOf("preview")).toBe("exclusive");
     expect(concurrencyClassOf("shell")).toBe("exclusive"); // R-tools-39: shell is serial
@@ -130,11 +132,21 @@ describe("concurrency classes (NF-072)", () => {
   });
 
   test("batchSegments: shared runs, exclusive barriers, and a trailing shared run", () => {
-    const mk = (id: string, name: string) => ({ id, name, arguments: "{}" });
+    const mk = (id: string, name: string, args: Record<string, unknown> = {}) => ({
+      id,
+      name,
+      arguments: JSON.stringify(args),
+    });
     expect(batchSegments([])).toEqual([]);
     expect(batchSegments([mk("1", "read"), mk("2", "grep"), mk("3", "glob")])).toHaveLength(1);
     const mixed = batchSegments([mk("1", "read"), mk("2", "shell"), mk("3", "edit"), mk("4", "read"), mk("5", "write")]);
     expect(mixed.map((segment) => segment.map((call) => call.id))).toEqual([["1"], ["2"], ["3"], ["4"], ["5"]]);
+    const exploreFanout = batchSegments([
+      mk("a", "agent", { task: "one", profile: "explore" }),
+      mk("b", "agent", { task: "two", profile: "explore" }),
+      mk("c", "agent", { task: "mutate", profile: "code" }),
+    ]);
+    expect(exploreFanout.map((segment) => segment.map((call) => call.id))).toEqual([["a", "b"], ["c"]]);
   });
 });
 

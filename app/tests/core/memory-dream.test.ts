@@ -1,7 +1,7 @@
 /** Manual dream consolidation plan (docs/33 §5.4). */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { buildDreamPlanMarkdown, writeDreamPlan } from "../../src/core/memory/dream";
@@ -52,5 +52,27 @@ describe("dream plan", () => {
     });
     expect(code).toBe(0);
     expect(lines.some((l) => l.includes("grow --dream:") && l.includes("plan-"))).toBe(true);
+  });
+
+  test("grow --dream refuses before write when policy denies fs.write (ruling 560)", async () => {
+    const dir = ws();
+    const kernelState = path.join(dir, ".hzcode", "kernel");
+    mkdirSync(kernelState, { recursive: true });
+    writeFileSync(
+      path.join(kernelState, "policy.json"),
+      JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-dream" }]),
+      "utf8",
+    );
+    const lines: string[] = [];
+    const code = await runGrowCli(["--dream", "--workspace", dir], {
+      out: (l) => lines.push(l),
+      err: (l) => lines.push(l),
+    });
+    expect(code).toBe(4);
+    expect(lines.join("\n")).toMatch(/denied|test-deny-dream/i);
+    const dreamDir = path.join(stateRoot(dir), "dream");
+    if (existsSync(dreamDir)) {
+      expect(readdirSync(dreamDir).filter((n) => n.startsWith("plan-"))).toEqual([]);
+    }
   });
 });

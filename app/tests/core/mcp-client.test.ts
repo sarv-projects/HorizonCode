@@ -60,7 +60,8 @@ import {
   MCP_FENCE_OPEN,
 } from "../../src/core/mcp/registry";
 import { kernelStateDir, readSpawnLedger } from "../../src/core/owned-spawn";
-import { cleanupTemps, tempDir } from "./helpers";
+import { cleanupTemps, restoreEnv, setEnv, snapshotEnv, tempDir } from "./helpers";
+import { EFFECT_HOST_KERNEL_MCP_SPAWN_REFUSED_NOTICE } from "../../src/core/effect-host-posture";
 
 const BUN = process.execPath || "bun";
 const FIXTURE = path.resolve(import.meta.dir, "../fixtures/mcp-echo-server.ts");
@@ -568,6 +569,30 @@ describe("mcp manager", () => {
       expect(mcpToolSpecs().length).toBe(FIXTURE_TOOLS);
     } finally {
       await manager.stop();
+    }
+  });
+
+  test("EffectHost-on refuses MCP server spawn before guard (ruling 702)", async () => {
+    const snap = snapshotEnv();
+    try {
+      setEnv({ HZ_EFFECT_HOST_KERNEL: "default" });
+      const workspace = tempDir("hz-mcp-effhost-");
+      const m = makeManagerHooks(workspace);
+      const manager = new McpManager();
+      try {
+        await manager.start({ servers: [{ id: "echo", command: BUN, args: ["run", FIXTURE] }], rejected: [] }, m.hooks);
+        expect(manager.pids()).toEqual([]);
+        expect(manager.report()[0]?.state).toBe("failed");
+        expect(manager.report()[0]?.reason ?? "").toContain(EFFECT_HOST_KERNEL_MCP_SPAWN_REFUSED_NOTICE);
+        expect(m.guards).toEqual([]);
+        expect(m.notices.some((n) => n.includes("not started"))).toBe(true);
+        const ledger = await ledgerRows(kernelStateDir(workspace));
+        expect(ledger.entries).toEqual([]);
+      } finally {
+        await manager.stop();
+      }
+    } finally {
+      restoreEnv(snap);
     }
   });
 

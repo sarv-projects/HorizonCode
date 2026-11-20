@@ -223,6 +223,16 @@ export interface CochangeOptions {
   runner?: GitRunner;
   /** Cache dir override for tests; defaults to the repo-map cache dir. */
   cacheDir?: string;
+  /**
+   * When false, skip writing `cochange.json` (under-admission deny/ask on the
+   * cache path). Default true. Read/compute still run when otherwise allowed.
+   */
+  persistCache?: boolean;
+}
+
+/** Absolute path of the durable co-change cache for a workspace. */
+export function cochangeCachePath(workspace: string, cacheDir?: string): string {
+  return path.join(cacheDir ?? repoMapCacheDir(workspace), "cochange.json");
 }
 
 /**
@@ -240,7 +250,7 @@ export async function computeCochangeBonuses(opts: CochangeOptions): Promise<Map
   for (let i = 0; i < files.length; i += 1) {
     for (let j = i + 1; j < files.length; j += 1) filePairKeys.push(pairKey(files[i] as string, files[j] as string));
   }
-  const cacheFile = path.join(opts.cacheDir ?? repoMapCacheDir(opts.workspace), "cochange.json");
+  const cacheFile = cochangeCachePath(opts.workspace, opts.cacheDir);
   const headResult = await safeRun(runner, ["git", "-C", opts.workspace, "rev-parse", "HEAD"], opts, "cochange:head");
   const repoHead = headResult?.stdout.trim() ?? "";
   if (repoHead === "") return new Map();
@@ -258,7 +268,7 @@ export async function computeCochangeBonuses(opts: CochangeOptions): Promise<Map
   if (commits.length === 0) return new Map();
   const bonuses = normalizeBonuses(countPairCochanges(commits));
   if (bonuses.size === 0) return new Map();
-  saveCochangeCache(cacheFile, key, bonuses);
+  if (opts.persistCache !== false) saveCochangeCache(cacheFile, key, bonuses);
   return bonuses;
 }
 

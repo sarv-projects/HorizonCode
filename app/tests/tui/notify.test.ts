@@ -18,10 +18,10 @@ describe("notify", () => {
     expect(out).toContain("\u0007");
   });
 
-  test("config merge and persist", () => {
+  test("config merge and persist", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "hz-notify-"));
     try {
-      persistNotifyConfig({ bell: false, minMs: 5000 }, home);
+      await persistNotifyConfig({ bell: false, minMs: 5000 }, home);
       const file = JSON.parse(readFileSync(defaultConfigPath(home), "utf8")) as {
         notify?: { bell?: boolean; minMs?: number };
       };
@@ -29,7 +29,7 @@ describe("notify", () => {
       expect(notifyPrefsMerged(file.notify, { HZ_NOTIFY_BELL: "1" }).bell).toBe(true);
       const lines: string[] = [];
       const r = createRenderer({ out: (c) => lines.push(c) });
-      runNotifyCommand("min 12000", r, file.notify, (p) => persistNotifyConfig(p, home));
+      runNotifyCommand("min 12000", r, file.notify, async (p) => { await persistNotifyConfig(p, home); });
       expect(lines.join("")).toContain("notify saved");
     } finally {
       rmSync(home, { recursive: true, force: true });

@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ChatMsg } from "../contracts";
+import { textFromChatContent } from "./chat-content";
 import { estimateTokens } from "./output-budget";
 import { metricContract } from "./metrics";
 
@@ -41,7 +42,7 @@ export interface ConvoStats {
 export function lastOfRole(history: readonly ChatMsg[], role: ChatMsg["role"]): string | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const m = history[i];
-    if (m?.role === role && (m.content ?? "").trim() !== "") return m.content;
+    if (m?.role === role && textFromChatContent(m.content).trim() !== "") return textFromChatContent(m.content);
   }
   return undefined;
 }
@@ -53,7 +54,7 @@ export function convoStats(history: readonly ChatMsg[]): ConvoStats {
   for (const m of history) {
     byRole[m.role] = (byRole[m.role] ?? 0) + 1;
     toolCalls += m.toolCalls?.length ?? 0;
-    text += (m.content ?? "") + "\n";
+    text += textFromChatContent(m.content) + "\n";
   }
   return { messages: history.length, byRole, toolCalls, estimatedTokens: estimateTokens(text) };
 }
@@ -121,7 +122,7 @@ export function renderExportHtml(history: readonly ChatMsg[], meta: ExportMeta):
     .map((m) => {
       const calls = (m.toolCalls ?? []).map((c) => `<div class="call">tool call: ${esc(c.name)}</div>`).join("");
       const who = m.role === "tool" ? `tool${m.toolName ? " " + esc(m.toolName) : ""}` : esc(m.role);
-      return `<section class="${esc(m.role)}"><h3>${who}</h3><pre>${esc(m.content ?? "")}</pre>${calls}</section>`;
+      return `<section class="${esc(m.role)}"><h3>${who}</h3><pre>${esc(textFromChatContent(m.content))}</pre>${calls}</section>`;
     })
     .join("\n");
   const chain = meta.chain;

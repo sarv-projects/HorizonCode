@@ -1,7 +1,7 @@
 /** J-4 bench-execution.test.ts — shared per-row engine reuse, typed metrics, resume. */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { executeBenchmarkArms, type BenchmarkArmSpec } from "../../src/core/bench-execution";
 import type { BatchRowExecutor } from "../../src/core/batch-runner";
@@ -99,4 +99,26 @@ describe("J-4 benchmark arm execution engine reuse", () => {
     writeFileSync(driftFile, `${JSON.stringify({ id: "alpha-1", task: "different", status: "done" })}\n`, "utf8");
     await expect(executeBenchmarkArms({ file: driftFile, arms, execute: recordingExecutor([]) })).rejects.toThrow(/task changed/);
   });
+
+  test("admitBatchJobWrite refuses deny before arm merge (ruling 610)", async () => {
+    const dir = tempDir("hz-bench-deny-");
+    const file = path.join(dir, "job.jsonl");
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(dir, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(dir, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-bench" }]),
+        "utf8",
+      );
+      await expect(executeBenchmarkArms({ file, arms, execute: recordingExecutor([]) })).rejects.toThrow(
+        /denied|test-deny-bench|batch-job/i,
+      );
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
 });

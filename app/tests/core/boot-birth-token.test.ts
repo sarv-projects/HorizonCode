@@ -82,8 +82,17 @@ describe("boot-id birth tokens (D-3 / ruling 473)", () => {
     expect(verifyIdentity({ ...live, bootId: "boot-other" }, readers("btime 100\n", "boot-A")).ok).toBe(false);
   });
 
+  test("non-Linux never attaches bootId even when injectable proc readers supply btime", () => {
+    if (process.platform === "linux") return;
+    const id = recordIdentity(123, {
+      readStat: () => "btime 1700000000\n",
+      readBootId: () => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    });
+    expect(id?.bootId).toBeUndefined();
+  });
+
   test("live Linux: btime gate yields boot-anchored birth token that round-trips", () => {
-    if (process.platform === "win32") return;
+    if (process.platform !== "linux") return;
     const btime = readBootBtime();
     if (btime === undefined) {
       // Non-Linux /proc hosts: no boot-anchored token is the documented residual.

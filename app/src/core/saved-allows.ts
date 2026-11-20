@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import * as path from "node:path";
 import { canonicalJson, sha256Hex } from "./canon";
 import type { GuardKind } from "../contracts";
+import { metricContract } from "./metrics";
 import { sessionDbPath, stateRoot } from "./paths";
 import { Database } from "bun:sqlite";
 import type { KernelClient } from "./kernel";
@@ -79,8 +80,16 @@ function syncJsonMirror(workspace: string, rows: SavedAllowRow[]): void {
   writeSavedAllowsJson(workspace, rows);
 }
 
-/** Doctor / status: read-only counts (never creates `hzcode.db`). */
-export function summarizeSavedAllows(workspace: string): string {
+export interface SavedAllowsSummary {
+  rows: number;
+  shaped: number;
+  store: "hzcode.db" | "saved-allows.json" | "none";
+  /** Human doctor detail — byte-stable for existing tests. */
+  detail: string;
+}
+
+/** Shared read-only inspect for doctor human + H-7 publication (never creates db). */
+export function inspectSavedAllows(workspace: string): SavedAllowsSummary {
   let rows: SavedAllowRow[] = [];
   const dbPath = sessionDbPath(workspace);
   if (existsSync(dbPath)) {
@@ -112,14 +121,73 @@ export function summarizeSavedAllows(workspace: string): string {
   }
   if (rows.length === 0) rows = loadSavedAllowsJsonFile(workspace);
   if (rows.length === 0) {
-    return existsSync(savedAllowsPath(workspace))
-      ? "saved-allows.json present but empty"
-      : "no saved allows (hzcode.db or saved-allows.json)";
+    const emptyJson = existsSync(savedAllowsPath(workspace));
+    return {
+      rows: 0,
+      shaped: 0,
+      store: "none",
+      detail: emptyJson
+        ? "saved-allows.json present but empty"
+        : "no saved allows (hzcode.db or saved-allows.json)",
+    };
   }
   const shaped = rows.filter((r) => typeof r.action === "string" && r.action !== "").length;
   const shapeNote = shaped > 0 ? `; ${shaped} with {action,resource} shape` : "";
-  const store = existsSync(dbPath) && rows.length > 0 ? "hzcode.db" : "saved-allows.json";
-  return `${rows.length} exact-target row(s) in ${store} (cap ${SAVED_ALLOWS_MAX}; rehydrated on session start)${shapeNote}`;
+  const store: SavedAllowsSummary["store"] =
+    existsSync(dbPath) && rows.length > 0 ? "hzcode.db" : "saved-allows.json";
+  return {
+    rows: rows.length,
+    shaped,
+    store,
+    detail: `${rows.length} exact-target row(s) in ${store} (cap ${SAVED_ALLOWS_MAX}; rehydrated on session start)${shapeNote}`,
+  };
+}
+
+/** Doctor / status: read-only counts (never creates `hzcode.db`). */
+export function summarizeSavedAllows(workspace: string): string {
+  return inspectSavedAllows(workspace).detail;
+}
+
+/**
+ * H-7 parallel surface for saved-allows counts (ruling **544**). Human
+ * `summarizeSavedAllows` stays byte-identical; these blocks are machine-readable only.
+ */
+export function savedAllowsPublication(workspace: string): string[] {
+  const summary = inspectSavedAllows(workspace);
+  const anchor = "none — first saved-allows inspect (no prior report of this workspace to compare against)";
+  const population = `saved allows for workspace ${workspace}`;
+  const excludes =
+    "wildcard targets ending in * are filtered at inspect; corrupt hzcode.db falls through to JSON mirror";
+  return [
+    metricContract({
+      metric: "saved allows exact-target rows",
+      anchor,
+      population,
+      excludes,
+      value: summary.rows,
+    }),
+    metricContract({
+      metric: "saved allows rows with {action,resource} shape",
+      anchor,
+      population,
+      excludes,
+      value: summary.shaped,
+    }),
+    metricContract({
+      metric: "saved allows store",
+      anchor,
+      population,
+      excludes,
+      value: summary.store,
+    }),
+    metricContract({
+      metric: "saved allows cap",
+      anchor,
+      population,
+      excludes,
+      value: SAVED_ALLOWS_MAX,
+    }),
+  ];
 }
 
 export function loadSavedAllows(workspace: string): SavedAllowRow[] {
@@ -132,15 +200,37 @@ export function loadSavedAllows(workspace: string): SavedAllowRow[] {
   return jsonRows;
 }
 
+/**
+ * Under-admission (ruling 585): Guard `fs.write` on the session DB before
+ * persisting a saved allow (JSON mirror is the same workspace-state write class).
+ * Returns an error string on deny/ask/guard failure; undefined when allowed.
+ */
+export async function admitSavedAllowsWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(sessionDbPath(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "saved-allows refused:")
+    .replace(/^preds write denied/, "saved-allows denied")
+    .replace(/^preds fs\.write requires approval/, "saved-allows fs.write requires approval");
+}
+
 /** Append or refresh one exact saved allow (deduped by kind+target, capped). */
-export function appendSavedAllow(workspace: string, kind: GuardKind, target: string): void {
+export async function appendSavedAllow(
+  workspace: string,
+  kind: GuardKind,
+  target: string,
+): Promise<string | undefined> {
   const targets = shellSavedGrantTargets(kind, target);
-  if (targets.length === 0) return;
+  if (targets.length === 0) return undefined;
+  const refused = await admitSavedAllowsWrite(workspace);
+  if (refused !== undefined) return refused;
   const now = new Date().toISOString();
   const action = openCodeActionForGuardKind(kind);
   const newRows: SavedAllowRow[] = targets.map((t) => ({ kind, target: t, action, savedAt: now }));
   upsertSavedAllowsSql(workspace, newRows, SAVED_ALLOWS_MAX);
   syncJsonMirror(workspace, loadSavedAllows(workspace));
+  return undefined;
 }
 
 /** Restore saved rows as session grants (same TTL as TUI "always"). */

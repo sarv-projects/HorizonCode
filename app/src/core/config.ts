@@ -13,6 +13,7 @@
  */
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { metricContract } from "./metrics";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import type { Credential, RunBudget } from "../contracts";
@@ -534,9 +535,25 @@ function parseNotify(value: unknown): NotifyConfig | undefined {
   return { ...(bell !== undefined ? { bell } : {}), ...(minMs !== undefined ? { minMs } : {}) };
 }
 
+/**
+ * Under-admission (ruling 594): Guard `fs.write` on the user config path before
+ * theme/notify persist. `home` is the admit root.
+ */
+export async function admitUserConfigWrite(home: string = homedir()): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(defaultConfigPath(home), home);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "user-config refused:")
+    .replace(/^preds write denied/, "user-config denied")
+    .replace(/^preds fs\.write requires approval/, "user-config fs.write requires approval");
+}
+
 /** Merge `theme` into the user config file (user config only). */
-export function persistThemeMode(mode: HzConfig["theme"], home: string = homedir()): void {
-  if (mode === undefined) return;
+export async function persistThemeMode(mode: HzConfig["theme"], home: string = homedir()): Promise<string | undefined> {
+  if (mode === undefined) return undefined;
+  const refused = await admitUserConfigWrite(home);
+  if (refused !== undefined) return refused;
   const file = defaultConfigPath(home);
   let current: ConfigFile = {};
   try {
@@ -551,10 +568,13 @@ export function persistThemeMode(mode: HzConfig["theme"], home: string = homedir
   } catch {
     /* best effort */
   }
+  return undefined;
 }
 
 /** Merge `notify` into the user config file (user config only). */
-export function persistNotifyConfig(notify: NotifyConfig, home: string = homedir()): void {
+export async function persistNotifyConfig(notify: NotifyConfig, home: string = homedir()): Promise<string | undefined> {
+  const refused = await admitUserConfigWrite(home);
+  if (refused !== undefined) return refused;
   const file = defaultConfigPath(home);
   let current: ConfigFile = {};
   try {
@@ -569,6 +589,7 @@ export function persistNotifyConfig(notify: NotifyConfig, home: string = homedir
   } catch {
     /* best effort */
   }
+  return undefined;
 }
 
 function normalizeProvider(value: string | undefined): ProviderName | undefined {
@@ -1432,6 +1453,7 @@ export const CONFIG_KEYS: Record<string, { type: string; description: string; en
   apiKey: { type: "string", description: "Inline API key (prefer env vars)." },
   mcp: { type: "object", description: "MCP stdio servers (user config only)." },
   lsp: { type: "object", description: "Language servers to start (user config only)." },
+  lint: { type: "object", description: "Workspace lint command config (user config only)." },
   providers: { type: "array", description: "Registered OpenAI-compatible providers." },
   permissionMode: {
     type: "string",
@@ -1443,10 +1465,35 @@ export const CONFIG_KEYS: Record<string, { type: string; description: string; en
     description: "Autonomy preset when permissionMode is unset (maps to permission mode).",
     enum: ["manual", "assisted", "auto-edits", "plan-only"],
   },
+  sandboxChildNet: {
+    type: "string",
+    description: "Wrapped-child network posture (`off` → HZ_SANDBOX_CHILD_NET=off). Never claims shell-net enforced.",
+    enum: ["off"],
+  },
+  effectHostKernel: {
+    type: "string",
+    description: "EffectHost kernel spine when env unset at createRuntime (prototype — not full EffectHost).",
+    enum: ["default", "require", "1"],
+  },
   trustedWorkspaceHooks: { type: "array", description: "Absolute workspace paths allowed to load workspace hooks.json." },
   theme: { type: "string", description: "Default TUI palette.", enum: ["dark", "light", "auto", "mono"] },
   notify: { type: "object", description: "Turn-end bell prefs (`bell`, `minMs`). User config only." },
   statusLine: { type: "object", description: "User status-line script: command + optional args (JSON on stdin)." },
+  providerClass: {
+    type: "string",
+    description: "H-3 provider class short name or closed import path (no dynamic plugin load).",
+    enum: ["openai", "anthropic", "google", "ollama", "mock", "openai-compatible"],
+  },
+  modelClass: {
+    type: "string",
+    description: "H-3 model class short name or closed import path.",
+    enum: ["openai", "anthropic", "google", "ollama", "mock"],
+  },
+  formatMessageClass: {
+    type: "string",
+    description: "H-4 formatter dialect short name (built-in only; no dynamic import).",
+    enum: ["openai", "openai-compatible", "anthropic", "google", "ollama", "mock"],
+  },
 };
 
 const TOP_KEYS = Object.keys(CONFIG_KEYS);
@@ -1457,6 +1504,12 @@ const TOP_KEYS = Object.keys(CONFIG_KEYS);
  * whitespace/control characters. Every other unknown key is still rejected.
  */
 const CONFIG_METADATA_KEYS = new Set(["$schema"]);
+/** Snake_case aliases accepted at load (rulings 543 and 545); camelCase is schema/docs form. */
+const CONFIG_CLASS_SNAKE_ALIASES = new Set([
+  "provider_class",
+  "model_class",
+  "format_message_class",
+]);
 
 function isValidSchemaRef(value: string): boolean {
   const s = value.trim();
@@ -1508,7 +1561,13 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
   }
   const cfg = parsed as Record<string, unknown>;
   for (const key of Object.keys(cfg)) {
-    if (!TOP_KEYS.includes(key) && !CONFIG_METADATA_KEYS.has(key)) result.unknown.push(key);
+    if (
+      !TOP_KEYS.includes(key) &&
+      !CONFIG_METADATA_KEYS.has(key) &&
+      !CONFIG_CLASS_SNAKE_ALIASES.has(key)
+    ) {
+      result.unknown.push(key);
+    }
   }
   if (cfg.$schema !== undefined) {
     if (typeof cfg.$schema !== "string" || !isValidSchemaRef(cfg.$schema)) {
@@ -1543,6 +1602,37 @@ export function checkConfigFile(file: string = defaultConfigPath()): ConfigCheck
   result.rejected.push(...(parseLintConfig(cfg.lint)?.rejected ?? []));
   result.rejected.push(...(parseProviderRegistry(cfg.providers)?.rejected ?? []));
   return result;
+}
+
+
+/** H-7: contracted form of `hzcode config check` diagnostic counts (ruling 595). */
+export function configCheckPublication(check: ConfigCheck): string[] {
+  const anchor = "none — this config-check invocation";
+  const population = "unknown keys and rejected values reported by checkConfigFile";
+  const excludes = "none — counts are diagnostic tallies only (file path/text stay in human render)";
+  return [
+    metricContract({
+      metric: "config check unknown keys",
+      anchor,
+      population,
+      excludes,
+      value: check.unknown.length,
+    }),
+    metricContract({
+      metric: "config check rejected values",
+      anchor,
+      population,
+      excludes,
+      value: check.rejected.length,
+    }),
+    metricContract({
+      metric: "config check file present",
+      anchor,
+      population,
+      excludes,
+      value: check.exists ? 1 : 0,
+    }),
+  ];
 }
 
 export function renderConfigCheck(check: ConfigCheck): string {

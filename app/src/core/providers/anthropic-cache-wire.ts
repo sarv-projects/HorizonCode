@@ -1,8 +1,9 @@
 /**
  * Wire `cache-breakpoints.ts` onto Anthropic request bodies (docs/30 B-4).
  *
- * Off unless `HZ_ANTHROPIC_CACHE_BREAKPOINTS=1` (default prefix planner on when enabled). Composes with
- * `HZ_ANTHROPIC_CACHE_SYSTEM=1` (system may already be a cached block array).
+ * Product default ON (ruling **542**). Opt out with `HZ_ANTHROPIC_CACHE_BREAKPOINTS=0`
+ * (also `false`/`off`/`no`). Explicit `=1`/`true`/`on`/`yes` still enables.
+ * Default prefix planner when enabled. Composes with `HZ_ANTHROPIC_CACHE_SYSTEM=1`.
  * When breakpoints are on, tool_result markers use the largest stable prefix (ruling **277** / **276**).
  * Residual: live cache-hit measure (keep-alive stub: ruling 246).
  */
@@ -23,8 +24,11 @@ type WireSlot =
   | { target: "system"; blockIndex: number }
   | { target: "message"; msgIndex: number; blockIndex: number };
 
-export function anthropicCacheBreakpointsEnabled(): boolean {
-  return process.env.HZ_ANTHROPIC_CACHE_BREAKPOINTS === "1";
+export function anthropicCacheBreakpointsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.HZ_ANTHROPIC_CACHE_BREAKPOINTS?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return true;
+  if (raw === "0" || raw === "false" || raw === "off" || raw === "no") return false;
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 function cacheableKind(
@@ -50,6 +54,9 @@ export function applyAnthropicRequestCacheBreakpoints(
   messages: AnthropicWireMessage[],
 ): { system: typeof system; messages: AnthropicWireMessage[] } {
   if (!anthropicCacheBreakpointsEnabled()) return { system, messages };
+  // Foreign message formatters (H-4) may yield string/`parts` shapes Anthropic
+  // wire does not use. Never crash the provider path — skip stamping instead.
+  if (messages.some((m) => !Array.isArray(m.content))) return { system, messages };
 
   const cacheable: CacheableBlock[] = [];
   const slots: WireSlot[] = [];

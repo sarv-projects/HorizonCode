@@ -2,16 +2,35 @@
  * `handoff_*` — session handoff create / resume / search (docs/30 §8 #3).
  */
 
-import type { Tool, ToolContext, ToolResult } from "../contracts";
+import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { hookAuditBlockForHandoff } from "../core/hook-handoff-capture";
 import {
   createHandoff,
+  handoffDbPath,
   normalizeHandoffSections,
   resumeHandoff,
   searchHandoffs,
 } from "../core/memory/handoff";
-import { durableTodosEnabled, mergeDurableBranchOpenTodos } from "../core/durable-todos";
-import { importSnapshottedTodos, openTodos } from "./todo";
+import {
+  durableBranchTrackPath,
+  durableTodosEnabled,
+  mergeDurableBranchOpenTodos,
+} from "../core/durable-todos";
+import { importSnapshottedTodosGuarded, openTodos } from "./todo";
+
+async function admitHandoffDbWrite(ctx: ToolContext, title: string): Promise<string | undefined> {
+  const target = handoffDbPath(ctx.workspace);
+  const action: GuardAction = { kind: "fs.write", target };
+  const decision = await ctx.guard(action);
+  if (decision.decision === "deny") {
+    return `denied by policy${decision.reason ? `: ${decision.reason}` : ""}`;
+  }
+  if (decision.decision === "ask") {
+    const approved = await ctx.approve({ title, detail: target, kind: "fs.write" }, action);
+    if (!approved) return "declined by user";
+  }
+  return undefined;
+}
 
 function fail(message: string): ToolResult {
   return { ok: false, output: message, error: message };
@@ -97,13 +116,15 @@ export const handoffCreateTool: Tool = {
     },
     required: ["summary"],
   },
-  concurrencyClass: "shared",
+  concurrencyClass: "exclusive",
   exposure: "deferred",
   searchInfo: { keywords: ["handoff", "session", "resume", "context", "continues"] },
 
   async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const normalized = normalizeHandoffSections(args);
     if ("error" in normalized) return fail(normalized.error);
+    const denied = await admitHandoffDbWrite(ctx, "Create handoff");
+    if (denied !== undefined) return fail(denied);
     const branchOverride = typeof args.branch === "string" ? args.branch : undefined;
     const continuesArg = args.continues_from;
     const continues_from =
@@ -156,7 +177,7 @@ export const handoffResumeTool: Tool = {
       },
     },
   },
-  concurrencyClass: "shared",
+  concurrencyClass: "exclusive",
   exposure: "deferred",
   searchInfo: { keywords: ["handoff", "resume", "session", "continues", "chain"] },
 
@@ -171,6 +192,21 @@ export const handoffResumeTool: Tool = {
       typeof args.merge_durable_branch === "string" ? args.merge_durable_branch.trim() : "";
     let durableMerge: { merged: number; skipped: number; fromBranch: string } | undefined;
     if (merge_durable_branch !== "" && durableTodosEnabled()) {
+      const denied = await admitHandoffDbWrite(ctx, "Merge durable todos");
+      if (denied !== undefined) return fail(denied);
+      const trackTarget = durableBranchTrackPath(ctx.workspace);
+      const trackAction: GuardAction = { kind: "fs.write", target: trackTarget };
+      const trackDecision = await ctx.guard(trackAction);
+      if (trackDecision.decision === "deny") {
+        return fail(`denied by policy${trackDecision.reason ? `: ${trackDecision.reason}` : ""}`);
+      }
+      if (trackDecision.decision === "ask") {
+        const approved = await ctx.approve(
+          { title: "Persist durable todo branch track", detail: trackTarget, kind: "fs.write" },
+          trackAction,
+        );
+        if (!approved) return fail("declined by user");
+      }
       const stats = mergeDurableBranchOpenTodos(ctx.workspace, merge_durable_branch);
       durableMerge = { ...stats, fromBranch: merge_durable_branch };
     }
@@ -194,7 +230,9 @@ export const handoffResumeTool: Tool = {
     }
     let rehydrate: { added: number; skipped: number } | undefined;
     if (rehydrate_todos && result.snapshotted_todos.length > 0) {
-      rehydrate = importSnapshottedTodos(ctx.sessionId, result.snapshotted_todos, ctx.workspace);
+      const imported = await importSnapshottedTodosGuarded(ctx, result.snapshotted_todos);
+      if ("error" in imported) return fail(imported.error);
+      rehydrate = imported;
     }
     const live = openTodos(ctx.sessionId);
     return { ok: true, output: formatResume(result, live, rehydrate, durableMerge) };

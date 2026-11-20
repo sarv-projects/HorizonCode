@@ -5,6 +5,7 @@
  */
 
 import type { ChatMsg } from "../../contracts";
+import { textFromChatContent } from "../chat-content";
 import { cacheableMessagesCutIndex, cacheableMessagesPrefix } from "./cacheable-messages-prefix";
 
 export interface CacheablePrefixMeasure {
@@ -23,7 +24,7 @@ export function measureCacheablePrefix(messages: readonly ChatMsg[]): CacheableP
   const prefix = cacheableMessagesPrefix(messages);
   let bytes = 0;
   for (const msg of prefix) {
-    bytes += utf8ByteLength(msg.content ?? "");
+    bytes += utf8ByteLength(textFromChatContent(msg.content));
     bytes += utf8ByteLength(msg.role);
   }
   return {

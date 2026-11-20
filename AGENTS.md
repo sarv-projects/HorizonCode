@@ -1,8 +1,10 @@
 # AGENTS.md — instructions for coding agents
 
-> **Goal: NOT COMPLETE** (2026-11-16). LICENSE deferred. Never claim shell-net egress **`enforced`**.
+> **Goal: NOT COMPLETE** (2026-11-20). LICENSE deferred. Never claim shell-net egress **`enforced`**. Rulings through **732**.
 
 ---
+
+**Stop-of-day (2026-11-20):** [`docs/STOP-OF-DAY-2026-11-20.md`](docs/STOP-OF-DAY-2026-11-20.md) — done / left / owner-input / v1 backlog.
 
 ## Docs are living; the tree is authoritative
 
@@ -21,7 +23,7 @@
 | 3 | [`docs/33-handoff.md`](docs/33-handoff.md) §2 | **Build, test, gates**, env gotchas |
 | 4 | [`app/src/contracts.ts`](app/src/contracts.ts) | Frozen wire/protocol types (additive only) |
 | 5 | [`docs/03-hld.md`](docs/03-hld.md) + [`docs/11-authority-safety.md`](docs/11-authority-safety.md) | Planes, trust, guard, egress honesty |
-| 6 | [`docs/28-implementation-status.md`](docs/28-implementation-status.md) §3 | **What is actually shipped** (rulings through **537**) |
+| 6 | [`docs/28-implementation-status.md`](docs/28-implementation-status.md) §3 | **What is actually shipped** (rulings through **732**) |
 | 7 | [`docs/GOAL-PROGRESS.md`](docs/GOAL-PROGRESS.md) | P0 residuals, waves, SKIP list |
 | As needed | [`docs/09-tools.md`](docs/09-tools.md), [`docs/08-runtime.md`](docs/08-runtime.md) | Loop and tools (design; verify in code) |
 | As needed | [`docs/AGENT-DOC-NAVIGATION.md`](docs/AGENT-DOC-NAVIGATION.md) | When to open **`repo_take/`**; code landmarks |

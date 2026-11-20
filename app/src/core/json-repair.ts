@@ -512,7 +512,20 @@ export function coerceToSchema(args: Record<string, unknown>, schema: Schema | u
  * argument blob is refused: completing a half-sent `command` or `content`
  * would run or write something the model never finished saying.
  */
-export const TRUNCATION_TOLERANT_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "glob", "repo_map", "tool_search", "ast_search"]);
+export const TRUNCATION_TOLERANT_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "glob",
+  "repo_map",
+  "tool_search",
+  "ast_search",
+  "web_fetch",
+  "shell_bg",
+  "git_status",
+  "git_diff",
+  "git_log",
+  "git_blame",
+]);
 
 export interface ToolArguments {
   args: Record<string, unknown>;

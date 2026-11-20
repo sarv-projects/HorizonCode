@@ -105,6 +105,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       const lease = await client.makeLease("shell.exec", "echo approved", 60_000, "session-a");
       expect(lease.kind).toBe("shell.exec");
       expect(lease.owner).toBe("session-a");
+      expect(lease.principal).toBe("parent");
       const yes = await client.executeEffect({
         effectId: "controlled-shell", sandboxRoot: root, sessionId: "session-a",
         dispatch: { kind: "shell.exec", spec: { argv: ["echo", "approved"] } },
@@ -118,6 +119,23 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       });
       expect(parentReceipt.id).toBeTruthy();
       expect((await client.verifyReceipts()).ok).toBe(true);
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("HZ_HUMAN_PRINCIPAL_STRICT=1 refuses kernel parent mint without human stamp (719)", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_HUMAN_PRINCIPAL_STRICT: "1" });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-human-strict-kernel-"));
+    const client = new KernelClient({ workspace: root, stateDir: path.join(root, ".hzcode", "kernel") });
+    try {
+      expect(await client.start()).toBe("trusted");
+      await expect(client.makeLease("shell.exec", "echo no", 60_000, "session-strict")).rejects.toThrow(
+        /HZ_HUMAN_PRINCIPAL_STRICT/,
+      );
     } finally {
       await client.close();
       rmSync(root, { recursive: true, force: true });
@@ -175,6 +193,39 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       expect(prepare?.payload?.details?.guardDecision).toBe("allow");
       expect(typeof prepare?.payload?.details?.guardLeaseId).toBe("string");
       expect(settle?.payload?.details?.guardLeaseId).toBe(prepare?.payload?.details?.guardLeaseId);
+      // Ruling 542/550: archived shell streams are streamChecked, not unsupportedEffects.
+      const replay = await client.ownerPostimageVerify();
+      expect(replay.ok).toBe(true);
+      expect((replay.streamChecked ?? 0)).toBeGreaterThanOrEqual(1);
+      expect(replay.unsupportedEffects).toBe(0);
+      expect(settle?.payload?.details?.streamEvidence).toBeDefined();
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
+  test.skipIf(!hasRustKernel)("kernel shell touch records OwnerLog file postimage (ruling 669 reduced)", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-shell-touch-postimage-"));
+    const client = new KernelClient({ workspace: root, stateDir: path.join(root, ".hzcode", "kernel") });
+    try {
+      expect(await client.start()).toBe("trusted");
+      const approved = await tryKernelShellRoute(
+        client, root, "touch-fs", { command: "touch via-shell.txt" },
+        { sessionId: "shell-touch-session", admittedByLoop: true },
+      );
+      expect(approved?.result.ok).toBe(true);
+      const events = await client.readEvents("owner:effects");
+      const settle = events.find((e) => e.type === "owner.settled");
+      const postimages = settle?.payload?.details?.postimages as Array<{ state?: string; path?: string }> | undefined;
+      expect(postimages?.[0]?.state).toBe("present");
+      expect(postimages?.[0]?.path).toContain("via-shell.txt");
+      const replay = await client.ownerPostimageVerify();
+      expect(replay.ok).toBe(true);
+      expect((replay.checked ?? 0)).toBeGreaterThanOrEqual(1);
     } finally {
       await client.close();
       rmSync(root, { recursive: true, force: true });
@@ -269,6 +320,40 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     }
   });
 
+  test.skipIf(!hasRustKernel)("nested childEffectIds observe on ownerPostimageVerify (ruling 697)", async () => {
+    const snapshot = snapshotEnv();
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    const root = mkdtempSync(path.join(tmpdir(), "hz-nested-observe-"));
+    const state = path.join(root, ".hzcode", "kernel");
+    const client = new KernelClient({ workspace: root, stateDir: state });
+    try {
+      expect(await client.start()).toBe("trusted");
+      const child = await client.executeEffect({
+        effectId: "child-nested",
+        sandboxRoot: root,
+        dispatch: { kind: "fs.write", spec: { path: "child.txt", text: "nested" } },
+      });
+      expect(child.ownerLogSettled).toBe(true);
+      await client.issueReceipt({
+        action: "tool.execute",
+        tool: "agent",
+        argsDigest: "a".repeat(64),
+        resultDigest: "b".repeat(64),
+        schemaVersion: 2,
+        effectId: "parent-agent",
+        childEffectIds: ["child-nested"],
+      });
+      const verify = await client.ownerPostimageVerify();
+      expect(verify.nestedObserve?.ok).toBe(true);
+      expect(verify.nestedObserve?.verified).toBe(1);
+      expect(verify.nestedObserve?.nodes[0]?.classification).toBe("file_postimage_ok");
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+      restoreEnv(snapshot);
+    }
+  });
+
   test.skipIf(!hasRustKernel)("kernel historical postimage archive verifies superseded bytes and refuses corrupted archive", async () => {
     const snapshot = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath });
@@ -288,6 +373,12 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
       expect(audit.ok).toBe(true);
       expect(audit.history?.checked).toBe(2);
       expect(audit.history?.scope).toBe("archived_kernel_owned_file_postimages_only");
+      // Ruling 654: superseded first version independently re-observed from CAS.
+      expect(audit.historicalOverwriteReplayed).toBe(1);
+      expect(audit.history?.overwriteReplay?.checked).toBe(1);
+      expect(audit.history?.overwriteReplay?.replayed[0]?.effectId).toBe("history-1");
+      expect(audit.history?.overwriteReplay?.replayed[0]?.superseded).toBe(true);
+      expect(audit.history?.overwriteReplay?.replayed[0]?.source).toBe("cas");
       const digest = (await import("../../src/core/canon")).sha256Hex("first");
       const archive = path.join(state, "owner-postimages", digest.slice(0, 2), digest + ".blob");
       expect(readFileSync(archive, "utf8")).toBe("first");
@@ -306,7 +397,9 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
 
   test.skipIf(!hasRustKernel)("two independent trusted clients see durable UNKNOWN and refuse next write", async () => {
     const snapshot = snapshotEnv();
-    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    // Multi-owner topology is CB-6-forbidden in product; skip lease so OwnerLog
+    // cross-process flock remains testable (ruling 647).
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_SUPERVISOR_LEASE: "0" });
     const root = mkdtempSync(path.join(tmpdir(), "hz-owner-dual-"));
     const state = path.join(root, ".hzcode", "kernel");
     const file = path.join(root, "source.txt");
@@ -350,7 +443,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
 
   test.skipIf(!hasRustKernel)("concurrent separate kernels serialise distinct admitted mutations", async () => {
     const snapshot = snapshotEnv();
-    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_SUPERVISOR_LEASE: "0" });
     const root = mkdtempSync(path.join(tmpdir(), "hz-owner-par-"));
     const state = path.join(root, ".hzcode", "kernel");
     const first = new KernelClient({ workspace: root, stateDir: state });
@@ -463,7 +556,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
 
   test.skipIf(!hasRustKernel)("read-only latest postimage replay detects disk tampering across independent clients", async () => {
     const snapshot = snapshotEnv();
-    setEnv({ HZ_KERNEL_BIN: rustKernelPath });
+    setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_SUPERVISOR_LEASE: "0" });
     const root = mkdtempSync(path.join(tmpdir(), "hz-owner-replay-"));
     const file = path.join(root, "tracked.txt");
     const stateDir = path.join(root, ".hzcode", "kernel");

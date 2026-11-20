@@ -10,10 +10,13 @@
 mod canon;
 mod control_auth;
 mod edit_unicode_fold;
+mod effect_absent_reconstruct;
+mod effect_legacy_unverifiable;
 mod effect_evidence;
 mod effect_host;
 mod effect_host_edit_repair;
 mod effect_history;
+mod effect_nested_observe;
 mod effect_owner;
 mod egress;
 mod egress_connect;
@@ -23,18 +26,31 @@ mod egress_tls_terminate;
 mod eventlog;
 mod execpolicy;
 mod guard;
+mod human_principal;
 mod jsonl_append;
+mod os_file_lock;
 mod permm;
 mod protocol;
 mod receipt_postimage;
+mod receipt_issuer;
 mod receipt_schema;
 mod receipts;
 mod sandbox;
 mod sandbox_atomic_write;
+mod sandbox_path_verify;
 mod time;
+#[cfg(unix)]
+mod socket_serve;
+mod peer_auth;
+mod host_supervisor_lease;
+mod supervisor_binary_seal;
+mod supervisor_epoch;
+mod supervisor_lease;
+mod workspace_binding;
 
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -49,6 +65,7 @@ fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut state_dir: Option<PathBuf> = None;
     let mut control_fd: Option<u32> = None;
+    let mut socket_path: Option<PathBuf> = None;
     let mut selftest = false;
 
     let mut i = 0;
@@ -74,6 +91,19 @@ fn run() -> i32 {
                     }
                 };
             }
+            "--socket" => {
+                i += 1;
+                match args.get(i) {
+                    Some(path) => socket_path = Some(PathBuf::from(path)),
+                    None => {
+                        eprintln!("error: --socket requires a path");
+                        return 2;
+                    }
+                }
+            }
+            other if other.starts_with("--socket=") => {
+                socket_path = Some(PathBuf::from(&other["--socket=".len()..]));
+            }
             "--state-dir" => {
                 i += 1;
                 match args.get(i) {
@@ -94,6 +124,14 @@ fn run() -> i32 {
             }
         }
         i += 1;
+    }
+    if socket_path.is_none() {
+        if let Ok(raw) = std::env::var("HZ_KERNEL_SOCKET") {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                socket_path = Some(PathBuf::from(trimmed));
+            }
+        }
     }
 
     let dir = state_dir.unwrap_or_else(default_state_dir);
@@ -138,7 +176,14 @@ fn run() -> i32 {
         },
         None => None,
     };
-    serve(&dir, anchor, control_secret)
+    let issuer_key = match receipt_issuer::load_or_create(&dir, control_secret.is_some()) {
+        Ok(key) => key,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return 2;
+        }
+    };
+    serve(&dir, anchor, control_secret, issuer_key, socket_path)
 }
 
 fn default_state_dir() -> PathBuf {
@@ -155,14 +200,65 @@ fn default_state_dir() -> PathBuf {
 
 fn print_help() {
     println!("hz-kernel {} — HorizonCode trust kernel", VERSION);
-    println!("usage: hz-kernel [--state-dir <path>] [--control-fd 3] [--selftest] [--version]");
+    println!("usage: hz-kernel [--state-dir <path>] [--socket <path>] [--control-fd 3] [--selftest] [--version]");
     println!("env:   HZ_ANCHOR_KEY=<hex>             keyed HMAC-SHA256 chain anchors");
     println!("       HZ_ACCEPT_LEGACY_ANCHORS=1      accept legacy anchors while keyed");
+    println!("       HZ_KERNEL_SOCKET=<path>         Unix socket serve (H-29/H-30/CB-6; exclusive supervisor lease)");
 }
 
 /// NDJSON loop: one response line per request, flushed immediately.
-fn serve(dir: &Path, anchor: eventlog::AnchorConfig, control_secret: Option<String>) -> i32 {
-    let kernel = Kernel::new_with_control(dir, anchor, control_secret);
+///
+/// When `socket` is set (H-29 / ruling 625), the Unix socket is the durable
+/// transport: stdin is drained in a background thread for compat, and the
+/// process keeps serving after stdin EOF (parent death closes the pipe).
+fn serve(
+    dir: &Path,
+    anchor: eventlog::AnchorConfig,
+    control_secret: Option<String>,
+    issuer_key: Option<Vec<u8>>,
+    socket: Option<PathBuf>,
+) -> i32 {
+    // CB-6 / ruling **703**: one live hz-kernel per host (cross-state-dir).
+    let _host_lease = match host_supervisor_lease::HostSupervisorLease::try_acquire() {
+        Ok(lease) => lease,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return 2;
+        }
+    };
+    // CB-6 / ruling 638: exclusive supervisor lease for both stdio and socket
+    // serve so exactly one live hz-kernel owns a given state dir.
+    let lease = match supervisor_lease::SupervisorLease::try_acquire(dir) {
+        Ok(lease) => lease,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return 2;
+        }
+    };
+    let kernel = Arc::new(Kernel::new_with_control(dir, anchor, control_secret, issuer_key));
+    if let Some(socket_path) = socket {
+        #[cfg(not(unix))]
+        {
+            let _ = (socket_path, kernel, lease);
+            eprintln!(
+                "error: --socket / HZ_KERNEL_SOCKET requires Unix (Linux/WSL); peer-proven SO_PEERCRED lease is unavailable on this OS"
+            );
+            return 2;
+        }
+        #[cfg(unix)]
+        {
+            let stdin_kernel = Arc::clone(&kernel);
+            std::thread::spawn(move || {
+                let _ = serve_stdin(&stdin_kernel);
+            });
+            return socket_serve::serve_forever(&socket_path, dir, kernel, lease);
+        }
+    }
+    let _lease = lease;
+    serve_stdin(&kernel)
+}
+
+fn serve_stdin(kernel: &Kernel) -> i32 {
     let stdin = std::io::stdin();
     let mut out = BufWriter::new(std::io::stdout().lock());
 

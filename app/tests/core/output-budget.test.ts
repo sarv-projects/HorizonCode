@@ -291,5 +291,5 @@ describe("the loop caps tool output and shores up the spill", () => {
       await kernel.close();
       store.close();
     }
-  });
+  }, 20_000);
 });

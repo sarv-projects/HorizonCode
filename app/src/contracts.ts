@@ -148,16 +148,40 @@ export interface GuardAction {
   detail?: Record<string, unknown>;
 }
 export type GuardDecisionValue = "allow" | "ask" | "deny";
+/** G1 / ruling 637 — Ask/Deny-only projection; frozen `decision:"allow"` maps to `g1:"ask"`. */
+export type GuardG1Decision = "ask" | "deny";
 export interface GuardDecision {
   decision: GuardDecisionValue;
   reason?: string;
   leaseId?: string;
+  /** Additive Ask/Deny-only vocabulary (docs/11 G1); omit on legacy clients. */
+  g1?: GuardG1Decision;
+}
+/** Reduced attribution stamp for approval-path lease/grant mints (not attestation). */
+export const HUMAN_APPROVAL_PRINCIPAL = "human" as const;
+/** fd-3 parent-control mint attribution — controlling Bun parent, not a human (ruling 719). */
+export const PARENT_CONTROL_PRINCIPAL = "parent" as const;
+
+/** H-31 / ruling 636 — optional workspace identity stamped on held leases. */
+export interface LeaseWorkspaceBinding {
+  root: string;
+  device: number;
+  inode: number;
 }
 export interface Lease {
   leaseId: string;
   kind: GuardKind;
   pattern: string; // exact match, or a trailing "*" wildcard prefix (guard.rs rules)
   expiry: string; // ISO-8601
+  /**
+   * Session or attribution owner at mint. `human:<sessionId>` marks a
+   * TUI/runtime approval path mint (reduced — not cryptographic human identity).
+   */
+  owner?: string;
+  /** Present when minted from the human approval path only (additive audit). */
+  principal?: typeof HUMAN_APPROVAL_PRINCIPAL | string;
+  /** Present when the kernel had a launch-time workspace binding at mint. */
+  workspaceBinding?: LeaseWorkspaceBinding;
 }
 
 export type PolicyScope = "workspace" | "outside" | "*";
@@ -458,6 +482,16 @@ export interface ReceiptInput {
    * Unhashed in historical v1; bound into a v2 receipt hash.
    */
   childEffectIds?: string[];
+  /**
+   * Additive (R172 / ruling **657**): parent receipt id for nested/subagent linkage.
+   * Bound into v2 hash when present; mutual-link verify vs parent's childEffectIds.
+   */
+  parentReceiptId?: string;
+  /**
+   * Additive (R172): HMAC-SHA256 stamp over `hash` using kernel state
+   * `.receipt-issuer.key`. Not in the receipt hash; verifiable by session verify.
+   */
+  issuerStamp?: string;
 }
 export interface Receipt extends ReceiptInput {
   id: string;
@@ -468,6 +502,25 @@ export interface Receipt extends ReceiptInput {
 }
 
 /* ------------------------------- Tools ------------------------------- */
+
+/** One presented choice (`ask_user` reduced form of docs/09 structured options). */
+export interface AskUserOption {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+}
+
+/** Structured user question (ask_user tool / runtime-injected handler). */
+export interface AskUserRequest {
+  question: string;
+  options?: AskUserOption[];
+  /** Optional background (≤ 4 KiB in the tool). */
+  context?: string;
+  /** When the user accepts without picking, or on binary-approve fallback. */
+  defaultOption?: string;
+}
+
+export type AskUserHandler = (req: AskUserRequest) => Promise<string>;
 
 export interface ApprovalRequest {
   title: string;
@@ -481,6 +534,12 @@ export interface ApprovalRequest {
   leaseId?: string;
   /** Dispatch tool name (e.g. `shell`, `write`); prompt-only linkage to the call card. */
   tool?: string;
+  /**
+   * Multi-resource projector (docs/30 §8 #6 residual; ruling 563): every
+   * concrete resource the admission batch covers. Prompt-only; when absent the
+   * card falls back to `detail` as the single resource.
+   */
+  resources?: string[];
 }
 export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
 
@@ -489,8 +548,15 @@ export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean>;
  * in its own child session and return the subagent's final report. The runtime
  * supplies it on the tool context; a tool without one cannot delegate.
  * `profile` (additive, docs/15 §3.6) names a narrowing preset for the child.
+ * `opts.workspace` (additive, ruling 728) runs the child against a sibling worktree root.
  */
-export type DelegateRunner = (task: string, maxSteps?: number, profile?: string) => Promise<ToolResult>;
+export type DelegateOptions = { workspace?: string };
+export type DelegateRunner = (
+  task: string,
+  maxSteps?: number,
+  profile?: string,
+  opts?: DelegateOptions,
+) => Promise<ToolResult>;
 
 /**
  * Opt-in post-edit LSP notice for `apply_patch` (POST-EDIT ONLY — the edit is
@@ -529,6 +595,8 @@ export interface ToolContext {
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
   /** Optional opt-in post-edit LSP notice hook (apply_patch). Absent = no notice. */
   postEditDiagnosticsNotice?: PostEditDiagnosticsNotice;
+  /** Optional structured user-input path (`ask_user`); absent = approve fallback. */
+  askUser?: AskUserHandler;
 }
 
 /** Minimal kernel surface for spawn sandbox routing (avoids a contracts → core import). */
@@ -611,9 +679,20 @@ export interface ToolCall {
   name: string;
   arguments: string; // raw JSON string as produced by the model
 }
+
+/** ADDITIVE multimodal part — string-only callers remain valid on `ChatMsg.content`. */
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } }
+  | { type: "image"; media_type?: string; base64?: string; path?: string };
+
+export type ChatMsgContent = string | ChatContentPart[];
+
+/** Multimodal content helpers live in `app/src/core/chat-content.ts` (`chatContentText`, `chatContentHasImage`). */
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: ChatMsgContent;
   toolCallId?: string;
   toolName?: string;
   toolCalls?: ToolCall[];
@@ -776,8 +855,14 @@ export interface ContextUsage {
   maxOutput: number;
   /** Messages the dispatch carried (the compacted view's length). */
   messages: number;
-  /** The dispatch window the history is fitted into (`HISTORY_LIMIT`). */
+  /** Token-aware message window used for this dispatch (may differ from default). */
   historyLimit: number;
+  /** Fixed message-count default before token-aware adjustment (usually 80). */
+  defaultHistoryLimit?: number;
+  /** Extra shrink after compaction so the provider view fits the token budget. */
+  tokenFitCompaction?: boolean;
+  /** Elided summary used LLM semantic compaction (`HZ_LLM_COMPACTION`). */
+  llmCompactionActive?: boolean;
 }
 
 /** Optional evidence on a finished `tool.card` (see the C1 note on the event). */
@@ -944,6 +1029,8 @@ export interface Runtime {
   readonly providerName: string;
   readonly kernelMode: KernelMode;
   send(text: string, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit?: RunExit }>;
+  /** Multipart user prompt on the product path (ruling **731**); absent on narrow mocks. */
+  sendMultimodal?(content: ChatMsgContent, cb: RuntimeCallbacks): Promise<{ text: string; aborted: boolean; exit?: RunExit }>;
   /**
    * Mid-turn steer (C-9 reduced): queue user text for the in-flight turn.
    * Returns `accepted: false` when no turn is running.
@@ -1018,14 +1105,39 @@ export interface RunExit {
     // Backlog C-5: the workspace-wide SpendLedger refused the next provider
     // dispatch because its configured ceiling would be exceeded.
     | "spend"
-    | "unverified_completion";
+    // Ruling 583: Guard refused durable spend.json before ledger construction.
+    | "spend_ledger_refused"
+    | "unverified_completion"
+    // Ruling 639: Engineering Brain pre-flight viability gate hard-stop.
+    | "engineering_viability"
+    // Ruling 640: adversarial critic P0 hard-stop after mutations.
+    | "engineering_critic";
 }
 
 /* --------------------------- Kernel protocol --------------------------- */
 
 /** Request/response shapes per method; kernel and TS fallback must match. */
 export interface KernelRequestMap {
-  ping: { params: Record<string, never>; result: { version: string } };
+  ping: {
+    params: Record<string, never>;
+    result: {
+      version: string;
+      /** H-31 workspace identity when product-bound (rulings 623 and 629). */
+      workspaceBinding?: { root: string; device: number; inode: number };
+      workspaceBindingError?: string;
+      /** H-30 detach supervisor epoch when `--socket` serve advanced `hzk.epoch` (ruling 634). */
+      supervisorEpoch?: number;
+      /** H-30 / CB-6 host-wide lock path + cross-process lock honesty (rulings **703** / **724**). */
+      hostSupervisorLease?: {
+        path: string;
+        unixFlock: boolean;
+        windowsFileLock?: boolean;
+        crossProcessLock?: boolean;
+      };
+      /** H-30 detach release-binary seal when `--socket` bind wrote `hzk.binary` (ruling **710**). */
+      supervisorBinarySha256?: string;
+    };
+  };
   "log.append": { params: { stream: string; event: EventSeed }; result: EventEnvelope };
   "log.read": {
     params: { stream: string; fromSeq?: number; limit?: number };
@@ -1046,11 +1158,26 @@ export interface KernelRequestMap {
   // User/tool callers must never supply or cache it, and it is not human
   // consent attestation. Standalone unbound legacy kernels may omit it.
   "guard.lease": {
-    params: { kind: GuardKind; pattern: string; ttlMs: number; sessionId?: string; approvalProof?: string };
+    params: {
+      kind: GuardKind;
+      pattern: string;
+      ttlMs: number;
+      sessionId?: string;
+      /** Approval-path only: owner becomes `human:<sessionId>` when set to `human`. */
+      principal?: typeof HUMAN_APPROVAL_PRINCIPAL;
+      approvalProof?: string;
+    };
     result: Lease;
   };
   "guard.grant": {
-    params: { kind: GuardKind; pattern: string; ttlMs: number; sessionId?: string; approvalProof?: string };
+    params: {
+      kind: GuardKind;
+      pattern: string;
+      ttlMs: number;
+      sessionId?: string;
+      principal?: typeof HUMAN_APPROVAL_PRINCIPAL;
+      approvalProof?: string;
+    };
     result: Lease;
   };
   /** Read-only: active session grant covering an exact action (display hydrate). */
@@ -1094,20 +1221,47 @@ export interface KernelRequestMap {
   /** Kernel-owned R170 precursor: read-only OwnerLog status after cross-process lock. */
   "effect.owner.status": {
     params: Record<string, never>;
-    result: { blocked: boolean; unresolved: number; unresolvedIds: string[]; recoverableIds: string[]; events: number };
+    result: {
+      blocked: boolean;
+      unresolved: number;
+      unresolvedIds: string[];
+      recoverableIds: string[];
+      /** Effects in executing / UNKNOWN — explicit recovery only (**655** / **714**). */
+      executedUnknownIds?: string[];
+      /** Operator playbook for recover modes; never silent auto-settle (**714**). */
+      recoveryPlaybook?: Array<Record<string, unknown>>;
+      events: number;
+    };
   };
   /** Recover a v2 owner prepare-only crash, with no execution marker.
    * Cannot release v1 prepares, executing/UNKNOWN effects, or settled ids.
    * The original effectId remains permanently reserved against replay. */
   "effect.owner.recover": {
-    params: { effectId: string };
+    params: {
+      effectId: string;
+      /** Default / omitted = prepare-only (**349**). Executed-UNKNOWN paths need attestation (**655** / **714**). */
+      mode?: "prepare_only" | "executed_unknown_abandon" | "executed_unknown_observe_settle";
+      /** `abandon_unobserved_execution` (**655**) or `independent_postimage_proves_success` (**714**). */
+      attestation?: "abandon_unobserved_execution" | "independent_postimage_proves_success";
+      /** Replay `effect.execute` params when observe-settling (**714**). */
+      sandboxRoot?: string;
+      dispatch?: KernelRequestMap["effect.execute"]["params"]["dispatch"];
+    };
     result: {
-      released: boolean;
+      released?: boolean;
+      settled?: boolean;
+      observedRecovery?: boolean;
       effectId: string;
       blocked: boolean;
       unresolved: number;
       unresolvedIds: string[];
       recoverableIds: string[];
+      /** Effects in executing / UNKNOWN (attested abandon only — ruling **655**). */
+      executedUnknownIds?: string[];
+      /** True when this recover cleared an executed-UNKNOWN fence (**655**). */
+      clearedExecutedUnknown?: boolean;
+      ownerReceiptId?: string;
+      terminal?: string;
       events: number;
     };
   };
@@ -1119,15 +1273,25 @@ export interface KernelRequestMap {
     result: {
       ok: boolean;
       checked: number;
+      /** Archived shell stdout/stderr streamEvidence blobs independently verified (ruling 542). */
+      streamChecked?: number;
+      streamFailures?: Array<{ effectId: string; reason: string }>;
+      /**
+       * Ruling **654**: count of superseded *present* file postimages
+       * independently re-observed from OwnerLog CAS (not today's disk).
+       */
+      historicalOverwriteReplayed?: number;
       legacyUnverifiable: number;
-      /** Shell/proc effects whose side-effects cannot be re-read as file postimages. */
+      /** Shell/proc effects with neither file postimages nor archived streamEvidence. */
       unsupportedEffects: number;
       unresolved: number;
       scope: "latest_settled_file_postimage_only";
       /** New kernel-owned file effects only: archived historical bytes are
        * verified without consulting current workspace state. Absent paths are
-       * signed evidence facts, NOT reconstructable bytes. Legacy/shell effects
-       * remain explicitly unverifiable. */
+       * signed evidence facts, NOT reconstructable bytes. Legacy rows without
+       * streamEvidence remain unverifiable; shell streams count in `checked`
+       * when archived (ruling 542). Superseded present versions are classified
+       * in `overwriteReplay` (ruling **654**). */
       history?: {
         ok: boolean;
         checked: number;
@@ -1136,7 +1300,70 @@ export interface KernelRequestMap {
         unsupportedEffects: number;
         unresolved: number;
         failures: Array<{ effectId: string; path?: string; reason: string }>;
+        overwriteReplay?: {
+          ok: boolean;
+          checked: number;
+          replayed: Array<{
+            effectId: string;
+            path: string;
+            digest: string;
+            archivedBytes: number;
+            source: "cas";
+            superseded: true;
+          }>;
+          failures: Array<{ effectId: string; path?: string; reason: string }>;
+          scope: "superseded_cas_present_postimages_only";
+        };
+        /** Ruling **709**: named legacy rows without digest/CAS/stream evidence. */
+        legacyClassify?: {
+          ok: boolean;
+          refused: number;
+          classification: "legacy_unverifiable";
+          scope: string;
+          backfillRefusal: { allowed: boolean; reason: string };
+          residual: string;
+          rows: Array<{
+            effectId: string;
+            path?: string | null;
+            classification: "legacy_unverifiable";
+            reason: string;
+            ok: boolean;
+            backfillRefused: boolean;
+            backfillRefusalReason: string;
+          }>;
+        };
+        /** Ruling **698**: superseded signed absence facts (no byte CAS). */
+        absenceReplay?: {
+          ok: boolean;
+          checked: number;
+          reconstructed: Array<{
+            effectId: string;
+            path: string;
+            classification: "signed_absence_fact";
+            source: "ownerlog";
+            superseded: true;
+          }>;
+          failures: Array<{ effectId: string; path?: string; reason: string }>;
+          scope: "superseded_signed_absence_facts_only";
+        };
         scope: "archived_kernel_owned_file_postimages_only";
+      };
+      /** Latest settled absent paths independently reconstructed (ruling **698**). */
+      absenceReconstruct?: {
+        ok: boolean;
+        reconstructed: number;
+        paths: Array<{
+          effectId: string;
+          path: string;
+          classification: "explicit_absent";
+          source: "independent_probe";
+        }>;
+        uncertain: Array<{
+          effectId: string;
+          path: string;
+          classification: string;
+        }>;
+        scope: "latest_settled_absent_paths_only";
       };
       mismatches: Array<{
         effectId: string;
@@ -1146,7 +1373,50 @@ export interface KernelRequestMap {
         expectedDigest?: string | null;
         observedDigest?: string | null;
         observationStable: boolean;
+        absenceClassification?: string;
       }>;
+      /** Named legacy unverifiable rows; CAS backfill refused (ruling **709**). */
+      legacyClassify?: {
+        ok: boolean;
+        refused: number;
+        classification: "legacy_unverifiable";
+        scope: string;
+        backfillRefusal: { allowed: boolean; reason: string };
+        residual: string;
+        rows: Array<{
+          effectId: string;
+          path?: string | null;
+          classification: "legacy_unverifiable";
+          reason: string;
+          ok: boolean;
+          backfillRefused: boolean;
+          backfillRefusalReason: string;
+        }>;
+      };
+      /** Bounded childEffectIds OwnerLog observe (P0-2 partial; not full R172). */
+      nestedObserve?: {
+        ok: boolean;
+        visited: number;
+        verified: number;
+        refused: number;
+        maxDepth: number;
+        nodeBudgetExceeded?: boolean;
+        scope: string;
+        residual: string;
+        nodes: Array<{
+          effectId: string;
+          depth?: number;
+          classification: string;
+          ok: boolean;
+          receiptId?: string;
+          tool?: string;
+          pathsChecked?: number;
+          absenceFacts?: number;
+          streamChecked?: number;
+          reason?: string;
+          failures?: Array<{ path: string; expectedState: string; observationStable: boolean }>;
+        }>;
+      };
     };
   };
   /** Verify owner EventLog plus receipt chain; refusal if either is unreadable. */
@@ -1170,8 +1440,9 @@ export interface KernelRequestMap {
     result: { verdict: "settled" | "unknown" };
   };
   /**
-   * Rulings 243, 267/275/277/278 and 348 — direct Rust execution for `pure`,
-   * `echo`, contained `fs.read` and sandboxRoot-scoped `fs.write/edit/delete/rename`.
+   * Rulings 243, 267/275/277/278, 348 and 539 — direct Rust execution for `pure`,
+   * `echo`, contained `fs.read` and sandboxRoot-scoped `fs.write/edit/delete/rename`
+   * plus reduced `fs.batch` (exact write-ops only under one OwnerLog lock).
    * Supported mutators enter a default-on, kernel-owned cross-process OwnerLog
    * transaction with independent observation and a kernel-issued receipt.
    * Raw `shell.exec` is limited to fixed output-only binaries until network/FS
@@ -1187,7 +1458,7 @@ export interface KernelRequestMap {
       leaseId?: string;
       /** Bound to the human-approved tool session, never trusted as a caller permit. */
       sessionId?: string;
-      /** Required for `fs.read` / `fs.write` / `fs.edit` / `fs.delete` / `fs.rename` / `shell.exec`; paths/cwd must resolve inside this root only. */
+      /** Required for `fs.read` / `fs.write` / `fs.edit` / `fs.delete` / `fs.rename` / `fs.batch` / `shell.exec`; paths/cwd must resolve inside this root only. */
       sandboxRoot?: string;
     };
     result: {
@@ -1202,6 +1473,16 @@ export interface KernelRequestMap {
       postimageConfirmDigest?: string;
       readPath?: string;
       writePath?: string;
+      /** Reduced `fs.batch` absolute paths after each exact write (**539**). */
+      writePaths?: string[];
+      /** Reduced `fs.batch` per-path content digests aligned with `writePaths` (**539**). */
+      contentDigests?: Array<string | null>;
+      /** Reduced `fs.batch` op count (**539**). */
+      batchOpCount?: number;
+      /** Reduced `fs.batch` rename op count (**630**). */
+      renameCount?: number;
+      /** Reduced `fs.batch` delete op count (**631**). */
+      deleteCount?: number;
       editPath?: string;
       deletePath?: string;
       renameToPath?: string;

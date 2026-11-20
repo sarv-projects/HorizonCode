@@ -11,12 +11,10 @@
  *    to `<workspace>/.hz/state/spills/<sha256>.txt` (canonical) or
  *    `<workspace>/.hzcode/spills/<sha256>.txt` (legacy, in place) — the reduced
  *    v0.1 stand-in for the `hz://artifact/...` pointer (no artifact store exists
- *    yet); the caller resolves the directory (paths.ts). When `spillDir` is
- *    given, `planToolOutputCap` materialises the spill through
- *    `writeSpillFile`: the directory is created 0700 and the file written
- *    0600 (Unix, umask-proof; docs/03 D12), and an already-loose file is
- *    tightened. The shipped loop writes only when the file is absent, so the
- *    bytes land once, owner-only.
+ *    yet); the caller resolves the directory (paths.ts). When `spillDir` /
+ *    `blobCasWorkspace` is set, `planToolOutputCap` offers a spill payload;
+ *    the loop admits `fs.write` then persists (ruling 584). `writeSpillFile`
+ *    remains the owner-only helper (0700/0600; docs/03 D12).
  *  - Truncation is lossless-resumable in shape: `nextOffset` names the byte
  *    offset of the kept prefix, so the following slice can start there.
  *
@@ -26,10 +24,13 @@
 
 import * as path from "node:path";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { displayBlobBodyPath, putBlobForWorkspace } from "./blobs";
+import { blobBodyPath, displayBlobBodyPath } from "./blobs";
+import { blobsDir } from "./paths";
 import { artifactUriForHash } from "./artifact-uri";
 import { sha256Hex } from "./canon";
 import type { ChatMsg } from "../contracts";
+import { textFromChatContent } from "./chat-content";
+import { admitPredsOutWrite } from "./preds-writer";
 
 export const BYTES_PER_TOKEN_ESTIMATE = 4;
 /** Per-message framing charge (NF-074(a): 16 tokens, a constant, not a guess). */
@@ -63,7 +64,7 @@ export function estimatePromptTokens(system: string, messages: ChatMsg[], toolsJ
   let total = estimateTokens(system);
   if (toolsJson !== "") total += estimateTokens(toolsJson);
   for (const message of Array.isArray(messages) ? messages : []) {
-    total += FRAMING_CHARGE_TOKENS + estimateTokens(message.content ?? "");
+    total += FRAMING_CHARGE_TOKENS + estimateTokens(textFromChatContent(message.content));
     for (const call of message.toolCalls ?? []) total += estimateTokens(call.arguments ?? "");
   }
   return total;
@@ -161,12 +162,29 @@ export function writeSpillFile(spill: { file: string; contents: string }): void 
 }
 
 /**
+ * Under-admission (ruling 584): Guard `fs.write` on a spill/blob target before
+ * materialising. Returns an error string on deny/ask/guard failure.
+ */
+export async function admitSpillWrite(
+  spillFile: string,
+  workspace: string = process.cwd(),
+): Promise<string | undefined> {
+  const refused = await admitPredsOutWrite(spillFile, workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "spill refused:")
+    .replace(/^preds write denied/, "spill denied")
+    .replace(/^preds fs\.write requires approval/, "spill fs.write requires approval");
+}
+
+/**
  * NF-074(b): cap a tool result for the model. Under the cap, the text is
  * returned untouched (byte-identical). Over it, a line-aware prefix is kept
  * (≤ maxBytes AND ≤ maxTokens on the byte/4 estimate) and the full text is
  * offered for spill; the marker carries what R-tools-43 requires in spirit.
- * When `spillDir` is set, the offered spill is materialised too, owner-only
- * (see `writeSpillFile`).
+ * When `spillDir` / `blobCasWorkspace` is set, the plan *offers* a spill
+ * payload; persist after Guard admit via `writeSpillFile` / `putBlob`
+ * (ruling 584).
  */
 /** Model/tool arg for lossless-resumable output continuation (docs/30 §8 #15). */
 export const TOOL_OUTPUT_OFFSET_ARG = "outputOffset";
@@ -247,20 +265,19 @@ export function planToolOutputCap(output: string, opts: ToolOutputCapOptions = {
   let artifactUri: string | undefined;
   let spill: { file: string; contents: string } | undefined;
   if (opts.blobCasWorkspace !== undefined && opts.blobCasWorkspace !== "") {
-    const { hash } = putBlobForWorkspace(opts.blobCasWorkspace, text);
+    const hash = sha256Hex(text);
     spillPath = displayBlobBodyPath(opts.blobCasWorkspace, hash);
-    // The blob key is the same content sha256, so the URI resolves there too.
     artifactUri = artifactUriForHash(hash);
+    // Defer CAS put until after Guard admit (ruling 584). Path mirrors putBlob.
+    const absolute = blobBodyPath(blobsDir(opts.blobCasWorkspace), hash);
+    if (absolute !== undefined) spill = { file: absolute, contents: text };
   } else if (opts.spillDir !== undefined && opts.spillDir !== "") {
     const hash = sha256Hex(text);
     artifactUri = artifactUriForHash(hash);
     const display = opts.displaySpillDir !== undefined && opts.displaySpillDir !== "" ? opts.displaySpillDir : opts.spillDir;
     spillPath = path.join(display, `${hash}.txt`);
     spill = { file: path.join(opts.spillDir, `${hash}.txt`), contents: text };
-    // Persist it now, owner-only. The shipped loop writes a spill only when the
-    // file is absent, so the full output lands exactly once, under a 0700
-    // directory, at 0600.
-    writeSpillFile(spill);
+    // Persist is owned by the loop after Guard admit (ruling 584).
   }
 
   const parts = [

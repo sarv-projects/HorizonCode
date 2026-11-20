@@ -21,13 +21,16 @@ use crate::time::now_iso;
 pub struct Receipts {
     path: PathBuf,
     anchor: AnchorConfig,
+    /// Kernel-held issuer key; stamps are not forgeable from ambient Bun alone.
+    issuer_key: Option<Vec<u8>>,
 }
 
 impl Receipts {
-    pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig) -> Self {
+    pub fn new_with_anchor(state_dir: &Path, anchor: AnchorConfig, issuer_key: Option<Vec<u8>>) -> Self {
         Receipts {
             path: state_dir.join("receipts.jsonl"),
             anchor,
+            issuer_key,
         }
     }
 
@@ -124,12 +127,21 @@ impl Receipts {
             if let Some(children) = input.get("childEffectIds") {
                 receipt.insert("childEffectIds".to_string(), children.clone());
             }
+            if let Some(parent) = input.get("parentReceiptId") {
+                if !parent.is_null() {
+                    receipt.insert("parentReceiptId".to_string(), parent.clone());
+                }
+            }
         }
         let receipt = Value::Object(receipt);
         let hash = receipt_schema::hash(&receipt)?;
         let mut receipt = receipt;
         if let Value::Object(map) = &mut receipt {
             map.insert("hash".to_string(), json!(hash));
+            if let Some(key) = &self.issuer_key {
+                let stamp = crate::receipt_issuer::stamp_hex(key, &hash);
+                map.insert("issuerStamp".to_string(), json!(stamp));
+            }
             // Sidecars are historical v1 additions; v2 already hashes them.
             if let Some(d) = &postimage_digest {
                 map.insert("postimageDigest".to_string(), json!(d));
@@ -151,13 +163,26 @@ impl Receipts {
 
     pub fn verify(&self) -> Result<VerifyReport, String> {
         let lines = crate::eventlog::read_lines(&self.path)?;
-        verify_chain(
-            lines,
+        let report = verify_chain(
+            lines.clone(),
             ChainKind::Receipt,
             read_head(&self.path),
             &self.anchor,
             &self.path.display().to_string(),
-        )
+        )?;
+        if !report.ok {
+            return Ok(report);
+        }
+        if let Some(key) = &self.issuer_key {
+            if let Err(seq) = verify_issuer_stamps(&lines, key) {
+                return Ok(VerifyReport {
+                    ok: false,
+                    count: report.count,
+                    broken_at: Some(seq),
+                });
+            }
+        }
+        Ok(report)
     }
 
     /// Obtain an internally consistent receipt snapshot for the kernel OwnerLog.
@@ -191,6 +216,67 @@ impl Receipts {
                 })
             })
             .collect()
+    }
+}
+
+/// When an issuer key is configured, nested-link receipts MUST carry a valid stamp.
+fn verify_issuer_stamps(lines: &[String], key: &[u8]) -> Result<(), u64> {
+    let mut seq: u64 = 0;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        seq += 1;
+        let record: Value = serde_json::from_str(line).map_err(|_| seq)?;
+        let hash = record
+            .get("hash")
+            .and_then(Value::as_str)
+            .ok_or(seq)?;
+        let parent = record.get("parentReceiptId").and_then(Value::as_str);
+        let child_link = parent.is_some_and(|p| !p.is_empty());
+        if !child_link {
+            continue;
+        }
+        let stamp = record
+            .get("issuerStamp")
+            .and_then(Value::as_str)
+            .ok_or(seq)?;
+        if !crate::receipt_issuer::verify_hex(key, hash, stamp) {
+            return Err(seq);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::env::temp_dir;
+
+    #[test]
+    fn nested_parent_receipt_gets_kernel_issuer_stamp() {
+        let dir = temp_dir().join(format!("hz-rcp-issuer-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let key = vec![0x11u8; 32];
+        let receipts = Receipts::new_with_anchor(&dir, AnchorConfig::default(), Some(key.clone()));
+        let issued = receipts
+            .issue(&json!({
+                "action": "tool.execute",
+                "tool": "agent",
+                "argsDigest": "a",
+                "resultDigest": "b",
+                "schemaVersion": 2,
+                "effectId": "child-fx",
+                "parentReceiptId": "rcp_parent",
+            }))
+            .unwrap();
+        let hash = issued["hash"].as_str().unwrap();
+        let stamp = issued["issuerStamp"].as_str().expect("issuerStamp");
+        assert!(crate::receipt_issuer::verify_hex(&key, hash, stamp));
+        assert!(receipts.verify().unwrap().ok);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

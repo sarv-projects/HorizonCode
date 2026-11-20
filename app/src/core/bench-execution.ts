@@ -163,6 +163,10 @@ export async function executeBenchmarkArms(opts: ExecuteBenchmarkArmsOptions): P
     throw new Error("benchmark execution: --arm must be non-empty");
   }
 
+  // Ruling 610: admit before mergeArmRows creates/appends the job JSONL.
+  const { admitBatchJobWrite } = await import("./batch-runner");
+  const refused = await admitBatchJobWrite(opts.file, path.dirname(path.resolve(opts.file)));
+  if (refused !== undefined) throw new Error(refused);
   const allRows = mergeArmRows(opts.file, opts.arms);
   const selected = opts.arm !== undefined ? selectBatchRows(allRows, { arm: opts.arm }) : allRows;
 

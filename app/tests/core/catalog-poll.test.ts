@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { decodeCatalog, getCatalogCacheRevision, loadCatalog, MINIMUM_PROVIDERS } from "../../src/core/catalog/catalog";
 import {
+  catalogCachePath,
+  decodeCatalog,
+  getCatalogCacheRevision,
+  loadCatalog,
+  MINIMUM_PROVIDERS,
+} from "../../src/core/catalog/catalog";
+import {
+  makeModelsCatalogPollCacheWriteGuard,
   makeModelsCatalogPollNetGuard,
   modelsCatalogFetchUrl,
   parseModelsPollIntervalMs,
@@ -33,6 +40,44 @@ describe("models catalog poll", () => {
     await expect(askGuard(url)).rejects.toThrow(/cannot prompt/);
     const allowGuard = makeModelsCatalogPollNetGuard(async () => ({ decision: "allow" }));
     await allowGuard(url);
+  });
+
+  test("makeModelsCatalogPollCacheWriteGuard fail-closed on deny and ask (ruling 576)", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-poll-cw-"));
+    const target = catalogCachePath(home);
+    const denyGuard = makeModelsCatalogPollCacheWriteGuard(async () => ({ decision: "deny", reason: "test-deny-cache" }), home);
+    await expect(denyGuard(target)).rejects.toThrow(/denied|test-deny-cache/);
+    const askGuard = makeModelsCatalogPollCacheWriteGuard(async () => ({ decision: "ask" }), home);
+    await expect(askGuard(target)).rejects.toThrow(/cannot prompt/);
+    const allowGuard = makeModelsCatalogPollCacheWriteGuard(async () => ({ decision: "allow" }), home);
+    await allowGuard(target);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("runModelsCatalogPollOnce refuses cache write when assertCacheWrite denies (ruling 576)", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-poll-deny-write-"));
+    const notices: string[] = [];
+    const providers: Record<string, unknown> = {};
+    for (let i = 0; i < MINIMUM_PROVIDERS; i += 1) {
+      const id = `deny-p${i}`;
+      const mid = `deny-m${i}`;
+      providers[id] = { id, defaultModel: mid, models: { [mid]: { id: mid, provider: id, limit: { context: 128000 } } } };
+    }
+    await runModelsCatalogPollOnce({
+      home,
+      onNotice: (m) => notices.push(m),
+      assertCacheWrite: async () => {
+        throw new Error("fs.write denied — test-deny-cache");
+      },
+      fetchLive: async () => ({
+        catalog: decodeCatalog({ providers }),
+        notModified: false,
+        etag: '"deny-write"',
+      }),
+    });
+    expect(notices.some((n) => n.includes("poll failed") && n.includes("denied"))).toBe(true);
+    expect(existsSync(catalogCachePath(home))).toBe(false);
+    rmSync(home, { recursive: true, force: true });
   });
 
   test("runModelsCatalogPollOnce refuses fetch when assertNetFetch denies", async () => {

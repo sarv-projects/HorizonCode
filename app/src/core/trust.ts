@@ -197,10 +197,27 @@ export function loadTrustStore(home: string): TrustStoreV1 {
   }
 }
 
-export function saveTrustStore(home: string, store: TrustStoreV1): void {
+/**
+ * Under-admission (ruling 593): Guard `fs.write` on trust.json before persist.
+ * `home` is the admit root so the config path is workspace-scoped.
+ */
+export async function admitTrustStoreWrite(home: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(trustStorePath(home), home);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "trust-store refused:")
+    .replace(/^preds write denied/, "trust-store denied")
+    .replace(/^preds fs\.write requires approval/, "trust-store fs.write requires approval");
+}
+
+export async function saveTrustStore(home: string, store: TrustStoreV1): Promise<string | undefined> {
+  const refused = await admitTrustStoreWrite(home);
+  if (refused !== undefined) return refused;
   const dir = userConfigDir(home);
   mkdirSync(dir, { recursive: true });
   writeFileSync(trustStorePath(home), JSON.stringify(store, null, 2) + "\n", { mode: 0o600 });
+  return undefined;
 }
 
 function findRecord(store: TrustStoreV1, workspace: string): WorkspaceTrustRecord | undefined {
@@ -404,8 +421,8 @@ export function trustSurfacesOutOfDate(
   return changed;
 }
 
-export function bindWorkspaceTrustRecord(home: string, workspace: string, currents: WorkspaceTrustDigests): void {
-  if (home === "") return;
+export async function bindWorkspaceTrustRecord(home: string, workspace: string, currents: WorkspaceTrustDigests): Promise<string | undefined> {
+  if (home === "") return undefined;
   const store = loadTrustStore(home);
   const ws = path.resolve(workspace);
   const prev = findRecord(store, workspace);
@@ -423,14 +440,14 @@ export function bindWorkspaceTrustRecord(home: string, workspace: string, curren
   const idx = store.records.findIndex((r) => path.resolve(r.workspace) === ws);
   if (idx >= 0) store.records[idx] = next;
   else store.records.push(next);
-  saveTrustStore(home, store);
+  return saveTrustStore(home, store);
 }
 
 /** Persist or update the hooks digest binding (merges other workspace digests). */
-export function bindWorkspaceHooksDigest(home: string, workspace: string, hooksDigest: string): void {
+export async function bindWorkspaceHooksDigest(home: string, workspace: string, hooksDigest: string): Promise<string | undefined> {
   const currents = collectWorkspaceTrustDigests(workspace);
   currents.hooks = hooksDigest;
-  bindWorkspaceTrustRecord(home, workspace, currents);
+  return bindWorkspaceTrustRecord(home, workspace, currents);
 }
 
 /** True when `workspace` is listed in `trusted` (each entry resolved absolutely). */
@@ -607,7 +624,11 @@ export async function ensureWorkspaceHookTrust(
       onNotice?.("workspace trust not bound (not approved)");
       return false;
     }
-    bindWorkspaceTrustRecord(home, workspace, currents);
+    const bindRefused = await bindWorkspaceTrustRecord(home, workspace, currents);
+    if (bindRefused !== undefined) {
+      onNotice?.(bindRefused);
+      return false;
+    }
     await onReceipt?.(receiptPayload(ws, "bind", currents));
     return true;
   }
@@ -627,7 +648,11 @@ export async function ensureWorkspaceHookTrust(
     onNotice?.(`workspace trust unchanged (not approved): ${stale.join(", ")}`);
     return false;
   }
-  bindWorkspaceTrustRecord(home, workspace, currents);
+  const rebindRefused = await bindWorkspaceTrustRecord(home, workspace, currents);
+  if (rebindRefused !== undefined) {
+    onNotice?.(rebindRefused);
+    return false;
+  }
   await onReceipt?.(receiptPayload(ws, "rebind", currents));
   onNotice?.(`workspace re-trusted for ${ws}`);
   return true;

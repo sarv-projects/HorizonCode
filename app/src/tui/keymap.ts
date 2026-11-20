@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { metricContract } from "../core/metrics";
 import { userConfigDir } from "../core/paths";
 
 export type KeyContext = "idle" | "busy" | "approval" | "any";
@@ -167,6 +168,40 @@ export function resolveAction(
 
 /** Chords that workspace/user files must never shadow (docs/33 §5.19 R47). */
 export const PROTECTED_CHORDS: readonly string[] = ["ctrl+c", "ctrl+d", "y", "n", "a"];
+
+/** H-7: contracted counts for `hzcode keybind check` (ruling 616). */
+export function keybindCheckPublication(input: {
+  overrideCount: number;
+  actionCount: number;
+  errorCount: number;
+}): string[] {
+  const anchor = "none — this keybind check invocation";
+  const population = "keybind override object validated against the default action registry";
+  const excludes = "chord text and action ids are not published as metrics";
+  return [
+    metricContract({
+      metric: "keybind check overrides",
+      anchor,
+      population,
+      excludes,
+      value: input.overrideCount,
+    }),
+    metricContract({
+      metric: "keybind check actions",
+      anchor,
+      population,
+      excludes,
+      value: input.actionCount,
+    }),
+    metricContract({
+      metric: "keybind check errors",
+      anchor,
+      population,
+      excludes,
+      value: input.errorCount,
+    }),
+  ];
+}
 
 /**
  * Validate optional overrides: unknown action ids fail; shadowing a protected

@@ -582,6 +582,17 @@ function matchesTool(hook: LoadedHook, tool: string): boolean {
   return hook.tools.includes("*") || hook.tools.includes(tool);
 }
 
+/** How many configured hooks would spawn at a point (tool filter for pre/post only). */
+export function countHookSpawns(config: HooksConfig, point: HookPoint, tool?: string): number {
+  if (config.state !== "ready") return 0;
+  const hooks = config.points[point];
+  if (point === "preTool" || point === "postTool") {
+    if (tool === undefined) return hooks.length;
+    return hooks.filter((h) => matchesTool(h, tool)).length;
+  }
+  return hooks.length;
+}
+
 /** The listener surface shared by every hook context (tool and lifecycle). */
 interface HookListeners {
   onNotice?: (message: string) => void;

@@ -7,6 +7,7 @@
  */
 
 import type { ChatMsg, Provider, ProviderEvent, ProviderRequest, ToolSpec, Usage } from "../../contracts";
+import { wireOpenAiContent, wireOpenAiToolResultContent } from "../chat-content";
 import { parseJsonObject } from "../json-repair";
 import type { MessageFormatter } from "./message-formatter";
 import { mapOpenAiUsage } from "./openai-usage";
@@ -14,7 +15,7 @@ import { applyQuirks } from "./quirks";
 import { systemPromptUpdateInHistory, wireSystemPromptInHistory } from "../system-prompt-wire";
 import { maybeDumpProviderRequest } from "./request-dump";
 import { textFromOpenAiDeltaContent } from "./openai-delta-content";
-import { toolResultContent } from "./tool-result-content";
+import { NO_TOOL_OUTPUT, toolResultContent, toolResultIsMultipart } from "./tool-result-content";
 import { classifyProviderFailure } from "./failure-codes";
 import { DEFAULT_RETRY_ATTEMPTS, fetchWithRetry, retryNotice, type RetryPolicy } from "./retry";
 import { errorText, isAbortError, readSse, truncate } from "./sse";
@@ -83,7 +84,8 @@ export function toOpenAiMessages(messages: ChatMsg[]): Array<Record<string, unkn
   for (const msg of messages) {
     if (!msg) continue;
     if (msg.role === "system" || msg.role === "user") {
-      out.push({ role: msg.role, content: msg.content ?? "" });
+      const content = wireOpenAiContent(msg.content);
+      out.push({ role: msg.role, content });
       continue;
     }
     if (msg.role === "assistant") {
@@ -103,10 +105,21 @@ export function toOpenAiMessages(messages: ChatMsg[]): Array<Record<string, unkn
       continue;
     }
     if (!msg.toolCallId) continue; // a tool message without its id cannot be replayed
+    const toolWire = toolResultIsMultipart(msg.content)
+      ? wireOpenAiToolResultContent(msg.content)
+      : toolResultContent(msg.content);
+    const normalizedToolContent =
+      typeof toolWire === "string"
+        ? toolWire !== ""
+          ? toolWire
+          : NO_TOOL_OUTPUT
+        : toolWire.length > 0
+          ? toolWire
+          : NO_TOOL_OUTPUT;
     const toolEntry: Record<string, unknown> = {
       role: "tool",
       tool_call_id: msg.toolCallId,
-      content: toolResultContent(msg.content),
+      content: normalizedToolContent,
     };
     if (msg.toolName) toolEntry.name = msg.toolName;
     out.push(toolEntry);
@@ -191,7 +204,7 @@ async function* streamOpenAiCompatibleInner(
 
   const quirksApplied = applyQuirks({ provider: name, model: wire.model, baseUrl }, body);
   if (quirksApplied.length > 0) yield { type: "quirks", applied: quirksApplied };
-  maybeDumpProviderRequest(name, body);
+  await maybeDumpProviderRequest(name, body);
 
   const headers: Record<string, string> = {
     "content-type": "application/json",

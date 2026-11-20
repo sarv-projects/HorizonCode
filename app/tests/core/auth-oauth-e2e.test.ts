@@ -83,7 +83,7 @@ describe("oauth hermetic e2e (fake IdP)", () => {
     });
     expect(tokenRes.ok).toBe(true);
     const tok = (await tokenRes.json()) as { access_token: string; refresh_token?: string };
-    writeOAuthToken(
+    await writeOAuthToken(
       {
         provider: "pkcehost",
         accessToken: tok.access_token,

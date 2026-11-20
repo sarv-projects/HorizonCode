@@ -3,9 +3,18 @@
  * Explicit `ultrathink` / env / config win; when effort is unset, a cheap
  * difficulty heuristic picks a rung capped one tier below max (ruling **464**).
  * `HZ_THINKING_AUTO=0` disables the default-on auto path.
+ * Opt-in `HZ_THINKING_CALIBRATED=1` swaps the auto scorer for the local
+ * calibrated estimate (ruling **541** / **493**) — still capped.
+ * Opt-in `HZ_THINKING_LIVE_JUDGE=1` (ruling **694**) tries a weak-model tier
+ * call first with fail-closed fallback to the local paths above.
  */
 
-import { autoThinkingEffortFromText } from "./decision-helper";
+import {
+  autoThinkingEffortCalibrated,
+  autoThinkingEffortFromText,
+  calibratedDifficultyOptIn,
+  type CalibrationFeatures,
+} from "./decision-helper";
 
 /** Ordered rungs; last is max (ultrathink-only); auto ceiling is one below. */
 export const THINKING_RUNGS = ["minimal", "low", "medium", "high", "xhigh"] as const;
@@ -60,16 +69,25 @@ export interface ResolveThinkingEffortInput {
    * classifier capped at {@link autoThinkingCeiling}. Pass false for `HZ_THINKING_AUTO=0`.
    */
   autoDifficulty?: boolean;
+  /**
+   * When true, auto path uses the local calibrated estimate (ruling **541**).
+   * When omitted, reads `HZ_THINKING_CALIBRATED` via {@link calibratedEnv} / process.env.
+   */
+  calibratedDifficulty?: boolean;
+  /** Optional env map for `HZ_THINKING_CALIBRATED` when `calibratedDifficulty` is omitted. */
+  calibratedEnv?: Readonly<Record<string, string | undefined>>;
+  /** Extra calibrated features (tool count, prior outcomes); `userText` is filled from input. */
+  calibrationFeatures?: Omit<CalibrationFeatures, "userText"> & { userText?: string };
 }
 
 export interface ResolvedThinkingEffort {
   effort?: ThinkingRung;
-  source?: "ultrathink" | "env" | "config" | "auto";
+  source?: "ultrathink" | "env" | "config" | "auto" | "auto-calibrated" | "auto-live-judge";
 }
 
 /**
  * Resolve effort for one turn. Priority: ultrathink keyword > HZ_THINKING_EFFORT >
- * configured default > auto heuristic when effort unset (unless autoDifficulty === false).
+ * configured default > auto heuristic/calibrated when effort unset (unless autoDifficulty === false).
  */
 export function resolveThinkingEffort(input: ResolveThinkingEffortInput): ResolvedThinkingEffort {
   if (ultrathinkInText(input.userText)) return { effort: "xhigh", source: "ultrathink" };
@@ -79,6 +97,17 @@ export function resolveThinkingEffort(input: ResolveThinkingEffortInput): Resolv
   if (fromCfg !== undefined) return { effort: fromCfg, source: "config" };
   // Default-on when effort unset (ruling 464); explicit false opts out.
   if (input.autoDifficulty !== false) {
+    const useCalibrated =
+      input.calibratedDifficulty ??
+      calibratedDifficultyOptIn(input.calibratedEnv ?? process.env);
+    if (useCalibrated) {
+      const features: CalibrationFeatures = {
+        ...input.calibrationFeatures,
+        userText: input.calibrationFeatures?.userText ?? input.userText,
+      };
+      const choice = autoThinkingEffortCalibrated(features);
+      return { effort: capAtAutoThinkingCeiling(choice.pick), source: "auto-calibrated" };
+    }
     const choice = autoThinkingEffortFromText(input.userText);
     return { effort: capAtAutoThinkingCeiling(choice.pick), source: "auto" };
   }

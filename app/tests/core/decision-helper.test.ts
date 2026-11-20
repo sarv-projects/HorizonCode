@@ -5,12 +5,14 @@ import {
   autoThinkingEffortCalibrated,
   autoThinkingEffortFromText,
   calibratedDifficultyOptIn,
+  calibrationFeaturesFromMessages,
   chooseThinkingEffort,
   resolveDifficultyScore,
   scoreTaskDifficulty,
   scoreTaskDifficultyCalibrated,
 } from "../../src/core/decision-helper";
 import { resolveThinkingEffort } from "../../src/core/thinking-effort";
+import type { ChatMsg } from "../../src/contracts";
 
 describe("decision helper + C-11 auto", () => {
   test("hard prompt scores higher", () => {
@@ -117,5 +119,50 @@ describe("C-11 local calibration (ruling 493, opt-in, no provider call)", () => 
     const pick = autoThinkingEffortCalibrated({ userText: "huge", toolCount: 50, priorStepOutcomes: ["failure"] });
     expect(pick.pick).toBeDefined();
     expect(pick.pick).not.toBe("xhigh");
+  });
+
+  test("calibrationFeaturesFromMessages maps tool results (ruling 551)", () => {
+    const messages: ChatMsg[] = [
+      { role: "user", content: "do it" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "c1", name: "shell", arguments: "{}" },
+          { id: "c2", name: "read", arguments: "{}" },
+        ],
+      },
+      { role: "tool", toolCallId: "c1", content: "Exit code 0\nOutput:\nok" },
+      { role: "tool", toolCallId: "c2", content: "HZ_PRECONDITION_FAILED: denied" },
+    ];
+    const features = calibrationFeaturesFromMessages(messages, { availableToolCount: 12 });
+    expect(features.toolCount).toBe(12);
+    expect(features.priorStepOutcomes).toEqual(["success", "failure"]);
+    const empty = calibrationFeaturesFromMessages([]);
+    expect(empty.toolCount).toBe(0);
+    expect(empty.priorStepOutcomes).toEqual([]);
+  });
+
+  test("resolveThinkingEffort uses session calibration features when opt-in", () => {
+    const withFailures = resolveThinkingEffort({
+      userText: "do the task",
+      calibratedDifficulty: true,
+      calibrationFeatures: {
+        toolCount: 8,
+        priorStepOutcomes: ["failure", "failure"],
+      },
+    });
+    const baseline = resolveThinkingEffort({
+      userText: "do the task",
+      calibratedDifficulty: true,
+      calibrationFeatures: { toolCount: 0, priorStepOutcomes: [] },
+    });
+    expect(withFailures.source).toBe("auto-calibrated");
+    expect(baseline.source).toBe("auto-calibrated");
+    // Failures raise difficulty; either same pick or higher tier — never lower than baseline.
+    const order = ["low", "medium", "high", "xhigh"] as const;
+    expect(order.indexOf(withFailures.effort as (typeof order)[number])).toBeGreaterThanOrEqual(
+      order.indexOf(baseline.effort as (typeof order)[number]),
+    );
   });
 });

@@ -49,11 +49,28 @@ export function hasSeenOnboarding(workspace: string): boolean {
 }
 
 /**
+ * Under-admission (ruling 587): Guard `fs.write` on the onboarding seen marker
+ * before persist. Returns an error string on deny/ask/guard failure.
+ */
+export async function admitOnboardingSeenWrite(workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("./preds-writer");
+  const refused = await admitPredsOutWrite(onboardingSeenFile(workspace), workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "onboarding-seen refused:")
+    .replace(/^preds write denied/, "onboarding-seen denied")
+    .replace(/^preds fs\.write requires approval/, "onboarding-seen fs.write requires approval");
+}
+
+/**
  * Persist the seen bit owner-only: 0700 dir, 0600 file (umask-proof via a
  * post-write chmod). Best-effort by contract — a state-dir that cannot be
- * written degrades to "show again next run", never a thrown error.
+ * written degrades to "show again next run", never a thrown error. Under-
+ * admission (ruling 587): Guard deny/ask skips the write.
  */
-export function markOnboardingSeen(workspace: string): void {
+export async function markOnboardingSeen(workspace: string): Promise<string | undefined> {
+  const refused = await admitOnboardingSeenWrite(workspace);
+  if (refused !== undefined) return refused;
   const file = onboardingSeenFile(workspace);
   const dir = path.dirname(file);
   try {
@@ -69,4 +86,5 @@ export function markOnboardingSeen(workspace: string): void {
   } catch {
     /* best effort */
   }
+  return undefined;
 }

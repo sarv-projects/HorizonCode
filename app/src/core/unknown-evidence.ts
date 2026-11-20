@@ -8,8 +8,22 @@ import type { Receipt } from "../contracts";
 import type { UnknownEffectRow } from "./effect-unknown-list";
 import type { EffectRecord } from "./effect-host";
 import { findReceiptForUnknownTarget } from "./unknown-receipt-lookup";
+import { metricContract } from "./metrics";
 import { stateRoot } from "./paths";
 import { maskSecrets } from "./compaction";
+
+/** H-7: contracted form of `/unknown export` effect count (ruling 574). */
+export function unknownExportPublication(input: { effectCount: number }): string[] {
+  return [
+    metricContract({
+      metric: "unknown export effects",
+      anchor: "none — this /unknown export invocation",
+      population: "unreconciled UNKNOWN effects included in the evidence bundle",
+      excludes: "none — count is the exported row length",
+      value: input.effectCount,
+    }),
+  ];
+}
 
 export interface UnknownEvidenceBundleV1 {
   version: 1;

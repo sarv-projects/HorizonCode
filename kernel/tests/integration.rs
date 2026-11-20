@@ -37,6 +37,24 @@ use sha2::{Digest, Sha256};
 const CONTRACTS_HASH_FIXTURE: &str =
     "e01afd531202f990a87972bae8d8e489e88e794c234fcbe0368101b729f015b0";
 
+static XDG_RUNTIME_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Per-spawn isolated host-lock namespace so parallel integration tests do not
+/// fight over `~/.local/share/horizon/hzk.host.lock` (CB-6 ruling **703**).
+fn isolated_xdg_runtime_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "hz-xdg-runtime-{}-{}",
+        std::process::id(),
+        XDG_RUNTIME_SEQ.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+fn apply_kernel_spawn_isolation(command: &mut Command) {
+    command.env("XDG_RUNTIME_DIR", isolated_xdg_runtime_dir());
+}
+
 /* ------------------------------- test temp dir ------------------------------- */
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -76,14 +94,20 @@ impl Drop for TempDir {
 /*
  * P0 R170 kernel-owner admission tests. These deliberately open two real
  * independent hz-kernel processes against one state directory.
+ * CB-6 / ruling 638 exclusive supervisor lease is skipped via
+ * `HZ_SUPERVISOR_LEASE=0` so the OwnerLog cross-process flock remains testable.
  */
+fn start_multi_owner(state_dir: &Path) -> Kernel {
+    Kernel::start_with_env(state_dir, &[("HZ_SUPERVISOR_LEASE", "0")])
+}
+
 #[test]
 fn owner_effects_serialise_and_block_unknown_across_processes() {
     let state = TempDir::new("owner-fence");
     let sandbox = TempDir::new("owner-workspace");
     fs::write(sandbox.path().join("file.txt"), b"original").unwrap();
-    let mut first = Kernel::start(state.path());
-    let mut second = Kernel::start(state.path());
+    let mut first = start_multi_owner(state.path());
+    let mut second = start_multi_owner(state.path());
 
     let settled = first.ok("effect.execute", json!({
         "effectId": "owner-one", "sandboxRoot": sandbox.path(),
@@ -207,6 +231,63 @@ fn bound_kernel_workspace_cannot_be_widened_by_raw_sandbox_root_argument() {
     }));
     assert_eq!(yes["ownerLogSettled"], true);
     assert_eq!(fs::read(workspace.path().join("inside.txt")).unwrap(), b"YES");
+}
+
+#[test]
+fn owner_policy_allow_write_records_minted_guard_lease_id() {
+    // H-4 / ruling 624: default workspace fs.write allow must cite a one-use
+    // lease on the OwnerLog settle path (not an empty ownerGuardLeaseIds).
+    let state = TempDir::new("owner-policy-allow-lease");
+    let ws = TempDir::new("owner-policy-allow-lease-ws");
+    let mut kernel = Kernel::start(state.path());
+    let settled = kernel.ok("effect.execute", json!({
+        "effectId": "policy-allow-lease",
+        "sandboxRoot": ws.path(),
+        "dispatch": {"kind": "fs.write", "spec": {"path": "ok.txt", "text": "YES"}}
+    }));
+    assert_eq!(settled["ownerLogSettled"], true);
+    let lease_id = settled["ownerGuardLeaseIds"][0]
+        .as_str()
+        .expect("policy allow must mint a lease citation");
+    assert!(!lease_id.is_empty(), "{settled}");
+    assert_eq!(settled["ownerGuardLeaseId"], lease_id);
+    assert_eq!(fs::read(ws.path().join("ok.txt")).unwrap(), b"YES");
+}
+
+#[test]
+fn bound_kernel_refuses_sandbox_root_after_directory_identity_swap() {
+    // H-31 / ruling 623: path-string equality is not enough — replacing the
+    // directory inode at the same path must drop inherited authority.
+    // Use rename-swap: rmdir+mkdir often reuses the same inode on Linux/tmpfs.
+    let state = TempDir::new("kernel-ws-bind-inode-state");
+    let parent = TempDir::new("kernel-ws-bind-inode-parent");
+    let workspace = parent.path().join("ws");
+    let decoy = parent.path().join("decoy");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&decoy).unwrap();
+    let mut kernel = Kernel::start_with_env(state.path(), &[(
+        "HZ_KERNEL_WORKSPACE_ROOT",
+        workspace.to_str().unwrap(),
+    )]);
+    let ping = kernel.ok("ping", json!({}));
+    assert!(ping.get("workspaceBinding").is_some(), "{ping}");
+    assert_eq!(
+        ping["workspaceBinding"]["root"].as_str().unwrap(),
+        std::fs::canonicalize(&workspace).unwrap().to_str().unwrap()
+    );
+
+    fs::rename(&workspace, parent.path().join("ws.old")).unwrap();
+    fs::rename(&decoy, &workspace).unwrap();
+    let denied = kernel.err("effect.execute", json!({
+        "effectId": "inode-swap",
+        "sandboxRoot": &workspace,
+        "dispatch": {"kind": "fs.write", "spec": {"path": "stolen.txt", "text": "NO"}}
+    }));
+    assert!(
+        denied.contains("device,inode") || denied.contains("identity"),
+        "{denied}"
+    );
+    assert!(!workspace.join("stolen.txt").exists());
 }
 
 #[test]
@@ -354,9 +435,155 @@ fn owner_shell_receipt_binds_observed_streams_and_does_not_poison_next_effect() 
     let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
     assert_eq!(events["events"][2]["payload"]["details"]["terminal"], "succeeded");
     let replay = kernel.ok("effect.owner.postimage.verify", json!({}));
-    assert_eq!(replay["ok"], false, "{replay}");
-    assert_eq!(replay["unsupportedEffects"], 1);
-    assert_eq!(replay["checked"], 1);
+    // Shell no longer counts as unsupportedEffects when stdout/stderr digests
+    // are archived as streamEvidence (P0-2 reduced). File side-effects of
+    // shell remain out of scope — only stream capture is claimed.
+    assert_eq!(replay["ok"], true, "{replay}");
+    assert_eq!(replay["unsupportedEffects"], 0, "{replay}");
+    assert_eq!(replay["checked"], 1, "{replay}");
+    assert!(
+        replay["streamChecked"].as_u64().unwrap_or(0) >= 1,
+        "expected archived shell stream evidence: {replay}"
+    );
+    let settled = &events["events"][2]["payload"]["details"];
+    assert!(settled.get("streamEvidence").is_some(), "{settled}");
+    assert!(
+        settled["streamEvidence"]["stdout"]["archive"].as_str().is_some(),
+        "{settled}"
+    );
+}
+
+#[test]
+fn owner_shell_reduced_fs_postimages_touch_rm_mkdir() {
+    let state = TempDir::new("owner-shell-fs");
+    let sandbox = TempDir::new("owner-shell-fs-workspace");
+    let mut kernel = Kernel::start(state.path());
+    let target = sandbox.path().join("gone.txt");
+    std::fs::write(&target, b"delete-me").unwrap();
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "rm -f gone.txt", "ttlMs": 60_000
+    }));
+    let rm = kernel.ok("effect.execute", json!({
+        "effectId": "shell-rm-fs",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "shell.exec",
+            "spec": { "argv": ["rm", "-f", "gone.txt"] }
+        }
+    }));
+    assert_eq!(rm["ownerLogSettled"], true);
+    assert!(!target.exists());
+
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "touch observed.txt", "ttlMs": 60_000
+    }));
+    let touch = kernel.ok("effect.execute", json!({
+        "effectId": "shell-touch-fs",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "shell.exec",
+            "spec": { "argv": ["touch", "observed.txt"] }
+        }
+    }));
+    assert_eq!(touch["ownerLogSettled"], true);
+    assert!(sandbox.path().join("observed.txt").is_file());
+
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "mkdir -p nested/dir", "ttlMs": 60_000
+    }));
+    let mkdir = kernel.ok("effect.execute", json!({
+        "effectId": "shell-mkdir-fs",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "shell.exec",
+            "spec": { "argv": ["mkdir", "-p", "nested/dir"] }
+        }
+    }));
+    assert_eq!(mkdir["ownerLogSettled"], true);
+    assert!(sandbox.path().join("nested/dir").is_dir());
+
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    let settled = |id: &str| {
+        events["events"].as_array().unwrap().iter().find(|e| {
+            e["type"] == "owner.settled" && e["payload"]["effectId"] == id
+        })
+    };
+    let rm_settled = settled("shell-rm-fs").unwrap();
+    let touch_settled = settled("shell-touch-fs").unwrap();
+    let mkdir_settled = settled("shell-mkdir-fs").unwrap();
+    assert_eq!(rm_settled["payload"]["details"]["postimages"][0]["state"], "absent");
+    assert_eq!(touch_settled["payload"]["details"]["postimages"][0]["state"], "present");
+    assert_eq!(mkdir_settled["payload"]["details"]["postimages"][0]["entryKind"], "directory");
+
+    let replay = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(replay["ok"], true, "{replay}");
+    assert!(replay["checked"].as_u64().unwrap_or(0) >= 3, "{replay}");
+    // File postimages are path-checked; stdout/stderr streams are ancillary here.
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
+}
+
+#[test]
+fn owner_shell_reduced_fs_postimages_cp_mv() {
+    let state = TempDir::new("owner-shell-fs-cpmv");
+    let sandbox = TempDir::new("owner-shell-fs-cpmv-workspace");
+    let mut kernel = Kernel::start(state.path());
+    fs::write(sandbox.path().join("origin.txt"), b"copy-me").unwrap();
+
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "cp origin.txt copied.txt", "ttlMs": 60_000
+    }));
+    let cp = kernel.ok("effect.execute", json!({
+        "effectId": "shell-cp-fs",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "shell.exec",
+            "spec": { "argv": ["cp", "origin.txt", "copied.txt"] }
+        }
+    }));
+    assert_eq!(cp["ownerLogSettled"], true);
+    assert!(sandbox.path().join("copied.txt").is_file());
+
+    fs::write(sandbox.path().join("move-src.txt"), b"mv-me").unwrap();
+    kernel.ok("guard.lease", json!({
+        "kind": "shell.exec", "pattern": "mv -f move-src.txt move-dest.txt", "ttlMs": 60_000
+    }));
+    let mv = kernel.ok("effect.execute", json!({
+        "effectId": "shell-mv-fs",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": {
+            "kind": "shell.exec",
+            "spec": { "argv": ["mv", "-f", "move-src.txt", "move-dest.txt"] }
+        }
+    }));
+    assert_eq!(mv["ownerLogSettled"], true);
+    assert!(!sandbox.path().join("move-src.txt").exists());
+    assert!(sandbox.path().join("move-dest.txt").is_file());
+
+    let events = kernel.ok("log.read", json!({"stream": "owner:effects"}));
+    let settled = |id: &str| {
+        events["events"].as_array().unwrap().iter().find(|e| {
+            e["type"] == "owner.settled" && e["payload"]["effectId"] == id
+        })
+    };
+    let cp_settled = settled("shell-cp-fs").unwrap();
+    let mv_settled = settled("shell-mv-fs").unwrap();
+    assert_eq!(cp_settled["payload"]["details"]["postimages"][0]["via"], "shell.cp");
+    assert_eq!(cp_settled["payload"]["details"]["postimages"][0]["state"], "present");
+    let mv_rows = mv_settled["payload"]["details"]["postimages"].as_array().unwrap();
+    assert_eq!(mv_rows.len(), 2);
+    assert_eq!(mv_rows[1]["state"], "absent");
+
+    let replay = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(replay["ok"], true, "{replay}");
+    assert!(replay["checked"].as_u64().unwrap_or(0) >= 2, "{replay}");
+    assert!(
+        replay["history"]["historicalAbsenceFacts"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "{replay}"
+    );
+    assert_eq!(kernel.ok("effect.owner.verify", json!({}))["ok"], true);
 }
 
 #[test]
@@ -385,8 +612,8 @@ fn owner_terminal_rc7_distinguishes_settled_failure_from_unknown() {
 fn mixed_case_dispatch_cannot_evade_kernel_owner_fence() {
     let state = TempDir::new("owner-case");
     let sandbox = TempDir::new("owner-case-workspace");
-    let mut a = Kernel::start(state.path());
-    let mut b = Kernel::start(state.path());
+    let mut a = start_multi_owner(state.path());
+    let mut b = start_multi_owner(state.path());
     let first = a.ok("effect.execute", json!({
         "effectId": "case-write", "sandboxRoot": sandbox.path(),
         "dispatch": { "kind": "FS.WRITE", "spec": { "path": "case.txt", "text": "FIRST" } }
@@ -405,8 +632,8 @@ fn mixed_case_dispatch_cannot_evade_kernel_owner_fence() {
 fn owner_effect_id_replay_cannot_write_twice() {
     let state = TempDir::new("owner-replay");
     let sandbox = TempDir::new("owner-replay-sandbox");
-    let mut a = Kernel::start(state.path());
-    let mut b = Kernel::start(state.path());
+    let mut a = start_multi_owner(state.path());
+    let mut b = start_multi_owner(state.path());
     let first = a.ok("effect.execute", json!({
         "effectId": "same-id", "sandboxRoot": sandbox.path(),
         "dispatch": { "kind": "fs.write", "spec": { "path": "x", "text": "FIRST" } }
@@ -433,6 +660,7 @@ fn tampered_owner_chain_refuses_inspection_and_mutation() {
     let owner_log = state.path().join("events").join("owner__effects.jsonl");
     let original = fs::read_to_string(&owner_log).unwrap();
     fs::write(&owner_log, original.replace("owner.prepare", "owner.prepareX")).unwrap();
+    drop(a); // release CB-6 supervisor lease before successor owner
     let mut b = Kernel::start(state.path());
     let refusal = b.err("effect.owner.status", json!({}));
     assert!(refusal.contains("verification failed"), "{refusal}");
@@ -461,6 +689,7 @@ fn owner_verification_rejects_v2_receipt_identity_sidecar_tamper_at_receipt_chai
     let original = fs::read_to_string(&file).unwrap();
     assert!(original.contains("receipt-linked"));
     fs::write(&file, original.replace("receipt-linked", "receipt-forged")).unwrap();
+    drop(a); // release CB-6 supervisor lease before successor owner
     let mut b = Kernel::start(state.path());
     assert_eq!(b.ok("receipt.verify", json!({}))["ok"], false);
     let message = b.err("effect.owner.verify", json!({}));
@@ -581,6 +810,12 @@ fn owner_crash_after_executing_fence_never_auto_releases() {
     let mut owner = Kernel::start(state.path());
     let blocked = owner.ok("effect.owner.status", json!({}));
     assert_eq!(blocked["blocked"], true);
+    assert!(
+        blocked["executedUnknownIds"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|v| v == "maybe-executed")),
+        "{blocked}"
+    );
     let denial = owner.err("effect.owner.recover", json!({"effectId": "maybe-executed"}));
     assert!(denial.contains("execution may have started"), "{denial}");
     let mutation = owner.err("effect.execute", json!({
@@ -589,6 +824,197 @@ fn owner_crash_after_executing_fence_never_auto_releases() {
     }));
     assert!(mutation.contains("OwnerLog UNKNOWN"), "{mutation}");
     assert!(!sandbox.path().join("new.txt").exists());
+}
+
+#[test]
+fn owner_executed_unknown_attested_abandon_clears_fence_without_settling() {
+    let state = TempDir::new("owner-recover-abandon");
+    let sandbox = TempDir::new("owner-recover-abandon-workspace");
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_AFTER_EXECUTING", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1003, "method": "effect.execute", "params": {
+            "effectId": "maybe-executed", "sandboxRoot": sandbox.path(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "X" } }
+        }
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for injected crash");
+    assert_eq!(status.code(), Some(87));
+    let mut owner = Kernel::start(state.path());
+    assert_eq!(owner.ok("effect.owner.status", json!({}))["blocked"], true);
+    let missing = owner.err("effect.owner.recover", json!({
+        "effectId": "maybe-executed",
+        "mode": "executed_unknown_abandon"
+    }));
+    assert!(missing.contains("attestation"), "{missing}");
+    let cleared = owner.ok("effect.owner.recover", json!({
+        "effectId": "maybe-executed",
+        "mode": "executed_unknown_abandon",
+        "attestation": "abandon_unobserved_execution"
+    }));
+    assert_eq!(cleared["released"], true);
+    assert_eq!(cleared["clearedExecutedUnknown"], true);
+    assert_eq!(cleared["blocked"], false);
+    assert_eq!(cleared["executedUnknownIds"], json!([]));
+    let events = owner.ok("log.read", json!({"stream": "owner:effects"}));
+    let types: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"owner.unknown"), "{types:?}");
+    assert!(types.contains(&"owner.released"), "{types:?}");
+    assert!(!types.contains(&"owner.settled"), "{types:?}");
+    let replay = owner.err("effect.execute", json!({
+        "effectId": "maybe-executed", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "REPLAY" } }
+    }));
+    assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
+    let next = owner.ok("effect.execute", json!({
+        "effectId": "after-abandon", "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "SAFE" } }
+    }));
+    assert_eq!(next["verdict"], "settled");
+    assert_eq!(fs::read(sandbox.path().join("new.txt")).unwrap(), b"SAFE");
+}
+
+#[test]
+fn owner_executed_unknown_observe_settle_after_crash_before_settle() {
+    let state = TempDir::new("owner-recover-observe");
+    let sandbox = TempDir::new("owner-recover-observe-workspace");
+    let execute_params = json!({
+        "effectId": "wrote-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "PROVEN" } }
+    });
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_BEFORE_OWNER_SETTLE", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1004, "method": "effect.execute", "params": execute_params
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for injected crash");
+    assert_eq!(status.code(), Some(88));
+    assert_eq!(fs::read(sandbox.path().join("new.txt")).unwrap(), b"PROVEN");
+
+    let mut owner = Kernel::start(state.path());
+    let blocked = owner.ok("effect.owner.status", json!({}));
+    assert_eq!(blocked["blocked"], true);
+    let playbook = blocked["recoveryPlaybook"].as_array().expect("playbook");
+    assert!(playbook.iter().any(|row| row["effectId"] == "wrote-but-not-settled"));
+
+    let wrong = owner.err("effect.owner.recover", json!({
+        "effectId": "wrote-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "WRONG" } }
+    }));
+    assert!(wrong.contains("digest mismatch") || wrong.contains("does not match"), "{wrong}");
+
+    let settled = owner.ok("effect.owner.recover", json!({
+        "effectId": "wrote-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "PROVEN" } }
+    }));
+    assert_eq!(settled["settled"], true);
+    assert_eq!(settled["observedRecovery"], true);
+    assert_eq!(settled["blocked"], false);
+    let events = owner.ok("log.read", json!({"stream": "owner:effects"}));
+    let types: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"owner.settled"), "{types:?}");
+    let replay = owner.err("effect.execute", json!({
+        "effectId": "wrote-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.write", "spec": { "path": "new.txt", "text": "REPLAY" } }
+    }));
+    assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
+}
+
+#[test]
+fn owner_executed_unknown_observe_settle_fs_edit_after_crash_before_settle() {
+    let state = TempDir::new("owner-recover-observe-edit");
+    let sandbox = TempDir::new("owner-recover-observe-edit-workspace");
+    fs::write(sandbox.path().join("src.txt"), b"before").unwrap();
+    let preimage_digest = sha256_bytes(b"before");
+    let execute_params = json!({
+        "effectId": "edited-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.edit", "spec": {
+            "path": "src.txt", "oldString": "before", "newString": "after",
+            "expectedPreimageDigest": preimage_digest
+        }}
+    });
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_BEFORE_OWNER_SETTLE", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1005, "method": "effect.execute", "params": execute_params
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for injected crash");
+    assert_eq!(status.code(), Some(88));
+    assert_eq!(fs::read(sandbox.path().join("src.txt")).unwrap(), b"after");
+
+    let mut owner = Kernel::start(state.path());
+    let blocked = owner.ok("effect.owner.status", json!({}));
+    assert_eq!(blocked["blocked"], true);
+
+    let wrong = owner.err("effect.owner.recover", json!({
+        "effectId": "edited-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.edit", "spec": {
+            "path": "src.txt", "oldString": "before", "newString": "WRONG",
+            "expectedPreimageDigest": preimage_digest
+        }}
+    }));
+    assert!(
+        wrong.contains("digest mismatch") || wrong.contains("does not match") || wrong.contains("does not prove"),
+        "{wrong}"
+    );
+
+    let settled = owner.ok("effect.owner.recover", json!({
+        "effectId": "edited-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.edit", "spec": {
+            "path": "src.txt", "oldString": "before", "newString": "after",
+            "expectedPreimageDigest": preimage_digest
+        }}
+    }));
+    assert_eq!(settled["settled"], true);
+    assert_eq!(settled["observedRecovery"], true);
+    assert_eq!(settled["blocked"], false);
+    let events = owner.ok("log.read", json!({"stream": "owner:effects"}));
+    let types: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"owner.settled"), "{types:?}");
+    let replay = owner.err("effect.execute", json!({
+        "effectId": "edited-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.edit", "spec": {
+            "path": "src.txt", "oldString": "after", "newString": "REPLAY"
+        }}
+    }));
+    assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
 }
 
 #[test]
@@ -620,12 +1046,73 @@ fn owner_preimage_pin_refuses_stale_edit_before_prepare_and_preserves_admission(
 }
 
 #[test]
+fn owner_nested_child_observe_classifies_settled_child_postimages() {
+    let state = TempDir::new("owner-nested-child-ok");
+    let ws = TempDir::new("owner-nested-child-ok-ws");
+    let mut kernel = start_multi_owner(state.path());
+    let child = kernel.ok(
+        "effect.execute",
+        json!({
+            "effectId": "child-write",
+            "sandboxRoot": ws.path(),
+            "dispatch": { "kind": "fs.write", "spec": { "path": "nested.txt", "text": "child bytes" } }
+        }),
+    );
+    assert_eq!(child["ownerLogSettled"], json!(true), "{child}");
+    kernel
+        .ok(
+            "receipt.issue",
+            json!({
+                "action": "tool.execute",
+                "tool": "agent",
+                "argsDigest": sha256_hex("parent-args"),
+                "resultDigest": sha256_hex("parent-res"),
+                "schemaVersion": 2,
+                "effectId": "parent-agent",
+                "childEffectIds": ["child-write"],
+            }),
+        );
+    let verify = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(verify["nestedObserve"]["ok"], json!(true), "{verify}");
+    assert_eq!(verify["nestedObserve"]["verified"], json!(1));
+    assert_eq!(
+        verify["nestedObserve"]["nodes"][0]["classification"],
+        json!("file_postimage_ok")
+    );
+    assert_eq!(verify["ok"], json!(true), "{verify}");
+}
+
+#[test]
+fn owner_nested_child_observe_refuses_missing_child_settlement() {
+    let state = TempDir::new("owner-nested-child-miss");
+    let mut kernel = start_multi_owner(state.path());
+    kernel.ok(
+        "receipt.issue",
+        json!({
+            "action": "tool.execute",
+            "tool": "agent",
+            "argsDigest": sha256_hex("parent-args"),
+            "resultDigest": sha256_hex("parent-res"),
+            "schemaVersion": 2,
+            "effectId": "parent-agent",
+            "childEffectIds": ["missing-child"],
+        }),
+    );
+    let verify = kernel.ok("effect.owner.postimage.verify", json!({}));
+    assert_eq!(verify["nestedObserve"]["ok"], json!(false), "{verify}");
+    assert_eq!(
+        verify["nestedObserve"]["nodes"][0]["classification"],
+        json!("missing_in_ownerlog")
+    );
+}
+
+#[test]
 fn owner_postimage_replay_detects_external_mutation_without_rewriting_receipt_chain() {
     let state = TempDir::new("owner-replay-postimage");
     let ws = TempDir::new("owner-replay-postimage-workspace");
     let file = ws.path().join("tracked.txt");
-    let mut writer = Kernel::start(state.path());
-    let mut inspector = Kernel::start(state.path());
+    let mut writer = start_multi_owner(state.path());
+    let mut inspector = start_multi_owner(state.path());
 
     writer.ok("effect.execute", json!({
         "effectId": "postimage-v1", "sandboxRoot": ws.path(),
@@ -662,8 +1149,8 @@ fn owner_postimage_replay_detects_external_mutation_without_rewriting_receipt_ch
 fn owner_history_archive_recovers_superseded_bytes_and_detects_tampering() {
     let state = TempDir::new("owner-archive-history");
     let ws = TempDir::new("owner-archive-history-ws");
-    let mut writer = Kernel::start(state.path());
-    let mut reader = Kernel::start(state.path());
+    let mut writer = start_multi_owner(state.path());
+    let mut reader = start_multi_owner(state.path());
     for (id, text) in [("history-1", "first version"), ("history-2", "second version")] {
         let result = writer.ok("effect.execute", json!({
             "effectId": id, "sandboxRoot": ws.path(),
@@ -677,6 +1164,12 @@ fn owner_history_archive_recovers_superseded_bytes_and_detects_tampering() {
     assert_eq!(history["history"]["ok"], true, "{history}");
     assert_eq!(history["history"]["checked"], 2);
     assert_eq!(history["history"]["scope"], "archived_kernel_owned_file_postimages_only");
+    // Ruling 654: superseded first version independently re-observed from CAS.
+    assert_eq!(history["historicalOverwriteReplayed"], 1, "{history}");
+    assert_eq!(history["history"]["overwriteReplay"]["checked"], 1, "{history}");
+    assert_eq!(history["history"]["overwriteReplay"]["replayed"][0]["effectId"], "history-1");
+    assert_eq!(history["history"]["overwriteReplay"]["replayed"][0]["superseded"], true);
+    assert_eq!(history["history"]["overwriteReplay"]["replayed"][0]["source"], "cas");
     let digest = sha256_bytes(b"first version");
     let archived = state.path().join("owner-postimages").join(&digest[..2])
         .join(format!("{digest}.blob"));
@@ -715,6 +1208,9 @@ fn owner_postimage_replay_tracks_delete_absence_and_both_rename_endpoints() {
     let deleted = kernel.ok("effect.owner.postimage.verify", json!({}));
     assert_eq!(deleted["ok"], true, "{deleted}");
     assert_eq!(deleted["checked"], 2);
+    let absence = &deleted["absenceReconstruct"];
+    assert_eq!(absence["ok"], true, "{absence}");
+    assert!(absence["reconstructed"].as_u64().unwrap_or(0) >= 1, "{absence}");
     fs::write(ws.path().join("source.txt"), b"recreated").unwrap();
     let tampered = kernel.ok("effect.owner.postimage.verify", json!({}));
     assert_eq!(tampered["ok"], false);
@@ -740,6 +1236,221 @@ fn owner_event_stream_is_not_caller_appendable() {
     }));
     assert!(denied.contains("HZ_PRECONDITION_FAILED"), "{denied}");
     assert_eq!(kernel.ok("effect.owner.status", json!({}))["unresolved"], 0);
+}
+
+#[test]
+fn kernel_socket_serve_survives_closed_stdin() {
+    // H-29 / ruling 625: with --socket, closing stdin (parent death) must not
+    // tear down the kernel — a fresh UnixStream client still gets ping.
+    use std::os::unix::net::UnixStream;
+    let state = TempDir::new("kernel-socket-survive-state");
+    let sock = state.path().join("hzk.sock");
+    let stderr_path = std::env::temp_dir().join(format!(
+        "hz-kernel-sock-stderr-{}.log",
+        std::process::id()
+    ));
+    let stderr_file = fs::File::create(&stderr_path).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
+    child
+        .arg("--state-dir")
+        .arg(state.path())
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null()) // already-closed stdin = parent-gone
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr_file))
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS");
+    apply_kernel_spawn_isolation(&mut child);
+    let mut child = child
+        .spawn()
+        .expect("spawn socket kernel");
+    for _ in 0..200 {
+        if state.path().join("hzk.socket").exists() && sock.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(10));
+    }
+    assert!(
+        sock.exists(),
+        "socket missing; stderr={}",
+        fs::read_to_string(&stderr_path).unwrap_or_default()
+    );
+    let mut client = UnixStream::connect(&sock).expect("connect after null stdin");
+    client
+        .write_all(br#"{"id":7,"method":"ping","params":{}}"#)
+        .unwrap();
+    client.write_all(b"\n").unwrap();
+    let mut reader = BufReader::new(client);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let reply: Value = serde_json::from_str(&line).expect(&line);
+    assert_eq!(reply["id"], json!(7), "{reply}");
+    assert!(reply.get("result").is_some(), "{reply}");
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_file(&stderr_path);
+}
+
+#[test]
+fn kernel_cross_state_dir_refuses_host_supervisor_lease() {
+    // CB-6 / ruling **703**: host flock is orthogonal to per-state lock — a second
+    // live kernel on a different state dir must exit 2 with supervisor.host_lease_held.
+    let shared_runtime = isolated_xdg_runtime_dir();
+    let state_a = TempDir::new("kernel-host-lease-a");
+    let state_b = TempDir::new("kernel-host-lease-b");
+    let mut first = Kernel::start_with_env(state_a.path(), &[(
+        "XDG_RUNTIME_DIR",
+        shared_runtime.to_str().expect("utf8 runtime path"),
+    )]);
+    let _ = first.ok("ping", json!({}));
+    let stderr2 = std::env::temp_dir().join(format!(
+        "hz-kernel-host-lease2-{}.log",
+        std::process::id()
+    ));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
+    command
+        .arg("--state-dir")
+        .arg(state_b.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(fs::File::create(&stderr2).unwrap()))
+        .env("XDG_RUNTIME_DIR", &shared_runtime)
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS");
+    let status = command.status().expect("spawn second cross-state kernel");
+    assert_eq!(status.code(), Some(2), "cross-state second owner must exit 2");
+    let err2 = fs::read_to_string(&stderr2).unwrap_or_default();
+    assert!(
+        err2.contains("supervisor.host_lease_held"),
+        "expected host_lease_held; stderr={err2}"
+    );
+    let _ = fs::remove_file(&stderr2);
+}
+
+#[test]
+fn kernel_stdio_second_owner_refuses_supervisor_lease() {
+    // CB-6 / ruling 638: exclusive lease covers stdio serve too — a second
+    // live kernel on the same state dir must exit 2 with supervisor.lease_held.
+    let shared_runtime = isolated_xdg_runtime_dir();
+    let state = TempDir::new("kernel-stdio-lease-state");
+    let mut first = Kernel::start_with_env(state.path(), &[(
+        "XDG_RUNTIME_DIR",
+        shared_runtime.to_str().expect("utf8 runtime path"),
+    )]);
+    let _ = first.ok("ping", json!({}));
+    assert!(
+        state.path().join("hzk.supervisor.lock").exists(),
+        "first owner must hold supervisor lock"
+    );
+    let stderr2 = std::env::temp_dir().join(format!(
+        "hz-kernel-stdio-lease2-{}.log",
+        std::process::id()
+    ));
+    let mut second_stdio = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
+    second_stdio
+        .arg("--state-dir")
+        .arg(state.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(fs::File::create(&stderr2).unwrap()))
+        .env("XDG_RUNTIME_DIR", &shared_runtime)
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS");
+    let status = second_stdio
+        .status()
+        .expect("spawn second stdio kernel");
+    assert_eq!(status.code(), Some(2), "second stdio owner must exit 2");
+    let err2 = fs::read_to_string(&stderr2).unwrap_or_default();
+    assert!(
+        err2.contains("supervisor.lease_held"),
+        "expected lease_held; stderr={err2}"
+    );
+    let _ = fs::remove_file(&stderr2);
+}
+
+#[test]
+fn kernel_socket_second_owner_refuses_supervisor_lease() {
+    // CB-6 / ruling 635: a second live --socket owner on the same state dir
+    // must fail closed with supervisor.lease_held (not steal the socket).
+    use std::os::unix::net::UnixStream;
+    let shared_runtime = isolated_xdg_runtime_dir();
+    let state = TempDir::new("kernel-socket-lease-state");
+    let sock = state.path().join("hzk.sock");
+    let stderr1 = std::env::temp_dir().join(format!(
+        "hz-kernel-lease1-{}.log",
+        std::process::id()
+    ));
+    let stderr2 = std::env::temp_dir().join(format!(
+        "hz-kernel-lease2-{}.log",
+        std::process::id()
+    ));
+    let mut first = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
+    first
+        .arg("--state-dir")
+        .arg(state.path())
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(fs::File::create(&stderr1).unwrap()))
+        .env("XDG_RUNTIME_DIR", &shared_runtime)
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS");
+    let mut first = first
+        .spawn()
+        .expect("spawn first socket kernel");
+    for _ in 0..200 {
+        if sock.exists() && state.path().join("hzk.supervisor.lock").exists() {
+            break;
+        }
+        sleep(Duration::from_millis(10));
+    }
+    assert!(
+        sock.exists(),
+        "first socket missing; stderr={}",
+        fs::read_to_string(&stderr1).unwrap_or_default()
+    );
+    let mut second_socket = Command::new(env!("CARGO_BIN_EXE_hz-kernel"));
+    second_socket
+        .arg("--state-dir")
+        .arg(state.path())
+        .arg("--socket")
+        .arg(state.path().join("hzk-steal.sock"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(fs::File::create(&stderr2).unwrap()))
+        .env("XDG_RUNTIME_DIR", &shared_runtime)
+        .env_remove("HZ_ANCHOR_KEY")
+        .env_remove("HZ_ACCEPT_LEGACY_ANCHORS");
+    let status = second_socket
+        .status()
+        .expect("spawn second socket kernel");
+    assert_eq!(status.code(), Some(2), "second owner must exit 2");
+    let err2 = fs::read_to_string(&stderr2).unwrap_or_default();
+    assert!(
+        err2.contains("supervisor.lease_held"),
+        "expected lease_held; stderr={err2}"
+    );
+    assert!(
+        !state.path().join("hzk-steal.sock").exists(),
+        "second owner must not bind a steal socket"
+    );
+    // First owner still serves.
+    let mut client = UnixStream::connect(&sock).expect("connect first owner");
+    client
+        .write_all(br#"{"id":9,"method":"ping","params":{}}"#)
+        .unwrap();
+    client.write_all(b"\n").unwrap();
+    let mut reader = BufReader::new(client);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let reply: Value = serde_json::from_str(&line).expect(&line);
+    assert!(reply.get("result").is_some(), "{reply}");
+    let _ = first.kill();
+    let _ = first.wait();
+    let _ = fs::remove_file(&stderr1);
+    let _ = fs::remove_file(&stderr2);
 }
 
 /* ------------------------------ kernel harness ------------------------------ */
@@ -780,6 +1491,7 @@ impl Kernel {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::from(stderr_file));
+        apply_kernel_spawn_isolation(&mut command);
         for (key, value) in env {
             command.env(key, value);
         }
@@ -1550,6 +2262,7 @@ fn keyed_verify_refuses_legacy_anchor_and_append_refuses_it_too() {
     assert_eq!(fs::read_to_string(dir.path().join("events/session__legacy.jsonl")).unwrap().lines().count(), 2);
 
     // opt-in: verify succeeds and the next append writes a keyed anchor
+    drop(keyed); // release CB-6 supervisor lease before successor owner
     let mut accepting = Kernel::start_with_env(
         dir.path(),
         &[("HZ_ANCHOR_KEY", key_hex.as_str()), ("HZ_ACCEPT_LEGACY_ANCHORS", "1")],
@@ -1572,6 +2285,7 @@ fn keyed_verify_refuses_legacy_anchor_and_append_refuses_it_too() {
     );
 
     // a strict keyed verifier (no opt-in) is happy with the re-anchored chain
+    drop(accepting); // release CB-6 supervisor lease before successor owner
     let mut strict = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_hex.as_str())]);
     assert_eq!(
         strict.ok("log.verify", json!({ "stream": stream })),
@@ -1602,12 +2316,14 @@ fn keyed_anchor_fails_closed_on_wrong_key_and_missing_anchor() {
 
     // deleting the anchor drops the keyed material: typed refusal, not legacy acceptance
     fs::remove_file(dir.path().join("events/session__strict.jsonl.head")).unwrap();
+    drop(wrong); // release CB-6 supervisor lease before successor owner
     let mut keyed = Kernel::start_with_env(dir.path(), &[("HZ_ANCHOR_KEY", key_a.as_str())]);
     let message = keyed.err("log.verify", json!({ "stream": stream }));
     assert!(message.contains("HZ_PRECONDITION_FAILED"), "{}", message);
     assert!(message.contains("no anchor"), "{}", message);
 
     // a malformed key is refused at startup (exit 2), never ignored
+    drop(keyed); // release lease so the malformed-key spawn is not lease_held
     let output = Command::new(env!("CARGO_BIN_EXE_hz-kernel"))
         .arg("--state-dir")
         .arg(dir.path())
@@ -1646,7 +2362,9 @@ fn four_processes_append_five_events_each_without_losing_any() {
                 let barrier = Arc::clone(&barrier);
                 let dir_path = dir.path().to_path_buf();
                 scope.spawn(move || {
-                    let mut kernel = Kernel::start(&dir_path);
+                    // Multi-owner topology is CB-6-forbidden in product; skip lease so
+                    // the event-log append flock itself remains proven.
+                    let mut kernel = start_multi_owner(&dir_path);
                     barrier.wait(); // all four processes write at the same moment
                     (0..PER_WRITER)
                         .map(|n| {
@@ -3021,7 +3739,8 @@ fn guard_memory_manifest_write_asks_despite_policy_allow() {
 
 /// A grant is an answer to `ask`, never a bypass: policy deny still wins over a
 /// matching grant, and a surface a plain allow rule already covers is decided
-/// by that rule — no grant is consulted, and no lease id is fabricated.
+/// by that rule — no grant is consulted (H-4 / 624: policy allow still mints
+/// its *own* one-use lease citation, distinct from a grant mint).
 #[test]
 fn guard_grant_never_beats_deny_and_never_fires_on_allow() {
     let dir = TempDir::new("guard-grant-scope");
@@ -3032,8 +3751,8 @@ fn guard_grant_never_beats_deny_and_never_fires_on_allow() {
 
     // Default policy: fs.write workspace is allowed. A grant for the exact
     // path must not turn that into a "grant-minted lease" allow: the allow rule
-    // answers, with no leaseId.
-    kernel.ok(
+    // answers, with an H-4 policy-allow lease citation (not a grant mint).
+    let grant = kernel.ok(
         "guard.grant",
         json!({ "kind": "fs.write", "pattern": target, "ttlMs": 60_000 }),
     );
@@ -3045,8 +3764,15 @@ fn guard_grant_never_beats_deny_and_never_fires_on_allow() {
         decision
     );
     assert!(
-        decision.get("leaseId").is_none(),
-        "no lease may be fabricated where an allow rule answered: {}",
+        !decision["reason"].as_str().unwrap_or("").contains("grant "),
+        "grant must not fire where policy allow already answers: {}",
+        decision
+    );
+    let lease_id = decision["leaseId"].as_str().expect("H-4 policy allow mints leaseId");
+    assert_ne!(
+        lease_id,
+        grant["leaseId"].as_str().unwrap_or(""),
+        "policy-allow lease must not reuse the grant id: {}",
         decision
     );
 
@@ -3112,8 +3838,8 @@ fn traversing_stream_names_are_refused_by_the_protocol() {
 fn two_kernels_appending_in_turn_keep_one_cached_chain() {
     let dir = TempDir::new("tail-cache-turn");
     let stream = "session:cache-turn";
-    let mut a = Kernel::start(dir.path());
-    let mut b = Kernel::start(dir.path());
+    let mut a = start_multi_owner(dir.path());
+    let mut b = start_multi_owner(dir.path());
 
     let mut seq = 0u64;
     let append = |kernel: &mut Kernel, label: &str, n: u64| {
@@ -3147,7 +3873,7 @@ fn two_kernels_appending_in_turn_keep_one_cached_chain() {
     let report = b.ok("log.verify", json!({ "stream": stream }));
     assert_eq!(report["ok"], json!(true), "{}", report);
     assert_eq!(report["count"], json!(6));
-    let mut cold = Kernel::start(dir.path());
+    let mut cold = start_multi_owner(dir.path());
     let report = cold.ok("log.verify", json!({ "stream": stream }));
     assert_eq!(report["ok"], json!(true), "{}", report);
     assert_eq!(report["count"], json!(6));
@@ -4146,6 +4872,12 @@ fn effect_execute_shell_exec_under_sandbox_root() {
     assert_eq!(result["exitCode"], json!(0), "{}", result);
     assert_eq!(result["stdoutDigest"], json!(expected_stdout), "{}", result);
     assert_eq!(result["resultDigestStable"], json!(true), "{}", result);
+    assert!(
+        result.get("sandboxExecWrapReason").and_then(|v| v.as_str()).is_some(),
+        "{}",
+        result
+    );
+    assert!(result.get("sandboxExecWrapped").and_then(|v| v.as_bool()).is_some());
 
     let unrestricted = kernel.err(
         "effect.execute",
@@ -4169,4 +4901,195 @@ fn effect_execute_shell_exec_under_sandbox_root() {
         }),
     );
     assert!(cwd_escape.contains("sandboxRoot"), "{}", cwd_escape);
+}
+
+#[test]
+fn owner_fs_batch_exact_writes_settle_under_one_lock() {
+    let state = TempDir::new("owner-fs-batch-ok");
+    let sandbox = TempDir::new("owner-fs-batch-ok-ws");
+    fs::write(sandbox.path().join("exist.txt"), b"old").unwrap();
+    let pin = sha256_bytes(b"old");
+    let mut k = Kernel::start(state.path());
+    let out = k.ok(
+        "effect.execute",
+        json!({
+            "effectId": "batch-ok",
+            "sandboxRoot": sandbox.path(),
+            "dispatch": {
+                "kind": "fs.batch",
+                "spec": {
+                    "ops": [
+                        {
+                            "kind": "fs.write",
+                            "path": "new.txt",
+                            "text": "one",
+                            "expectedPreimageDigest": null
+                        },
+                        {
+                            "kind": "fs.write",
+                            "path": "exist.txt",
+                            "text": "two",
+                            "expectedPreimageDigest": pin
+                        }
+                    ]
+                }
+            }
+        }),
+    );
+    assert_eq!(out["ownerLogSettled"], true);
+    assert_eq!(out["batchOpCount"], 2);
+    assert_eq!(fs::read(sandbox.path().join("new.txt")).unwrap(), b"one");
+    assert_eq!(fs::read(sandbox.path().join("exist.txt")).unwrap(), b"two");
+    assert_eq!(k.ok("effect.owner.status", json!({}))["blocked"], false);
+}
+
+#[test]
+fn owner_fs_batch_mid_failure_marks_unknown_and_blocks_further_mutations() {
+    let state = TempDir::new("owner-fs-batch-mid");
+    let sandbox = TempDir::new("owner-fs-batch-mid-ws");
+    let mut k = Kernel::start(state.path());
+    // First write creates a file; second targets a child under that file so
+    // create_dir_all fails after the first mutation. Ruling 627 rolls the
+    // first write back (prior was absent → delete).
+    let err = k.err(
+        "effect.execute",
+        json!({
+            "effectId": "batch-mid",
+            "sandboxRoot": sandbox.path(),
+            "dispatch": {
+                "kind": "fs.batch",
+                "spec": {
+                    "ops": [
+                        {
+                            "kind": "fs.write",
+                            "path": "blocker.txt",
+                            "text": "first",
+                            "expectedPreimageDigest": null
+                        },
+                        {
+                            "kind": "fs.write",
+                            "path": "blocker.txt/child.txt",
+                            "text": "second",
+                            "expectedPreimageDigest": null
+                        }
+                    ]
+                }
+            }
+        }),
+    );
+    assert!(err.contains("HZ_PRECONDITION_FAILED"), "{err}");
+    assert!(
+        err.contains("rolled back") || err.contains("aborted"),
+        "{err}"
+    );
+    assert!(
+        !sandbox.path().join("blocker.txt").exists(),
+        "first write must be rolled back when a later op fails"
+    );
+    assert!(!sandbox.path().join("blocker.txt/child.txt").exists());
+    let status = k.ok("effect.owner.status", json!({}));
+    assert_eq!(status["blocked"], true);
+    let denied = k.err(
+        "effect.execute",
+        json!({
+            "effectId": "after-batch-unknown",
+            "sandboxRoot": sandbox.path(),
+            "dispatch": {
+                "kind": "fs.write",
+                "spec": { "path": "never.txt", "text": "NO" }
+            }
+        }),
+    );
+    assert!(denied.contains("OwnerLog UNKNOWN"), "{denied}");
+    assert!(!sandbox.path().join("never.txt").exists());
+}
+
+#[test]
+fn owner_fs_batch_write_and_rename_settle() {
+    // Ruling 630: exact write + rename under one OwnerLog fs.batch.
+    let state = TempDir::new("owner-fs-batch-ren");
+    let sandbox = TempDir::new("owner-fs-batch-ren-ws");
+    fs::write(sandbox.path().join("src.txt"), b"move-me").unwrap();
+    let mut k = Kernel::start(state.path());
+    let out = k.ok(
+        "effect.execute",
+        json!({
+            "effectId": "batch-ren",
+            "sandboxRoot": sandbox.path(),
+            "dispatch": {
+                "kind": "fs.batch",
+                "spec": {
+                    "ops": [
+                        { "kind": "fs.write", "path": "extra.txt", "text": "fresh" },
+                        {
+                            "kind": "fs.rename",
+                            "from": "src.txt",
+                            "to": "dst.txt"
+                        }
+                    ]
+                }
+            }
+        }),
+    );
+    assert_eq!(out["verdict"], "settled", "{out}");
+    assert_eq!(out["renameCount"], 1, "{out}");
+    assert_eq!(fs::read(sandbox.path().join("extra.txt")).unwrap(), b"fresh");
+    assert!(!sandbox.path().join("src.txt").exists());
+    assert_eq!(fs::read(sandbox.path().join("dst.txt")).unwrap(), b"move-me");
+}
+
+#[test]
+fn owner_fs_batch_write_and_delete_settle() {
+    // Ruling 631: exact write + delete under one OwnerLog fs.batch.
+    let state = TempDir::new("owner-fs-batch-del");
+    let sandbox = TempDir::new("owner-fs-batch-del-ws");
+    fs::write(sandbox.path().join("gone.txt"), b"bye").unwrap();
+    let mut k = Kernel::start(state.path());
+    let out = k.ok(
+        "effect.execute",
+        json!({
+            "effectId": "batch-del",
+            "sandboxRoot": sandbox.path(),
+            "dispatch": {
+                "kind": "fs.batch",
+                "spec": {
+                    "ops": [
+                        { "kind": "fs.write", "path": "keep.txt", "text": "fresh" },
+                        { "kind": "fs.delete", "path": "gone.txt" }
+                    ]
+                }
+            }
+        }),
+    );
+    assert_eq!(out["verdict"], "settled", "{out}");
+    assert_eq!(out["deleteCount"], 1, "{out}");
+    assert_eq!(fs::read(sandbox.path().join("keep.txt")).unwrap(), b"fresh");
+    assert!(!sandbox.path().join("gone.txt").exists());
+}
+
+#[test]
+fn owner_fs_batch_refuses_unknown_op_before_prepare() {
+    let state = TempDir::new("owner-fs-batch-mix");
+    let sandbox = TempDir::new("owner-fs-batch-mix-ws");
+    fs::write(sandbox.path().join("a.txt"), b"x").unwrap();
+    let mut k = Kernel::start(state.path());
+    let err = k.err(
+        "effect.execute",
+        json!({
+            "effectId": "batch-mix",
+            "sandboxRoot": sandbox.path(),
+            "dispatch": {
+                "kind": "fs.batch",
+                "spec": {
+                    "ops": [
+                        { "kind": "fs.write", "path": "a.txt", "text": "x" },
+                        { "kind": "fs.fuzzy", "path": "a.txt" }
+                    ]
+                }
+            }
+        }),
+    );
+    assert!(err.contains("fs.batch"), "{err}");
+    assert_eq!(k.ok("effect.owner.status", json!({}))["events"], 0);
+    assert_eq!(fs::read(sandbox.path().join("a.txt")).unwrap(), b"x");
 }

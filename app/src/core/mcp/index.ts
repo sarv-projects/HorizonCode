@@ -35,6 +35,7 @@
 import type { ApprovalRequest, GuardAction, GuardDecision } from "../../contracts";
 import { canonicalJson, sha256Hex } from "../canon";
 import { parseMcpServer, type McpConfig, type McpServerConfig } from "../config";
+import { effectHostMcpAmbientSpawnRefusal } from "../effect-host-posture";
 import { kernelStateDir } from "../owned-spawn";
 import { McpClient, type McpClientOptions } from "./client";
 import { clearMcpTools, registerMcpTools } from "./registry";
@@ -138,6 +139,13 @@ export class McpManager {
   private async connectServer(server: McpServerConfig, hooks: McpManagerHooks): Promise<void> {
     const record: ServerRecord = { config: server, client: undefined, state: "failed", reason: undefined, tools: 0 };
     this.servers.set(server.id, record);
+
+    const spawnRefusal = effectHostMcpAmbientSpawnRefusal(server.id);
+    if (spawnRefusal !== undefined) {
+      record.reason = spawnRefusal;
+      hooks.onNotice(`mcp: server ${server.id} not started — ${spawnRefusal}`);
+      return;
+    }
 
     // 1. The spawn admission, before any process exists.
     const action = mcpSpawnAction(server);

@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { probeCacheHit, type CacheProbeSample } from "../../src/core/providers/cache-hit-probe";
+import {
+  compareCacheProbeSamples,
+  parseCacheProbeUsage,
+  probeCacheHit,
+  type CacheProbeSample,
+} from "../../src/core/providers/cache-hit-probe";
 
 function fakeFetch(samples: CacheProbeSample[]): typeof fetch {
   let i = 0;
@@ -21,6 +26,38 @@ function fakeFetch(samples: CacheProbeSample[]): typeof fetch {
     );
   }) as typeof fetch;
 }
+
+describe("cache-hit probe parse/compare (hermetic)", () => {
+  test("parseCacheProbeUsage reads prompt_tokens_details.cached_tokens", () => {
+    const s = parseCacheProbeUsage({
+      prompt_tokens: 50,
+      completion_tokens: 2,
+      prompt_tokens_details: { cached_tokens: 40 },
+    });
+    expect(s.cachedTokens).toBe(40);
+    expect(s.inputTokens).toBe(50);
+  });
+
+  test("parseCacheProbeUsage falls back across dialect fields", () => {
+    expect(parseCacheProbeUsage({ prompt_cache_hit_tokens: 7 }).cachedTokens).toBe(7);
+    expect(parseCacheProbeUsage({ cached_tokens: 3 }).cachedTokens).toBe(3);
+    expect(parseCacheProbeUsage({ cache_read_input_tokens: 11 }).cachedTokens).toBe(11);
+  });
+
+  test("compareCacheProbeSamples refuses claim when both sends report zero cached", () => {
+    const z = { inputTokens: 1, cachedTokens: 0, outputTokens: 1 };
+    const c = compareCacheProbeSamples(z, z);
+    expect(c.cacheHitObserved).toBe(false);
+    expect(c.note).toContain("do not claim");
+  });
+
+  test("compareCacheProbeSamples documents warmed-first-send without claiming rising hit", () => {
+    const warm = { inputTokens: 1, cachedTokens: 64, outputTokens: 1 };
+    const c = compareCacheProbeSamples(warm, warm);
+    expect(c.cacheHitObserved).toBe(false);
+    expect(c.note).toContain("warmed the prefix");
+  });
+});
 
 describe("cache-hit probe (B-4 live measurement seam)", () => {
   test("observes a rising cached-token count on an identical prefix", async () => {

@@ -89,12 +89,12 @@ describe("G-1 detached worker gate", () => {
 });
 
 describe("G-1 spawnDetachedReviewFork (fake subprocess)", () => {
-  test("reserves spend in the parent before spawn and passes the reservation id in the job", () => {
+  test("reserves spend in the parent before spawn and passes the reservation id in the job", async () => {
     const spend = fakeSpend();
     let captured: ReviewForkWorkerJob | undefined;
     let capturedPath = "";
     const notices: string[] = [];
-    const outcome = spawnDetachedReviewFork({
+    const outcome = await spawnDetachedReviewFork({
       spec: makeSpec(),
       model: "mock-1",
       providerName: "mock",
@@ -129,10 +129,10 @@ describe("G-1 spawnDetachedReviewFork (fake subprocess)", () => {
     expect(notices.some((m) => m.includes("4242"))).toBe(true);
   });
 
-  test("a spend refusal returns before spawning", () => {
+  test("a spend refusal returns before spawning", async () => {
     const spend = fakeSpend({ failReserve: true });
     let spawned = false;
-    const outcome = spawnDetachedReviewFork({
+    const outcome = await spawnDetachedReviewFork({
       spec: makeSpec(),
       model: "mock-1",
       providerName: "mock",
@@ -148,9 +148,56 @@ describe("G-1 spawnDetachedReviewFork (fake subprocess)", () => {
     expect(spawned).toBe(false);
   });
 
-  test("a spawn failure releases the parent reservation", () => {
+
+  test("admits fs.write on journal then job file before persist (rulings 589/611)", async () => {
     const spend = fakeSpend();
-    const outcome = spawnDetachedReviewFork({
+    const notices: string[] = [];
+    const denyState = tempDir("hz-rfw-deny-state-");
+    const denyWs = tempDir("hz-rfw-deny-ws-");
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(denyState, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(denyState, ".hzcode", "kernel");
+      const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-rfj" }]),
+        "utf8",
+      );
+      const outcome = await spawnDetachedReviewFork({
+        spec: buildReviewFork({
+          parentPrefix: parentPrefixRecord(PREFIX),
+          transcript: [{ id: "msg_1", type: "user", summary: "review this" }],
+          workspace: denyWs,
+          stateDir: denyState,
+        }),
+        model: "mock-1",
+        providerName: "mock",
+        workspace: denyWs,
+        stateDir: denyState,
+        spend,
+        reserveUsd: 0.01,
+        spawnWorker: () => ({ pid: 1 }),
+        onNotice: (m) => notices.push(m),
+      });
+      expect(outcome.status).toBe("refused");
+      if (outcome.status === "refused") {
+        expect(outcome.reason).toBe("guard-refused");
+        expect(outcome.detail ?? "").toMatch(/denied|test-deny-rfj|journal|job/i);
+      }
+      expect(spend.released.length).toBeGreaterThan(0);
+      expect(notices.some((m) => /journal refused|job file refused/i.test(m))).toBe(true);
+      expect(existsSync(path.join(denyState, "review-fork-journal", "journal.jsonl"))).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
+
+  test("a spawn failure releases the parent reservation", async () => {
+    const spend = fakeSpend();
+    const outcome = await spawnDetachedReviewFork({
       spec: makeSpec(),
       model: "mock-1",
       providerName: "mock",

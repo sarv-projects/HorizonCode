@@ -117,11 +117,18 @@ confinement, network egress explicitly NOT confined.
   final 8/8 gates run above.
 - **H9:** the 30 s window is a bound, not an incremental verifier. A true
   append-only/tail verifier remains.
-- **H-4:** default `allow` writes still carry no one-use lease. Either mint a
-  lease for every allow or downgrade the HLD invariant.
-- **H-29/H-30:** `hzk` still dies with the parent; no independent supervisor.
-- **H-31:** workspace identity is still a path string, not `(dev, ino)` in the
-  guard digest.
+- **H-4 (partial — ruling 624):** policy allow and allowlist allow now mint
+  one-use lease citations on each Guard admit (OwnerLog records them). Residual:
+  G1 “Ask/Deny only” wire rename still open; ambient Bun paths outside kernel
+  Guard still bypass this mint.
+- **H-29/H-30 (partial — rulings 625–628):** detach socket serve + KernelClient
+  orphan survival + socket reattach. Residual: reattach has no control secret
+  (remint refused); full supervisor hierarchy / epochs / H-30 upgrade durability
+  OPEN.
+- **H-31 (partial — rulings 623+629):** mutating `effect.execute` re-checks
+  live `(root, device, inode)`; Guard `intentDigest` includes the launch
+  binding. Residual: held-lease re-validate against remount mid-TTL; H-30
+  upgrade durability still open.
 - **EffectHost/R170/egress (backlog §Z):** universal kernel ownership, atomic
   `fs.batch`, routed netns egress and full R172 remain the P0 backlog.
 - **E-4: CLOSED (ruling 485).** `--restore [path]` → `RuntimeOptions.restoreFromTranscript`

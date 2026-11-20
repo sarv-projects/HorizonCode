@@ -11,23 +11,24 @@ import * as readline from "node:readline";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { ChatMsg, ContextUsage, RunExit, Runtime } from "../contracts";
+import type { ChatMsg, ContextUsage, GuardAction, RunExit, Runtime } from "../contracts";
 import { modelsForProvider } from "../core/catalog/list-models";
 import { formatModelsNotice } from "./models-slash";
 import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
 import { defaultConfigPath, loadConfig, type HzConfig } from "../core/config";
 import { getSkill } from "../core/skills";
-import { writeSessionArchive } from "../core/archive";
 import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
 import { contextChunkRows, renderContextTokenTable } from "../core/context-token-table";
+import { KernelClient } from "../core/kernel";
 import { renderLearnChapter, renderLearnIndex } from "../core/learn-kb";
 import { renderWorkspaceTrustReport } from "../core/trust";
 import { renderSettingsReport } from "../core/settings-report";
 import { renderWorkspaceLearningGraph } from "../core/learning-graph";
 import { renderWorkspaceAgentGraph } from "../core/agent-graph";
+import { convoExportPublication, exportSessionCli, sessionExportPublication } from "../core/session-cli";
 import { homedir } from "node:os";
-import { systemPrompt } from "../core/loop";
+import { scopeFor, systemPrompt } from "../core/loop";
 import { toolSpecs } from "../tools";
 import { INSTRUCTION_KIND_LABEL, loadInstructionBlocks, peekLazyInstructions } from "../core/instructions";
 import {
@@ -310,8 +311,25 @@ export function loadHistory(file: string, rl: readline.Interface): void {
   setHistoryOwnerOnly(file);
 }
 
+/** Under-admission (ruling 601): Guard before readline history persist. */
+export async function admitHistoryWrite(file: string, workspace: string): Promise<string | undefined> {
+  const { admitPredsOutWrite } = await import("../core/preds-writer");
+  const refused = await admitPredsOutWrite(file, workspace);
+  if (refused === undefined) return undefined;
+  return refused
+    .replace(/^preds write refused:/, "history refused:")
+    .replace(/^preds write denied/, "history denied")
+    .replace(/^preds fs\.write requires approval/, "history fs.write requires approval");
+}
+
 /** Exported for tests; `runInteractive` wires it to the live readline instance. */
-export function rememberHistory(file: string, text: string): void {
+export async function rememberHistory(
+  file: string,
+  text: string,
+  workspace: string,
+): Promise<string | undefined> {
+  const refused = await admitHistoryWrite(file, workspace);
+  if (refused !== undefined) return refused;
   try {
     appendFileSync(file, text.replace(/\s+/g, " ") + "\n");
     // Applied after the append: covers a fresh file and tightens a loose one.
@@ -328,6 +346,7 @@ export function rememberHistory(file: string, text: string): void {
   } catch {
     /* history is a convenience, never a reason to fail */
   }
+  return undefined;
 }
 
 /* ------------------------------ local text ------------------------------ */
@@ -442,7 +461,7 @@ export function runThemeCommand(arg: string, renderer: Renderer): void {
   }
   setThemeMode(want);
   try {
-    persistThemeMode(want);
+    void persistThemeMode(want);
   } catch {
     /* user config may be read-only */
   }
@@ -926,12 +945,19 @@ export async function runConvoCommand(
           return true;
         }
         if (format === "hzs") {
-          const result = writeSessionArchive(workspace, runtime.sessionId);
-          renderer.notice(
-            `exported .hzs: ${result.messageCount} message(s), ${result.checkpointCount} checkpoint(s)` +
-              (result.eventCount > 0 ? `, ${result.eventCount} event(s)` : "") +
-              ` → ${shortenPath(result.path)} (import not supported)`,
-          );
+          // Under-admission (ruling 572): reuse CLI Guard path (569) before .hzs write.
+          try {
+            const result = await exportSessionCli(workspace, runtime.sessionId);
+            renderer.notice(
+              `exported .hzs: ${result.messageCount} message(s), ${result.checkpointCount} checkpoint(s)` +
+                (result.eventCount > 0 ? `, ${result.eventCount} event(s)` : "") +
+                ` → ${shortenPath(result.path)} (import not supported)`,
+            );
+            // H-7 (ruling 574): force-evaluate contracts; human notice unchanged.
+            void sessionExportPublication(result);
+          } catch (err) {
+            renderer.notice(errorMessage(err));
+          }
           return true;
         }
         const h = history();
@@ -950,11 +976,34 @@ export async function runConvoCommand(
           chain,
         };
         const dir = path.join(stateRoot(workspace), "exports");
-        mkdirSync(dir, { recursive: true });
         const file = path.join(dir, `${runtime.sessionId.replace(/[^A-Za-z0-9._-]/g, "_")}.${format}`);
+        // Under-admission (ruling 572): Guard fs.write before json/html export write.
+        const action: GuardAction = { kind: "fs.write", target: file };
+        const kernel = new KernelClient({ workspace });
+        await kernel.start();
+        let decision;
+        try {
+          decision = await kernel.checkGuard(action, scopeFor(action, workspace));
+        } catch (err) {
+          renderer.notice(
+            `export refused: the guard could not decide (${err instanceof Error ? err.message : String(err)})`,
+          );
+          return true;
+        }
+        if (decision.decision !== "allow") {
+          const why =
+            decision.decision === "ask"
+              ? "unattended export never self-approves; allow the path in policy"
+              : `denied by policy: ${decision.reason !== undefined && decision.reason !== "" ? decision.reason : "no reason given"}`;
+          renderer.notice(`export refused: ${why}`);
+          return true;
+        }
+        mkdirSync(dir, { recursive: true });
         // The export leaves the guarded state tree as a shareable file: mask secret-like values.
         writeFileSync(file, maskSecrets(format === "json" ? renderExportJson(h, meta) : renderExportHtml(h, meta)), { mode: 0o600 });
         renderer.notice(`exported ${h.length} message(s) to ${shortenPath(file)} (${chainLine(chain)})`);
+        // H-7 (ruling 574): force-evaluate contracts; human notice unchanged.
+        void convoExportPublication({ messageCount: h.length, format });
         return true;
       }
       default:
@@ -1595,10 +1644,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break;
       case "status":
         renderer.notice(strip(formatIdleStatusLine(statusInfo(), terminalWidth() - 1, { plain: true })));
-        if (unknownCount > 0) runUnknownCommand(runtime, renderer);
+        if (unknownCount > 0) void runUnknownCommand(runtime, renderer);
         break;
       case "unknown":
-        runUnknownCommand(runtime, renderer, arg);
+        void runUnknownCommand(runtime, renderer, arg);
         break;
       case "theme":
         runThemeCommand(arg, renderer);
@@ -1606,7 +1655,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "notify": {
         const home = process.env.HOME?.trim() || homedir();
         const cfg = loadConfig(process.env, defaultConfigPath(home), workspace);
-        runNotifyCommand(arg, renderer, cfg.notify, (prefs) => persistNotifyConfig(prefs, home));
+        runNotifyCommand(arg, renderer, cfg.notify, (prefs) => { void persistNotifyConfig(prefs, home); });
         break;
       }
       case "mode":
@@ -1762,7 +1811,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const handleUserLine = async (text: string): Promise<void> => {
     try {
       // Every line the human typed is worth remembering, commands included.
-      rememberHistory(historyFile, text);
+      await rememberHistory(historyFile, text, workspace);
       clearAbortedComposerDraft(workspace, runtime.sessionId);
       if (tryScrollbackHzReceiptUriLine(runtime, renderer, text)) {
         showPrompt();
@@ -1845,7 +1894,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * "no approval open" guard in the keymap listener below. */
   const abortTurn = (): void => {
     const drafting = String((rl as unknown as { line?: string }).line ?? "");
-    if (drafting.trim() !== "") saveAbortedComposerDraft(workspace, runtime.sessionId, drafting);
+    if (drafting.trim() !== "") {
+      // Best-effort (ruling 586): admit then persist; refuse is silent on abort.
+      void saveAbortedComposerDraft(workspace, runtime.sessionId, drafting);
+    }
     if (abortRequested) return;
     abortRequested = true;
     try {

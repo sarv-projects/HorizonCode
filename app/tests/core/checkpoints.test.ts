@@ -27,6 +27,7 @@ import { sha256Hex } from "../../src/contracts";
 import {
   __resetCheckpointsForTests,
   MAX_CHECKPOINTS,
+  admitCheckpointWrite,
   changesSince,
   checkpointByNumber,
   checkpointNumber,
@@ -34,6 +35,7 @@ import {
   checkpointViews,
   listCheckpoints,
   recordCheckpoint,
+  recordCheckpointGuarded,
   rewindPlan,
 } from "../../src/core/checkpoints";
 import {
@@ -433,4 +435,31 @@ describe("rewindPlan", () => {
     expect(readFileSync(checkpointPath(ws), "utf8")).toBe(checkpointsBefore);
     expect(reloadFromDisk(ws).entries.map((e) => e.id)).toEqual(["e-a", "e-b"]);
   });
+
+  test("admitCheckpointWrite refuses deny before persist (ruling 604)", async () => {
+    const ws = tempDir("hz-checkpoints-deny-");
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(ws, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(ws, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-checkpoint" }]),
+        "utf8",
+      );
+      const refused = await admitCheckpointWrite(ws);
+      expect(refused).toMatch(/denied|test-deny-checkpoint|checkpoint/i);
+      const notes: string[] = [];
+      const recorded = await recordCheckpointGuarded(ws, "s", 0, [], {
+        onAppendFailure: (m) => notes.push(m),
+      });
+      expect(recorded).toBeUndefined();
+      expect(notes.some((n) => /denied|test-deny-checkpoint|checkpoint/i.test(n))).toBe(true);
+      expect(existsSync(checkpointPath(ws))).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+    }
+  }, 20_000);
 });

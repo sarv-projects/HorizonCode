@@ -8,17 +8,22 @@
  */
 
 import * as path from "node:path";
-import { realpathish } from "./paths";
+import {
+  assessResourcePathOverlapDetailed,
+  formatResourcePathOverlapUncertainReason,
+} from "./resource-path-overlap";
 import type { EffectHost, EffectRecord } from "./effect-host";
 import { loadEffectLedger } from "./effect-ledger";
 import { appendReconcileLatch, loadReconcileLatch } from "./effect-reconcile-latch-store";
 import { formatEffectReconcileProbeSummary, probeEffectReconcile } from "./effect-reconcile-probe";
 import { resourceKeyFromEffectRecord } from "./effect-reconcile-probe-io";
+import { isMcpToolName, mcpToolClaimsReadOnly } from "./mcp/registry";
 import {
   observePendingEffectIdsOverlappingPath,
   observePendingResourceKeys,
   mutationResourceTargets,
 } from "./effect-resource-gate";
+import { countHookSpawns, type HookPoint, type HooksConfig } from "./hooks";
 import {
   formatUnpairedSessionKernelNotice,
   reconcileSessionKernel,
@@ -105,6 +110,46 @@ export function effectReconcileBlockMode(
   return "off";
 }
 
+/** True when the operator has not set any reconcile-block preference (including explicit off). */
+export function reconcileBlockEnvUnset(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const raw = env.HZ_EFFECT_RECONCILE_BLOCK;
+  return raw === undefined || raw.trim() === "";
+}
+
+export type ApplyReconcileBlockSpineResult = {
+  applied: boolean;
+  notice?: string;
+};
+
+/**
+ * Product spine (reduced R170): when EffectHost is `default`/`require`/`1` and
+ * reconcile-block env is unset, enable `=resource`. Explicit `0`/`off` wins.
+ * This is NOT universal kernel-owned R170.
+ */
+export function applyReconcileBlockSpineDefault(
+  env: Record<string, string | undefined> = process.env,
+): ApplyReconcileBlockSpineResult {
+  if (!reconcileBlockEnvUnset(env)) return { applied: false };
+  const host = env.HZ_EFFECT_HOST_KERNEL?.trim().toLowerCase() ?? "";
+  const spine =
+    host === "default" ||
+    host === "require" ||
+    host === "1" ||
+    host === "true" ||
+    host === "yes" ||
+    host === "opt-in";
+  if (!spine) return { applied: false };
+  env.HZ_EFFECT_RECONCILE_BLOCK = "resource";
+  return {
+    applied: true,
+    notice:
+      "[effect-reconcile-block] HZ_EFFECT_RECONCILE_BLOCK=resource " +
+      "(runtime: EffectHost spine active + env unset — reduced R170 path filter; not full kernel R170)",
+  };
+}
+
 export function effectReconcileBlockEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -122,28 +167,21 @@ export function effectReconcileBlockDoctorHint(
     return (
       "HZ_EFFECT_RECONCILE_BLOCK=resource: path-filtered mutating-tool gate (reduced R170; status chip + /unknown status wire **304**); " +
       "durable latch until explicit clean /unknown release, first-admission preflight, unknown-target fail-closed (**344**); " +
-      "all projected apply_patch paths and rename ends gated; unscoped shell denied during observe-pending; status/inset drivers (**342**)"
+      "all projected apply_patch paths and rename ends gated; unscoped shell denied during observe-pending; status/inset drivers (**342**); " +
+      "preTool + observation hook spawns refused under latch/observe-pending (**691**/**718**)"
     );
   }
   return (
     "HZ_EFFECT_RECONCILE_BLOCK=1: session-wide potential-effect gate (reduced R170); " +
     "durable latch persists across restarts, admission preflight, and clean explicit /unknown release (**344**); " +
     "observe-pending overlap checks all projected apply_patch paths; unscoped shell denied until observe; " +
-    "scrollback/fullscreen status and inset barrier (**342** reduced)"
+    "scrollback/fullscreen status and inset barrier (**342** reduced); " +
+    "preTool + observation hook spawns refused under latch/observe-pending (**691**/**718**)"
   );
 }
 
 function reconcileBlockNoticePrefix(mode: EffectReconcileBlockMode): string {
   return mode === "resource" ? EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE : EFFECT_RECONCILE_BLOCK_SESSION_NOTICE;
-}
-
-function resourcePathsOverlap(a: string, b: string): boolean {
-  // Resolve existing symlink aliases before comparing. A write to alias.ts
-  // must not bypass a barrier protecting the file it points at.
-  const ra = realpathish(a);
-  const rb = realpathish(b);
-  if (ra === rb) return true;
-  return ra.startsWith(rb + path.sep) || rb.startsWith(ra + path.sep);
 }
 
 function recordForEffectId(
@@ -626,6 +664,16 @@ const OBSERVE_PENDING_BLOCK_TOOLS = new Set([
   "shell",
 ]);
 
+function observePendingBlocksTool(tool: string): boolean {
+  if (OBSERVE_PENDING_BLOCK_TOOLS.has(tool)) return true;
+  return isMcpToolName(tool) && !mcpToolClaimsReadOnly(tool);
+}
+
+/** Fail-closed when targets are unprojectable but observe-pending is active. */
+function observePendingUnscopedMutator(tool: string): boolean {
+  return tool === "shell" || tool === "apply_patch" || (isMcpToolName(tool) && !mcpToolClaimsReadOnly(tool));
+}
+
 export const EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE =
   "[effect-reconcile-block] observe not settled";
 
@@ -641,12 +689,12 @@ export function effectReconcileBlockObservePendingRefusal(
   host?: EffectHost,
 ): string | undefined {
   if (!effectReconcileBlockEnabled()) return undefined;
-  if (!OBSERVE_PENDING_BLOCK_TOOLS.has(tool)) return undefined;
+  if (!observePendingBlocksTool(tool)) return undefined;
   const targets = args ? mutationResourceTargets(tool, args, workspace) : undefined;
   if (!targets || targets.length === 0) {
-    // Shell with no declared cwd and unprojectable patches cannot prove they
+    // Shell / apply_patch / mutating MCP with no projectable path cannot prove they
     // avoid any of the resources for which a receipt has not been observed.
-    if (tool !== "shell" && tool !== "apply_patch") return undefined;
+    if (!observePendingUnscopedMutator(tool)) return undefined;
     const pending = observePendingResourceKeys(host);
     if (pending.size === 0) return undefined;
     const driving = [...new Set([...pending.values()].flat())];
@@ -693,16 +741,122 @@ export function effectReconcileBlockRefusal(
         return `${EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE}: ${latch.reason} ` +
           `(refusing ${tool}: unknown resource target cannot prove disjoint from blocked path(s))`;
       }
-      const overlap = targets.find((target) => blocked.some((p) => resourcePathsOverlap(p, target)));
-      if (!overlap) return undefined;
-      return (
-        `${EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE}: ${latch.reason} ` +
-        `(refusing ${tool} on ${overlap}; run /unknown reconcile when ledger is clean)`
-      );
+      for (const target of targets) {
+        for (const p of blocked) {
+          const detail = assessResourcePathOverlapDetailed(p, target);
+          if (detail.overlap === "uncertain") {
+            const honesty = formatResourcePathOverlapUncertainReason(detail.uncertainReason);
+            return (
+              `${EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE}: ${latch.reason} ` +
+              `(refusing ${tool}: ${honesty})`
+            );
+          }
+          const assessment = detail.overlap;
+          if (assessment === "overlap") {
+            return (
+              `${EFFECT_RECONCILE_BLOCK_RESOURCE_NOTICE}: ${latch.reason} ` +
+              `(refusing ${tool} on ${target}; run /unknown reconcile when ledger is clean)`
+            );
+          }
+        }
+      }
+      return undefined;
     }
   }
   return (
     `${reconcileBlockNoticePrefix(mode)}: ${latch.reason} ` +
     `(refusing ${tool}; run /unknown reconcile or /unknown reconcile --probe when ledger is clean)`
+  );
+}
+
+export const EFFECT_RECONCILE_BLOCK_PRETOOL_HOOK_NOTICE =
+  "[effect-reconcile-block] preTool hooks barred";
+
+export const EFFECT_RECONCILE_BLOCK_OBSERVATION_HOOK_NOTICE =
+  "[effect-reconcile-block] observation hooks barred";
+
+type ReconcileHookBarrier = { latch: ReconcileBlockLatch | undefined; pendingCount: number };
+
+function effectReconcileBlockHookBarrier(
+  workspace: string,
+  sessionId: string,
+  host?: EffectHost,
+): ReconcileHookBarrier | undefined {
+  if (!effectReconcileBlockEnabled()) return undefined;
+  const latch = currentLatch(workspace, sessionId);
+  const pendingCount = host ? observePendingResourceKeys(host).size : 0;
+  if (!latch && pendingCount === 0) return undefined;
+  return { latch, pendingCount };
+}
+
+function formatReconcileBlockHookSpawnRefusal(
+  notice: string,
+  pointLabel: string,
+  hookCount: number,
+  hookClass: string,
+  barrier: ReconcileHookBarrier,
+): string {
+  if (barrier.latch) {
+    const mode = effectReconcileBlockMode();
+    return (
+      `${notice}: ${reconcileBlockNoticePrefix(mode)} latch active — ` +
+      `refusing ${pointLabel} hook spawn (${hookCount} ${hookClass} hook(s); ${barrier.latch.reason}; ` +
+      `run /unknown reconcile when ledger is clean)`
+    );
+  }
+  return (
+    `${notice}: observe-pending barrier active — ` +
+    `refusing ${pointLabel} hook spawn (${hookCount} ${hookClass} hook(s)) until receipt observe settles ` +
+    `(HZ_EFFECT_RECONCILE_BLOCK; ${barrier.pendingCount} in-flight resource path(s))`
+  );
+}
+
+/**
+ * Refuse deciding `preTool` hook spawns while a reconcile barrier is active
+ * (session/resource latch or observe-pending). Cross-process Bun hooks are ambient
+ * mutators outside the reduced R170 tool gates (ruling **691**; extends **683**).
+ */
+export function effectReconcileBlockPreToolHookRefusal(
+  workspace: string,
+  sessionId: string,
+  hooks: HooksConfig,
+  host?: EffectHost,
+): string | undefined {
+  const hookCount = countHookSpawns(hooks, "preTool");
+  if (hookCount === 0) return undefined;
+  const barrier = effectReconcileBlockHookBarrier(workspace, sessionId, host);
+  if (barrier === undefined) return undefined;
+  return formatReconcileBlockHookSpawnRefusal(
+    EFFECT_RECONCILE_BLOCK_PRETOOL_HOOK_NOTICE,
+    "preTool",
+    hookCount,
+    "deciding",
+    barrier,
+  );
+}
+
+/**
+ * Refuse observation hook spawns (`postTool`, lifecycle) while a reconcile barrier
+ * is active. Hook children are cross-process ambient mutators outside OwnerLog
+ * (ruling 718; extends 691 and 683).
+ */
+export function effectReconcileBlockObservationHookRefusal(
+  workspace: string,
+  sessionId: string,
+  hooks: HooksConfig,
+  host: EffectHost | undefined,
+  scope: { point: Exclude<HookPoint, "preTool">; tool?: string },
+): string | undefined {
+  const hookCount = countHookSpawns(hooks, scope.point, scope.tool);
+  if (hookCount === 0) return undefined;
+  const barrier = effectReconcileBlockHookBarrier(workspace, sessionId, host);
+  if (barrier === undefined) return undefined;
+  const pointLabel = scope.point === "postTool" ? "postTool" : `lifecycle ${scope.point}`;
+  return formatReconcileBlockHookSpawnRefusal(
+    EFFECT_RECONCILE_BLOCK_OBSERVATION_HOOK_NOTICE,
+    pointLabel,
+    hookCount,
+    "observation",
+    barrier,
   );
 }

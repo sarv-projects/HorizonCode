@@ -31,7 +31,7 @@ import { isRefused, writeAtomic } from "./atomic-write";
 import {
   BEFORE_MAX_BYTES,
   bindJournalWorkspace,
-  consumeChange,
+  consumeChangeGuarded,
   reloadFromDisk,
   unpersistedEntries,
   type ChangeEntry,
@@ -192,14 +192,14 @@ export const undoTool: Tool = {
           );
         }
         rmSync(entry.path);
-        consumeChange(ctx.sessionId, entry);
+        await consumeChangeGuarded(ctx.sessionId, entry);
         return { ok: true, output: `Removed ${rel} (it existed only because of the last recorded ${entry.tool}; undo)` };
       }
 
       const outcome = await writeAtomic(real, entry.before, ctx, real);
       if (isRefused(outcome)) return fail(outcome.refusal);
       // Append the consume tombstone: a reload must not resurrect this entry.
-      consumeChange(ctx.sessionId, entry);
+      await consumeChangeGuarded(ctx.sessionId, entry);
       // The session now holds the restored bytes -- later edits are legitimate.
       noteRead(ctx, real);
       return { ok: true, output: `Restored ${rel} to its content before the last recorded ${entry.tool}` };

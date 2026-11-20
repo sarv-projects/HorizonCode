@@ -148,6 +148,38 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
+/// Hex-encode raw bytes (lowercase). Used to ferry capped shell captures into
+/// OwnerLog streamEvidence archives without a base64 dependency.
+pub fn hex_encode(bytes: &[u8]) -> String {
+    hex_lower(bytes)
+}
+
+/// Decode lowercase/uppercase hex into bytes. Odd length or non-hex refused.
+pub fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
+    if hex.len() % 2 != 0 {
+        return Err("HZ_PRECONDITION_FAILED: hex length must be even".into());
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let bytes = hex.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = hex_nibble(bytes[i])?;
+        let lo = hex_nibble(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(b: u8) -> Result<u8, String> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err("HZ_PRECONDITION_FAILED: non-hex digit".into()),
+    }
+}
+
 /// The digest stored in a `.head` anchor for one canonical record preimage:
 /// plain sha256 when unkeyed (byte-identical to the legacy anchor), and
 /// HMAC-SHA256(key, utf8(preimage)) when a key is configured.

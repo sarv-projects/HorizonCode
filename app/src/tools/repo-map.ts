@@ -36,9 +36,17 @@ import {
   type RepoMapFileEntry,
   type RepoMapIndexLoad,
 } from "./repo-map-cache";
+import {
+  buildExportedSymbolGraph,
+  renderSymbolGraphSection,
+  saveSymbolGraphIfChanged,
+  symbolGraphCachePath,
+  symbolGraphEnabled,
+} from "./symbol-graph";
 import { buildRepoMapWithLadder, effectiveRepoMapBudget } from "./repo-map-ladder";
 import { sessionHasFilesInContext } from "./repo-map-context";
 import {
+  cochangeCachePath,
   cochangesEnabled,
   cochangeWorkspaceTrusted,
   computeCochangeBonuses,
@@ -178,6 +186,11 @@ function extractDefsWithFlags(text: string, ext: string): { defs: string[]; expo
  * (line order within each group), deduped. */
 export function extractDefs(text: string, ext: string): string[] {
   return extractDefsWithFlags(text, ext).defs;
+}
+
+/** Lexical def surface (exported vs local flags) for repo_map-adjacent callers (e.g. Eng Brain critic). */
+export function lexicalSymbolSurface(text: string, ext: string): { defs: string[]; exported: boolean[] } {
+  return extractDefsWithFlags(text, ext);
 }
 
 /** Whole-identifier occurrence counts for one file's text. */
@@ -748,6 +761,15 @@ export const repoMapTool: Tool = {
         description:
           "Definition-row offset (after fileCursor slice) for symbol-level paging; use nextSymbolCursor from a prior truncated map.",
       },
+      symbolGraph: {
+        type: "boolean",
+        description:
+          "When true, append a lexical exported-symbol adjacency slice (requires index; persist when HZ_SYMBOL_GRAPH=1).",
+      },
+      symbolGraphQuery: {
+        type: "string",
+        description: "Optional exported symbol name to narrow the symbolGraph section.",
+      },
       fallbackLadder: {
         type: "boolean",
         description: "When true (default), climb focus → repo → plain max-budget ladder if the map would be empty.",
@@ -767,6 +789,22 @@ export const repoMapTool: Tool = {
       if (decision.decision === "ask") {
         const ok = await ctx.approve({ title: `Map ${relPath(ctx.cwd, root)}`, detail: root, kind: "fs.read" }, action);
         if (!ok) return fail("declined by user");
+      }
+
+      // Under-admission (ruling 564): the durable index is an fs.write. Deny/ask
+      // skip persistence only — the read map still runs.
+      const indexPath = repoMapCachePath(ctx.workspace);
+      let indexFile: string | undefined = indexPath;
+      const cacheWrite: GuardAction = { kind: "fs.write", target: indexPath };
+      const cacheDecision = await ctx.guard(cacheWrite);
+      if (cacheDecision.decision === "deny") {
+        indexFile = undefined;
+      } else if (cacheDecision.decision === "ask") {
+        const ok = await ctx.approve(
+          { title: `Write repo-map cache ${relPath(ctx.cwd, indexPath)}`, detail: indexPath, kind: "fs.write" },
+          cacheWrite,
+        );
+        if (!ok) indexFile = undefined;
       }
 
       const focus = Array.isArray(args.focus) ? args.focus.filter((f): f is string => typeof f === "string") : undefined;
@@ -790,7 +828,7 @@ export const repoMapTool: Tool = {
         maxTokens: budget,
         fileCursor,
         symbolCursor,
-        indexFile: repoMapCachePath(ctx.workspace),
+        indexFile,
         hasFilesInContext,
         contextWindowTokens: ctx.contextWindowTokens,
       };
@@ -801,11 +839,29 @@ export const repoMapTool: Tool = {
       if (cochangesEnabled()) {
         try {
           const trusted = cochangeWorkspaceTrusted(ctx.workspace, loadConfig(process.env).trustedWorkspaceHooks);
+          const cochangePath = cochangeCachePath(ctx.workspace);
+          let persistCochange = true;
+          const cochangeWrite: GuardAction = { kind: "fs.write", target: cochangePath };
+          const cochangeDecision = await ctx.guard(cochangeWrite);
+          if (cochangeDecision.decision === "deny") {
+            persistCochange = false;
+          } else if (cochangeDecision.decision === "ask") {
+            const ok = await ctx.approve(
+              {
+                title: `Write repo-map cochange cache ${relPath(ctx.cwd, cochangePath)}`,
+                detail: cochangePath,
+                kind: "fs.write",
+              },
+              cochangeWrite,
+            );
+            if (!ok) persistCochange = false;
+          }
           const cochangeBonuses = await computeCochangeBonuses({
             workspace: ctx.workspace,
             stateDir: kernelStateDir(ctx.workspace),
             trusted,
             files: focus,
+            persistCache: persistCochange,
           });
           if (cochangeBonuses.size > 0) mapOpts.cochangeBonuses = cochangeBonuses;
         } catch {
@@ -814,7 +870,46 @@ export const repoMapTool: Tool = {
       }
       const result = useLadder ? buildRepoMapWithLadder(mapOpts) : buildRepoMap(mapOpts);
       if ("empty" in result) return fail("empty workspace");
-      return { ok: true, output: result.map };
+
+      let output = result.map;
+      const wantSymbolGraph =
+        args.symbolGraph === true || (typeof args.symbolGraphQuery === "string" && args.symbolGraphQuery !== "");
+      const persistGraph = symbolGraphEnabled();
+      if ((wantSymbolGraph || persistGraph) && indexFile !== undefined) {
+        const index = loadRepoMapIndex(indexFile);
+        if (index.entries.size > 0) {
+          const graph = buildExportedSymbolGraph(index.entries);
+          if (persistGraph) {
+            const graphPath = symbolGraphCachePath(ctx.workspace);
+            let persistSymbolGraph = true;
+            const graphWrite: GuardAction = { kind: "fs.write", target: graphPath };
+            const graphDecision = await ctx.guard(graphWrite);
+            if (graphDecision.decision === "deny") {
+              persistSymbolGraph = false;
+            } else if (graphDecision.decision === "ask") {
+              const ok = await ctx.approve(
+                {
+                  title: `Write symbol-graph cache ${relPath(ctx.cwd, graphPath)}`,
+                  detail: graphPath,
+                  kind: "fs.write",
+                },
+                graphWrite,
+              );
+              if (!ok) persistSymbolGraph = false;
+            }
+            if (persistSymbolGraph) saveSymbolGraphIfChanged(graphPath, graph);
+          }
+          if (wantSymbolGraph) {
+            const query =
+              typeof args.symbolGraphQuery === "string" && args.symbolGraphQuery !== ""
+                ? args.symbolGraphQuery
+                : undefined;
+            output = `${output}\n\n${renderSymbolGraphSection(graph, { query })}`;
+          }
+        }
+      }
+
+      return { ok: true, output };
     } catch (e) {
       return fail(msg(e));
     }

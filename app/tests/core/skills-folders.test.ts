@@ -25,31 +25,31 @@ function put(file: string, text: string): void {
   writeFileSync(file, text);
 }
 
-function skillOpts(trusted = false): WorkspaceTrustOptions {
+async function skillOpts(trusted = false): Promise<WorkspaceTrustOptions> {
   if (!trusted) return { home };
-  bindWorkspaceTrustRecord(home, ws, collectWorkspaceTrustDigests(ws));
+  await bindWorkspaceTrustRecord(home, ws, collectWorkspaceTrustDigests(ws));
   return { home, trustedWorkspaceHooks: [path.resolve(ws)] };
 }
 
-test("folder skill loads SKILL.md and lists resources", () => {
+test("folder skill loads SKILL.md and lists resources", async () => {
   const dir = path.join(ws, ".claude", "skills", "deploy");
   put(path.join(dir, "SKILL.md"), "---\ndescription: Ship it\n---\nRun the steps.");
   put(path.join(dir, "scripts", "go.sh"), "echo");
-  const skill = getSkill(ws, "deploy", skillOpts())!;
+  const skill = getSkill(ws, "deploy", await skillOpts())!;
   expect(skill.description).toBe("Ship it");
   expect(skill.resources).toEqual(["scripts/go.sh"]);
   expect(activeSkillSection(skill)).toContain("- scripts/go.sh");
 });
 
-test("precedence: project hz > project .claude", () => {
+test("precedence: project hz > project .claude", async () => {
   put(path.join(ws, ".claude", "skills", "a", "SKILL.md"), "project claude");
-  expect(getSkill(ws, "a", skillOpts())!.body).toBe("project claude");
+  expect(getSkill(ws, "a", await skillOpts())!.body).toBe("project claude");
   put(path.join(ws, ".hz", "state", "skills", "a", "SKILL.md"), "project hz");
-  expect(getSkill(ws, "a", skillOpts(true))!.body).toBe("project hz");
-  expect(listSkills(ws, skillOpts(true)).filter((s) => s.name === "a")).toHaveLength(1);
+  expect(getSkill(ws, "a", await skillOpts(true))!.body).toBe("project hz");
+  expect(listSkills(ws, await skillOpts(true)).filter((s) => s.name === "a")).toHaveLength(1);
 });
 
-test("symlinked skill files and folders are refused", () => {
+test("symlinked skill files and folders are refused", async () => {
   const secret = path.join(ws, "secret.txt");
   put(secret, "TOP SECRET");
   const dir = path.join(ws, ".claude", "skills");
@@ -60,12 +60,12 @@ test("symlinked skill files and folders are refused", () => {
   const outside = path.join(ws, "outside");
   put(path.join(outside, "SKILL.md"), "body");
   symlinkSync(outside, path.join(dir, "linked"));
-  expect(listSkills(ws, skillOpts()).map((s) => s.name)).toEqual([]);
+  expect(listSkills(ws, await skillOpts()).map((s) => s.name)).toEqual([]);
 });
 
-test("the built-in execute-plan skill resolves but is not listed, and a workspace skill shadows it", () => {
-  expect(getSkill(ws, "execute-plan", skillOpts())?.source).toBe("builtin:execute-plan");
-  expect(listSkills(ws, skillOpts()).map((s) => s.name)).not.toContain("execute-plan");
+test("the built-in execute-plan skill resolves but is not listed, and a workspace skill shadows it", async () => {
+  expect(getSkill(ws, "execute-plan", await skillOpts())?.source).toBe("builtin:execute-plan");
+  expect(listSkills(ws, await skillOpts()).map((s) => s.name)).not.toContain("execute-plan");
   put(path.join(ws, ".hz", "state", "skills", "execute-plan.md"), "---\ndescription: mine\n---\nmine");
-  expect(getSkill(ws, "execute-plan", skillOpts(true))?.body).toBe("mine");
+  expect(getSkill(ws, "execute-plan", await skillOpts(true))?.body).toBe("mine");
 });

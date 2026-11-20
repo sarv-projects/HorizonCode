@@ -112,11 +112,23 @@ describe("C-12 Linux /proc ancestor-chain proving", () => {
     expect(ANCESTOR_MAX_DEPTH).toBeGreaterThanOrEqual(8);
   });
 
-  test("non-Linux is an unavailable refusal (macOS/Windows residual)", () => {
-    const verdict = workerIsDescendantOf(4242, 500, { readFacts: read, platform: "darwin" });
+  test("win32 is an unavailable refusal (Windows residual)", () => {
+    const verdict = workerIsDescendantOf(4242, 500, { readFacts: read, platform: "win32" });
     expect(verdict.ok).toBe(false);
     expect(verdict.unavailable).toBe(true);
+    expect(verdict.reason).toContain("win32");
   });
+
+  test("darwin walks injectable ppid chain (reduced prove)", () => {
+    const ppid: Record<number, number> = { 4242: 500, 500: 1 };
+    const verdict = workerIsDescendantOf(4242, 500, {
+      platform: "darwin",
+      readPpid: (pid) => ppid[pid],
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.unavailable).toBeUndefined();
+  });
+
 });
 
 describe("C-12 publish → hello/verify → FIFO reserve handshake (fake IO)", () => {

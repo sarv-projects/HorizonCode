@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ChatMsg, Runtime } from "../../src/contracts";
@@ -43,27 +43,41 @@ test("html export escapes text and shows the chain status", () => {
 
 test("/export writes the file, /rename and /copy use the runtime", async () => {
   const ws = tmp();
-  const notices: string[] = [];
-  const renderer = { notice: (m: string) => notices.push(m), line: () => {} } as never;
-  let title = "old";
-  const rt = {
-    sessionId: "s1",
-    model: "m",
-    history: () => history,
-    renameSession: (t: string) => (title = t),
-    sessionTitle: () => title,
-    receiptChain: async () => ({ ok: true, count: 2 }),
-  } as unknown as Runtime;
-  const out: string[] = [];
-  await runConvoCommand("export", "html", rt, renderer, ws, (t) => void out.push(t));
-  const file = path.join(ws, ".hz", "exports", "s1.html");
-  expect(existsSync(file)).toBe(true);
-  expect(readFileSync(file, "utf8")).toContain("receipt chain verified: 2");
-  await runConvoCommand("rename", "new name", rt, renderer, ws);
-  expect(title).toBe("new name");
-  await runConvoCommand("copy", "", rt, renderer, ws, (t) => void out.push(t));
-  expect(out[0]).toBe(osc52("hello"));
-  expect(await runConvoCommand("bogus", "", rt, renderer, ws)).toBe(false);
+  const prevBin = process.env.HZ_KERNEL_BIN;
+  process.env.HZ_KERNEL_BIN = path.join(ws, "no-such-hz-kernel");
+  try {
+    const kernelState = path.join(ws, ".hzcode", "kernel");
+    mkdirSync(kernelState, { recursive: true });
+    writeFileSync(
+      path.join(kernelState, "policy.json"),
+      JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "allow", reason: "test-allow-export" }]),
+      "utf8",
+    );
+    const notices: string[] = [];
+    const renderer = { notice: (m: string) => notices.push(m), line: () => {} } as never;
+    let title = "old";
+    const rt = {
+      sessionId: "s1",
+      model: "m",
+      history: () => history,
+      renameSession: (t: string) => (title = t),
+      sessionTitle: () => title,
+      receiptChain: async () => ({ ok: true, count: 2 }),
+    } as unknown as Runtime;
+    const out: string[] = [];
+    await runConvoCommand("export", "html", rt, renderer, ws, (t) => void out.push(t));
+    const file = path.join(ws, ".hzcode", "exports", "s1.html");
+    expect(existsSync(file)).toBe(true);
+    expect(readFileSync(file, "utf8")).toContain("receipt chain verified: 2");
+    await runConvoCommand("rename", "new name", rt, renderer, ws);
+    expect(title).toBe("new name");
+    await runConvoCommand("copy", "", rt, renderer, ws, (t) => void out.push(t));
+    expect(out[0]).toBe(osc52("hello"));
+    expect(await runConvoCommand("bogus", "", rt, renderer, ws)).toBe(false);
+  } finally {
+    if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+    else process.env.HZ_KERNEL_BIN = prevBin;
+  }
 });
 
 test("the new verbs are builtin names, and truncating to the last user row drops the reply", () => {

@@ -19,6 +19,7 @@ import {
   workspaceStateDir,
   workspaceStateFile,
 } from "../paths";
+import { metricContract } from "../metrics";
 import { mmrLiteSelect, type ScoredMemoryCandidate } from "./mmr-lite";
 
 export const SECTION_SOFT_CAP_CHARS = 5000;
@@ -681,6 +682,65 @@ export function summarizeHandoffStore(workspace: string): HandoffStoreSummary | 
     return { branch, handoffRows, ftsRows, durableTodoRows, durableTodoBranches };
   });
   return summary ?? null;
+}
+
+/**
+ * H-7 parallel surface for Engram handoff counts (ruling 547).
+ * Doctor human detail stays byte-identical via `summarizeHandoffStore`.
+ */
+export function handoffStorePublication(workspace: string): string[] {
+  const store = summarizeHandoffStore(workspace);
+  const anchor = "none — first handoff-store inspect (no prior report of this workspace to compare against)";
+  const population = `Engram handoffs.db for workspace ${workspace}`;
+  const excludes = "missing handoffs.db yields a zero-row absent store; nothing discarded from an open db";
+  if (store === null) {
+    return [
+      metricContract({
+        metric: "handoff store present",
+        anchor,
+        population,
+        excludes,
+        value: 0,
+      }),
+    ];
+  }
+  return [
+    metricContract({
+      metric: "handoff store present",
+      anchor,
+      population,
+      excludes,
+      value: 1,
+    }),
+    metricContract({
+      metric: "handoff rows",
+      anchor,
+      population,
+      excludes,
+      value: store.handoffRows,
+    }),
+    metricContract({
+      metric: "handoff fts sections",
+      anchor,
+      population,
+      excludes,
+      value: store.ftsRows,
+    }),
+    metricContract({
+      metric: "handoff durable todo rows",
+      anchor,
+      population,
+      excludes,
+      value: store.durableTodoRows,
+    }),
+    metricContract({
+      metric: "handoff durable todo branches",
+      anchor,
+      population,
+      excludes,
+      value: store.durableTodoBranches,
+    }),
+  ];
 }
 
 export function searchHandoffs(

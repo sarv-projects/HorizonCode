@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { createRuntime } from "../../src/core/index";
-import { defaultConfigPath, persistThemeMode } from "../../src/core/config";
+import { admitUserConfigWrite, defaultConfigPath, persistThemeMode } from "../../src/core/config";
 import { runThemeCommand } from "../../src/tui/interactive";
 import { createRenderer } from "../../src/tui/render";
 import { activeTheme, bgCode, fgCode, onBg, paint, setColorEnabled, setThemeMode, strip, themeMode } from "../../src/tui/style";
@@ -61,14 +61,14 @@ describe("/theme", () => {
     expect(notices("")).toContain("(NO_COLOR is set)");
   });
 
-  test("persistThemeMode writes user config and /theme uses it", () => {
+  test("persistThemeMode writes user config and /theme uses it", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "hz-theme-home-"));
     try {
-      persistThemeMode("dark", home);
+      await persistThemeMode("dark", home);
       const file = JSON.parse(readFileSync(defaultConfigPath(home), "utf8")) as { theme?: string };
       expect(file.theme).toBe("dark");
       runThemeCommand("light", createRenderer({ out: () => {} }));
-      persistThemeMode("light", home);
+      await persistThemeMode("light", home);
       expect(JSON.parse(readFileSync(defaultConfigPath(home), "utf8")).theme).toBe("light");
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -100,4 +100,29 @@ describe("/theme", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  test("admitUserConfigWrite refuses deny before theme persist (ruling 594)", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "hz-theme-deny-"));
+    const prevBin = process.env.HZ_KERNEL_BIN;
+    process.env.HZ_KERNEL_BIN = path.join(home, "no-such-hz-kernel");
+    try {
+      const kernelState = path.join(home, ".hzcode", "kernel");
+      mkdirSync(kernelState, { recursive: true });
+      writeFileSync(
+        path.join(kernelState, "policy.json"),
+        JSON.stringify([{ kind: "fs.write", scope: "workspace", decision: "deny", reason: "test-deny-config" }]),
+        "utf8",
+      );
+      const refused = await admitUserConfigWrite(home);
+      expect(refused).toMatch(/denied|test-deny-config|user-config/i);
+      const persistRefused = await persistThemeMode("dark", home);
+      expect(persistRefused).toMatch(/denied|test-deny-config|user-config/i);
+      expect(existsSync(defaultConfigPath(home))).toBe(false);
+    } finally {
+      if (prevBin === undefined) delete process.env.HZ_KERNEL_BIN;
+      else process.env.HZ_KERNEL_BIN = prevBin;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+
 });
