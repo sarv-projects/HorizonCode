@@ -2,7 +2,7 @@
 
 > **Product:** HorizonCode · **Binary:** `hzcode` · **Goal: NOT COMPLETE** (prototype trust spine / P0 bars open). LICENSE deferred. Never claim shell-net egress **`enforced`**.
 >
-> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Authoritative status: [`28-implementation-status.md`](28-implementation-status.md) §3 (rulings through **734**); honesty: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md); stop-of-day: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Design set ratified through **RC-18** (RC-1…RC-17 plus event-map discipline); much of docs/01–25 remains **DESIGNED** ahead of code.
+> **Coding agents:** [`../AGENTS.md`](../AGENTS.md) — onboarding, backlog-first, **docs are not exhaustive vs the tree**. Queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Authoritative status: [`28-implementation-status.md`](28-implementation-status.md) §3 (rulings through **735**); honesty: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md); stop-of-day: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Design set ratified through **RC-18** (RC-1…RC-17 plus event-map discipline); much of docs/01–25 remains **DESIGNED** ahead of code.
 >
 > **Gates note:** `bash ops/gates.sh` **8/8** re-verified 2026-11-19 (ruling **648** follow-up) — that is repository-gate VERIFIED, **not** P0/EffectHost/R170/egress done and **not** RELEASED. Historical 2026-11-10 suite counts in older banners are archive only. Build/commands: [`33-handoff.md`](33-handoff.md).
 

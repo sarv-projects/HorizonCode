@@ -2,7 +2,7 @@
 
 > **Goal: NOT COMPLETE.** LICENSE deferred ([`LICENSE-STATUS.md`](LICENSE-STATUS.md)). Never claim shell-net egress **`enforced`**. Nothing is **RELEASED**.
 >
-> **Authoritative status:** [`28-implementation-status.md`](28-implementation-status.md) §3 through ruling **734**. Live queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Progress: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md). Build/test: [`33-handoff.md`](33-handoff.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md).
+> **Authoritative status:** [`28-implementation-status.md`](28-implementation-status.md) §3 through ruling **735**. Live queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Progress: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md). Build/test: [`33-handoff.md`](33-handoff.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md).
 >
 > **Recheck:** working tree tip + uncommitted 733/734 folded into this inventory before push. Prior tip `aa09567` covered through **732**; this stop-of-day revision adds **733** (`fs.delete` observe-settle) + **734** (Bun H-31 workspace identity).
 

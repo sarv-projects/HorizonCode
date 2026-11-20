@@ -12,7 +12,7 @@
 
 ---
 
-> **2026-11-20 stop-of-day (rechecked) — finish-all paused; Goal NOT COMPLETE:** Working tree through ruling **734** (`docs/28` §3). Full done/left/owner-input/v1 inventory: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). P0-1…4 done-bars still OPEN; never shell-net **`enforced`**; LICENSE deferred. **Owner live-spend grant:** unlimited usage / no holding back — run live residuals and fix rate-limits/errors in place (stop-of-day §3.1).
+> **2026-11-20 stop-of-day (rechecked) — finish-all paused; Goal NOT COMPLETE:** Working tree through ruling **735** (`docs/28` §3). Full done/left/owner-input/v1 inventory: [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). P0-1…4 done-bars still OPEN; never shell-net **`enforced`**; LICENSE deferred. **Owner live-spend grant:** unlimited usage / no holding back — run live residuals and fix rate-limits/errors in place (stop-of-day §3.1).
 
 > **2026-11-15 ruling 478 — R172 nested event-stream replay reduced, R172 still OPEN:** `receipt-nested-event-stream-replay.ts` walks nested child session JSONL streams from a verified parent event read (depth/cycle budgets; missing/broken child refusal) into the receipt inspector and `hzcode session verify` (exit 3). Complements **456** nested receipt-graph replay and **357** flat parent/child hash inspection. Does **not** complete authenticated issuer, `parentReceiptId` contracts, or keyed attestation. See [status §3](28-implementation-status.md) ruling **478**.
 >

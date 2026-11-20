@@ -16,7 +16,7 @@
 | Schemas `*V1` | [`05-domain-and-schemas.md`](05-domain-and-schemas.md) + [`app/src/contracts.ts`](../app/src/contracts.ts) |
 | APIs / kernel protocol | [`07-apis-and-contracts.md`](07-apis-and-contracts.md) + `kernel/src/protocol.rs` |
 | Loop / tool logic | [`08-runtime.md`](08-runtime.md), [`09-tools.md`](09-tools.md) + `loop.ts` |
-| What is **actually shipped** | [`28-implementation-status.md`](28-implementation-status.md) §3 (through **734**, status rulings) |
+| What is **actually shipped** | [`28-implementation-status.md`](28-implementation-status.md) §3 (through **735**, status rulings) |
 | Designed superset (may exceed code) | [`31-design-summary.md`](31-design-summary.md) |
 
 **Onboarding order (new agent):** [`../AGENTS.md`](../AGENTS.md) (start here) → FULL-BACKLOG (§Z) → `33-handoff` §1 → `contracts.ts` → `28` §3 → code. **Docs may lag code** — update docs when you implement backlog rows.
@@ -28,7 +28,7 @@
 
 | Fact | Evidence |
 |---|---|
-| Branch | Working tree rulings **538–734** (stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)). Latest: **734** Bun H-31 workspace identity; **733** fs.delete observe-settle; **732** shell.exec require-wrap; **731** multimodal; **730** speculation doctor. P0 spine still OPEN — gates-green ≠ release |
+| Branch | Working tree rulings **538–735** (stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)). Latest: **734** Bun H-31 workspace identity; **733** fs.delete observe-settle; **732** shell.exec require-wrap; **731** multimodal; **730** speculation doctor. P0 spine still OPEN — gates-green ≠ release |
 | Research | `repo_take/little-coder` @ `89d4fa0…`, `repo_take/aider` @ `5dc9490…` (gitignored) |
 | Never claim | Shell-net **`enforced`** |
 | WSL caveat | `kernel/tests/sandbox_exec.rs` may fail without CAP/Landlock |

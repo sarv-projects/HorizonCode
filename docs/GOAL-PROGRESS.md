@@ -1,10 +1,10 @@
 # Goal progress — HorizonCode prototype honesty
 
-> **Overall goal: NOT COMPLETE** (2026-11-20). Working tree through ruling **734**; `bash ops/gates.sh` **8/8** re-verified 2026-11-19 after **648**; the prototype trust spine and P0 done bars remain open. Gates-green ≠ release.
+> **Overall goal: NOT COMPLETE** (2026-11-20). Working tree through ruling **735**; `bash ops/gates.sh` **8/8** re-verified 2026-11-19 after **648**; the prototype trust spine and P0 done bars remain open. Gates-green ≠ release.
 >
 > **Next agent:** [`../AGENTS.md`](../AGENTS.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). **LICENSE deferred** — [`LICENSE-STATUS.md`](LICENSE-STATUS.md).
 >
-> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **734**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`. Critique verification: [`audit/architecture-critique-verification-2026-11-19.md`](audit/architecture-critique-verification-2026-11-19.md).
+> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **735**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`. Critique verification: [`audit/architecture-critique-verification-2026-11-19.md`](audit/architecture-critique-verification-2026-11-19.md).
 >
 > **Stop-of-day inventory:** [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md).
 >
@@ -371,7 +371,7 @@ Partial §7 rows still carrying live residuals (FULL-BACKLOG §C): **B-4** live 
 
 | Item | Note |
 |---|---|
-| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–734** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
+| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–735** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
 | docs/24 §3.5 catalogue | 18 rows remain `declared-gap` in `ops/gate-catalogue.md` — runner never pretends they run |
 | NOTICE / provenance | Release-grade NOTICE rows keyed to full Provenance tables still OPEN (`33-handoff` §6) |
 | Never claim | Shell-net egress **`enforced`** |
@@ -630,7 +630,7 @@ Partial §7 rows still carrying live residuals (FULL-BACKLOG §C): **B-4** live 
 
 | Item | Note |
 |---|---|
-| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–734** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
+| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–735** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
 | docs/24 §3.5 catalogue | 18 rows remain `declared-gap` in `ops/gate-catalogue.md` — runner never pretends they run |
 | NOTICE / provenance | Release-grade NOTICE rows keyed to full Provenance tables still OPEN (`33-handoff` §6) |
 | Never claim | Shell-net egress **`enforced`** |

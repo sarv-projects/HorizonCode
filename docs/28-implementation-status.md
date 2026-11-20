@@ -1,6 +1,6 @@
 # 28 — Implementation Status
 
-> **What this file is:** the single map from the design corpus (docs 01–30; the design corpus proper is 01–25) to implementation reality. Every status here is backed by a command that was actually run. **Agents:** [`AGENT-DOC-NAVIGATION.md`](AGENT-DOC-NAVIGATION.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md) (complete queue) → this file §3 (rulings through **734**). **Goal:** `GOAL-PROGRESS.md` — **NOT COMPLETE**. Header counts below = **historical 2026-11-10**. Steal evidence: `30-steal-list.md`.
+> **What this file is:** the single map from the design corpus (docs 01–30; the design corpus proper is 01–25) to implementation reality. Every status here is backed by a command that was actually run. **Agents:** [`AGENT-DOC-NAVIGATION.md`](AGENT-DOC-NAVIGATION.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md) (complete queue) → this file §3 (rulings through **735**). **Goal:** `GOAL-PROGRESS.md` — **NOT COMPLETE**. Header counts below = **historical 2026-11-10**. Steal evidence: `30-steal-list.md`.
 >
 > Status ladder per `docs/_conventions.md` §8: **`DESIGNED`** → **`CODE_PRESENT`** → **`WIRED`** → **`TESTED`** (automated tests exist and pass) → **`VERIFIED`** (the integrator ran the evidence command and observed the result; agent reports alone never reach `VERIFIED`) → **`RELEASED`**. Only `TESTED` and `VERIFIED` are claimed below; a level above what the evidence supports is never claimed, and an unknown is written `UNKNOWN`, never an implied success.
 >
@@ -852,6 +852,22 @@ All suites complete. File counts and totals are from the 2026-11-10 run on the `
 733. **P0-3 — executed-UNKNOWN observe-and-settle recovery for `fs.delete` (2026-11-20; TESTED, partial).** Extends **714**/**722**/**349**/**655**: same `effect.owner.recover` observe-settle attestation under OwnerLog flock with `argsDigest` match; `effect_host::observe_intended_fs_delete_settlement` independently double-checks stably absent path + empty-content digest proves delete intent before `owner.settled` + receipt (never writes or deletes during recovery). `recoveryPlaybook` outcome text names `fs.write`/`fs.edit`/`fs.delete`. Does **not** cover shell/`fs.batch`/`fs.rename` observe-settle, hooks/MCP/SQLite kernel OwnerLog barrier, or alias-race TOCTOU. Tests: `owner_executed_unknown_observe_settle_fs_delete_after_crash_before_settle`. Never shell-net `enforced`. Goal **NOT COMPLETE**.
 
 734. **H-31 — Bun file-tool workspace `(device,inode)` capture + effect-time drift refuse (2026-11-20; TESTED, partial).** Extends **623**/**629**/**636**/**674**: `workspace-binding.ts` captures workspace root identity at Guard time; `write` / `edit` / `atomic-write` / EffectHost atomic write re-stat and refuse remount/rename-swap before bytes land. Does **not** close all intermediate-component TOCTOU, non-Linux create races, or claim universal Bun EffectHost. Tests: `workspace-binding.test.ts`. Never shell-net `enforced`. Goal **NOT COMPLETE**.
+
+735. **Owner live-provider spend authorization — GRANTED in full (2026-11-20; RECORDED, not a product feature).** Owner stated that live API keys are already provisioned on the integration host and are authorized for **unlimited usage**, with **no holding back** on permission to spend. This is a complete operational grant, not a partial opt-in and not a residual “ask before spend” gate.
+
+   **Scope of the grant (full):**
+   - Keys already present on host include at least `OPENAI_API_KEY`, `NVIDIA_API_KEY`, and `~/.config/horizon/env` (0600). Agents must treat spend as pre-approved.
+   - Live residuals that require provider calls **must be run**, including §7 rows that were previously blocked only by spend hesitation: **B-4** product-loop live cache-hit, **C-7/C-9** live Responses `response.steer` / GPT-6 session, **F-4 / G-1 / H-2 / I-2** live invoice/billing truth, multimodal/vision live E2E, and any similar live provider probe behind `HZ_LIVE_*` / product flags.
+   - **Primary agent posture:** run the live path; when failures appear (auth, schema drift, empty responses, flaky WebSocket, provider outages, **rate limits**, retries/backoff, key wiring), **fix them in place** and continue. Rate-limit is not a stop condition: back off, retry, narrow the call, record honesty, keep going.
+   - Agents must **not** re-ask for spend permission, invent a SKIP for cost alone, or treat “keys may cost money” as owner-input blocking.
+
+   **Still outside this grant (not implied closed):**
+   - Official **J-1 / J-3 / J-4** harness credentials / OS-enforced proxy / live omp metaharness secrets if absent from the host (distinct from chat provider keys).
+   - Optional third-party backends not already keyed (e.g. Brave Search) until that key is present or the residual can use an already-keyed path.
+   - P0-1…4 done-bars, LICENSE, G1 frozen-`allow` removal, cryptographic human principal, and shell-net **`enforced`** — none of these are closed by spend authorization alone.
+   - Goal remains **NOT COMPLETE**; nothing is **RELEASED**.
+
+   **Where mirrored:** [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md) §3.1; [`../AGENTS.md`](../AGENTS.md); [`../CURRENT_RUN.md`](../CURRENT_RUN.md); [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md); [`33-handoff.md`](33-handoff.md).
 
 717. **Human approval principal — opt-in strict product mint gate (2026-11-19; TESTED, partial).** Extends **682**/**712**: `human-approval-principal-strict.ts` + `HZ_HUMAN_PRINCIPAL_STRICT=1` refuses product `KernelClient`/`LocalKernel` `makeLease`/`makeGrant` without approval-path `principal:"human"` (TUI/runtime `mintHumanApprovalLease`/`Grant` unchanged); doctor `guard.human.principal` OK when strict is on naming fd-3 ≠ human and Rust parent-mint RPCs unchanged. Does **not** implement cryptographic human identity, kernel-bound UI attestation, or Rust-side refusal of parent-minted raw leases (see **720**). Tests: `human-approval-principal-strict.test.ts`, `human-approval-principal.test.ts`, `human-approval-principal-honesty.test.ts`. Never shell-net `enforced`. Goal **NOT COMPLETE**.
 
