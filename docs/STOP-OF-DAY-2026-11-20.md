@@ -100,7 +100,7 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 
 | ID | Status | Live residual |
 |---|---|---|
-| **B-4** | PARTIAL | Product-loop live cache-hit measure (API keys) |
+| **B-4** | PARTIAL | Product-loop live cache-hit measure — **run** (spend granted §3.1) |
 | **C-7** | PARTIAL | Depends on live C-9 Responses steer |
 | **C-9** | PARTIAL | Live OpenAI GPT-6 `response.steer` session |
 | **C-11** | PARTIAL | Empirical difficulty-corpus calibration |
