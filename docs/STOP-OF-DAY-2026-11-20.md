@@ -47,7 +47,7 @@ High-water since prior `main` docs tip (**537**-era). Full text in `docs/28` §3
 
 | ID | Landed | Live residual |
 |---|---|---|
-| **B-4** | **692** hermetic cache-hit doctor | Product-loop live cache-hit (API keys) |
+| **B-4** | **692** hermetic cache-hit doctor | Product-loop live cache-hit — **run** (spend granted §3.1) |
 | **C-7** | Auto-bg ↔ steer race | Real Responses steer (see C-9) |
 | **C-9** | **697** hermetic steer doctor + product wrap | Live GPT-6 session |
 | **C-11** | **694** opt-in live difficulty judge | Empirical corpus calibration |
@@ -143,7 +143,17 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 
 ---
 
-## 3. Owner input needed
+## 3. Owner authorizations (recorded 2026-11-20)
+
+### 3.1 Live provider spend — **GRANTED (unlimited)**
+
+Owner confirmation (this session): live API keys are already provisioned on this host (`OPENAI_API_KEY`, `NVIDIA_API_KEY`, and `~/.config/horizon/env`). Owner authorizes **unlimited usage** and **no holding back** on permission to spend.
+
+**Agent rule:** for B-4 / C-9 / F-4 / G-1 / H-2 / I-2 / vision / other live provider residuals, **run the live path**. Do not skip, defer, or ask again for spend permission because of cost. Primary posture: **run**, and **fix whatever breaks along the way** (auth errors, schema drift, flaky WS, empty responses, **rate limits**, retries/backoff, provider outages, env/key wiring). Rate-limit ≠ stop: back off, retry, narrow the call, record honesty, continue.
+
+Still separate from spend: harness-only secrets (J-1/J-3/J-4 official credentials / OS proxy policy) if not already on the host; Brave/other optional backends only if that provider is required for the residual under test.
+
+### 3.2 Owner input still needed (non-spend)
 
 | Topic | Why | Blocking? |
 |---|---|---|
@@ -151,8 +161,8 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 | **LICENSE** | Choose SPDX / distribution terms | Deferred; needed for distribution |
 | **G1 breaking change** | Approve removing frozen `decision:"allow"` from `contracts.ts` | Needed for G1 done-bar |
 | **Human crypto principal** | Scope / UX for real human attestation (not Bun fd-3) | Needed for human-principal done-bar |
-| **Live provider keys** | B-4 / C-9 / F-4 / I-2 / vision E2E — credentials or explicit SKIP | Needed to close live residuals |
-| **J-1 / J-3 / J-4** | Official harness credentials + OS proxy policy | Needed for those §7 rows |
+| **Live provider spend** | ~~Ask for keys / SKIP~~ → **GRANTED unlimited** (§3.1) | **Not blocking** |
+| **J-1 / J-3 / J-4** | Official harness credentials + OS proxy policy (if absent on host) | Needed for those §7 rows only |
 | **WSL / CAP** | Host capability for product netns prove (this WSL often EPERM) | Needed for P0-4 prove |
 | **NOTICE / provenance** | Release-grade NOTICE rows | Release hygiene |
 
@@ -167,13 +177,15 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 - Speculative execution default-off.
 - Observe-settle is never silent auto-settle.
 - §7 PARTIAL ≠ P0 done-bar.
+- Unlimited spend authorization ≠ done-bar closed — live rows still need evidence.
 
 ---
 
 ## 5. Next agent first hour
 
-1. Read [`../AGENTS.md`](../AGENTS.md) → this file → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md) §Z / §A / §C.
-2. `git log -1` — confirm tip includes **734** stop-of-day sync.
-3. Prefer P0-1 hooks/MCP OwnerLog **or** P0-3 alias-race / shell observe-settle — not §7 live-key work without owner keys.
-4. Never claim shell-net **`enforced`**. Do not invent root `LICENSE`.
-5. On ship: add §3 ruling, bump GOAL/FULL/AGENTS/CURRENT_RUN/this file in the **same** change.
+1. Read [`../AGENTS.md`](../AGENTS.md) → this file (§3.1 spend grant) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md) §Z / §A / §C.
+2. `git log -1` — confirm tip includes this stop-of-day sync.
+3. **Run** live residuals when they are the next backlog item (B-4 / C-9 / invoice / vision / …). Fix errors and rate limits in place; do not hold back for cost.
+4. Also advance P0 spine (hooks/MCP OwnerLog, alias-race, shell observe-settle) in §Z order when not blocked on live keys.
+5. Never claim shell-net **`enforced`**. Do not invent root `LICENSE`.
+6. On ship: add §3 ruling, bump GOAL/FULL/AGENTS/CURRENT_RUN/this file in the **same** change.

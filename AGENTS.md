@@ -6,6 +6,8 @@
 
 **Stop-of-day (2026-11-20):** [`docs/STOP-OF-DAY-2026-11-20.md`](docs/STOP-OF-DAY-2026-11-20.md) — done / left / owner-input / v1 backlog.
 
+**Owner live-spend grant (2026-11-20):** keys already on host; **unlimited usage**; **no holding back** on permission to spend. For live residuals (B-4, C-9, invoice/vision, …): **run**, and fix errors as they appear (including rate limits / retries). Details: stop-of-day §3.1.
+
 ## Docs are living; the tree is authoritative
 
 - **Do not assume** the design corpus (`docs/01`–`25`, HLD, LLD, schemas, APIs) is complete, current, or fully implemented. Much is **DESIGNED** ahead of code; `docs/31-design-summary.md` and parts of `03`/`04` describe targets, not guaranteed reality.

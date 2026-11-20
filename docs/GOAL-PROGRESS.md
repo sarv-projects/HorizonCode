@@ -8,6 +8,8 @@
 >
 > **Stop-of-day inventory:** [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md).
 >
+> **Owner live-spend grant (2026-11-20):** keys on host; **unlimited usage**; **no holding back** on spend. Live residuals → **run** and fix errors/rate-limits in place (stop-of-day §3.1). Not a P0 done-bar by itself.
+>
 > **Release blockers (honest):** see [§ Release blockers](#release-blockers-honest--not-a-roadmap) below. Do not treat §7 partial steal rows as the release bar — P0-1…4 are.
 
 ## Rulings 538–669 slice (2026-11-18/19) — still NOT COMPLETE
