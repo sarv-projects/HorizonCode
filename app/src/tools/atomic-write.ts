@@ -29,7 +29,8 @@ import { randomBytes } from "node:crypto";
 import { lstat, open, readFile, rename, stat, unlink, type FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
-import type { ToolContext } from "../contracts";
+import type { LeaseWorkspaceBinding, ToolContext } from "../contracts";
+import { refuseWorkspaceIdentityDrift } from "../core/workspace-binding";
 import { realpathish } from "../core/paths";
 import { openVerifiedWrite, protectedTargetRefusal, type VerifiedWrite } from "./verified-open";
 
@@ -87,7 +88,12 @@ export async function writeAtomic(
   content: string,
   ctx: ToolContext,
   expectedReal?: string,
+  workspaceBindingAtGuard?: LeaseWorkspaceBinding,
 ): Promise<AtomicWriteOutcome> {
+  if (workspaceBindingAtGuard !== undefined) {
+    const drift = await refuseWorkspaceIdentityDrift(ctx.workspace, workspaceBindingAtGuard);
+    if (drift !== undefined) return { ok: false, refusal: drift };
+  }
   // Where the effect would really land, symlinks followed. Checked here as well
   // as at the call site so that every caller inherits the guarantee.
   const target = realpathish(resolved);

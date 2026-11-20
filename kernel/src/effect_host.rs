@@ -1697,6 +1697,57 @@ pub fn observe_intended_fs_edit_settlement(params: &Value) -> Result<Value, Stri
     Ok(out)
 }
 
+/// Independent disk observe for recovery when `fs.delete` finished but OwnerLog
+/// settlement did not persist (ruling **733** partial). Never deletes bytes.
+pub fn observe_intended_fs_delete_settlement(params: &Value) -> Result<Value, String> {
+    verify_expected_preimage(params, "fs.delete")?;
+    let sandbox_root = string_param(params, "sandboxRoot")?;
+    let raw_path = read_path_from_spec(params)?;
+    let root = Path::new(&sandbox_root);
+    let candidate = candidate_read_path(root, &raw_path);
+    if !crate::guard::path_contained_in(root, &candidate) {
+        return Err(
+            "HZ_PRECONDITION_FAILED: effect.execute fs.delete path must resolve inside sandboxRoot"
+                .to_string(),
+        );
+    }
+    let resolved = crate::guard::lexical_resolve(&candidate).ok_or_else(|| {
+        "HZ_PRECONDITION_FAILED: effect.execute fs.delete path could not be resolved".to_string()
+    })?;
+    let resolved =
+        crate::sandbox_path_verify::recheck_path_in_sandbox(root, &candidate, Some(&resolved))?;
+    let observation_stable = file_missing_stable(&resolved) && file_missing_stable(&resolved);
+    if !observation_stable {
+        return Err(
+            "HZ_PRECONDITION_FAILED: observe-settle fs.delete path not stably absent".into(),
+        );
+    }
+    let result_obs = crate::effect_evidence::observe_kernel_fs_mutation_result_digest(
+        crate::effect_evidence::FsMutationResultKind::Delete,
+        &raw_path,
+        Some(EMPTY_SHA256_HEX),
+        None,
+    );
+    if !result_obs.observation_stable {
+        return Err(
+            "HZ_PRECONDITION_FAILED: observe-settle fs.delete result digest unstable".into(),
+        );
+    }
+    let mut out = json!({
+        "verdict": "settled",
+        "effectId": params.get("effectId"),
+        "phases": ["allow", "execute", "observe"],
+        "postimageObservationStable": true,
+        "deletePath": resolved.to_string_lossy(),
+        "contentDigest": EMPTY_SHA256_HEX,
+        "resultDigestStable": true,
+    });
+    if let Some(d) = result_obs.digest {
+        out["resultDigest"] = json!(d);
+    }
+    Ok(out)
+}
+
 fn finish_fs_postimage_mutation_json(
     ledger: &mut HermeticEffectLedger,
     effect_id: &str,

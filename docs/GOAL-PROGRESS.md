@@ -1,10 +1,10 @@
 # Goal progress — HorizonCode prototype honesty
 
-> **Overall goal: NOT COMPLETE** (2026-11-20). Working tree through ruling **732**; `bash ops/gates.sh` **8/8** re-verified 2026-11-19 after **648**; the prototype trust spine and P0 done bars remain open. Gates-green ≠ release.
+> **Overall goal: NOT COMPLETE** (2026-11-20). Working tree through ruling **734**; `bash ops/gates.sh` **8/8** re-verified 2026-11-19 after **648**; the prototype trust spine and P0 done bars remain open. Gates-green ≠ release.
 >
 > **Next agent:** [`../AGENTS.md`](../AGENTS.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). **LICENSE deferred** — [`LICENSE-STATUS.md`](LICENSE-STATUS.md).
 >
-> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **732**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`. Critique verification: [`audit/architecture-critique-verification-2026-11-19.md`](audit/architecture-critique-verification-2026-11-19.md).
+> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **734**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`. Critique verification: [`audit/architecture-critique-verification-2026-11-19.md`](audit/architecture-critique-verification-2026-11-19.md).
 >
 > **Stop-of-day inventory:** [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md).
 >
@@ -138,6 +138,8 @@
 - **713:** Exported-symbol lexical adjacency graph (`symbol-graph.ts`, `HZ_SYMBOL_GRAPH=1`, `repo_map` `symbolGraph`); structural refinement on importers via **727**; tree-sitter AST call-graph still OPEN.
 - **714:** P0-3 executed-UNKNOWN observe-and-settle for fs.write (partial; not silent auto-settle).
 - **722:** P0-3 executed-UNKNOWN observe-and-settle for fs.edit (partial; not silent auto-settle).
+- **733:** P0-3 executed-UNKNOWN observe-and-settle for fs.delete (partial; stably absent proof; not silent auto-settle).
+- **734:** H-31 Bun file-tool workspace `(device,inode)` capture + effect-time drift refuse (partial).
 - **662:** Egress Allow mints one-use lease (H-4 / G1).
 - **663:** Mutating memory/handoff/debug exclusive; explore/review/plan/never agent fan-out shared.
 - **664:** CDP/artifact/h2h/acp/viability hardening from audit 1.7.
@@ -344,7 +346,7 @@ Gates **8/8** prove the repository CI contract. They do **not** prove a shippabl
 |---:|---|---|---|
 | **P0-1** | Universal EffectHost | Kernel owns **or refuses** every mutation path (write/edit/shell/apply_patch/ast_edit **and** ambient Bun: MCP, hooks, undo, preview, agent, code_mode); no silent Bun fallback under honesty gate | Reduced `fs.batch` + `EDIT_REPAIR` (**539**–**646**); `=require` auto on trusted Linux (**540**); **649**–**653**/**702**/**721** require preflight + undo route + hooks suppress + compound shell refuse + never-routable + MCP spawn refuse + mutating `mcp.invoke` fail-closed under EffectHost-on; hooks OwnerLog OPEN; read-only MCP ambient under `=default`/`=1` only; first-hit mixed-score refuse under require (**687**); tied-equal kernel route; shape-ineligible write/edit still Bun under non-require |
 | **P0-2** | Full postimage / Rust observe | Rust observes **every** effect class; complete historical replay (not only latest file postimage / shell streamEvidence) | Latest-file replay (**350**); CAS superseded (**356**); shell stdout/stderr streamChecked (**542**); **654** superseded CAS overwrite replay; **669**/**686** named shell argv FS postimages (`rm -f`/`touch`/`mkdir -p`/`cp`/`mv` reduced argv only); **698** bounded nested `childEffectIds` OwnerLog observe on postimage verify; **700** independent absence classify + signed absence-fact replay (partial); **709** named `legacyClassify` for rows without digest/CAS/stream (partial); arbitrary shell FS/net + deleted-byte reconstruction + deep universal nested observe still OPEN |
-| **P0-3** | Full R170 | Kernel-owned mandatory cross-process barrier for Bun/SQLite/MCP/hooks; UNKNOWN recovery that is not prepare-only | TS latch + reduced `=resource` spine (**344**/**538**); OwnerLog flock for **direct** kernel effects (**348**+); prepare-only recover (**349**); **655** attested abandon; **714** fs.write + **722** fs.edit observe-settle (partial); **673** Bun mutation fence (partial); **683** MCP + **690** SQLite mutator fail-closed (partial); **691** preTool + **718** observation hooks reconcile-barrier (partial); **695** hardlink `(dev,ino)` overlap + lstat fail-closed (partial); **699** dangling-symlink overlap fail-closed + named honesty (partial); full alias-race TOCTOU + hooks kernel OwnerLog / session lifecycle still OPEN |
+| **P0-3** | Full R170 | Kernel-owned mandatory cross-process barrier for Bun/SQLite/MCP/hooks; UNKNOWN recovery that is not prepare-only | TS latch + reduced `=resource` spine (**344**/**538**); OwnerLog flock for **direct** kernel effects (**348**+); prepare-only recover (**349**); **655** attested abandon; **714** fs.write + **722** fs.edit + **733** fs.delete observe-settle (partial); **673** Bun mutation fence (partial); **683** MCP + **690** SQLite mutator fail-closed (partial); **691** preTool + **718** observation hooks reconcile-barrier (partial); **695** hardlink `(dev,ino)` overlap + lstat fail-closed (partial); **699** dangling-symlink overlap fail-closed + named honesty (partial); full alias-race TOCTOU + hooks kernel OwnerLog / session lifecycle still OPEN |
 | **P0-4** | Product routed egress | Product netns path that confines child egress without ever advertising shell-net **`enforced`** | Decider + probes + optional CONNECT (**315**–**341**, **533**); **656** CREATE prove; **672** default-on when capable; **715** WSL/CAP/userns gap honesty; never `enforced` |
 
 ### Wave-0 / trust residuals that still block a “strict” release
@@ -355,7 +357,7 @@ Gates **8/8** prove the repository CI contract. They do **not** prove a shippabl
 | **G1** | **719** trusted product default-on V2 projection (`HZ_GUARD_G1_WIRE=1` when unset; `=0` legacy); **637** additive `g1`; **716** doctor honesty; frozen `contracts.ts` `allow` + raw lease/grant + human principal still OPEN |
 | **Human approval principal** | **720** fd-3 mints stamp `principal:"parent"`; **717**/**720** `HZ_HUMAN_PRINCIPAL_STRICT=1` refuses Bun + kernel raw mint without `principal:"human"`; doctor **712** names fd-3 (**352**) ≠ human; cryptographic human identity + policy-allow internal mint stamps remain OPEN |
 | **H-29 / H-30 / CB-6** | Detach/socket/epoch/lease/host flock + **710** `hzk.binary` reattach seal + **724** Windows `LockFileEx` (**625**–**638**/**647**/**703**/**710**/**724**); Windows peer honesty (**696**); Windows `--socket`/SO_PEERCRED detach still OPEN |
-| **H-31** | Workspace `(dev,ino)` bind + digest + held-lease remount (**623**/**629**/**636**); file-tool TOCTOU still OPEN |
+| **H-31** | Workspace `(dev,ino)` bind + digest + held-lease remount + Bun capture/drift (**623**/**629**/**636**/**674**/**734**); intermediate-component TOCTOU still OPEN |
 | **Speculation** | Opt-in wired (**670**) + prep-discard/doctor (**730**); default-off; segment/hook residuals OPEN |
 | **LICENSE** | No root `LICENSE` — deferred ([`LICENSE-STATUS.md`](LICENSE-STATUS.md)); distribution terms unset |
 
@@ -367,7 +369,7 @@ Partial §7 rows still carrying live residuals (FULL-BACKLOG §C): **B-4** live 
 
 | Item | Note |
 |---|---|
-| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–732** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
+| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–734** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
 | docs/24 §3.5 catalogue | 18 rows remain `declared-gap` in `ops/gate-catalogue.md` — runner never pretends they run |
 | NOTICE / provenance | Release-grade NOTICE rows keyed to full Provenance tables still OPEN (`33-handoff` §6) |
 | Never claim | Shell-net egress **`enforced`** |
@@ -603,7 +605,7 @@ Gates **8/8** prove the repository CI contract. They do **not** prove a shippabl
 |---:|---|---|---|
 | **P0-1** | Universal EffectHost | Kernel owns **or refuses** every mutation path (write/edit/shell/apply_patch/ast_edit **and** ambient Bun: MCP, hooks, undo, preview, agent, code_mode); no silent Bun fallback under honesty gate | Reduced `fs.batch` + `EDIT_REPAIR` (**539**–**646**); `=require` auto on trusted Linux (**540**); **649**–**653**/**702**/**721** require preflight + undo route + hooks suppress + compound shell refuse + never-routable + MCP spawn refuse + mutating `mcp.invoke` fail-closed under EffectHost-on; hooks OwnerLog OPEN; read-only MCP ambient under `=default`/`=1` only; first-hit mixed-score refuse under require (**687**); tied-equal kernel route; shape-ineligible write/edit still Bun under non-require |
 | **P0-2** | Full postimage / Rust observe | Rust observes **every** effect class; complete historical replay (not only latest file postimage / shell streamEvidence) | Latest-file replay (**350**); CAS superseded (**356**); shell stdout/stderr streamChecked (**542**); **654** superseded CAS overwrite replay; **669**/**686** named shell argv FS postimages (`rm -f`/`touch`/`mkdir -p`/`cp`/`mv` reduced argv only); **698** bounded nested `childEffectIds` OwnerLog observe on postimage verify; **700** independent absence classify + signed absence-fact replay (partial); **709** named `legacyClassify` for rows without digest/CAS/stream (partial); arbitrary shell FS/net + deleted-byte reconstruction + deep universal nested observe still OPEN |
-| **P0-3** | Full R170 | Kernel-owned mandatory cross-process barrier for Bun/SQLite/MCP/hooks; UNKNOWN recovery that is not prepare-only | TS latch + reduced `=resource` spine (**344**/**538**); OwnerLog flock for **direct** kernel effects (**348**+); prepare-only recover (**349**); **655** attested abandon; **714** fs.write + **722** fs.edit observe-settle (partial); **673** Bun mutation fence (partial); **683** MCP + **690** SQLite mutator fail-closed (partial); **691** preTool + **718** observation hooks reconcile-barrier (partial); **695** hardlink `(dev,ino)` overlap + lstat fail-closed (partial); **699** dangling-symlink overlap fail-closed + named honesty (partial); full alias-race TOCTOU + hooks kernel OwnerLog / session lifecycle still OPEN |
+| **P0-3** | Full R170 | Kernel-owned mandatory cross-process barrier for Bun/SQLite/MCP/hooks; UNKNOWN recovery that is not prepare-only | TS latch + reduced `=resource` spine (**344**/**538**); OwnerLog flock for **direct** kernel effects (**348**+); prepare-only recover (**349**); **655** attested abandon; **714** fs.write + **722** fs.edit + **733** fs.delete observe-settle (partial); **673** Bun mutation fence (partial); **683** MCP + **690** SQLite mutator fail-closed (partial); **691** preTool + **718** observation hooks reconcile-barrier (partial); **695** hardlink `(dev,ino)` overlap + lstat fail-closed (partial); **699** dangling-symlink overlap fail-closed + named honesty (partial); full alias-race TOCTOU + hooks kernel OwnerLog / session lifecycle still OPEN |
 | **P0-4** | Product routed egress | Product netns path that confines child egress without ever advertising shell-net **`enforced`** | Decider + probes + optional CONNECT (**315**–**341**, **533**); **656** CREATE prove; **672** default-on when capable; **715** WSL/CAP/userns gap honesty; never `enforced` |
 
 ### Wave-0 / trust residuals that still block a “strict” release
@@ -614,7 +616,7 @@ Gates **8/8** prove the repository CI contract. They do **not** prove a shippabl
 | **G1** | **719** trusted product default-on V2 projection (`HZ_GUARD_G1_WIRE=1` when unset; `=0` legacy); **637** additive `g1`; **716** doctor honesty; frozen `contracts.ts` `allow` + raw lease/grant + human principal still OPEN |
 | **Human approval principal** | **720** fd-3 mints stamp `principal:"parent"`; **717**/**720** `HZ_HUMAN_PRINCIPAL_STRICT=1` refuses Bun + kernel raw mint without `principal:"human"`; doctor **712** names fd-3 (**352**) ≠ human; cryptographic human identity + policy-allow internal mint stamps remain OPEN |
 | **H-29 / H-30 / CB-6** | Detach/socket/epoch/lease/host flock + **710** `hzk.binary` reattach seal + **724** Windows `LockFileEx` (**625**–**638**/**647**/**703**/**710**/**724**); Windows peer honesty (**696**); Windows `--socket`/SO_PEERCRED detach still OPEN |
-| **H-31** | Workspace `(dev,ino)` bind + digest + held-lease remount (**623**/**629**/**636**); file-tool TOCTOU still OPEN |
+| **H-31** | Workspace `(dev,ino)` bind + digest + held-lease remount + Bun capture/drift (**623**/**629**/**636**/**674**/**734**); intermediate-component TOCTOU still OPEN |
 | **Speculation** | Opt-in wired (**670**) + prep-discard/doctor (**730**); default-off; segment/hook residuals OPEN |
 | **LICENSE** | No root `LICENSE` — deferred ([`LICENSE-STATUS.md`](LICENSE-STATUS.md)); distribution terms unset |
 
@@ -626,7 +628,7 @@ Partial §7 rows still carrying live residuals (FULL-BACKLOG §C): **B-4** live 
 
 | Item | Note |
 |---|---|
-| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–732** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
+| Working tree vs `origin/main` | Stop-of-day **2026-11-20** commits rulings **538–734** to `main` ([`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)); re-verify gates after push |
 | docs/24 §3.5 catalogue | 18 rows remain `declared-gap` in `ops/gate-catalogue.md` — runner never pretends they run |
 | NOTICE / provenance | Release-grade NOTICE rows keyed to full Provenance tables still OPEN (`33-handoff` §6) |
 | Never claim | Shell-net egress **`enforced`** |

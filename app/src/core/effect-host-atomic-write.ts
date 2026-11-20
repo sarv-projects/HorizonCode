@@ -9,6 +9,11 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { recheckPathInWorkspace, verifyFdInWorkspace } from "./sandbox-fd-verify";
+import {
+  captureWorkspaceBinding,
+  isWorkspaceBindingError,
+  refuseWorkspaceIdentityDrift,
+} from "./workspace-binding";
 
 function pathInsideRoot(root: string, candidate: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -40,6 +45,11 @@ export async function writeBytesAtomicInSandbox(
   resolved: string,
   payload: Buffer,
 ): Promise<void> {
+  const wsCap = await captureWorkspaceBinding(sandboxRoot);
+  if (isWorkspaceBindingError(wsCap)) {
+    throw new Error(wsCap.error);
+  }
+  const wsBinding = wsCap;
   const rechecked = recheckPathInWorkspace(sandboxRoot, resolved);
   if (typeof rechecked !== "string") {
     throw new Error(rechecked.refusal);
@@ -59,6 +69,10 @@ export async function writeBytesAtomicInSandbox(
   }
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
+    const drift = await refuseWorkspaceIdentityDrift(sandboxRoot, wsBinding);
+    if (drift !== undefined) {
+      throw new Error(drift);
+    }
     handle = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     const verified = await verifyFdInWorkspace(handle, sandboxRoot, tmp);
     if ("refusal" in verified) {

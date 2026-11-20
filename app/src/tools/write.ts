@@ -34,6 +34,11 @@ import path from "node:path";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
+import {
+  captureWorkspaceBinding,
+  isWorkspaceBindingError,
+  refuseWorkspaceIdentityDrift,
+} from "../core/workspace-binding";
 import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
 import { isRefused, writeAtomic } from "./atomic-write";
@@ -151,6 +156,9 @@ export const writeTool: Tool = {
       const bytes = Buffer.byteLength(content, "utf8");
 
       const action: GuardAction = { kind: "fs.write", target: real };
+      const wsBindingCap = await captureWorkspaceBinding(ctx.workspace);
+      if (isWorkspaceBindingError(wsBindingCap)) return fail(wsBindingCap.error);
+      const wsBinding = wsBindingCap;
       const beforeGuard = await snapshot(real);
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
@@ -184,6 +192,8 @@ export const writeTool: Tool = {
       // directory is caught here too; the refusal names both paths.
       const refused = await protectedTargetRefusal(resolved, effectReal, ctx);
       if (refused !== undefined) return fail(refused);
+      const wsDrift = await refuseWorkspaceIdentityDrift(ctx.workspace, wsBinding);
+      if (wsDrift !== undefined) return fail(wsDrift);
 
       // Cross-process (core/file-lock.ts): snapshot check -> write -> journal is one
       // critical section per target file, taken AFTER approval. A second process that
@@ -268,7 +278,7 @@ export const writeTool: Tool = {
         checkpointNote = dirtyCheckpointPrefix(ctx, rel);
 
         await mkdir(path.dirname(real), { recursive: true });
-        const outcome = await writeAtomic(real, toWrite, ctx, real);
+        const outcome = await writeAtomic(real, toWrite, ctx, real, wsBinding);
         if (isRefused(outcome)) return fail(outcome.refusal);
 
         await recordChangeGuarded(ctx.sessionId, {

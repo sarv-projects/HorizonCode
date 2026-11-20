@@ -16,6 +16,10 @@ import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { withBunMutationDiskCriticalSection } from "../core/effect-r170-bun-mutation-fence";
+import {
+  captureWorkspaceBinding,
+  isWorkspaceBindingError,
+} from "../core/workspace-binding";
 import { isRefused, writeAtomic } from "./atomic-write";
 import {
   checkpointDirtyPathBeforeEdit,
@@ -604,6 +608,9 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
   // spelling: `edit {all:true}` is ineligible for the kernel route, so this Bun
   // path must never let a symlink turn an "inside" decision into an outside write.
   const action: GuardAction = { kind: "fs.write", target: real };
+  const wsBindingCap = await captureWorkspaceBinding(ctx.workspace);
+  if (isWorkspaceBindingError(wsBindingCap)) return fail(wsBindingCap.error);
+  const wsBinding = wsBindingCap;
   const decision = await ctx.guard(action);
   if (decision.decision === "deny") {
     return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -665,7 +672,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
           `(expected sha256 ${preimageSha256}; actual sha256 ${actualSha256}; changedBy unknown)`,
       );
     }
-    const outcome = await writeAtomic(real, after, ctx, real);
+    const outcome = await writeAtomic(real, after, ctx, real, wsBinding);
     if (isRefused(outcome)) return fail(outcome.refusal);
     if ((await readFile(real)).toString("utf8") !== after) {
       return fail(`verification failed: ${rel} does not match the intended content`);
@@ -729,6 +736,9 @@ export const editTool: Tool = {
       // Guard the resolved target (see executeAnchored): a symlink must not be
       // able to turn this path's "inside" decision into an outside write.
       const action: GuardAction = { kind: "fs.write", target: real };
+      const wsBindingCap = await captureWorkspaceBinding(ctx.workspace);
+      if (isWorkspaceBindingError(wsBindingCap)) return fail(wsBindingCap.error);
+      const wsBinding = wsBindingCap;
       const decision = await ctx.guard(action);
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
@@ -860,7 +870,7 @@ export const editTool: Tool = {
         // byte is written (same check, and same symlink policy, as `write` — see the
         // header of ./verified-open.ts). Not `truncate(0)` + `write`: a crash between
         // those two calls left the file at ZERO BYTES with nothing able to restore it.
-        const outcome = await writeAtomic(real, after, ctx, real);
+        const outcome = await writeAtomic(real, after, ctx, real, wsBinding);
         if (isRefused(outcome)) return fail(outcome.refusal);
         const verified = (await readFile(real)).toString("utf8") === after;
         if (!verified) return fail(`verification failed: ${rel} does not match the intended content`);

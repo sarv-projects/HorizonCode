@@ -1018,6 +1018,66 @@ fn owner_executed_unknown_observe_settle_fs_edit_after_crash_before_settle() {
 }
 
 #[test]
+fn owner_executed_unknown_observe_settle_fs_delete_after_crash_before_settle() {
+    let state = TempDir::new("owner-recover-observe-delete");
+    let sandbox = TempDir::new("owner-recover-observe-delete-workspace");
+    fs::write(sandbox.path().join("gone.txt"), b"remove-me").unwrap();
+    let execute_params = json!({
+        "effectId": "deleted-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.delete", "spec": { "path": "gone.txt" } }
+    });
+    let mut crashed = Kernel::start_with_env(
+        state.path(),
+        &[("HZ_EFFECT_OWNER_FAULT_BEFORE_OWNER_SETTLE", "1")],
+    );
+    crashed.send_line(&json!({
+        "id": 1006, "method": "effect.execute", "params": execute_params
+    }).to_string());
+    let status = crashed.child.wait().expect("wait for injected crash");
+    assert_eq!(status.code(), Some(88));
+    assert!(!sandbox.path().join("gone.txt").exists());
+
+    let mut owner = Kernel::start(state.path());
+    let blocked = owner.ok("effect.owner.status", json!({}));
+    assert_eq!(blocked["blocked"], true);
+
+    let wrong = owner.err("effect.owner.recover", json!({
+        "effectId": "deleted-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.delete", "spec": { "path": "other.txt" } }
+    }));
+    assert!(wrong.contains("digest mismatch") || wrong.contains("does not match"), "{wrong}");
+
+    let settled = owner.ok("effect.owner.recover", json!({
+        "effectId": "deleted-but-not-settled",
+        "mode": "executed_unknown_observe_settle",
+        "attestation": "independent_postimage_proves_success",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.delete", "spec": { "path": "gone.txt" } }
+    }));
+    assert_eq!(settled["settled"], true);
+    assert_eq!(settled["observedRecovery"], true);
+    assert_eq!(settled["blocked"], false);
+    let events = owner.ok("log.read", json!({"stream": "owner:effects"}));
+    let types: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"owner.settled"), "{types:?}");
+    let replay = owner.err("effect.execute", json!({
+        "effectId": "deleted-but-not-settled",
+        "sandboxRoot": sandbox.path(),
+        "dispatch": { "kind": "fs.delete", "spec": { "path": "gone.txt" } }
+    }));
+    assert!(replay.contains("duplicate EffectHost effectId"), "{replay}");
+}
+
+#[test]
 fn owner_preimage_pin_refuses_stale_edit_before_prepare_and_preserves_admission() {
     let state = TempDir::new("owner-preimage-pin");
     let sandbox = TempDir::new("owner-preimage-pin-workspace");

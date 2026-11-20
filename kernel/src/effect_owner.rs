@@ -835,7 +835,7 @@ fn recovery_playbook_for(state: &OwnerState) -> Value {
                     {
                         "mode": "executed_unknown_observe_settle",
                         "attestation": "independent_postimage_proves_success",
-                        "outcome": "issues owner.settled when replay params match prepare and disk independently proves fs.write/fs.edit intent",
+                        "outcome": "issues owner.settled when replay params match prepare and disk independently proves fs.write/fs.edit/fs.delete intent",
                         "requiresReplayParams": true
                     }
                 ],
@@ -1168,9 +1168,10 @@ pub fn recover(
         let observed = match kind.as_str() {
             "fs.write" => effect_host::observe_intended_fs_write_settlement(&replay)?,
             "fs.edit" => effect_host::observe_intended_fs_edit_settlement(&replay)?,
+            "fs.delete" => effect_host::observe_intended_fs_delete_settlement(&replay)?,
             _ => {
                 return Err(format!(
-                    "HZ_PRECONDITION_FAILED: owner observe-settle for {effect_id} supports fs.write and fs.edit only (got {kind})"
+                    "HZ_PRECONDITION_FAILED: owner observe-settle for {effect_id} supports fs.write, fs.edit, and fs.delete only (got {kind})"
                 ));
             }
         };
