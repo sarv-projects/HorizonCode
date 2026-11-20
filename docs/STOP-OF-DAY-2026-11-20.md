@@ -145,7 +145,7 @@ Gates alone do **not** ship. Until the owner lowers the bar, this is the release
 
 ## 3. Owner authorizations (recorded 2026-11-20)
 
-### 3.1 Live provider spend — **GRANTED (unlimited)**
+### 3.1 Live provider spend — **GRANTED (unlimited)** (docs/28 ruling **735**, full grant — not partial)
 
 Owner confirmation (this session): live API keys are already provisioned on this host (`OPENAI_API_KEY`, `NVIDIA_API_KEY`, and `~/.config/horizon/env`). Owner authorizes **unlimited usage** and **no holding back** on permission to spend.
 
