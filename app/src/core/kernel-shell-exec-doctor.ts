@@ -1,5 +1,5 @@
 /**
- * Kernel-routed `shell.exec` hz-sandbox-exec wrap honesty (ruling **730**).
+ * Kernel-routed `shell.exec` hz-sandbox-exec wrap honesty (ruling **732**).
  * Reports helper presence and require-wrap posture — never shell-net `enforced`.
  */
 

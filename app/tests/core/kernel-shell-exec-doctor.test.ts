@@ -8,7 +8,7 @@ describe("kernel-shell-exec-doctor", () => {
       HZ_SANDBOX_EXEC_BIN: "/nonexistent/hz-sandbox-exec",
     });
     expect(posture.status).toBe("fail");
-    expect(posture.detail).toContain("730");
+    expect(posture.detail).toContain("732");
     expect(posture.detail).toContain("never shell-net enforced");
   });
 

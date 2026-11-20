@@ -17,7 +17,7 @@ not invent Apache-2.0, MIT, or other SPDX ids on behalf of the owner.
 ## Still open
 
 - Owner-chosen project `LICENSE` (tracked in `docs/MASTER-BACKLOG-ALL.md` P0).
-- Release-grade `NOTICE` rows keyed to full Provenance tables (`docs/33` §5.11).
+- Release-grade `NOTICE` rows keyed to full Provenance tables (`docs/33-handoff.md` §6).
 
 Third-party code we adapt remains subject to **its** upstream licenses; see Provenance
 tables in design docs and the summary in `NOTICE`.

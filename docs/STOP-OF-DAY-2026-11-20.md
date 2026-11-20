@@ -2,13 +2,13 @@
 
 > **Goal: NOT COMPLETE.** LICENSE deferred ([`LICENSE-STATUS.md`](LICENSE-STATUS.md)). Never claim shell-net egress **`enforced`**. Nothing is **RELEASED**.
 >
-> **Authoritative status:** [`28-implementation-status.md`](28-implementation-status.md) §3 through ruling **735**. Live queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Progress: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md). Build/test: [`33-handoff.md`](33-handoff.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md).
+> **Authoritative status:** [`28-implementation-status.md`](28-implementation-status.md) §3 through ruling **739**. Live queue: [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). Progress: [`GOAL-PROGRESS.md`](GOAL-PROGRESS.md). Build/test: [`33-handoff.md`](33-handoff.md). Snapshot: [`../CURRENT_RUN.md`](../CURRENT_RUN.md). Deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md). Competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md).
 >
-> **Recheck:** working tree tip + uncommitted 733/734 folded into this inventory before push. Prior tip `aa09567` covered through **732**; this stop-of-day revision adds **733** (`fs.delete` observe-settle) + **734** (Bun H-31 workspace identity).
+> **Recheck:** inventory through **735** + honesty **736** + viability **737** + follow-up **738** (ruling-ID cites, GOAL dedupe, steal-list spend alignment) + docs-consistency **739** (P1/P2 closure).
 
 ## Session outcome
 
-Finish-all /goal work **paused for the day** after owner request. Inventory + implementation through **734** committed to `main`. Gates **8/8** last re-verified 2026-11-19 after **648** — gates-green ≠ release / ≠ P0 closed.
+Finish-all /goal work **paused for the day** after owner request. Inventory through **735**; honesty **736**; competitive viability **737**; follow-up **738** (mis-cites + GOAL dedupe + steal/F-4 honesty); docs-consistency **739** (OOO note, **9b**, steal C-12/H-7, FULL counts, deep-audit consolidation). Gates **8/8** last re-verified 2026-11-19 after **648** — gates-green ≠ release / ≠ P0 closed.
 
 ---
 

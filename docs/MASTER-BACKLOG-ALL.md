@@ -148,4 +148,4 @@ Wave F + global SKIP unchanged — see `GOAL-PROGRESS.md` §Explicit non-wired.
 
 ---
 
-*Last refreshed: 2026-11-16. Rulings through **537**; tree committed on `audit-remediation` @ `ddc8ef8`. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*
+*Last refreshed: 2026-11-20. Live rulings through **739** in [`28-implementation-status.md`](28-implementation-status.md); stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md); viability [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md). This matrix body last bulk-refreshed 2026-11-16 (@ `ddc8ef8` era) — prefer FULL-BACKLOG / GOAL / `28` §3 over stale row text here. LICENSE **DEFERRED**. P0 done bars **not met** — goal **NOT COMPLETE**.*

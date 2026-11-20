@@ -916,7 +916,7 @@ function checkSandboxExec(d: DoctorEnv): DoctorCheck {
   return ok("sandbox.exec", "hz-sandbox-exec", `found (${bin}); optional shell child confinement when the kernel reports process enforced`);
 }
 
-/** Kernel-routed shell.exec wrap posture — never shell-net `enforced` (ruling **730**). */
+/** Kernel-routed shell.exec wrap posture — never shell-net `enforced` (ruling **732**). */
 function checkKernelShellExec(d: DoctorEnv): DoctorCheck {
   const posture = assessKernelShellExecDoctorPosture(d.env as Record<string, string | undefined>);
   if (posture.status === "ok") {

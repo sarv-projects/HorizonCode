@@ -159,7 +159,7 @@ export interface GuardDecision {
 }
 /** Reduced attribution stamp for approval-path lease/grant mints (not attestation). */
 export const HUMAN_APPROVAL_PRINCIPAL = "human" as const;
-/** fd-3 parent-control mint attribution — controlling Bun parent, not a human (ruling 719). */
+/** fd-3 parent-control mint attribution — controlling Bun parent, not a human (ruling 720). */
 export const PARENT_CONTROL_PRINCIPAL = "parent" as const;
 
 /** H-31 / ruling 636 — optional workspace identity stamped on held leases. */

@@ -16,7 +16,7 @@
 | Schemas `*V1` | [`05-domain-and-schemas.md`](05-domain-and-schemas.md) + [`app/src/contracts.ts`](../app/src/contracts.ts) |
 | APIs / kernel protocol | [`07-apis-and-contracts.md`](07-apis-and-contracts.md) + `kernel/src/protocol.rs` |
 | Loop / tool logic | [`08-runtime.md`](08-runtime.md), [`09-tools.md`](09-tools.md) + `loop.ts` |
-| What is **actually shipped** | [`28-implementation-status.md`](28-implementation-status.md) §3 (through **735**, status rulings) |
+| What is **actually shipped** | [`28-implementation-status.md`](28-implementation-status.md) §3 (through **739**, status rulings) |
 | Designed superset (may exceed code) | [`31-design-summary.md`](31-design-summary.md) |
 
 **Onboarding order (new agent):** [`../AGENTS.md`](../AGENTS.md) (start here) → FULL-BACKLOG (§Z) → `33-handoff` §1 → `contracts.ts` → `28` §3 → code. **Docs may lag code** — update docs when you implement backlog rows.
@@ -28,7 +28,7 @@
 
 | Fact | Evidence |
 |---|---|
-| Branch | Working tree rulings **538–735** (stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md)). Latest: **734** Bun H-31 workspace identity; **733** fs.delete observe-settle; **732** shell.exec require-wrap; **731** multimodal; **730** speculation doctor. P0 spine still OPEN — gates-green ≠ release |
+| Branch | Working tree rulings **538–739** (stop-of-day [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md); honesty [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md); viability [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md)). Latest: **739** docs-consistency P1/P2 closure; **738** cite/steal/GOAL honesty; **737** competitive viability; **736** doc honesty; **735** spend grant. P0 spine still OPEN — gates-green ≠ release |
 | Research | `repo_take/little-coder` @ `89d4fa0…`, `repo_take/aider` @ `5dc9490…` (gitignored) |
 | Never claim | Shell-net **`enforced`** |
 | WSL caveat | `kernel/tests/sandbox_exec.rs` may fail without CAP/Landlock |
@@ -59,7 +59,7 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | forge T-1–T-20 | 1 | 19 | 0 | 0 | 20 |
 | second-wave §5 partial lines | 186 (index §V) | — | — | — | — |
 
-> Count note: OPEN is the not-yet-done bucket (15 `OPEN` + `G-1` `PARTIAL` = 16). DONE includes `CLOSED` rows. SKIP: D-4, H-6. Refreshed 2026-11-17 after rulings 529–534.
+> Count note: table above is a **2026-11-17 archive snapshot** (15 `OPEN` + `G-1` `PARTIAL` = 16; SKIP D-4, H-6). Prefer live PARTIAL/OPEN inventory in [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md) §2 and §C / §R below (e.g. **F-4** is **PARTIAL — TESTED**, not CLOSED). Do not treat these header counts as current.
 
 ---
 
@@ -90,7 +90,7 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | **E-5** | aider `watch.py` ai!/ai? | `30` §0.1.1 |
 | **LC-*** | little-coder TAKE pack | §J + `research/steal-little-coder-aider.md` |
 
-## C. §7 OPEN rows only (execute these)
+## C. §7 status mirror (execute non-DONE / PARTIAL residuals; DONE rows kept for traceability)
 
 | ID | Title | Status (from `30-steal-list.md` §2) |
 |---|---|---|
@@ -186,7 +186,7 @@ Rulings ladder: [`28-implementation-status.md`](28-implementation-status.md) §3
 | **F-1** | DONE | Narrow the lint signal to compiler-grade errors; render failures as marked tree-sitter exc | **done (scope closed by owner, ruling 513)** (rulings **204**, **462**, **486**): errors-only LSP plus marked line/structural (balanced-delimiter/dedent) excerpt windows and user lint commands ship. Grammar-aware tree-sitter ERROR-node windows are formally out of scope under the zero-runtime-dependency rule (decided once for B-1 and F-1). |
 | **F-2** | DONE | Tell the model what the harness already does for it (pre-commit lint list) | **done** (ruling **191**): `.pre-commit-config.yaml` hook ids are rendered into the main system prompt via `harnessAutomationSection`. |
 | **F-3** | DONE | User-supplied per-language lint command with catch-all fallback and `filename:line` parsin | **done** (rulings **210**, **462**, **486**): user lint commands, deterministic last-wins catch-all with an ambiguity diagnostic, shell-inert `{file}`, and Windows/ANSI/multi-finding `path:line` parsing with a 200 cap. Grammar-aware tree-sitter excerpts are F-1's clause and remain open there. |
-| **F-4** | CLOSED (reduced) | Evals built from post-mortems; evals that measure cost/latency, not just pass/fail | **partial — TESTED** (rulings **28**, **487**, **519**): per-case usage/cost now flows from a `provider.usage` event with explicit source (`none|harness-estimate|reported`); a pure `cost-reconciliation.ts` compares JSON/CSV invoices, and an opt-in live NVIDIA eval passed. Residual: live invoice truth and shell-net egress. |
+| **F-4** | PARTIAL — TESTED | Evals built from post-mortems; evals that measure cost/latency, not just pass/fail | **partial — TESTED** (rulings **28**, **487**, **519**): per-case usage/cost now flows from a `provider.usage` event with explicit source (`none|harness-estimate|reported`); a pure `cost-reconciliation.ts` compares JSON/CSV invoices, and an opt-in live NVIDIA eval passed. Residual: live invoice truth — **run** under spend grant **735**; shell-net egress never `enforced`. |
 | **F-5** | DONE | Hostile-input fixtures for the read path (lockfile tarpit, 600 KB line, FIFO, lying extens | **done** (wave 6a: hostile-read fixtures and read-tool hardening (`app/tests/tools/`)) |
 | **G-1** | PARTIAL | Post-turn background-review fork inheriting the parent's cached prefix byte-for-byte (~26  | **partial — TESTED** (rulings **488**, **522**, **531**): detached review-fork worker + `--review-fork`, spend reservation, and a crash-durable content-addressed JSONL journal with idempotent explicit recovery. Residual: live-provider cost capture and invoice reconciliation. |
 | **G-2** | DONE | Editorial standard for what may be written down (forbids capturing unresolved failures and | **done** (docs/28 ruling 27: editorial standard as one function in `app/src/core/review.ts`) |

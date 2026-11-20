@@ -135,7 +135,7 @@ fn shell_exec_wrap_disabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Fail-closed when product posture requires hz-sandbox-exec wrap (ruling **730**).
+/// Fail-closed when product posture requires hz-sandbox-exec wrap (ruling **732**).
 fn shell_exec_require_wrap() -> bool {
     std::env::var("HZ_SANDBOX_REQUIRE")
         .map(|value| value.trim() == "1")
@@ -1608,7 +1608,7 @@ fn unique_preimage_forward_replay(post: &str, old: &str, new: &str) -> Result<St
 }
 
 /// Independent disk observe for recovery when `fs.edit` finished but OwnerLog
-/// settlement did not persist (ruling **721** partial). Never writes bytes.
+/// settlement did not persist (ruling **722** partial). Never writes bytes.
 pub fn observe_intended_fs_edit_settlement(params: &Value) -> Result<Value, String> {
     let sandbox_root = string_param(params, "sandboxRoot")?;
     let raw_path = edit_path_from_spec(params)?;

@@ -126,7 +126,7 @@ describe("kernel-owned OwnerLog admission (R170 partial)", () => {
     }
   });
 
-  test.skipIf(!hasRustKernel)("HZ_HUMAN_PRINCIPAL_STRICT=1 refuses kernel parent mint without human stamp (719)", async () => {
+  test.skipIf(!hasRustKernel)("HZ_HUMAN_PRINCIPAL_STRICT=1 refuses kernel parent mint without human stamp (720)", async () => {
     const snapshot = snapshotEnv();
     setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_HUMAN_PRINCIPAL_STRICT: "1" });
     const root = mkdtempSync(path.join(tmpdir(), "hz-human-strict-kernel-"));
