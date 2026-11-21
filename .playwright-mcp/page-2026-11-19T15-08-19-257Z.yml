@@ -1,0 +1,422 @@
+- generic [active] [ref=f41e1]:
+  - alert [ref=f41e2]
+  - generic [ref=f41e3]:
+    - generic [ref=f41e4]:
+      - link "Skip to main content" [ref=f41e5] [cursor=pointer]:
+        - /url: "#main-content"
+      - generic [ref=f41e6]:
+        - banner [ref=f41e7]:
+          - generic [ref=f41e8]:
+            - generic [ref=f41e9]:
+              - link "Cursor Home" [ref=f41e10] [cursor=pointer]:
+                - /url: /docs
+                - img "Cursor Logo" [ref=f41e11]
+              - navigation [ref=f41e14]:
+                - link "Docs" [ref=f41e15] [cursor=pointer]:
+                  - /url: /docs
+                - link "API" [ref=f41e17] [cursor=pointer]:
+                  - /url: /docs/api
+                - link "Learn" [ref=f41e18] [cursor=pointer]:
+                  - /url: /learn
+                - link "Help" [ref=f41e19] [cursor=pointer]:
+                  - /url: /help
+            - button "Search docs... ⌘K" [ref=f41e23] [cursor=pointer]:
+              - generic [ref=f41e27]: Search docs...
+              - generic [ref=f41e28]: ⌘K
+            - generic [ref=f41e30]:
+              - link "Sign in" [ref=f41e31] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard
+              - link "Download" [ref=f41e32] [cursor=pointer]:
+                - /url: https://cursor.com/downloads
+        - generic [ref=f41e33]:
+          - heading "Command Palette" [level=2] [ref=f41e34]
+          - paragraph [ref=f41e35]: Search for a command to run...
+      - generic [ref=f41e36]:
+        - generic [ref=f41e38]:
+          - button [ref=f41e39]:
+            - button "Toggle Docs Sidebar" [ref=f41e41] [cursor=pointer]
+          - generic [ref=f41e45]:
+            - generic [ref=f41e46]:
+              - heading "Get Started" [level=2] [ref=f41e47]
+              - generic [ref=f41e48]:
+                - link "Welcome" [ref=f41e49] [cursor=pointer]:
+                  - /url: /docs
+                - link "Quickstart" [ref=f41e52] [cursor=pointer]:
+                  - /url: /docs/get-started/quickstart
+                - button "Models & Pricing" [ref=f41e55] [cursor=pointer]
+                - link "Changelog" [ref=f41e61] [cursor=pointer]:
+                  - /url: https://cursor.com/changelog
+                - link "Release Notes" [ref=f41e64] [cursor=pointer]:
+                  - /url: /docs/release-notes
+            - generic [ref=f41e67]:
+              - heading "Agent" [level=2] [ref=f41e68]
+              - generic [ref=f41e69]:
+                - link "Overview" [ref=f41e70] [cursor=pointer]:
+                  - /url: /docs/agent/overview
+                - link "Agents Window" [ref=f41e73] [cursor=pointer]:
+                  - /url: /docs/agent/agents-window
+                - link "Projects" [ref=f41e76] [cursor=pointer]:
+                  - /url: /docs/agent/projects
+                - link "Agent Review" [ref=f41e79] [cursor=pointer]:
+                  - /url: /docs/agent/agent-review
+                - link "Planning" [ref=f41e82] [cursor=pointer]:
+                  - /url: /docs/agent/plan-mode
+                - link "Prompting" [ref=f41e85] [cursor=pointer]:
+                  - /url: /docs/agent/prompting
+                - link "Voice Chat" [ref=f41e88] [cursor=pointer]:
+                  - /url: /docs/agent/voice-chat
+                - link "Debugging" [ref=f41e91] [cursor=pointer]:
+                  - /url: /docs/agent/debug-mode
+                - link "Design Mode" [ref=f41e94] [cursor=pointer]:
+                  - /url: /docs/agent/design-mode
+                - button "Tools" [ref=f41e97] [cursor=pointer]
+                - button "Security" [ref=f41e103] [cursor=pointer]
+            - generic [ref=f41e109]:
+              - heading "Customize" [level=2] [ref=f41e110]
+              - generic [ref=f41e111]:
+                - link "Overview" [ref=f41e112] [cursor=pointer]:
+                  - /url: /docs/customize-cursor
+                - link "Plugins" [ref=f41e115] [cursor=pointer]:
+                  - /url: /docs/plugins
+                - link "Rules" [ref=f41e118] [cursor=pointer]:
+                  - /url: /docs/rules
+                - link "Skills" [ref=f41e121] [cursor=pointer]:
+                  - /url: /docs/skills
+                - link "Subagents" [ref=f41e124] [cursor=pointer]:
+                  - /url: /docs/subagents
+                - link "Hooks" [ref=f41e127] [cursor=pointer]:
+                  - /url: /docs/hooks
+                - link "MCP" [ref=f41e130] [cursor=pointer]:
+                  - /url: /docs/mcp
+            - generic [ref=f41e133]:
+              - heading "Cloud Agents" [level=2] [ref=f41e134]
+              - generic [ref=f41e135]:
+                - link "Overview" [ref=f41e136] [cursor=pointer]:
+                  - /url: /docs/cloud-agent
+                - link "Setup" [ref=f41e139] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/setup
+                - link "Builds" [ref=f41e142] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/builds
+                - link "Apps" [ref=f41e145] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/apps
+                - button "Capabilities" [ref=f41e148] [cursor=pointer]
+                - link "Best Practices" [ref=f41e154] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/best-practices
+                - link "Choose Where Cloud Agents Run" [ref=f41e157] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/self-hosted/choose-runtime
+                - link "Automations" [ref=f41e160] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/automations
+                - link "Bugbot" [ref=f41e163] [cursor=pointer]:
+                  - /url: /docs/bugbot
+                - link "Security Review" [ref=f41e166] [cursor=pointer]:
+                  - /url: /docs/security-review
+                - link "Vulnerability Remediation" [ref=f41e169] [cursor=pointer]:
+                  - /url: /docs/vulnerability-remediation
+                - link "PR Routing & Approval" [ref=f41e172] [cursor=pointer]:
+                  - /url: /docs/approval-agents
+                - link "Rollouts" [ref=f41e175] [cursor=pointer]:
+                  - /url: /docs/rollouts
+                - link "Mobile" [ref=f41e178] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/mobile
+                - button "Security" [ref=f41e181] [cursor=pointer]
+                - button "Self-Hosted Machines" [ref=f41e187] [cursor=pointer]
+                - link "Settings" [ref=f41e193] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/settings
+                - link "API" [ref=f41e196] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/api/endpoints
+            - generic [ref=f41e199]:
+              - heading "Origin" [level=2] [ref=f41e200]
+              - generic [ref=f41e201]:
+                - link "Overview" [ref=f41e202] [cursor=pointer]:
+                  - /url: /docs/origin
+                - button "CLI" [ref=f41e205] [cursor=pointer]
+                - link "Create a repository" [ref=f41e211] [cursor=pointer]:
+                  - /url: /docs/origin/create-repository
+                - link "Mirror GitHub" [ref=f41e214] [cursor=pointer]:
+                  - /url: /docs/origin/mirror-github
+                - link "Clone, Push & Pull" [ref=f41e217] [cursor=pointer]:
+                  - /url: /docs/origin/git
+                - link "CloneKit in CI" [ref=f41e220] [cursor=pointer]:
+                  - /url: /docs/origin/clonekit-ci
+                - link "Pull requests" [ref=f41e223] [cursor=pointer]:
+                  - /url: /docs/origin/pull-requests
+                - link "Code Tours" [ref=f41e226] [cursor=pointer]:
+                  - /url: /docs/origin/code-tours
+                - link "Browse & Search" [ref=f41e229] [cursor=pointer]:
+                  - /url: /docs/origin/browse
+                - link "Agents and Automations" [ref=f41e232] [cursor=pointer]:
+                  - /url: /docs/origin/agents
+                - button "Apps" [ref=f41e235] [cursor=pointer]
+                - link "Settings" [ref=f41e241] [cursor=pointer]:
+                  - /url: /docs/origin/settings
+            - generic [ref=f41e244]:
+              - heading "Integrations" [level=2] [ref=f41e245]
+              - generic [ref=f41e246]:
+                - link "Slack" [ref=f41e247] [cursor=pointer]:
+                  - /url: /docs/integrations/slack
+                - link "Microsoft Teams" [ref=f41e250] [cursor=pointer]:
+                  - /url: /docs/integrations/microsoft-teams
+                - link "Jira" [ref=f41e253] [cursor=pointer]:
+                  - /url: /docs/integrations/jira
+                - link "Linear" [ref=f41e256] [cursor=pointer]:
+                  - /url: /docs/integrations/linear
+                - link "Notion" [ref=f41e259] [cursor=pointer]:
+                  - /url: /docs/integrations/notion
+                - link "GitHub" [ref=f41e262] [cursor=pointer]:
+                  - /url: /docs/integrations/github
+                - link "GitLab" [ref=f41e265] [cursor=pointer]:
+                  - /url: /docs/integrations/gitlab
+                - link "Azure DevOps" [ref=f41e268] [cursor=pointer]:
+                  - /url: /docs/integrations/azure-devops
+                - link "Bitbucket" [ref=f41e271] [cursor=pointer]:
+                  - /url: /docs/integrations/bitbucket
+                - link "JetBrains" [ref=f41e274] [cursor=pointer]:
+                  - /url: /docs/integrations/jetbrains
+                - link "Xcode" [ref=f41e277] [cursor=pointer]:
+                  - /url: /docs/integrations/xcode
+                - link "Tailscale" [ref=f41e280] [cursor=pointer]:
+                  - /url: /docs/integrations/tailscale
+                - link "Deeplinks" [ref=f41e283] [cursor=pointer]:
+                  - /url: /docs/reference/deeplinks
+            - generic [ref=f41e286]:
+              - heading "SDK" [level=2] [ref=f41e287]
+              - generic [ref=f41e288]:
+                - link "TypeScript" [ref=f41e289] [cursor=pointer]:
+                  - /url: /docs/sdk/typescript
+                - link "Python" [ref=f41e292] [cursor=pointer]:
+                  - /url: /docs/sdk/python
+                - link "Bridge" [ref=f41e295] [cursor=pointer]:
+                  - /url: /docs/sdk/bridge
+                - link "Changelog" [ref=f41e298] [cursor=pointer]:
+                  - /url: /docs/release-notes/sdk
+            - generic [ref=f41e301]:
+              - heading "Agent SDK" [level=2] [ref=f41e302]
+              - generic [ref=f41e303]:
+                - button "Getting started" [ref=f41e304] [cursor=pointer]
+                - button "Integrations" [ref=f41e310] [cursor=pointer]
+                - button "Extensions" [ref=f41e316] [cursor=pointer]
+                - button "Guides" [ref=f41e322] [cursor=pointer]
+                - button "Templates" [ref=f41e328] [cursor=pointer]
+                - button "Reference" [ref=f41e334] [cursor=pointer]
+            - generic [ref=f41e340]:
+              - heading "CLI" [level=2] [ref=f41e341]
+              - generic [ref=f41e342]:
+                - link "Overview" [ref=f41e343] [cursor=pointer]:
+                  - /url: /docs/cli/overview
+                - link "Installation" [ref=f41e346] [cursor=pointer]:
+                  - /url: /docs/cli/installation
+                - link "Capabilities" [ref=f41e349] [cursor=pointer]:
+                  - /url: /docs/cli/using
+                - link "Changelog" [ref=f41e352] [cursor=pointer]:
+                  - /url: /docs/cli/changelog
+                - link "Shell Mode" [ref=f41e355] [cursor=pointer]:
+                  - /url: /docs/cli/shell-mode
+                - link "ACP" [ref=f41e358] [cursor=pointer]:
+                  - /url: /docs/cli/acp
+                - link "Headless / CI" [ref=f41e361] [cursor=pointer]:
+                  - /url: /docs/cli/headless
+                - button "Reference" [ref=f41e364] [cursor=pointer]
+            - generic [ref=f41e370]:
+              - heading "Teams & Enterprise" [level=2] [ref=f41e371]
+              - generic [ref=f41e372]:
+                - button "Teams" [ref=f41e373] [cursor=pointer]
+                - button "Enterprise" [ref=f41e379] [cursor=pointer]
+        - main [ref=f41e385]:
+          - generic [ref=f41e388]:
+            - generic [ref=f41e389]:
+              - generic [ref=f41e390]: CLI
+              - generic [ref=f41e392]:
+                - heading "Cursor CLI" [level=1] [ref=f41e393]
+                - paragraph [ref=f41e394]: Cursor CLI lets you interact with AI agents directly from your terminal to write, review, and modify code. Whether you prefer an interactive terminal interface or print automation for scripts and CI pipelines, the CLI provides powerful coding assistance right where you work.
+                - heading [level=2] [ref=f41e395]:
+                  - link "Copy link to getting-started" [ref=f41e396] [cursor=pointer]:
+                    - /url: "#getting-started"
+                    - generic [ref=f41e397]: Getting started
+                - generic [ref=f41e407]:
+                  - button [ref=f41e408] [cursor=pointer]
+                  - code [ref=f41e414]:
+                    - generic [ref=f41e415]: "# Install (macOS, Linux, WSL)"
+                    - generic [ref=f41e416]: curl https://cursor.com/install -fsS | bash
+                    - generic [ref=f41e418]: "# Install (Windows PowerShell)"
+                    - generic [ref=f41e419]: irm 'https://cursor.com/install?win32=true' | iex
+                    - generic [ref=f41e421]: "# Run interactive session"
+                    - generic [ref=f41e422]: agent
+                - heading [level=2] [ref=f41e425]:
+                  - link "Copy link to interactive-mode" [ref=f41e426] [cursor=pointer]:
+                    - /url: "#interactive-mode"
+                    - generic [ref=f41e427]: Interactive mode
+                - paragraph [ref=f41e435]: "Start a conversational session with the agent to describe your goals, review proposed changes, and approve commands:"
+                - generic [ref=f41e438]:
+                  - button [ref=f41e439] [cursor=pointer]
+                  - code [ref=f41e445]:
+                    - generic [ref=f41e446]: "# Start interactive session"
+                    - generic [ref=f41e447]: agent
+                    - generic [ref=f41e449]: "# Start with initial prompt"
+                    - generic [ref=f41e450]: agent "refactor the auth module to use JWT tokens"
+                - heading [level=2] [ref=f41e451]:
+                  - link "Copy link to modes" [ref=f41e452] [cursor=pointer]:
+                    - /url: "#modes"
+                    - generic [ref=f41e453]: Modes
+                - paragraph [ref=f41e461]:
+                  - text: The CLI supports the same modes as the editor. Switch between modes using slash commands, keyboard shortcuts, or the
+                  - code [ref=f41e462]: "--mode"
+                  - text: flag.
+                - table [ref=f41e464]:
+                  - rowgroup [ref=f41e465]:
+                    - row [ref=f41e466]:
+                      - columnheader "Mode" [ref=f41e467]
+                      - columnheader "Description" [ref=f41e468]
+                      - columnheader "Shortcut" [ref=f41e469]
+                  - rowgroup [ref=f41e470]:
+                    - row [ref=f41e471]:
+                      - cell [ref=f41e472]:
+                        - strong [ref=f41e473]: Agent
+                      - cell "Full access to all tools for complex coding tasks" [ref=f41e474]
+                      - cell [ref=f41e475]:
+                        - text: Default (no
+                        - code [ref=f41e476]: "--mode"
+                        - text: value needed)
+                    - row [ref=f41e477]:
+                      - cell [ref=f41e478]:
+                        - strong [ref=f41e479]: Plan
+                      - cell "Design your approach before coding with clarifying questions" [ref=f41e480]
+                      - cell "Shift+Tab , /plan, --plan, --mode=plan" [ref=f41e481]:
+                        - generic [ref=f41e482]: Shift+Tab
+                        - text: ","
+                        - code [ref=f41e484]: /plan
+                        - text: ","
+                        - code [ref=f41e485]: "--plan"
+                        - text: ","
+                        - code [ref=f41e486]: "--mode=plan"
+                    - row [ref=f41e487]:
+                      - cell [ref=f41e488]:
+                        - strong [ref=f41e489]: Ask
+                      - cell "Read-only exploration without making changes" [ref=f41e490]
+                      - cell [ref=f41e491]:
+                        - code [ref=f41e492]: /ask
+                        - text: ","
+                        - code [ref=f41e493]: "--mode=ask"
+                - heading [level=2] [ref=f41e494]:
+                  - link "Copy link to non-interactive-mode" [ref=f41e495] [cursor=pointer]:
+                    - /url: "#non-interactive-mode"
+                    - generic [ref=f41e496]: Non-interactive mode
+                - paragraph [ref=f41e504]: "Use print mode for non-interactive scenarios like scripts, CI pipelines, or automation:"
+                - generic [ref=f41e507]:
+                  - button [ref=f41e508] [cursor=pointer]
+                  - code [ref=f41e514]:
+                    - generic [ref=f41e515]: "# Run with specific prompt and model"
+                    - generic [ref=f41e516]: agent -p "find and fix performance issues" --model "gpt-5"
+                    - generic [ref=f41e518]: "# Use with git changes included for review"
+                    - generic [ref=f41e519]: agent -p "review these changes for security issues" --output-format text
+                - heading [level=2] [ref=f41e520]:
+                  - link "Copy link to cloud-agent-handoff" [ref=f41e521] [cursor=pointer]:
+                    - /url: "#cloud-agent-handoff"
+                    - generic [ref=f41e522]: Cloud Agent handoff
+                - paragraph [ref=f41e530]:
+                  - text: Push your conversation to a
+                  - link "Cloud Agent" [ref=f41e531] [cursor=pointer]:
+                    - /url: /docs/cloud-agent
+                  - text: to continue running while you're away. Prepend
+                  - code [ref=f41e532]: "&"
+                  - text: "to any message:"
+                - generic [ref=f41e535]:
+                  - button [ref=f41e536] [cursor=pointer]
+                  - code [ref=f41e542]:
+                    - generic [ref=f41e543]: "# Send a task to Cloud Agent mid-conversation"
+                    - generic [ref=f41e544]: "& refactor the auth module and add comprehensive tests"
+                - paragraph [ref=f41e545]:
+                  - text: Pick up your Cloud Agent tasks on web or mobile at
+                  - link "cursor.com/agents" [ref=f41e546] [cursor=pointer]:
+                    - /url: https://cursor.com/agents
+                  - text: .
+                - heading [level=2] [ref=f41e547]:
+                  - link "Copy link to sessions" [ref=f41e548] [cursor=pointer]:
+                    - /url: "#sessions"
+                    - generic [ref=f41e549]: Sessions
+                - paragraph [ref=f41e557]: "Resume previous conversations to maintain context across multiple interactions:"
+                - generic [ref=f41e560]:
+                  - button [ref=f41e561] [cursor=pointer]
+                  - code [ref=f41e567]:
+                    - generic [ref=f41e568]: "# Open previous chats and resume one"
+                    - generic [ref=f41e569]: agent ls
+                    - generic [ref=f41e571]: "# Resume latest conversation"
+                    - generic [ref=f41e572]: agent resume
+                    - generic [ref=f41e574]: "# Continue the previous session"
+                    - generic [ref=f41e575]: agent --continue
+                    - generic [ref=f41e577]: "# Resume specific conversation"
+                    - generic [ref=f41e578]: agent --resume="chat-id-here"
+                - heading [level=2] [ref=f41e579]:
+                  - link "Copy link to sandbox-controls" [ref=f41e580] [cursor=pointer]:
+                    - /url: "#sandbox-controls"
+                    - generic [ref=f41e581]: Sandbox controls
+                - paragraph [ref=f41e589]:
+                  - text: Configure command execution settings with
+                  - code [ref=f41e590]: /sandbox
+                  - text: or the
+                  - code [ref=f41e591]: "--sandbox <mode>"
+                  - text: flag (
+                  - code [ref=f41e592]: enabled
+                  - text: or
+                  - code [ref=f41e593]: disabled
+                  - text: ). Toggle sandbox mode on or off and control network access through an interactive menu. Settings persist across sessions.
+                - heading [level=2] [ref=f41e596]:
+                  - link "Copy link to sudo-password-prompting" [ref=f41e597] [cursor=pointer]:
+                    - /url: "#sudo-password-prompting"
+                    - generic [ref=f41e598]: Sudo password prompting
+                - paragraph [ref=f41e606]:
+                  - text: Run commands requiring elevated privileges without leaving the CLI. When a command needs
+                  - code [ref=f41e607]: sudo
+                  - text: ", Cursor displays a secure, masked password prompt. Your password flows directly to"
+                  - code [ref=f41e608]: sudo
+                  - text: via a secure IPC channel; the AI model never sees it.
+              - generic [ref=f41e609]:
+                - generic [ref=f41e610]:
+                  - button "System theme" [ref=f41e612] [cursor=pointer]
+                  - button "Light theme" [ref=f41e615] [cursor=pointer]
+                  - button "Dark theme" [ref=f41e622] [cursor=pointer]
+                - button "Privacy choices" [ref=f41e625] [cursor=pointer]
+            - navigation [ref=f41e627]:
+              - generic [ref=f41e628]:
+                - list [ref=f41e629]:
+                  - listitem [ref=f41e630]:
+                    - link "Getting started" [ref=f41e631] [cursor=pointer]:
+                      - /url: "#getting-started"
+                  - listitem [ref=f41e632]:
+                    - link "Interactive mode" [ref=f41e633] [cursor=pointer]:
+                      - /url: "#interactive-mode"
+                  - listitem [ref=f41e634]:
+                    - link "Modes" [ref=f41e635] [cursor=pointer]:
+                      - /url: "#modes"
+                  - listitem [ref=f41e636]:
+                    - link "Non-interactive mode" [ref=f41e637] [cursor=pointer]:
+                      - /url: "#non-interactive-mode"
+                  - listitem [ref=f41e638]:
+                    - link "Cloud Agent handoff" [ref=f41e639] [cursor=pointer]:
+                      - /url: "#cloud-agent-handoff"
+                  - listitem [ref=f41e640]:
+                    - link "Sessions" [ref=f41e641] [cursor=pointer]:
+                      - /url: "#sessions"
+                  - listitem [ref=f41e642]:
+                    - link "Sandbox controls" [ref=f41e643] [cursor=pointer]:
+                      - /url: "#sandbox-controls"
+                  - listitem [ref=f41e644]:
+                    - link "Sudo password prompting" [ref=f41e645] [cursor=pointer]:
+                      - /url: "#sudo-password-prompting"
+                - button "Copy page" [ref=f41e649] [cursor=pointer]
+    - region "Cookie notice" [ref=f41e652]:
+      - button "Dismiss cookie notice" [ref=f41e653] [cursor=pointer]
+      - paragraph [ref=f41e654]:
+        - text: Essential cookies keep the site working and stay on. Optional cookies help with performance and advertising — accept, reject, or manage them. Learn more in our
+        - link "Cookie Policy" [ref=f41e655] [cursor=pointer]:
+          - /url: https://cursor.com/cookie-policy
+        - text: ","
+        - link "Privacy Policy" [ref=f41e656] [cursor=pointer]:
+          - /url: https://cursor.com/privacy
+        - text: ", and"
+        - link "Terms of Service" [ref=f41e657] [cursor=pointer]:
+          - /url: https://cursor.com/terms-of-service
+        - text: .
+      - generic [ref=f41e658]:
+        - button "Cookies Settings" [ref=f41e659] [cursor=pointer]
+        - button "Reject All" [ref=f41e660] [cursor=pointer]
+        - button "Accept All Cookies" [ref=f41e661] [cursor=pointer]

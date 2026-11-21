@@ -2368,12 +2368,12 @@ mod tests {
         )
         .unwrap_err();
         match prev_require {
-            Ok(v) => std::env::set_var("HZ_SANDBOX_REQUIRE", v),
-            Err(_) => std::env::remove_var("HZ_SANDBOX_REQUIRE"),
+            Some(v) => std::env::set_var("HZ_SANDBOX_REQUIRE", v),
+            None => std::env::remove_var("HZ_SANDBOX_REQUIRE"),
         }
         match prev_bin {
-            Ok(v) => std::env::set_var("HZ_SANDBOX_EXEC_BIN", v),
-            Err(_) => std::env::remove_var("HZ_SANDBOX_EXEC_BIN"),
+            Some(v) => std::env::set_var("HZ_SANDBOX_EXEC_BIN", v),
+            None => std::env::remove_var("HZ_SANDBOX_EXEC_BIN"),
         }
         assert!(err.contains("HZ_SANDBOX_REQUIRE=1"), "{err}");
         assert!(err.contains("never shell-net enforced"), "{err}");

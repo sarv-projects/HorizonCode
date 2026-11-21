@@ -662,6 +662,10 @@ const OBSERVE_PENDING_BLOCK_TOOLS = new Set([
   "apply_patch",
   "ast_edit",
   "shell",
+  "shell.exec",
+  "rename",
+  "fs.rename",
+  "fs.batch",
 ]);
 
 function observePendingBlocksTool(tool: string): boolean {
@@ -671,7 +675,13 @@ function observePendingBlocksTool(tool: string): boolean {
 
 /** Fail-closed when targets are unprojectable but observe-pending is active. */
 function observePendingUnscopedMutator(tool: string): boolean {
-  return tool === "shell" || tool === "apply_patch" || (isMcpToolName(tool) && !mcpToolClaimsReadOnly(tool));
+  return (
+    tool === "shell" ||
+    tool === "shell.exec" ||
+    tool === "apply_patch" ||
+    tool === "fs.batch" ||
+    (isMcpToolName(tool) && !mcpToolClaimsReadOnly(tool))
+  );
 }
 
 export const EFFECT_RECONCILE_BLOCK_OBSERVE_PENDING_NOTICE =

@@ -1,0 +1,3001 @@
+- generic [active] [ref=f27e1]:
+  - alert [ref=f27e2]
+  - generic [ref=f27e4]:
+    - link "Skip to main content" [ref=f27e5] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=f27e6]:
+      - banner [ref=f27e7]:
+        - generic [ref=f27e8]:
+          - generic [ref=f27e9]:
+            - link "Cursor Home" [ref=f27e10] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=f27e11]
+            - navigation [ref=f27e14]:
+              - link "Docs" [ref=f27e15] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=f27e17] [cursor=pointer]:
+                - /url: /docs/api
+              - link "Learn" [ref=f27e18] [cursor=pointer]:
+                - /url: /learn
+              - link "Help" [ref=f27e19] [cursor=pointer]:
+                - /url: /help
+          - button "Search docs... ⌘K" [ref=f27e23] [cursor=pointer]:
+            - generic [ref=f27e27]: Search docs...
+            - generic [ref=f27e28]: ⌘K
+          - generic [ref=f27e30]:
+            - link "Sign in" [ref=f27e31] [cursor=pointer]:
+              - /url: https://cursor.com/dashboard
+            - link "Download" [ref=f27e32] [cursor=pointer]:
+              - /url: https://cursor.com/downloads
+      - generic [ref=f27e33]:
+        - heading "Command Palette" [level=2] [ref=f27e34]
+        - paragraph [ref=f27e35]: Search for a command to run...
+    - generic [ref=f27e36]:
+      - generic [ref=f27e38]:
+        - button [ref=f27e39]:
+          - button "Toggle Docs Sidebar" [ref=f27e41] [cursor=pointer]
+        - generic [ref=f27e45]:
+          - generic [ref=f27e46]:
+            - heading "Get Started" [level=2] [ref=f27e47]
+            - generic [ref=f27e48]:
+              - link "Welcome" [ref=f27e49] [cursor=pointer]:
+                - /url: /docs
+              - link "Quickstart" [ref=f27e52] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+              - button "Models & Pricing" [ref=f27e55] [cursor=pointer]
+              - link "Changelog" [ref=f27e61] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+              - link "Release Notes" [ref=f27e64] [cursor=pointer]:
+                - /url: /docs/release-notes
+          - generic [ref=f27e67]:
+            - heading "Agent" [level=2] [ref=f27e68]
+            - generic [ref=f27e69]:
+              - link "Overview" [ref=f27e70] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - link "Agents Window" [ref=f27e73] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - link "Projects" [ref=f27e76] [cursor=pointer]:
+                - /url: /docs/agent/projects
+              - link "Agent Review" [ref=f27e79] [cursor=pointer]:
+                - /url: /docs/agent/agent-review
+              - link "Planning" [ref=f27e82] [cursor=pointer]:
+                - /url: /docs/agent/plan-mode
+              - link "Prompting" [ref=f27e85] [cursor=pointer]:
+                - /url: /docs/agent/prompting
+              - link "Voice Chat" [ref=f27e88] [cursor=pointer]:
+                - /url: /docs/agent/voice-chat
+              - link "Debugging" [ref=f27e91] [cursor=pointer]:
+                - /url: /docs/agent/debug-mode
+              - link "Design Mode" [ref=f27e94] [cursor=pointer]:
+                - /url: /docs/agent/design-mode
+              - button "Tools" [ref=f27e97] [cursor=pointer]
+              - button "Security" [ref=f27e103] [cursor=pointer]
+          - generic [ref=f27e109]:
+            - heading "Customize" [level=2] [ref=f27e110]
+            - generic [ref=f27e111]:
+              - link "Overview" [ref=f27e112] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+              - link "Plugins" [ref=f27e115] [cursor=pointer]:
+                - /url: /docs/plugins
+              - link "Rules" [ref=f27e118] [cursor=pointer]:
+                - /url: /docs/rules
+              - link "Skills" [ref=f27e121] [cursor=pointer]:
+                - /url: /docs/skills
+              - link "Subagents" [ref=f27e124] [cursor=pointer]:
+                - /url: /docs/subagents
+              - link "Hooks" [ref=f27e127] [cursor=pointer]:
+                - /url: /docs/hooks
+              - link "MCP" [ref=f27e130] [cursor=pointer]:
+                - /url: /docs/mcp
+          - generic [ref=f27e133]:
+            - heading "Cloud Agents" [level=2] [ref=f27e134]
+            - generic [ref=f27e135]:
+              - link "Overview" [ref=f27e136] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - link "Setup" [ref=f27e139] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - link "Builds" [ref=f27e142] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - link "Apps" [ref=f27e145] [cursor=pointer]:
+                - /url: /docs/cloud-agent/apps
+              - button "Capabilities" [ref=f27e148] [cursor=pointer]
+              - link "Best Practices" [ref=f27e154] [cursor=pointer]:
+                - /url: /docs/cloud-agent/best-practices
+              - link "Choose Where Cloud Agents Run" [ref=f27e157] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted/choose-runtime
+              - link "Automations" [ref=f27e160] [cursor=pointer]:
+                - /url: /docs/cloud-agent/automations
+              - link "Bugbot" [ref=f27e163] [cursor=pointer]:
+                - /url: /docs/bugbot
+              - link "Security Review" [ref=f27e166] [cursor=pointer]:
+                - /url: /docs/security-review
+              - link "Vulnerability Remediation" [ref=f27e169] [cursor=pointer]:
+                - /url: /docs/vulnerability-remediation
+              - link "PR Routing & Approval" [ref=f27e172] [cursor=pointer]:
+                - /url: /docs/approval-agents
+              - link "Rollouts" [ref=f27e175] [cursor=pointer]:
+                - /url: /docs/rollouts
+              - link "Mobile" [ref=f27e178] [cursor=pointer]:
+                - /url: /docs/cloud-agent/mobile
+              - button "Security" [ref=f27e181] [cursor=pointer]
+              - button "Self-Hosted Machines" [ref=f27e187] [cursor=pointer]
+              - link "Settings" [ref=f27e193] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings
+              - link "API" [ref=f27e196] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints
+          - generic [ref=f27e199]:
+            - heading "Origin" [level=2] [ref=f27e200]
+            - generic [ref=f27e201]:
+              - link "Overview" [ref=f27e202] [cursor=pointer]:
+                - /url: /docs/origin
+              - button "CLI" [ref=f27e205] [cursor=pointer]
+              - link "Create a repository" [ref=f27e211] [cursor=pointer]:
+                - /url: /docs/origin/create-repository
+              - link "Mirror GitHub" [ref=f27e214] [cursor=pointer]:
+                - /url: /docs/origin/mirror-github
+              - link "Clone, Push & Pull" [ref=f27e217] [cursor=pointer]:
+                - /url: /docs/origin/git
+              - link "CloneKit in CI" [ref=f27e220] [cursor=pointer]:
+                - /url: /docs/origin/clonekit-ci
+              - link "Pull requests" [ref=f27e223] [cursor=pointer]:
+                - /url: /docs/origin/pull-requests
+              - link "Code Tours" [ref=f27e226] [cursor=pointer]:
+                - /url: /docs/origin/code-tours
+              - link "Browse & Search" [ref=f27e229] [cursor=pointer]:
+                - /url: /docs/origin/browse
+              - link "Agents and Automations" [ref=f27e232] [cursor=pointer]:
+                - /url: /docs/origin/agents
+              - button "Apps" [ref=f27e235] [cursor=pointer]
+              - link "Settings" [ref=f27e241] [cursor=pointer]:
+                - /url: /docs/origin/settings
+          - generic [ref=f27e244]:
+            - heading "Integrations" [level=2] [ref=f27e245]
+            - generic [ref=f27e246]:
+              - link "Slack" [ref=f27e247] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - link "Microsoft Teams" [ref=f27e250] [cursor=pointer]:
+                - /url: /docs/integrations/microsoft-teams
+              - link "Jira" [ref=f27e253] [cursor=pointer]:
+                - /url: /docs/integrations/jira
+              - link "Linear" [ref=f27e256] [cursor=pointer]:
+                - /url: /docs/integrations/linear
+              - link "Notion" [ref=f27e259] [cursor=pointer]:
+                - /url: /docs/integrations/notion
+              - link "GitHub" [ref=f27e262] [cursor=pointer]:
+                - /url: /docs/integrations/github
+              - link "GitLab" [ref=f27e265] [cursor=pointer]:
+                - /url: /docs/integrations/gitlab
+              - link "Azure DevOps" [ref=f27e268] [cursor=pointer]:
+                - /url: /docs/integrations/azure-devops
+              - link "Bitbucket" [ref=f27e271] [cursor=pointer]:
+                - /url: /docs/integrations/bitbucket
+              - link "JetBrains" [ref=f27e274] [cursor=pointer]:
+                - /url: /docs/integrations/jetbrains
+              - link "Xcode" [ref=f27e277] [cursor=pointer]:
+                - /url: /docs/integrations/xcode
+              - link "Tailscale" [ref=f27e280] [cursor=pointer]:
+                - /url: /docs/integrations/tailscale
+              - link "Deeplinks" [ref=f27e283] [cursor=pointer]:
+                - /url: /docs/reference/deeplinks
+          - generic [ref=f27e286]:
+            - heading "SDK" [level=2] [ref=f27e287]
+            - generic [ref=f27e288]:
+              - link "TypeScript" [ref=f27e289] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - link "Python" [ref=f27e292] [cursor=pointer]:
+                - /url: /docs/sdk/python
+              - link "Bridge" [ref=f27e295] [cursor=pointer]:
+                - /url: /docs/sdk/bridge
+              - link "Changelog" [ref=f27e298] [cursor=pointer]:
+                - /url: /docs/release-notes/sdk
+          - generic [ref=f27e301]:
+            - heading "Agent SDK" [level=2] [ref=f27e302]
+            - generic [ref=f27e303]:
+              - button "Getting started" [ref=f27e304] [cursor=pointer]
+              - button "Integrations" [ref=f27e310] [cursor=pointer]
+              - button "Extensions" [ref=f27e316] [cursor=pointer]
+              - button "Guides" [ref=f27e322] [cursor=pointer]
+              - button "Templates" [ref=f27e328] [cursor=pointer]
+              - button "Reference" [ref=f27e334] [cursor=pointer]
+          - generic [ref=f27e340]:
+            - heading "CLI" [level=2] [ref=f27e341]
+            - generic [ref=f27e342]:
+              - link "Overview" [ref=f27e343] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - link "Installation" [ref=f27e346] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - link "Capabilities" [ref=f27e349] [cursor=pointer]:
+                - /url: /docs/cli/using
+              - link "Changelog" [ref=f27e352] [cursor=pointer]:
+                - /url: /docs/cli/changelog
+              - link "Shell Mode" [ref=f27e355] [cursor=pointer]:
+                - /url: /docs/cli/shell-mode
+              - link "ACP" [ref=f27e358] [cursor=pointer]:
+                - /url: /docs/cli/acp
+              - link "Headless / CI" [ref=f27e361] [cursor=pointer]:
+                - /url: /docs/cli/headless
+              - button "Reference" [ref=f27e364] [cursor=pointer]
+          - generic [ref=f27e370]:
+            - heading "Teams & Enterprise" [level=2] [ref=f27e371]
+            - generic [ref=f27e372]:
+              - button "Teams" [ref=f27e373] [cursor=pointer]
+              - button "Enterprise" [ref=f27e379] [cursor=pointer]
+      - main [ref=f27e385]:
+        - generic [ref=f27e388]:
+          - generic [ref=f27e389]:
+            - generic [ref=f27e390]: Customize
+            - generic [ref=f27e392]:
+              - heading "Hooks" [level=1] [ref=f27e393]
+              - paragraph [ref=f27e394]:
+                - text: Hooks let you observe, control, and extend the agent loop using custom scripts. Define hooks in
+                - code [ref=f27e395]: hooks.json
+                - text: files at the project or user level, or install them through plugins from
+                - strong [ref=f27e396]: Customize
+                - text: . Hooks are spawned processes that communicate over stdio using JSON in both directions. They run before or after defined stages of the agent loop and can observe, block, or modify behavior.
+              - paragraph [ref=f27e399]: "With hooks, you can:"
+              - list [ref=f27e400]:
+                - listitem [ref=f27e401]: Run formatters after edits
+                - listitem [ref=f27e402]: Add analytics for events
+                - listitem [ref=f27e403]: Scan for PII or secrets
+                - listitem [ref=f27e404]: Gate risky operations (e.g., SQL writes)
+                - listitem [ref=f27e405]: Control subagent (Task tool) execution
+                - listitem [ref=f27e406]: Inject context at session start
+              - alert [ref=f27e407]:
+                - paragraph [ref=f27e411]:
+                  - text: Looking for ready-to-use integrations? See
+                  - link "Partner Integrations" [ref=f27e412] [cursor=pointer]:
+                    - /url: "#partner-integrations"
+                  - text: for security, governance, and secrets management solutions from our ecosystem partners.
+              - alert [ref=f27e413]:
+                - paragraph [ref=f27e417]:
+                  - text: Cursor supports loading hooks from third-party tools like Claude Code. See
+                  - link "Third Party Hooks" [ref=f27e418] [cursor=pointer]:
+                    - /url: /docs/reference/third-party-hooks
+                  - text: for details on compatibility and configuration.
+              - heading [level=2] [ref=f27e419]:
+                - link "Copy link to hook-categories" [ref=f27e420] [cursor=pointer]:
+                  - /url: "#hook-categories"
+                  - generic [ref=f27e421]: Hook categories
+              - paragraph [ref=f27e429]: "Hooks fall into three categories based on what triggers them:"
+              - paragraph [ref=f27e430]:
+                - strong [ref=f27e431]: Agent hooks (Agent Chat)
+                - text: "fire during an agent session:"
+              - list [ref=f27e432]:
+                - listitem [ref=f27e433]:
+                  - code [ref=f27e434]: sessionStart
+                  - text: /
+                  - code [ref=f27e435]: sessionEnd
+                  - text: "- Session lifecycle management"
+                - listitem [ref=f27e436]:
+                  - code [ref=f27e437]: preToolUse
+                  - text: /
+                  - code [ref=f27e438]: postToolUse
+                  - text: /
+                  - code [ref=f27e439]: postToolUseFailure
+                  - text: "- Generic tool use hooks (fires for all tools)"
+                - listitem [ref=f27e440]:
+                  - code [ref=f27e441]: subagentStart
+                  - text: /
+                  - code [ref=f27e442]: subagentStop
+                  - text: "- Subagent (Task tool) lifecycle"
+                - listitem [ref=f27e443]:
+                  - code [ref=f27e444]: beforeShellExecution
+                  - text: /
+                  - code [ref=f27e445]: afterShellExecution
+                  - text: "- Control shell commands"
+                - listitem [ref=f27e446]:
+                  - code [ref=f27e447]: beforeMCPExecution
+                  - text: /
+                  - code [ref=f27e448]: afterMCPExecution
+                  - text: "- Control MCP tool usage"
+                - listitem [ref=f27e449]:
+                  - code [ref=f27e450]: beforeReadFile
+                  - text: /
+                  - code [ref=f27e451]: afterFileEdit
+                  - text: "- Control file access and edits"
+                - listitem [ref=f27e452]:
+                  - code [ref=f27e453]: beforeSubmitPrompt
+                  - text: "- Validate prompts before submission"
+                - listitem [ref=f27e454]:
+                  - code [ref=f27e455]: preCompact
+                  - text: "- Observe context window compaction"
+                - listitem [ref=f27e456]:
+                  - code [ref=f27e457]: stop
+                  - text: "- Handle agent completion"
+                - listitem [ref=f27e458]:
+                  - code [ref=f27e459]: afterAgentResponse
+                  - text: /
+                  - code [ref=f27e460]: afterAgentThought
+                  - text: "- Track agent responses"
+              - paragraph [ref=f27e461]:
+                - strong [ref=f27e462]: Tab hooks (inline completions)
+                - text: "fire for autonomous Tab operations:"
+              - list [ref=f27e463]:
+                - listitem [ref=f27e464]:
+                  - code [ref=f27e465]: beforeTabFileRead
+                  - text: "- Control file access for Tab completions"
+                - listitem [ref=f27e466]:
+                  - code [ref=f27e467]: afterTabFileEdit
+                  - text: "- Post-process Tab edits"
+              - paragraph [ref=f27e468]:
+                - strong [ref=f27e469]: App lifecycle hooks
+                - text: "fire outside any agent session:"
+              - list [ref=f27e470]:
+                - listitem [ref=f27e471]:
+                  - code [ref=f27e472]: workspaceOpen
+                  - text: "- Fires when Cursor opens a workspace and on every workspace folder change. Can return additional plugin paths to load for the current workspace."
+              - paragraph [ref=f27e473]: These separate hook surfaces let you apply different policies to autonomous Tab operations, user-directed Agent operations, and workspace startup.
+              - heading [level=2] [ref=f27e474]:
+                - link "Copy link to cloud-agent-support" [ref=f27e475] [cursor=pointer]:
+                  - /url: "#cloud-agent-support"
+                  - generic [ref=f27e476]: Cloud agent support
+              - paragraph [ref=f27e484]:
+                - text: Cloud agents run command-based hooks from your repository. If you have hooks defined in
+                - code [ref=f27e485]: .cursor/hooks.json
+                - text: at the root of your project, cloud agents pick them up and run them during their work.
+              - paragraph [ref=f27e486]:
+                - text: In a
+                - link "multi-repo environment" [ref=f27e487] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/setup#multi-repo-environments
+                - text: ", each repo's"
+                - code [ref=f27e488]: .cursor/hooks.json
+                - text: runs from that repo's folder, and file hooks fire only for that repo's files.
+              - paragraph [ref=f27e489]:
+                - text: On Enterprise plans, cloud agents also run team hooks and enterprise-managed hooks configured through the
+                - link "web dashboard" [ref=f27e490] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/team-content?section=hooks
+                - text: .
+              - paragraph [ref=f27e491]: Cloud agents sometimes begin in a read-only environment for early exploratory turns. Hooks do not run during those turns. They start once the agent has a writable environment.
+              - heading [level=3] [ref=f27e492]:
+                - link "Copy link to supported-hooks" [ref=f27e493] [cursor=pointer]:
+                  - /url: "#supported-hooks"
+                  - generic [ref=f27e494]: Supported hooks
+              - paragraph [ref=f27e502]: "The following hooks run in cloud agents:"
+              - table [ref=f27e504]:
+                - rowgroup [ref=f27e505]:
+                  - row [ref=f27e506]:
+                    - columnheader "Hook" [ref=f27e507]
+                    - columnheader "Supported" [ref=f27e508]
+                - rowgroup [ref=f27e509]:
+                  - row [ref=f27e510]:
+                    - cell [ref=f27e511]:
+                      - code [ref=f27e512]: beforeShellExecution
+                    - cell "Yes" [ref=f27e513]
+                  - row [ref=f27e514]:
+                    - cell [ref=f27e515]:
+                      - code [ref=f27e516]: afterShellExecution
+                    - cell "Yes" [ref=f27e517]
+                  - row [ref=f27e518]:
+                    - cell [ref=f27e519]:
+                      - code [ref=f27e520]: beforeReadFile
+                    - cell "Yes" [ref=f27e521]
+                  - row [ref=f27e522]:
+                    - cell [ref=f27e523]:
+                      - code [ref=f27e524]: afterFileEdit
+                    - cell "Yes" [ref=f27e525]
+                  - row [ref=f27e526]:
+                    - cell [ref=f27e527]:
+                      - code [ref=f27e528]: preToolUse
+                    - cell "Yes" [ref=f27e529]
+                  - row [ref=f27e530]:
+                    - cell [ref=f27e531]:
+                      - code [ref=f27e532]: postToolUse
+                    - cell "Yes" [ref=f27e533]
+                  - row [ref=f27e534]:
+                    - cell [ref=f27e535]:
+                      - code [ref=f27e536]: postToolUseFailure
+                    - cell "Yes" [ref=f27e537]
+                  - row [ref=f27e538]:
+                    - cell [ref=f27e539]:
+                      - code [ref=f27e540]: subagentStart
+                    - cell "Yes" [ref=f27e541]
+                  - row [ref=f27e542]:
+                    - cell [ref=f27e543]:
+                      - code [ref=f27e544]: subagentStop
+                    - cell "Yes" [ref=f27e545]
+                  - row [ref=f27e546]:
+                    - cell [ref=f27e547]:
+                      - code [ref=f27e548]: beforeSubmitPrompt
+                    - cell "Yes" [ref=f27e549]
+                  - row [ref=f27e550]:
+                    - cell [ref=f27e551]:
+                      - code [ref=f27e552]: preCompact
+                    - cell "Yes" [ref=f27e553]
+                  - row [ref=f27e554]:
+                    - cell [ref=f27e555]:
+                      - code [ref=f27e556]: afterAgentResponse
+                    - cell "Yes" [ref=f27e557]
+                  - row [ref=f27e558]:
+                    - cell [ref=f27e559]:
+                      - code [ref=f27e560]: afterAgentThought
+                    - cell "Yes" [ref=f27e561]
+                  - row [ref=f27e562]:
+                    - cell [ref=f27e563]:
+                      - code [ref=f27e564]: stop
+                    - cell "Yes" [ref=f27e565]
+              - paragraph [ref=f27e566]:
+                - text: HTTP MCP servers run on Cursor's backend instead of the agent's VM. For their tools,
+                - code [ref=f27e567]: preToolUse
+                - text: and
+                - code [ref=f27e568]: postToolUse
+                - text: fire with
+                - code [ref=f27e569]: tool_name
+                - text: set to
+                - code [ref=f27e570]: MCP:<tool_name>
+                - text: ", with these limits:"
+              - list [ref=f27e571]:
+                - listitem [ref=f27e572]:
+                  - code [ref=f27e573]: preToolUse
+                  - text: can deny the call, but Cursor ignores
+                  - code [ref=f27e574]: updated_input
+                  - text: .
+                - listitem [ref=f27e575]:
+                  - code [ref=f27e576]: postToolUse
+                  - text: receives
+                  - code [ref=f27e577]: "{\"redacted\": true}"
+                  - text: (with
+                  - code [ref=f27e578]: isError
+                  - text: when known) as
+                  - code [ref=f27e579]: tool_output
+                  - text: instead of the tool result, and can't replace the result with
+                  - code [ref=f27e580]: updated_mcp_tool_output
+                  - text: .
+              - heading [level=3] [ref=f27e581]:
+                - link "Copy link to hooks-not-available-in-cloud-agents" [ref=f27e582] [cursor=pointer]:
+                  - /url: "#hooks-not-available-in-cloud-agents"
+                  - generic [ref=f27e583]: Hooks not available in cloud agents
+              - paragraph [ref=f27e591]: "Some hooks don't apply to cloud agents due to differences in the execution environment:"
+              - table [ref=f27e593]:
+                - rowgroup [ref=f27e594]:
+                  - row [ref=f27e595]:
+                    - columnheader "Hook" [ref=f27e596]
+                    - columnheader "Reason" [ref=f27e597]
+                - rowgroup [ref=f27e598]:
+                  - row [ref=f27e599]:
+                    - cell [ref=f27e600]:
+                      - code [ref=f27e601]: sessionStart
+                    - cell [ref=f27e602]:
+                      - text: Deferred while cloud agents can still start in a read-only environment. Hooks don't load there, so a cloud
+                      - code [ref=f27e603]: sessionStart
+                      - text: would fire too late (after the first write) rather than at true session start.
+                  - row [ref=f27e604]:
+                    - cell [ref=f27e605]:
+                      - code [ref=f27e606]: sessionEnd
+                    - cell [ref=f27e607]:
+                      - text: Cloud agents have no editor-lifetime session boundary.
+                      - code [ref=f27e608]: sessionEnd
+                      - text: is tied to the IDE session, not a cloud agent chat.
+                  - row [ref=f27e609]:
+                    - cell [ref=f27e610]:
+                      - code [ref=f27e611]: beforeMCPExecution
+                      - text: /
+                      - code [ref=f27e612]: afterMCPExecution
+                    - cell "Deferred while cloud agents can still start in a read-only environment, where hooks don't load and MCP hook timing is unclear." [ref=f27e613]
+                  - row [ref=f27e614]:
+                    - cell [ref=f27e615]:
+                      - code [ref=f27e616]: beforeTabFileRead
+                      - text: /
+                      - code [ref=f27e617]: afterTabFileEdit
+                    - cell "Tab completions are an IDE feature and don't run in cloud agents." [ref=f27e618]
+                  - row [ref=f27e619]:
+                    - cell [ref=f27e620]:
+                      - code [ref=f27e621]: workspaceOpen
+                    - cell "This is an IDE lifecycle hook and doesn't apply to cloud agents." [ref=f27e622]
+              - heading [level=3] [ref=f27e623]:
+                - link "Copy link to configuration-sources" [ref=f27e624] [cursor=pointer]:
+                  - /url: "#configuration-sources"
+                  - generic [ref=f27e625]: Configuration sources
+              - paragraph [ref=f27e633]: "Cloud agents load hooks from these sources:"
+              - list [ref=f27e634]:
+                - listitem [ref=f27e635]:
+                  - strong [ref=f27e636]: Project hooks
+                  - text: (
+                  - code [ref=f27e637]: .cursor/hooks.json
+                  - text: "in your repo): Loaded and run during cloud agent work."
+                - listitem [ref=f27e638]:
+                  - strong [ref=f27e639]: Team hooks
+                  - text: "(Enterprise): Distributed from the dashboard and run in cloud agents."
+                - listitem [ref=f27e640]:
+                  - strong [ref=f27e641]: Enterprise hooks
+                  - text: "(Enterprise): System-wide managed hooks run in cloud agents."
+              - paragraph [ref=f27e642]:
+                - text: User-level hooks (
+                - code [ref=f27e643]: ~/.cursor/hooks.json
+                - text: ) are not available in cloud agents. Cloud agent VMs don't have access to your local home directory configuration.
+              - paragraph [ref=f27e644]:
+                - link "Self-Hosted Machines" [ref=f27e645] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/self-hosted
+                - text: workers (Pools and My Machines) run the same command-based project hooks, and on Enterprise also run team and enterprise-managed hooks. On those workers,
+                - code [ref=f27e646]: sessionStart
+                - text: and
+                - code [ref=f27e647]: sessionEnd
+                - text: fire when a session claims the worker and when that claim is released. See
+                - link "Hooks on Pools" [ref=f27e648] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/self-hosted/pool#hooks
+                - text: .
+              - heading [level=3] [ref=f27e649]:
+                - link "Copy link to execution-type-limits" [ref=f27e650] [cursor=pointer]:
+                  - /url: "#execution-type-limits"
+                  - generic [ref=f27e651]: Execution type limits
+              - paragraph [ref=f27e659]:
+                - text: Cloud agents run
+                - strong [ref=f27e660]: command-based hooks
+                - text: only. Prompt-based hooks require authentication wiring between the hook and the agent loop, which isn't available in the cloud execution environment.
+              - heading [level=2] [ref=f27e661]:
+                - link "Copy link to quickstart" [ref=f27e662] [cursor=pointer]:
+                  - /url: "#quickstart"
+                  - generic [ref=f27e663]: Quickstart
+              - paragraph [ref=f27e671]:
+                - text: Create a
+                - code [ref=f27e672]: hooks.json
+                - text: file. You can create it at the project level (
+                - code [ref=f27e673]: <project>/.cursor/hooks.json
+                - text: ) or in your home directory (
+                - code [ref=f27e674]: ~/.cursor/hooks.json
+                - text: ). Project-level hooks apply only to that specific project, while home directory hooks apply globally.
+              - generic [ref=f27e675]:
+                - tablist [ref=f27e676]:
+                  - tab "User hooks (~/.cursor/)" [selected] [ref=f27e677] [cursor=pointer]
+                  - tab "Project hooks (.cursor/)" [ref=f27e678] [cursor=pointer]
+                - tabpanel [ref=f27e679]:
+                  - paragraph [ref=f27e680]:
+                    - text: For user-level hooks that apply globally, create
+                    - code [ref=f27e681]: ~/.cursor/hooks.json
+                    - text: ":"
+                  - generic [ref=f27e684]:
+                    - button [ref=f27e685] [cursor=pointer]
+                    - code [ref=f27e691]:
+                      - generic [ref=f27e692]: "{"
+                      - generic [ref=f27e693]: "\"version\": 1,"
+                      - generic [ref=f27e694]: "\"hooks\": {"
+                      - generic [ref=f27e695]: "\"afterFileEdit\": [{ \"command\": \"./hooks/format.sh\" }]"
+                      - generic [ref=f27e696]: "}"
+                      - generic [ref=f27e697]: "}"
+                  - paragraph [ref=f27e698]:
+                    - text: Create your hook script at
+                    - code [ref=f27e699]: ~/.cursor/hooks/format.sh
+                    - text: ":"
+                  - generic [ref=f27e702]:
+                    - button [ref=f27e703] [cursor=pointer]
+                    - code [ref=f27e709]:
+                      - generic [ref=f27e710]: "#!/bin/bash"
+                      - generic [ref=f27e711]: "# Read input, do something, exit 0"
+                      - generic [ref=f27e712]: cat > /dev/null
+                      - generic [ref=f27e713]: exit 0
+                  - paragraph [ref=f27e714]: "Make it executable:"
+                  - generic [ref=f27e717]:
+                    - button [ref=f27e718] [cursor=pointer]
+                    - code [ref=f27e724]:
+                      - generic [ref=f27e725]: chmod +x ~/.cursor/hooks/format.sh
+              - paragraph [ref=f27e726]: Cursor watches hooks config files and reloads them automatically. Your hook runs after every file edit.
+              - heading [level=2] [ref=f27e727]:
+                - link "Copy link to hook-types" [ref=f27e728] [cursor=pointer]:
+                  - /url: "#hook-types"
+                  - generic [ref=f27e729]: Hook Types
+              - paragraph [ref=f27e737]: "Hooks support two execution types: command-based (default) and prompt-based (LLM-evaluated)."
+              - heading [level=3] [ref=f27e738]:
+                - link "Copy link to command-based-hooks" [ref=f27e739] [cursor=pointer]:
+                  - /url: "#command-based-hooks"
+                  - generic [ref=f27e740]: Command-Based Hooks
+              - paragraph [ref=f27e748]:
+                - text: Command hooks execute shell scripts that receive JSON input via stdin and return JSON output via stdout. On Windows, the desktop app runs hook commands through PowerShell and pipes the JSON into the command, so a PowerShell script reads it from
+                - code [ref=f27e749]: $input
+                - text: and other programs read it from stdin.
+              - generic [ref=f27e752]:
+                - button [ref=f27e753] [cursor=pointer]
+                - code [ref=f27e759]:
+                  - generic [ref=f27e760]: "{"
+                  - generic [ref=f27e761]: "\"version\": 1,"
+                  - generic [ref=f27e762]: "\"hooks\": {"
+                  - generic [ref=f27e763]: "\"beforeShellExecution\": ["
+                  - generic [ref=f27e764]: "{"
+                  - generic [ref=f27e765]: "\"command\": \"./scripts/approve-network.sh\","
+                  - generic [ref=f27e766]: "\"timeout\": 30,"
+                  - generic [ref=f27e767]: "\"matcher\": \"curl|wget|nc\""
+                  - generic [ref=f27e768]: "}"
+                  - generic [ref=f27e769]: "]"
+                  - generic [ref=f27e770]: "}"
+                  - generic [ref=f27e771]: "}"
+              - paragraph [ref=f27e772]:
+                - strong [ref=f27e773]: "Exit code behavior:"
+              - list [ref=f27e774]:
+                - listitem [ref=f27e775]:
+                  - text: Exit code
+                  - code [ref=f27e776]: "0"
+                  - text: "- Hook succeeded, use the JSON output. For permission hooks ("
+                  - code [ref=f27e777]: beforeShellExecution
+                  - text: ","
+                  - code [ref=f27e778]: beforeMCPExecution
+                  - text: ","
+                  - code [ref=f27e779]: beforeReadFile
+                  - text: ","
+                  - code [ref=f27e780]: beforeTabFileRead
+                  - text: ","
+                  - code [ref=f27e781]: subagentStart
+                  - text: ","
+                  - code [ref=f27e782]: preToolUse
+                  - text: ), invalid JSON or a response that doesn't match the hook's schema blocks the action.
+                - listitem [ref=f27e783]:
+                  - text: Exit code
+                  - code [ref=f27e784]: "2"
+                  - text: "- Block the action (equivalent to returning"
+                  - code [ref=f27e785]: "permission: \"deny\""
+                  - text: )
+                - listitem [ref=f27e786]: Other exit codes - Hook failed, action proceeds (fail-open by default)
+              - heading [level=3] [ref=f27e787]:
+                - link "Copy link to prompt-based-hooks" [ref=f27e788] [cursor=pointer]:
+                  - /url: "#prompt-based-hooks"
+                  - generic [ref=f27e789]: Prompt-Based Hooks
+              - paragraph [ref=f27e797]: Prompt hooks use an LLM to evaluate a natural language condition. They're useful for policy enforcement without writing custom scripts.
+              - generic [ref=f27e800]:
+                - button [ref=f27e801] [cursor=pointer]
+                - code [ref=f27e807]:
+                  - generic [ref=f27e808]: "{"
+                  - generic [ref=f27e809]: "\"version\": 1,"
+                  - generic [ref=f27e810]: "\"hooks\": {"
+                  - generic [ref=f27e811]: "\"beforeShellExecution\": ["
+                  - generic [ref=f27e812]: "{"
+                  - generic [ref=f27e813]: "\"type\": \"prompt\","
+                  - generic [ref=f27e814]: "\"prompt\": \"Does this command look safe to execute? Only allow read-only operations.\","
+                  - generic [ref=f27e815]: "\"timeout\": 10"
+                  - generic [ref=f27e816]: "}"
+                  - generic [ref=f27e817]: "]"
+                  - generic [ref=f27e818]: "}"
+                  - generic [ref=f27e819]: "}"
+              - paragraph [ref=f27e820]:
+                - strong [ref=f27e821]: "Features:"
+              - list [ref=f27e822]:
+                - listitem [ref=f27e823]:
+                  - text: Returns structured
+                  - code [ref=f27e824]: "{ ok: boolean, reason?: string }"
+                  - text: response
+                - listitem [ref=f27e825]: Uses a fast model for quick evaluation
+                - listitem [ref=f27e826]:
+                  - code [ref=f27e827]: $ARGUMENTS
+                  - text: placeholder is auto-replaced with hook input JSON
+                - listitem [ref=f27e828]:
+                  - text: If
+                  - code [ref=f27e829]: $ARGUMENTS
+                  - text: is absent, hook input is auto-appended
+                - listitem [ref=f27e830]:
+                  - text: Optional
+                  - code [ref=f27e831]: model
+                  - text: field to override the default LLM model
+              - heading [level=2] [ref=f27e832]:
+                - link "Copy link to examples" [ref=f27e833] [cursor=pointer]:
+                  - /url: "#examples"
+                  - generic [ref=f27e834]: Examples
+              - alert [ref=f27e842]:
+                - paragraph [ref=f27e846]:
+                  - text: The examples below use
+                  - code [ref=f27e847]: ./hooks/...
+                  - text: paths, which work for
+                  - strong [ref=f27e848]: user hooks
+                  - text: (
+                  - code [ref=f27e849]: ~/.cursor/hooks.json
+                  - text: ) where scripts run from
+                  - code [ref=f27e850]: ~/.cursor/
+                  - text: . For
+                  - strong [ref=f27e851]: project hooks
+                  - text: (
+                  - code [ref=f27e852]: <project>/.cursor/hooks.json
+                  - text: ), use
+                  - code [ref=f27e853]: .cursor/hooks/...
+                  - text: paths instead since scripts run from the project root.
+              - generic [ref=f27e855]:
+                - tablist [ref=f27e856]:
+                  - tab "hooks.json" [selected] [ref=f27e857] [cursor=pointer]
+                  - tab "audit.sh" [ref=f27e858] [cursor=pointer]
+                  - tab "block-git.sh" [ref=f27e859] [cursor=pointer]
+                - tabpanel "hooks.json" [ref=f27e860]:
+                  - generic [ref=f27e863]:
+                    - button [ref=f27e864] [cursor=pointer]
+                    - code [ref=f27e870]:
+                      - generic [ref=f27e871]: "{"
+                      - generic [ref=f27e872]: "\"version\": 1,"
+                      - generic [ref=f27e873]: "\"hooks\": {"
+                      - generic [ref=f27e874]: "\"sessionStart\": ["
+                      - generic [ref=f27e875]: "{"
+                      - generic [ref=f27e876]: "\"command\": \"./hooks/session-init.sh\""
+                      - generic [ref=f27e877]: "}"
+                      - generic [ref=f27e878]: "],"
+                      - generic [ref=f27e879]: "\"sessionEnd\": ["
+                      - generic [ref=f27e880]: "{"
+                      - generic [ref=f27e881]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e882]: "}"
+                      - generic [ref=f27e883]: "],"
+                      - generic [ref=f27e884]: "\"beforeShellExecution\": ["
+                      - generic [ref=f27e885]: "{"
+                      - generic [ref=f27e886]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e887]: "},"
+                      - generic [ref=f27e888]: "{"
+                      - generic [ref=f27e889]: "\"command\": \"./hooks/block-git.sh\""
+                      - generic [ref=f27e890]: "}"
+                      - generic [ref=f27e891]: "],"
+                      - generic [ref=f27e892]: "\"beforeMCPExecution\": ["
+                      - generic [ref=f27e893]: "{"
+                      - generic [ref=f27e894]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e895]: "}"
+                      - generic [ref=f27e896]: "],"
+                      - generic [ref=f27e897]: "\"afterShellExecution\": ["
+                      - generic [ref=f27e898]: "{"
+                      - generic [ref=f27e899]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e900]: "}"
+                      - generic [ref=f27e901]: "],"
+                      - generic [ref=f27e902]: "\"afterMCPExecution\": ["
+                      - generic [ref=f27e903]: "{"
+                      - generic [ref=f27e904]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e905]: "}"
+                      - generic [ref=f27e906]: "],"
+                      - generic [ref=f27e907]: "\"afterFileEdit\": ["
+                      - generic [ref=f27e908]: "{"
+                      - generic [ref=f27e909]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e910]: "}"
+                      - generic [ref=f27e911]: "],"
+                      - generic [ref=f27e912]: "\"beforeSubmitPrompt\": ["
+                      - generic [ref=f27e913]: "{"
+                      - generic [ref=f27e914]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e915]: "}"
+                      - generic [ref=f27e916]: "],"
+                      - generic [ref=f27e917]: "\"preCompact\": ["
+                      - generic [ref=f27e918]: "{"
+                      - generic [ref=f27e919]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e920]: "}"
+                      - generic [ref=f27e921]: "],"
+                      - generic [ref=f27e922]: "\"stop\": ["
+                      - generic [ref=f27e923]: "{"
+                      - generic [ref=f27e924]: "\"command\": \"./hooks/audit.sh\""
+                      - generic [ref=f27e925]: "}"
+                      - generic [ref=f27e926]: "],"
+                      - generic [ref=f27e927]: "\"beforeTabFileRead\": ["
+                      - generic [ref=f27e928]: "{"
+                      - generic [ref=f27e929]: "\"command\": \"./hooks/redact-secrets-tab.sh\""
+                      - generic [ref=f27e930]: "}"
+                      - generic [ref=f27e931]: "],"
+                      - generic [ref=f27e932]: "\"afterTabFileEdit\": ["
+                      - generic [ref=f27e933]: "{"
+                      - generic [ref=f27e934]: "\"command\": \"./hooks/format-tab.sh\""
+                      - generic [ref=f27e935]: "}"
+                      - generic [ref=f27e936]: "]"
+                      - generic [ref=f27e937]: "}"
+                      - generic [ref=f27e938]: "}"
+              - heading [level=3] [ref=f27e939]:
+                - link "Copy link to typescript-stop-automation-hook" [ref=f27e940] [cursor=pointer]:
+                  - /url: "#typescript-stop-automation-hook"
+                  - generic [ref=f27e941]: TypeScript stop automation hook
+              - paragraph [ref=f27e949]:
+                - text: Choose TypeScript when you need typed JSON, durable file I/O, and HTTP calls in the same hook. This Bun-powered
+                - code [ref=f27e950]: stop
+                - text: hook tracks per-conversation failure counts on disk, forwards structured telemetry to an internal API, and can automatically schedule a retry when the agent fails twice in a row.
+              - generic [ref=f27e952]:
+                - tablist [ref=f27e953]:
+                  - tab "hooks.json" [selected] [ref=f27e954] [cursor=pointer]
+                  - tab ".cursor/hooks/track-stop.ts" [ref=f27e955] [cursor=pointer]
+                - tabpanel "hooks.json" [ref=f27e956]:
+                  - generic [ref=f27e959]:
+                    - button [ref=f27e960] [cursor=pointer]
+                    - code [ref=f27e966]:
+                      - generic [ref=f27e967]: "{"
+                      - generic [ref=f27e968]: "\"version\": 1,"
+                      - generic [ref=f27e969]: "\"hooks\": {"
+                      - generic [ref=f27e970]: "\"stop\": ["
+                      - generic [ref=f27e971]: "{"
+                      - generic [ref=f27e972]: "\"command\": \"bun run .cursor/hooks/track-stop.ts --stop\""
+                      - generic [ref=f27e973]: "}"
+                      - generic [ref=f27e974]: "]"
+                      - generic [ref=f27e975]: "}"
+                      - generic [ref=f27e976]: "}"
+              - paragraph [ref=f27e977]:
+                - text: Set
+                - code [ref=f27e978]: AGENT_TELEMETRY_URL
+                - text: to the internal endpoint that should receive run summaries.
+              - heading [level=3] [ref=f27e979]:
+                - link "Copy link to python-manifest-guard-hook" [ref=f27e980] [cursor=pointer]:
+                  - /url: "#python-manifest-guard-hook"
+                  - generic [ref=f27e981]: Python manifest guard hook
+              - paragraph [ref=f27e989]:
+                - text: Python shines when you need rich parsing libraries. This hook uses
+                - code [ref=f27e990]: pyyaml
+                - text: to inspect Kubernetes manifests before
+                - code [ref=f27e991]: kubectl apply
+                - text: runs; Bash would struggle to parse multi-document YAML safely.
+              - generic [ref=f27e993]:
+                - tablist [ref=f27e994]:
+                  - tab "hooks.json" [selected] [ref=f27e995] [cursor=pointer]
+                  - tab ".cursor/hooks/kube_guard.py" [ref=f27e996] [cursor=pointer]
+                - tabpanel "hooks.json" [ref=f27e997]:
+                  - generic [ref=f27e1000]:
+                    - button [ref=f27e1001] [cursor=pointer]
+                    - code [ref=f27e1007]:
+                      - generic [ref=f27e1008]: "{"
+                      - generic [ref=f27e1009]: "\"version\": 1,"
+                      - generic [ref=f27e1010]: "\"hooks\": {"
+                      - generic [ref=f27e1011]: "\"beforeShellExecution\": ["
+                      - generic [ref=f27e1012]: "{"
+                      - generic [ref=f27e1013]: "\"command\": \"python3 .cursor/hooks/kube_guard.py\""
+                      - generic [ref=f27e1014]: "}"
+                      - generic [ref=f27e1015]: "]"
+                      - generic [ref=f27e1016]: "}"
+                      - generic [ref=f27e1017]: "}"
+              - paragraph [ref=f27e1018]:
+                - text: Install PyYAML (for example,
+                - code [ref=f27e1019]: pip install pyyaml
+                - text: ) wherever your hook scripts run so the parser import succeeds.
+              - heading [level=2] [ref=f27e1020]:
+                - link "Copy link to partner-integrations" [ref=f27e1021] [cursor=pointer]:
+                  - /url: "#partner-integrations"
+                  - generic [ref=f27e1022]: Partner Integrations
+              - paragraph [ref=f27e1030]: We partner with ecosystem vendors who have built hooks support with Cursor. These integrations cover security scanning, governance, secrets management, and more.
+              - heading [level=3] [ref=f27e1031]:
+                - link "Copy link to mcp-governance-and-visibility" [ref=f27e1032] [cursor=pointer]:
+                  - /url: "#mcp-governance-and-visibility"
+                  - generic [ref=f27e1033]: MCP governance and visibility
+              - table [ref=f27e1042]:
+                - rowgroup [ref=f27e1043]:
+                  - row [ref=f27e1044]:
+                    - columnheader "Partner" [ref=f27e1045]
+                    - columnheader "Description" [ref=f27e1046]
+                - rowgroup [ref=f27e1047]:
+                  - row [ref=f27e1048]:
+                    - cell [ref=f27e1049]:
+                      - link "MintMCP" [ref=f27e1050] [cursor=pointer]:
+                        - /url: https://www.mintmcp.com/blog/mcp-governance-cursor-hooks
+                    - cell "Build a complete inventory of MCP servers, monitor tool usage patterns, and scan responses for sensitive data before it reaches the AI model." [ref=f27e1051]
+                  - row [ref=f27e1052]:
+                    - cell [ref=f27e1053]:
+                      - link "Oasis Security" [ref=f27e1054] [cursor=pointer]:
+                        - /url: https://www.oasis.security/blog/cursor-oasis-governing-agentic-access
+                    - cell "Enforce least-privilege policies on AI agent actions and maintain full audit trails across enterprise systems." [ref=f27e1055]
+                  - row [ref=f27e1056]:
+                    - cell [ref=f27e1057]:
+                      - link "Runlayer" [ref=f27e1058] [cursor=pointer]:
+                        - /url: https://www.runlayer.com/blog/cursor-hooks
+                    - cell "Wrap MCP tools and integrate with their MCP broker for centralized control and visibility over agent-to-tool interactions." [ref=f27e1059]
+              - heading [level=3] [ref=f27e1060]:
+                - link "Copy link to code-security-and-best-practices" [ref=f27e1061] [cursor=pointer]:
+                  - /url: "#code-security-and-best-practices"
+                  - generic [ref=f27e1062]: Code security and best practices
+              - table [ref=f27e1071]:
+                - rowgroup [ref=f27e1072]:
+                  - row [ref=f27e1073]:
+                    - columnheader "Partner" [ref=f27e1074]
+                    - columnheader "Description" [ref=f27e1075]
+                - rowgroup [ref=f27e1076]:
+                  - row [ref=f27e1077]:
+                    - cell [ref=f27e1078]:
+                      - link "Corridor" [ref=f27e1079] [cursor=pointer]:
+                        - /url: https://corridor.dev/blog/corridor-cursor-hooks/
+                    - cell "Get real-time feedback on code implementation and security design decisions as code is being written." [ref=f27e1080]
+                  - row [ref=f27e1081]:
+                    - cell [ref=f27e1082]:
+                      - link "Semgrep" [ref=f27e1083] [cursor=pointer]:
+                        - /url: https://semgrep.dev/blog/2025/cursor-hooks-mcp-server
+                    - cell "Automatically scan AI-generated code for vulnerabilities with real-time feedback to regenerate code until security issues are resolved." [ref=f27e1084]
+              - heading [level=3] [ref=f27e1085]:
+                - link "Copy link to dependency-security" [ref=f27e1086] [cursor=pointer]:
+                  - /url: "#dependency-security"
+                  - generic [ref=f27e1087]: Dependency security
+              - table [ref=f27e1096]:
+                - rowgroup [ref=f27e1097]:
+                  - row [ref=f27e1098]:
+                    - columnheader "Partner" [ref=f27e1099]
+                    - columnheader "Description" [ref=f27e1100]
+                - rowgroup [ref=f27e1101]:
+                  - row [ref=f27e1102]:
+                    - cell [ref=f27e1103]:
+                      - link "Endor Labs" [ref=f27e1104] [cursor=pointer]:
+                        - /url: https://www.endorlabs.com/learn/bringing-malware-detection-into-ai-coding-workflows-with-cursor-hooks
+                    - cell "Intercept package installations and scan for malicious dependencies, preventing supply chain attacks before they enter your codebase." [ref=f27e1105]
+              - heading [level=3] [ref=f27e1106]:
+                - link "Copy link to agent-security-and-safety" [ref=f27e1107] [cursor=pointer]:
+                  - /url: "#agent-security-and-safety"
+                  - generic [ref=f27e1108]: Agent security and safety
+              - table [ref=f27e1117]:
+                - rowgroup [ref=f27e1118]:
+                  - row [ref=f27e1119]:
+                    - columnheader "Partner" [ref=f27e1120]
+                    - columnheader "Description" [ref=f27e1121]
+                - rowgroup [ref=f27e1122]:
+                  - row [ref=f27e1123]:
+                    - cell [ref=f27e1124]:
+                      - link "Snyk" [ref=f27e1125] [cursor=pointer]:
+                        - /url: https://snyk.io/blog/evo-agent-guard-cursor-integration/
+                    - cell "Review agent actions in real-time with Evo Agent Guard, detecting and preventing issues like prompt injection and dangerous tool calls." [ref=f27e1126]
+              - heading [level=3] [ref=f27e1127]:
+                - link "Copy link to secrets-management" [ref=f27e1128] [cursor=pointer]:
+                  - /url: "#secrets-management"
+                  - generic [ref=f27e1129]: Secrets management
+              - table [ref=f27e1138]:
+                - rowgroup [ref=f27e1139]:
+                  - row [ref=f27e1140]:
+                    - columnheader "Partner" [ref=f27e1141]
+                    - columnheader "Description" [ref=f27e1142]
+                - rowgroup [ref=f27e1143]:
+                  - row [ref=f27e1144]:
+                    - cell [ref=f27e1145]:
+                      - link "1Password" [ref=f27e1146] [cursor=pointer]:
+                        - /url: https://marketplace.1password.com/integration/cursor-hooks
+                    - cell "Validate that environment files from 1Password Environments are properly mounted before shell commands execute, enabling just-in-time secrets access without writing credentials to disk." [ref=f27e1147]
+              - paragraph [ref=f27e1148]:
+                - text: For more details about our hooks partners, see the
+                - link "Hooks for security and platform teams" [ref=f27e1149] [cursor=pointer]:
+                  - /url: /blog/hooks-partners
+                - text: blog post.
+              - heading [level=2] [ref=f27e1150]:
+                - link "Copy link to configuration" [ref=f27e1151] [cursor=pointer]:
+                  - /url: "#configuration"
+                  - generic [ref=f27e1152]: Configuration
+              - paragraph [ref=f27e1160]:
+                - text: Define hooks in a
+                - code [ref=f27e1161]: hooks.json
+                - text: "file. Configuration can exist at multiple levels. All matching hooks from every source run, and Cursor merges their responses: any"
+                - code [ref=f27e1162]: deny
+                - text: wins over
+                - code [ref=f27e1163]: ask
+                - text: ", and"
+                - code [ref=f27e1164]: ask
+                - text: wins over
+                - code [ref=f27e1165]: allow
+                - text: ", regardless of source."
+                - code [ref=f27e1166]: user_message
+                - text: and
+                - code [ref=f27e1167]: agent_message
+                - text: values are concatenated. For other fields, such as
+                - code [ref=f27e1168]: followup_message
+                - text: ", the last response wins. Responses merge in the priority order below, so for those fields a lower-priority source overrides a higher-priority one:"
+              - generic [ref=f27e1171]:
+                - button [ref=f27e1172] [cursor=pointer]
+                - code [ref=f27e1178]:
+                  - generic [ref=f27e1179]: ~/.cursor/
+                  - generic [ref=f27e1180]: ├── hooks.json
+                  - generic [ref=f27e1181]: └── hooks/
+                  - generic [ref=f27e1182]: ├── audit.sh
+                  - generic [ref=f27e1183]: └── block-git.sh
+              - list [ref=f27e1184]:
+                - listitem [ref=f27e1185]:
+                  - strong [ref=f27e1186]: Enterprise
+                  - text: "(MDM-managed, system-wide):"
+                  - list [ref=f27e1187]:
+                    - listitem [ref=f27e1188]:
+                      - text: "macOS:"
+                      - code [ref=f27e1189]: /Library/Application Support/Cursor/hooks.json
+                    - listitem [ref=f27e1190]:
+                      - text: "Linux/WSL:"
+                      - code [ref=f27e1191]: /etc/cursor/hooks.json
+                    - listitem [ref=f27e1192]:
+                      - text: "Windows:"
+                      - code [ref=f27e1193]: C:\\ProgramData\\Cursor\\hooks.json
+                - listitem [ref=f27e1194]:
+                  - strong [ref=f27e1195]: Team
+                  - text: "(Cloud-distributed, enterprise only):"
+                  - list [ref=f27e1196]:
+                    - listitem [ref=f27e1197]:
+                      - text: Configured in the
+                      - link "web dashboard" [ref=f27e1198] [cursor=pointer]:
+                        - /url: https://cursor.com/dashboard/team-content?section=hooks
+                      - text: and synced to all team members automatically
+                - listitem [ref=f27e1199]:
+                  - strong [ref=f27e1200]: Project
+                  - text: "(Project-specific):"
+                  - list [ref=f27e1201]:
+                    - listitem [ref=f27e1202]:
+                      - code [ref=f27e1203]: <project-root>/.cursor/hooks.json
+                    - listitem [ref=f27e1204]: Project hooks run in any trusted workspace and are checked into version control with your project
+                - listitem [ref=f27e1205]:
+                  - strong [ref=f27e1206]: User
+                  - text: "(User-specific):"
+                  - list [ref=f27e1207]:
+                    - listitem [ref=f27e1208]:
+                      - code [ref=f27e1209]: ~/.cursor/hooks.json
+              - paragraph [ref=f27e1210]: "Priority order (highest to lowest): Enterprise → Team → Project → User"
+              - paragraph [ref=f27e1211]:
+                - text: Hooks from installed
+                - link "plugins" [ref=f27e1212] [cursor=pointer]:
+                  - /url: /docs/plugins
+                - text: come after all of these. Plugin hooks run command hooks only.
+              - paragraph [ref=f27e1213]:
+                - text: The
+                - code [ref=f27e1214]: hooks
+                - text: object maps hook names to arrays of hook definitions. Each definition currently supports a
+                - code [ref=f27e1215]: command
+                - text: "property that can be a shell string, an absolute path, or a relative path. The working directory depends on the hook source:"
+              - list [ref=f27e1216]:
+                - listitem [ref=f27e1217]:
+                  - strong [ref=f27e1218]: Project hooks
+                  - text: (
+                  - code [ref=f27e1219]: .cursor/hooks.json
+                  - text: "in a repository): Run from the"
+                  - strong [ref=f27e1220]: project root
+                - listitem [ref=f27e1221]:
+                  - strong [ref=f27e1222]: User hooks
+                  - text: (
+                  - code [ref=f27e1223]: ~/.cursor/hooks.json
+                  - text: "): Run from"
+                  - code [ref=f27e1224]: ~/.cursor/
+                - listitem [ref=f27e1225]:
+                  - strong [ref=f27e1226]: Enterprise hooks
+                  - text: "(system-wide config): Run from the enterprise config directory"
+                - listitem [ref=f27e1227]:
+                  - strong [ref=f27e1228]: Team hooks
+                  - text: "(cloud-distributed): Run from the managed hooks directory"
+                - listitem [ref=f27e1229]:
+                  - strong [ref=f27e1230]: Plugin hooks
+                  - text: ": Run from the plugin's install directory, which"
+                  - code [ref=f27e1231]: CURSOR_PLUGIN_ROOT
+                  - text: points to.
+                  - code [ref=f27e1232]: stop
+                  - text: and
+                  - code [ref=f27e1233]: subagentStop
+                  - text: plugin hooks run from the workspace root.
+              - paragraph [ref=f27e1234]:
+                - text: For project hooks, use paths like
+                - code [ref=f27e1235]: .cursor/hooks/script.sh
+                - text: (relative to project root), not
+                - code [ref=f27e1236]: ./hooks/script.sh
+                - text: (which would look for
+                - code [ref=f27e1237]: <project>/hooks/script.sh
+                - text: ).
+              - heading [level=3] [ref=f27e1238]:
+                - link "Copy link to configuration-file" [ref=f27e1239] [cursor=pointer]:
+                  - /url: "#configuration-file"
+                  - generic [ref=f27e1240]: Configuration file
+              - paragraph [ref=f27e1248]:
+                - text: This example shows a user-level hooks file (
+                - code [ref=f27e1249]: ~/.cursor/hooks.json
+                - text: ). For project-level hooks, change paths like
+                - code [ref=f27e1250]: ./hooks/script.sh
+                - text: to
+                - code [ref=f27e1251]: .cursor/hooks/script.sh
+                - text: ":"
+              - generic [ref=f27e1254]:
+                - button [ref=f27e1255] [cursor=pointer]
+                - code [ref=f27e1261]:
+                  - generic [ref=f27e1262]: "{"
+                  - generic [ref=f27e1263]: "\"version\": 1,"
+                  - generic [ref=f27e1264]: "\"hooks\": {"
+                  - generic [ref=f27e1265]: "\"sessionStart\": [{ \"command\": \"./session-init.sh\" }],"
+                  - generic [ref=f27e1266]: "\"sessionEnd\": [{ \"command\": \"./audit.sh\" }],"
+                  - generic [ref=f27e1267]: "\"preToolUse\": ["
+                  - generic [ref=f27e1268]: "{"
+                  - generic [ref=f27e1269]: "\"command\": \"./hooks/validate-tool.sh\","
+                  - generic [ref=f27e1270]: "\"matcher\": \"Shell|Read|Write\""
+                  - generic [ref=f27e1271]: "}"
+                  - generic [ref=f27e1272]: "],"
+                  - generic [ref=f27e1273]: "\"postToolUse\": [{ \"command\": \"./hooks/audit-tool.sh\" }],"
+                  - generic [ref=f27e1274]: "\"subagentStart\": [{ \"command\": \"./hooks/validate-subagent.sh\" }],"
+                  - generic [ref=f27e1275]: "\"subagentStop\": [{ \"command\": \"./hooks/audit-subagent.sh\" }],"
+                  - generic [ref=f27e1276]: "\"beforeShellExecution\": [{ \"command\": \"./script.sh\" }],"
+                  - generic [ref=f27e1277]: "\"afterShellExecution\": [{ \"command\": \"./script.sh\" }],"
+                  - generic [ref=f27e1278]: "\"afterMCPExecution\": [{ \"command\": \"./script.sh\" }],"
+                  - generic [ref=f27e1279]: "\"afterFileEdit\": [{ \"command\": \"./format.sh\" }],"
+                  - generic [ref=f27e1280]: "\"preCompact\": [{ \"command\": \"./audit.sh\" }],"
+                  - generic [ref=f27e1281]: "\"stop\": [{ \"command\": \"./audit.sh\", \"loop_limit\": 10 }],"
+                  - generic [ref=f27e1282]: "\"beforeTabFileRead\": [{ \"command\": \"./redact-secrets-tab.sh\" }],"
+                  - generic [ref=f27e1283]: "\"afterTabFileEdit\": [{ \"command\": \"./format-tab.sh\" }],"
+                  - generic [ref=f27e1284]: "\"workspaceOpen\": [{ \"command\": \"./register-workspace-plugins.sh\" }]"
+                  - generic [ref=f27e1285]: "}"
+                  - generic [ref=f27e1286]: "}"
+              - paragraph [ref=f27e1287]:
+                - text: The Agent hooks (
+                - code [ref=f27e1288]: sessionStart
+                - text: ","
+                - code [ref=f27e1289]: sessionEnd
+                - text: ","
+                - code [ref=f27e1290]: preToolUse
+                - text: ","
+                - code [ref=f27e1291]: postToolUse
+                - text: ","
+                - code [ref=f27e1292]: postToolUseFailure
+                - text: ","
+                - code [ref=f27e1293]: subagentStart
+                - text: ","
+                - code [ref=f27e1294]: subagentStop
+                - text: ","
+                - code [ref=f27e1295]: beforeShellExecution
+                - text: ","
+                - code [ref=f27e1296]: afterShellExecution
+                - text: ","
+                - code [ref=f27e1297]: beforeMCPExecution
+                - text: ","
+                - code [ref=f27e1298]: afterMCPExecution
+                - text: ","
+                - code [ref=f27e1299]: beforeReadFile
+                - text: ","
+                - code [ref=f27e1300]: afterFileEdit
+                - text: ","
+                - code [ref=f27e1301]: beforeSubmitPrompt
+                - text: ","
+                - code [ref=f27e1302]: preCompact
+                - text: ","
+                - code [ref=f27e1303]: stop
+                - text: ","
+                - code [ref=f27e1304]: afterAgentResponse
+                - text: ","
+                - code [ref=f27e1305]: afterAgentThought
+                - text: ) apply to Agent Chat operations. The Tab hooks (
+                - code [ref=f27e1306]: beforeTabFileRead
+                - text: ","
+                - code [ref=f27e1307]: afterTabFileEdit
+                - text: ) apply specifically to inline Tab completions. The app lifecycle hook (
+                - code [ref=f27e1308]: workspaceOpen
+                - text: ) fires when a workspace opens and on workspace folder changes, independent of any agent session.
+              - heading [level=3] [ref=f27e1309]:
+                - link "Copy link to global-configuration-options" [ref=f27e1310] [cursor=pointer]:
+                  - /url: "#global-configuration-options"
+                  - generic [ref=f27e1311]: Global Configuration Options
+              - table [ref=f27e1320]:
+                - rowgroup [ref=f27e1321]:
+                  - row [ref=f27e1322]:
+                    - columnheader "Option" [ref=f27e1323]
+                    - columnheader "Type" [ref=f27e1324]
+                    - columnheader "Default" [ref=f27e1325]
+                    - columnheader "Description" [ref=f27e1326]
+                - rowgroup [ref=f27e1327]:
+                  - row [ref=f27e1328]:
+                    - cell [ref=f27e1329]:
+                      - code [ref=f27e1330]: version
+                    - cell "number" [ref=f27e1331]
+                    - cell "required" [ref=f27e1332]
+                    - cell [ref=f27e1333]:
+                      - text: Config schema version. Must be a positive integer (use
+                      - code [ref=f27e1334]: "1"
+                      - text: ).
+              - heading [level=3] [ref=f27e1335]:
+                - link "Copy link to per-script-configuration-options" [ref=f27e1336] [cursor=pointer]:
+                  - /url: "#per-script-configuration-options"
+                  - generic [ref=f27e1337]: Per-Script Configuration Options
+              - table [ref=f27e1346]:
+                - rowgroup [ref=f27e1347]:
+                  - row [ref=f27e1348]:
+                    - columnheader "Option" [ref=f27e1349]
+                    - columnheader "Type" [ref=f27e1350]
+                    - columnheader "Default" [ref=f27e1351]
+                    - columnheader "Description" [ref=f27e1352]
+                - rowgroup [ref=f27e1353]:
+                  - row [ref=f27e1354]:
+                    - cell [ref=f27e1355]:
+                      - code [ref=f27e1356]: command
+                    - cell "string" [ref=f27e1357]
+                    - cell "required" [ref=f27e1358]
+                    - cell "Script path or command" [ref=f27e1359]
+                  - row [ref=f27e1360]:
+                    - cell [ref=f27e1361]:
+                      - code [ref=f27e1362]: type
+                    - cell [ref=f27e1363]:
+                      - code [ref=f27e1364]: "\"command\""
+                      - text: "|"
+                      - code [ref=f27e1365]: "\"prompt\""
+                    - cell [ref=f27e1366]:
+                      - code [ref=f27e1367]: "\"command\""
+                    - cell "Hook execution type" [ref=f27e1368]
+                  - row [ref=f27e1369]:
+                    - cell [ref=f27e1370]:
+                      - code [ref=f27e1371]: timeout
+                    - cell "number" [ref=f27e1372]
+                    - cell "platform default" [ref=f27e1373]
+                    - cell "Execution timeout in seconds" [ref=f27e1374]
+                  - row [ref=f27e1375]:
+                    - cell [ref=f27e1376]:
+                      - code [ref=f27e1377]: loop_limit
+                    - cell "number | null" [ref=f27e1378]
+                    - cell [ref=f27e1379]:
+                      - code [ref=f27e1380]: "5"
+                    - cell [ref=f27e1381]:
+                      - text: Per-script loop limit for stop/subagentStop hooks.
+                      - code [ref=f27e1382]: "null"
+                      - text: means no limit. Default is
+                      - code [ref=f27e1383]: "5"
+                      - text: for Cursor hooks,
+                      - code [ref=f27e1384]: "null"
+                      - text: for Claude Code hooks.
+                  - row [ref=f27e1385]:
+                    - cell [ref=f27e1386]:
+                      - code [ref=f27e1387]: failClosed
+                    - cell "boolean" [ref=f27e1388]
+                    - cell [ref=f27e1389]:
+                      - code [ref=f27e1390]: "false"
+                    - cell [ref=f27e1391]:
+                      - text: When
+                      - code [ref=f27e1392]: "true"
+                      - text: ", hook failures (crash, timeout, non-zero exit code, no output) block the action instead of allowing it through. Permission hooks block on invalid JSON or an invalid response even when this is"
+                      - code [ref=f27e1393]: "false"
+                      - text: . Useful for security-critical hooks.
+                  - row [ref=f27e1394]:
+                    - cell [ref=f27e1395]:
+                      - code [ref=f27e1396]: matcher
+                    - cell "string" [ref=f27e1397]
+                    - cell "-" [ref=f27e1398]
+                    - cell [ref=f27e1399]:
+                      - text: Regex that filters when the hook runs. An empty string or
+                      - code [ref=f27e1400]: "\"*\""
+                      - text: matches everything.
+              - heading [level=3] [ref=f27e1401]:
+                - link "Copy link to matcher-configuration" [ref=f27e1402] [cursor=pointer]:
+                  - /url: "#matcher-configuration"
+                  - generic [ref=f27e1403]: Matcher Configuration
+              - paragraph [ref=f27e1411]:
+                - text: Matchers let you filter when a hook runs. A matcher is a regex string; an empty string or
+                - code [ref=f27e1412]: "\"*\""
+                - text: "matches everything. Which value the regex is tested against depends on the hook:"
+              - generic [ref=f27e1415]:
+                - button [ref=f27e1416] [cursor=pointer]
+                - code [ref=f27e1422]:
+                  - generic [ref=f27e1423]: "{"
+                  - generic [ref=f27e1424]: "\"version\": 1,"
+                  - generic [ref=f27e1425]: "\"hooks\": {"
+                  - generic [ref=f27e1426]: "\"preToolUse\": ["
+                  - generic [ref=f27e1427]: "{"
+                  - generic [ref=f27e1428]: "\"command\": \"./validate-shell.sh\","
+                  - generic [ref=f27e1429]: "\"matcher\": \"Shell\""
+                  - generic [ref=f27e1430]: "}"
+                  - generic [ref=f27e1431]: "],"
+                  - generic [ref=f27e1432]: "\"subagentStart\": ["
+                  - generic [ref=f27e1433]: "{"
+                  - generic [ref=f27e1434]: "\"command\": \"./validate-explore.sh\","
+                  - generic [ref=f27e1435]: "\"matcher\": \"explore|shell\""
+                  - generic [ref=f27e1436]: "}"
+                  - generic [ref=f27e1437]: "],"
+                  - generic [ref=f27e1438]: "\"beforeShellExecution\": ["
+                  - generic [ref=f27e1439]: "{"
+                  - generic [ref=f27e1440]: "\"command\": \"./approve-network.sh\","
+                  - generic [ref=f27e1441]: "\"matcher\": \"curl|wget|nc \""
+                  - generic [ref=f27e1442]: "}"
+                  - generic [ref=f27e1443]: "]"
+                  - generic [ref=f27e1444]: "}"
+                  - generic [ref=f27e1445]: "}"
+              - list [ref=f27e1446]:
+                - listitem [ref=f27e1447]:
+                  - strong [ref=f27e1448]: subagentStart
+                  - text: ": The matcher runs against the"
+                  - strong [ref=f27e1449]: subagent type
+                  - text: (e.g.
+                  - code [ref=f27e1450]: explore
+                  - text: ","
+                  - code [ref=f27e1451]: shell
+                  - text: ","
+                  - code [ref=f27e1452]: generalPurpose
+                  - text: ). Use it to run hooks only when a specific kind of subagent is started. The example above runs
+                  - code [ref=f27e1453]: validate-explore.sh
+                  - text: only for explore or shell subagents.
+                - listitem [ref=f27e1454]:
+                  - strong [ref=f27e1455]: beforeShellExecution
+                  - text: ": The matcher runs against the"
+                  - strong [ref=f27e1456]: shell command
+                  - text: string. Use it to run hooks only when the command matches a pattern (e.g. network calls, file deletions). The example above runs
+                  - code [ref=f27e1457]: approve-network.sh
+                  - text: only when the command contains
+                  - code [ref=f27e1458]: curl
+                  - text: ","
+                  - code [ref=f27e1459]: wget
+                  - text: ", or"
+                  - code [ref=f27e1460]: nc
+                  - text: .
+              - paragraph [ref=f27e1461]:
+                - strong [ref=f27e1462]: "Available matchers by hook:"
+              - list [ref=f27e1463]:
+                - listitem [ref=f27e1464]:
+                  - strong [ref=f27e1465]: preToolUse / postToolUse / postToolUseFailure
+                  - text: ": Filter by tool type. Values include"
+                  - code [ref=f27e1466]: Shell
+                  - text: ","
+                  - code [ref=f27e1467]: Read
+                  - text: ","
+                  - code [ref=f27e1468]: Write
+                  - text: ","
+                  - code [ref=f27e1469]: Grep
+                  - text: ","
+                  - code [ref=f27e1470]: Delete
+                  - text: ","
+                  - code [ref=f27e1471]: Task
+                  - text: ", and MCP tools using the"
+                  - code [ref=f27e1472]: MCP:<tool_name>
+                  - text: format.
+                - listitem [ref=f27e1473]:
+                  - strong [ref=f27e1474]: subagentStart / subagentStop
+                  - text: ": Filter by subagent type ("
+                  - code [ref=f27e1475]: generalPurpose
+                  - text: ","
+                  - code [ref=f27e1476]: explore
+                  - text: ","
+                  - code [ref=f27e1477]: shell
+                  - text: ", etc.)."
+                - listitem [ref=f27e1478]:
+                  - strong [ref=f27e1479]: beforeShellExecution / afterShellExecution
+                  - text: ": Filter by the shell command text; the matcher is matched against the full command string."
+                - listitem [ref=f27e1480]:
+                  - strong [ref=f27e1481]: beforeReadFile
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1482]: Read
+                  - text: .
+                - listitem [ref=f27e1483]:
+                  - strong [ref=f27e1484]: afterFileEdit
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1485]: Write
+                  - text: .
+                - listitem [ref=f27e1486]:
+                  - strong [ref=f27e1487]: beforeTabFileRead
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1488]: TabRead
+                  - text: .
+                - listitem [ref=f27e1489]:
+                  - strong [ref=f27e1490]: afterTabFileEdit
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1491]: TabWrite
+                  - text: .
+                - listitem [ref=f27e1492]:
+                  - strong [ref=f27e1493]: beforeSubmitPrompt
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1494]: UserPromptSubmit
+                  - text: .
+                - listitem [ref=f27e1495]:
+                  - strong [ref=f27e1496]: stop
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1497]: Stop
+                  - text: .
+                - listitem [ref=f27e1498]:
+                  - strong [ref=f27e1499]: afterAgentResponse
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1500]: AgentResponse
+                  - text: .
+                - listitem [ref=f27e1501]:
+                  - strong [ref=f27e1502]: afterAgentThought
+                  - text: ": Matched against the value"
+                  - code [ref=f27e1503]: AgentThought
+                  - text: .
+              - heading [level=2] [ref=f27e1504]:
+                - link "Copy link to team-distribution" [ref=f27e1505] [cursor=pointer]:
+                  - /url: "#team-distribution"
+                  - generic [ref=f27e1506]: Team Distribution
+              - paragraph [ref=f27e1514]: Hooks can be distributed to team members using project hooks (via version control), MDM tools, or Cursor's cloud distribution system.
+              - heading [level=3] [ref=f27e1515]:
+                - link "Copy link to project-hooks-version-control" [ref=f27e1516] [cursor=pointer]:
+                  - /url: "#project-hooks-version-control"
+                  - generic [ref=f27e1517]: Project Hooks (Version Control)
+              - paragraph [ref=f27e1525]:
+                - text: Project hooks are the simplest way to share hooks with your team. Place a
+                - code [ref=f27e1526]: hooks.json
+                - text: file at
+                - code [ref=f27e1527]: <project-root>/.cursor/hooks.json
+                - text: and commit it to your repository. When team members open the project in a trusted workspace, Cursor automatically loads and runs the project hooks.
+              - paragraph [ref=f27e1528]: Cloud agents also load these project hooks when they work on your repository in the cloud.
+              - paragraph [ref=f27e1529]: "Project hooks:"
+              - list [ref=f27e1530]:
+                - listitem [ref=f27e1531]: Are stored in version control alongside your code
+                - listitem [ref=f27e1532]: Automatically load for all team members in trusted workspaces
+                - listitem [ref=f27e1533]: Can be project-specific (e.g., enforce formatting standards for a particular codebase)
+                - listitem [ref=f27e1534]: Require the workspace to be trusted to run (for security)
+              - heading [level=3] [ref=f27e1535]:
+                - link "Copy link to mdm-distribution" [ref=f27e1536] [cursor=pointer]:
+                  - /url: "#mdm-distribution"
+                  - generic [ref=f27e1537]: MDM Distribution
+              - paragraph [ref=f27e1545]:
+                - text: Distribute hooks across your organization using Mobile Device Management (MDM) tools. Place the
+                - code [ref=f27e1546]: hooks.json
+                - text: file and hook scripts in the target directories on each machine.
+              - paragraph [ref=f27e1547]:
+                - strong [ref=f27e1548]: User home directory
+                - text: "(per-user distribution):"
+              - list [ref=f27e1549]:
+                - listitem [ref=f27e1550]:
+                  - code [ref=f27e1551]: ~/.cursor/hooks.json
+                - listitem [ref=f27e1552]:
+                  - code [ref=f27e1553]: ~/.cursor/hooks/
+                  - text: (for hook scripts)
+              - paragraph [ref=f27e1554]:
+                - strong [ref=f27e1555]: Global directories
+                - text: "(system-wide distribution):"
+              - list [ref=f27e1556]:
+                - listitem [ref=f27e1557]:
+                  - text: "macOS:"
+                  - code [ref=f27e1558]: /Library/Application Support/Cursor/hooks.json
+                - listitem [ref=f27e1559]:
+                  - text: "Linux/WSL:"
+                  - code [ref=f27e1560]: /etc/cursor/hooks.json
+                - listitem [ref=f27e1561]:
+                  - text: "Windows:"
+                  - code [ref=f27e1562]: C:\\ProgramData\\Cursor\\hooks.json
+              - paragraph [ref=f27e1563]: "Note: MDM-based distribution is fully managed by your organization. Cursor does not deploy or manage files through your MDM solution. Ensure your internal IT or security team handles configuration, deployment, and updates in accordance with your organization's policies."
+              - heading [level=3] [ref=f27e1564]:
+                - link "Copy link to cloud-distribution-enterprise-only" [ref=f27e1565] [cursor=pointer]:
+                  - /url: "#cloud-distribution-enterprise-only"
+                  - generic [ref=f27e1566]: Cloud Distribution (Enterprise Only)
+              - paragraph [ref=f27e1574]:
+                - text: Enterprise teams can use Cursor's native cloud distribution to automatically sync hooks to all team members. Configure hooks in the
+                - link "web dashboard" [ref=f27e1575] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/team-content?section=hooks
+                - text: . Cursor automatically delivers configured hooks to all client machines when team members log in.
+              - paragraph [ref=f27e1576]: "Cloud distribution provides:"
+              - list [ref=f27e1577]:
+                - listitem [ref=f27e1578]: Automatic synchronization to all team members (every thirty minutes)
+                - listitem [ref=f27e1579]: Operating system targeting for platform-specific hooks
+                - listitem [ref=f27e1580]: Centralized management through the dashboard
+              - paragraph [ref=f27e1581]:
+                - text: Each dashboard hook runs one script or one prompt on one hook step. Dashboard hooks don't take per-hook options such as
+                - code [ref=f27e1582]: failClosed
+                - text: or
+                - code [ref=f27e1583]: matcher
+                - text: .
+              - paragraph [ref=f27e1584]:
+                - text: The desktop app writes each command hook to
+                - code [ref=f27e1585]: ~/.cursor/managed/team_<team ID>/hooks/
+                - text: and rewrites the folder on every sync. On Windows, a script name without a
+                - code [ref=f27e1586]: .ps1
+                - text: ","
+                - code [ref=f27e1587]: .bat
+                - text: ", or"
+                - code [ref=f27e1588]: .cmd
+                - text: extension gets
+                - code [ref=f27e1589]: .ps1
+                - text: added.
+              - paragraph [ref=f27e1590]:
+                - text: By default, the desktop app waits only a short time for hooks to load before it sends a prompt. Turn on
+                - strong [ref=f27e1591]: Block until hooks are ready
+                - text: in the dashboard's hook settings to make it wait with no timeout until enterprise, team, project, and user hooks have loaded, so they run on every prompt, including the first one after a restart.
+              - paragraph [ref=f27e1592]: Enterprise administrators can create, edit, and manage team hooks from the dashboard without requiring access to individual machines.
+              - paragraph [ref=f27e1593]:
+                - link "Contact sales" [ref=f27e1594] [cursor=pointer]:
+                  - /url: https://cursor.com/contact-sales?source=docs-hooks-cloud
+                - text: to get Enterprise cloud hook distribution.
+              - heading [level=2] [ref=f27e1595]:
+                - link "Copy link to reference" [ref=f27e1596] [cursor=pointer]:
+                  - /url: "#reference"
+                  - generic [ref=f27e1597]: Reference
+              - heading [level=3] [ref=f27e1605]:
+                - link "Copy link to common-schema" [ref=f27e1606] [cursor=pointer]:
+                  - /url: "#common-schema"
+                  - generic [ref=f27e1607]: Common schema
+              - heading [level=4] [ref=f27e1615]:
+                - link "Copy link to input-all-hooks" [ref=f27e1616] [cursor=pointer]:
+                  - /url: "#input-all-hooks"
+                  - generic [ref=f27e1617]: Input (all hooks)
+              - paragraph [ref=f27e1625]: "All hooks receive a base set of fields in addition to their hook-specific fields:"
+              - generic [ref=f27e1628]:
+                - button [ref=f27e1629] [cursor=pointer]
+                - code [ref=f27e1635]:
+                  - generic [ref=f27e1636]: "{"
+                  - generic [ref=f27e1637]: "\"conversation_id\": \"string\","
+                  - generic [ref=f27e1638]: "\"generation_id\": \"string\","
+                  - generic [ref=f27e1639]: "\"model\": \"string\","
+                  - generic [ref=f27e1640]: "\"model_id\": \"string\","
+                  - generic [ref=f27e1641]: "\"model_params\": [{ \"id\": \"string\", \"value\": \"string\" }],"
+                  - generic [ref=f27e1642]: "\"hook_event_name\": \"string\","
+                  - generic [ref=f27e1643]: "\"cursor_version\": \"string\","
+                  - generic [ref=f27e1644]: "\"workspace_roots\": [\"<path>\"],"
+                  - generic [ref=f27e1645]: "\"user_email\": \"string | null\","
+                  - generic [ref=f27e1646]: "\"transcript_path\": \"string | null\""
+                  - generic [ref=f27e1647]: "}"
+              - table [ref=f27e1649]:
+                - rowgroup [ref=f27e1650]:
+                  - row [ref=f27e1651]:
+                    - columnheader "Field" [ref=f27e1652]
+                    - columnheader "Type" [ref=f27e1653]
+                    - columnheader "Description" [ref=f27e1654]
+                - rowgroup [ref=f27e1655]:
+                  - row [ref=f27e1656]:
+                    - cell [ref=f27e1657]:
+                      - code [ref=f27e1658]: conversation_id
+                    - cell "string" [ref=f27e1659]
+                    - cell "Stable ID of the conversation across many turns" [ref=f27e1660]
+                  - row [ref=f27e1661]:
+                    - cell [ref=f27e1662]:
+                      - code [ref=f27e1663]: generation_id
+                    - cell "string" [ref=f27e1664]
+                    - cell "The current generation that changes with every user message" [ref=f27e1665]
+                  - row [ref=f27e1666]:
+                    - cell [ref=f27e1667]:
+                      - code [ref=f27e1668]: model
+                    - cell "string" [ref=f27e1669]
+                    - cell "Legacy model slug configured for the composer that triggered the hook" [ref=f27e1670]
+                  - row [ref=f27e1671]:
+                    - cell [ref=f27e1672]:
+                      - code [ref=f27e1673]: model_id
+                    - cell "string (optional)" [ref=f27e1674]
+                    - cell "Structured ID for the selected model, when available" [ref=f27e1675]
+                  - row [ref=f27e1676]:
+                    - cell [ref=f27e1677]:
+                      - code [ref=f27e1678]: model_params
+                    - cell "array (optional)" [ref=f27e1679]
+                    - cell [ref=f27e1680]:
+                      - text: Selected model parameters, such as thinking, context, or effort. Each item has an
+                      - code [ref=f27e1681]: id
+                      - text: and
+                      - code [ref=f27e1682]: value
+                      - text: .
+                  - row [ref=f27e1683]:
+                    - cell [ref=f27e1684]:
+                      - code [ref=f27e1685]: hook_event_name
+                    - cell "string" [ref=f27e1686]
+                    - cell "Which hook is being run" [ref=f27e1687]
+                  - row [ref=f27e1688]:
+                    - cell [ref=f27e1689]:
+                      - code [ref=f27e1690]: cursor_version
+                    - cell "string" [ref=f27e1691]
+                    - cell "Cursor application version (e.g. \"1.7.2\")" [ref=f27e1692]
+                  - row [ref=f27e1693]:
+                    - cell [ref=f27e1694]:
+                      - code [ref=f27e1695]: workspace_roots
+                    - cell "string[]" [ref=f27e1696]
+                    - cell "The list of root folders in the workspace (normally just one, but multiroot workspaces can have multiple)" [ref=f27e1697]
+                  - row [ref=f27e1698]:
+                    - cell [ref=f27e1699]:
+                      - code [ref=f27e1700]: user_email
+                    - cell "string | null" [ref=f27e1701]
+                    - cell "Email address of the authenticated user, if available" [ref=f27e1702]
+                  - row [ref=f27e1703]:
+                    - cell [ref=f27e1704]:
+                      - code [ref=f27e1705]: transcript_path
+                    - cell "string | null" [ref=f27e1706]
+                    - cell "Path to the main conversation transcript file (null if transcripts disabled)" [ref=f27e1707]
+              - alert [ref=f27e1708]:
+                - paragraph [ref=f27e1712]:
+                  - text: App lifecycle hooks (
+                  - code [ref=f27e1713]: workspaceOpen
+                  - text: ) fire outside any agent session, so the request omits
+                  - code [ref=f27e1714]: conversation_id
+                  - text: ","
+                  - code [ref=f27e1715]: generation_id
+                  - text: ","
+                  - code [ref=f27e1716]: model
+                  - text: ","
+                  - code [ref=f27e1717]: session_id
+                  - text: ", and"
+                  - code [ref=f27e1718]: transcript_path
+                  - text: . They still receive
+                  - code [ref=f27e1719]: hook_event_name
+                  - text: ","
+                  - code [ref=f27e1720]: cursor_version
+                  - text: ","
+                  - code [ref=f27e1721]: workspace_roots
+                  - text: ", and"
+                  - code [ref=f27e1722]: user_email
+                  - text: .
+              - heading [level=3] [ref=f27e1723]:
+                - link "Copy link to hook-events" [ref=f27e1724] [cursor=pointer]:
+                  - /url: "#hook-events"
+                  - generic [ref=f27e1725]: Hook events
+              - heading [level=4] [ref=f27e1733]:
+                - link "Copy link to pretooluse" [ref=f27e1734] [cursor=pointer]:
+                  - /url: "#pretooluse"
+                  - generic [ref=f27e1735]: preToolUse
+              - paragraph [ref=f27e1743]: Called before any tool execution. This is a generic hook that fires for all tool types (Shell, Read, Write, MCP, Task, etc.). Use matchers to filter by specific tools.
+              - generic [ref=f27e1746]:
+                - button [ref=f27e1747] [cursor=pointer]
+                - code [ref=f27e1753]:
+                  - generic [ref=f27e1754]: // Input
+                  - generic [ref=f27e1755]: "{"
+                  - generic [ref=f27e1756]: "\"tool_name\": \"Shell\","
+                  - generic [ref=f27e1757]: "\"tool_input\": { \"command\": \"npm install\", \"working_directory\": \"/project\" },"
+                  - generic [ref=f27e1758]: "\"tool_use_id\": \"abc123\","
+                  - generic [ref=f27e1759]: "\"cwd\": \"/project\","
+                  - generic [ref=f27e1760]: "\"model\": \"claude-opus-4-7-thinking-max\","
+                  - generic [ref=f27e1761]: "\"model_id\": \"claude-opus-4-7\","
+                  - generic [ref=f27e1762]: "\"model_params\": ["
+                  - generic [ref=f27e1763]: "{ \"id\": \"thinking\", \"value\": \"true\" },"
+                  - generic [ref=f27e1764]: "{ \"id\": \"context\", \"value\": \"1m\" },"
+                  - generic [ref=f27e1765]: "{ \"id\": \"effort\", \"value\": \"max\" }"
+                  - generic [ref=f27e1766]: "],"
+                  - generic [ref=f27e1767]: "\"agent_message\": \"Installing dependencies...\""
+                  - generic [ref=f27e1768]: "}"
+                  - generic [ref=f27e1770]: // Output
+                  - generic [ref=f27e1771]: "{"
+                  - generic [ref=f27e1772]: "\"permission\": \"allow\" | \"deny\","
+                  - generic [ref=f27e1773]: "\"user_message\": \"<message shown in client when denied>\","
+                  - generic [ref=f27e1774]: "\"agent_message\": \"<message sent to agent when denied>\","
+                  - generic [ref=f27e1775]: "\"updated_input\": { \"command\": \"npm ci\" }"
+                  - generic [ref=f27e1776]: "}"
+              - table [ref=f27e1778]:
+                - rowgroup [ref=f27e1779]:
+                  - row [ref=f27e1780]:
+                    - columnheader "Output Field" [ref=f27e1781]
+                    - columnheader "Type" [ref=f27e1782]
+                    - columnheader "Description" [ref=f27e1783]
+                - rowgroup [ref=f27e1784]:
+                  - row [ref=f27e1785]:
+                    - cell [ref=f27e1786]:
+                      - code [ref=f27e1787]: permission
+                    - cell "string" [ref=f27e1788]
+                    - cell [ref=f27e1789]:
+                      - code [ref=f27e1790]: "\"allow\""
+                      - text: to proceed,
+                      - code [ref=f27e1791]: "\"deny\""
+                      - text: to block.
+                      - code [ref=f27e1792]: "\"ask\""
+                      - text: is accepted by the schema but not enforced for
+                      - code [ref=f27e1793]: preToolUse
+                      - text: today.
+                  - row [ref=f27e1794]:
+                    - cell [ref=f27e1795]:
+                      - code [ref=f27e1796]: user_message
+                    - cell "string (optional)" [ref=f27e1797]
+                    - cell "Message shown to the user when the action is denied" [ref=f27e1798]
+                  - row [ref=f27e1799]:
+                    - cell [ref=f27e1800]:
+                      - code [ref=f27e1801]: agent_message
+                    - cell "string (optional)" [ref=f27e1802]
+                    - cell "Message fed back to the agent when the action is denied" [ref=f27e1803]
+                  - row [ref=f27e1804]:
+                    - cell [ref=f27e1805]:
+                      - code [ref=f27e1806]: updated_input
+                    - cell "object (optional)" [ref=f27e1807]
+                    - cell "Modified tool input to use instead" [ref=f27e1808]
+              - heading [level=4] [ref=f27e1809]:
+                - link "Copy link to posttooluse" [ref=f27e1810] [cursor=pointer]:
+                  - /url: "#posttooluse"
+                  - generic [ref=f27e1811]: postToolUse
+              - paragraph [ref=f27e1819]: Called after successful tool execution. Useful for auditing, analytics, and injecting context.
+              - generic [ref=f27e1822]:
+                - button [ref=f27e1823] [cursor=pointer]
+                - code [ref=f27e1829]:
+                  - generic [ref=f27e1830]: // Input
+                  - generic [ref=f27e1831]: "{"
+                  - generic [ref=f27e1832]: "\"tool_name\": \"Shell\","
+                  - generic [ref=f27e1833]: "\"tool_input\": { \"command\": \"npm test\" },"
+                  - generic [ref=f27e1834]: "\"tool_output\": \"{\\\"exitCode\\\":0,\\\"stdout\\\":\\\"All tests passed\\\"}\","
+                  - generic [ref=f27e1835]: "\"tool_use_id\": \"abc123\","
+                  - generic [ref=f27e1836]: "\"cwd\": \"/project\","
+                  - generic [ref=f27e1837]: "\"duration\": 5432,"
+                  - generic [ref=f27e1838]: "\"model\": \"claude-opus-4-7-thinking-max\","
+                  - generic [ref=f27e1839]: "\"model_id\": \"claude-opus-4-7\","
+                  - generic [ref=f27e1840]: "\"model_params\": ["
+                  - generic [ref=f27e1841]: "{ \"id\": \"thinking\", \"value\": \"true\" },"
+                  - generic [ref=f27e1842]: "{ \"id\": \"context\", \"value\": \"1m\" },"
+                  - generic [ref=f27e1843]: "{ \"id\": \"effort\", \"value\": \"max\" }"
+                  - generic [ref=f27e1844]: "]"
+                  - generic [ref=f27e1845]: "}"
+                  - generic [ref=f27e1847]: // Output
+                  - generic [ref=f27e1848]: "{"
+                  - generic [ref=f27e1849]: "\"updated_mcp_tool_output\": { \"modified\": \"output\" },"
+                  - generic [ref=f27e1850]: "\"additional_context\": \"Test coverage report attached.\""
+                  - generic [ref=f27e1851]: "}"
+              - table [ref=f27e1853]:
+                - rowgroup [ref=f27e1854]:
+                  - row [ref=f27e1855]:
+                    - columnheader "Input Field" [ref=f27e1856]
+                    - columnheader "Type" [ref=f27e1857]
+                    - columnheader "Description" [ref=f27e1858]
+                - rowgroup [ref=f27e1859]:
+                  - row [ref=f27e1860]:
+                    - cell [ref=f27e1861]:
+                      - code [ref=f27e1862]: duration
+                    - cell "number" [ref=f27e1863]
+                    - cell "Execution time in milliseconds" [ref=f27e1864]
+                  - row [ref=f27e1865]:
+                    - cell [ref=f27e1866]:
+                      - code [ref=f27e1867]: tool_output
+                    - cell "string" [ref=f27e1868]
+                    - cell "JSON-stringified result payload from the tool (not raw terminal text)" [ref=f27e1869]
+              - table [ref=f27e1871]:
+                - rowgroup [ref=f27e1872]:
+                  - row [ref=f27e1873]:
+                    - columnheader "Output Field" [ref=f27e1874]
+                    - columnheader "Type" [ref=f27e1875]
+                    - columnheader "Description" [ref=f27e1876]
+                - rowgroup [ref=f27e1877]:
+                  - row [ref=f27e1878]:
+                    - cell [ref=f27e1879]:
+                      - code [ref=f27e1880]: updated_mcp_tool_output
+                    - cell "object (optional)" [ref=f27e1881]
+                    - 'cell "For MCP tools only: replaces the tool output seen by the model" [ref=f27e1882]'
+                  - row [ref=f27e1883]:
+                    - cell [ref=f27e1884]:
+                      - code [ref=f27e1885]: additional_context
+                    - cell "string (optional)" [ref=f27e1886]
+                    - cell "Extra context injected into the conversation after the tool result" [ref=f27e1887]
+              - heading [level=4] [ref=f27e1888]:
+                - link "Copy link to posttoolusefailure" [ref=f27e1889] [cursor=pointer]:
+                  - /url: "#posttoolusefailure"
+                  - generic [ref=f27e1890]: postToolUseFailure
+              - paragraph [ref=f27e1898]: Called when a tool fails, times out, or is denied. Useful for error tracking and recovery logic.
+              - generic [ref=f27e1901]:
+                - button [ref=f27e1902] [cursor=pointer]
+                - code [ref=f27e1908]:
+                  - generic [ref=f27e1909]: // Input
+                  - generic [ref=f27e1910]: "{"
+                  - generic [ref=f27e1911]: "\"tool_name\": \"Shell\","
+                  - generic [ref=f27e1912]: "\"tool_input\": { \"command\": \"npm test\" },"
+                  - generic [ref=f27e1913]: "\"tool_use_id\": \"abc123\","
+                  - generic [ref=f27e1914]: "\"cwd\": \"/project\","
+                  - generic [ref=f27e1915]: "\"error_message\": \"Command timed out after 30s\","
+                  - generic [ref=f27e1916]: "\"failure_type\": \"timeout\" | \"error\" | \"permission_denied\","
+                  - generic [ref=f27e1917]: "\"duration\": 5000,"
+                  - generic [ref=f27e1918]: "\"is_interrupt\": false"
+                  - generic [ref=f27e1919]: "}"
+                  - generic [ref=f27e1921]: // Output
+                  - generic [ref=f27e1922]: "{"
+                  - generic [ref=f27e1923]: "\"additional_context\": \"Tests time out on CI runners. Retry with --maxWorkers=2.\""
+                  - generic [ref=f27e1924]: "}"
+              - table [ref=f27e1926]:
+                - rowgroup [ref=f27e1927]:
+                  - row [ref=f27e1928]:
+                    - columnheader "Input Field" [ref=f27e1929]
+                    - columnheader "Type" [ref=f27e1930]
+                    - columnheader "Description" [ref=f27e1931]
+                - rowgroup [ref=f27e1932]:
+                  - row [ref=f27e1933]:
+                    - cell [ref=f27e1934]:
+                      - code [ref=f27e1935]: error_message
+                    - cell "string" [ref=f27e1936]
+                    - cell "Description of the failure" [ref=f27e1937]
+                  - row [ref=f27e1938]:
+                    - cell [ref=f27e1939]:
+                      - code [ref=f27e1940]: failure_type
+                    - cell "string" [ref=f27e1941]
+                    - cell [ref=f27e1942]:
+                      - text: "Type of failure:"
+                      - code [ref=f27e1943]: "\"error\""
+                      - text: ","
+                      - code [ref=f27e1944]: "\"timeout\""
+                      - text: ", or"
+                      - code [ref=f27e1945]: "\"permission_denied\""
+                  - row [ref=f27e1946]:
+                    - cell [ref=f27e1947]:
+                      - code [ref=f27e1948]: duration
+                    - cell "number" [ref=f27e1949]
+                    - cell "Time in milliseconds until the failure occurred" [ref=f27e1950]
+                  - row [ref=f27e1951]:
+                    - cell [ref=f27e1952]:
+                      - code [ref=f27e1953]: is_interrupt
+                    - cell "boolean" [ref=f27e1954]
+                    - cell "Whether this failure was caused by a user interrupt/cancellation" [ref=f27e1955]
+              - table [ref=f27e1957]:
+                - rowgroup [ref=f27e1958]:
+                  - row [ref=f27e1959]:
+                    - columnheader "Output Field" [ref=f27e1960]
+                    - columnheader "Type" [ref=f27e1961]
+                    - columnheader "Description" [ref=f27e1962]
+                - rowgroup [ref=f27e1963]:
+                  - row [ref=f27e1964]:
+                    - cell [ref=f27e1965]:
+                      - code [ref=f27e1966]: additional_context
+                    - cell "string (optional)" [ref=f27e1967]
+                    - cell "Extra context injected into the conversation after the failed tool result" [ref=f27e1968]
+              - heading [level=4] [ref=f27e1969]:
+                - link "Copy link to subagentstart" [ref=f27e1970] [cursor=pointer]:
+                  - /url: "#subagentstart"
+                  - generic [ref=f27e1971]: subagentStart
+              - paragraph [ref=f27e1979]: Called before spawning a subagent (Task tool). Can allow or deny subagent creation.
+              - generic [ref=f27e1982]:
+                - button [ref=f27e1983] [cursor=pointer]
+                - code [ref=f27e1989]:
+                  - generic [ref=f27e1990]: // Input
+                  - generic [ref=f27e1991]: "{"
+                  - generic [ref=f27e1992]: "\"subagent_id\": \"abc-123\","
+                  - generic [ref=f27e1993]: "\"subagent_type\": \"generalPurpose\","
+                  - generic [ref=f27e1994]: "\"task\": \"Explore the authentication flow\","
+                  - generic [ref=f27e1995]: "\"parent_conversation_id\": \"conv-456\","
+                  - generic [ref=f27e1996]: "\"tool_call_id\": \"tc-789\","
+                  - generic [ref=f27e1997]: "\"subagent_model\": \"claude-sonnet-4-20250514\","
+                  - generic [ref=f27e1998]: "\"is_parallel_worker\": false,"
+                  - generic [ref=f27e1999]: "\"git_branch\": \"feature/auth\""
+                  - generic [ref=f27e2000]: "}"
+                  - generic [ref=f27e2002]: // Output
+                  - generic [ref=f27e2003]: "{"
+                  - generic [ref=f27e2004]: "\"permission\": \"allow\" | \"deny\","
+                  - generic [ref=f27e2005]: "\"user_message\": \"<message shown when denied>\""
+                  - generic [ref=f27e2006]: "}"
+              - table [ref=f27e2008]:
+                - rowgroup [ref=f27e2009]:
+                  - row [ref=f27e2010]:
+                    - columnheader "Input Field" [ref=f27e2011]
+                    - columnheader "Type" [ref=f27e2012]
+                    - columnheader "Description" [ref=f27e2013]
+                - rowgroup [ref=f27e2014]:
+                  - row [ref=f27e2015]:
+                    - cell [ref=f27e2016]:
+                      - code [ref=f27e2017]: subagent_id
+                    - cell "string" [ref=f27e2018]
+                    - cell "Unique identifier for this subagent instance" [ref=f27e2019]
+                  - row [ref=f27e2020]:
+                    - cell [ref=f27e2021]:
+                      - code [ref=f27e2022]: subagent_type
+                    - cell "string" [ref=f27e2023]
+                    - cell [ref=f27e2024]:
+                      - text: "Type of subagent:"
+                      - code [ref=f27e2025]: generalPurpose
+                      - text: ","
+                      - code [ref=f27e2026]: explore
+                      - text: ","
+                      - code [ref=f27e2027]: shell
+                      - text: ", etc."
+                  - row [ref=f27e2028]:
+                    - cell [ref=f27e2029]:
+                      - code [ref=f27e2030]: task
+                    - cell "string" [ref=f27e2031]
+                    - cell "The task description given to the subagent" [ref=f27e2032]
+                  - row [ref=f27e2033]:
+                    - cell [ref=f27e2034]:
+                      - code [ref=f27e2035]: parent_conversation_id
+                    - cell "string" [ref=f27e2036]
+                    - cell "Conversation ID of the parent agent session" [ref=f27e2037]
+                  - row [ref=f27e2038]:
+                    - cell [ref=f27e2039]:
+                      - code [ref=f27e2040]: tool_call_id
+                    - cell "string" [ref=f27e2041]
+                    - cell "ID of the tool call that triggered the subagent" [ref=f27e2042]
+                  - row [ref=f27e2043]:
+                    - cell [ref=f27e2044]:
+                      - code [ref=f27e2045]: subagent_model
+                    - cell "string" [ref=f27e2046]
+                    - cell "Model the subagent will use" [ref=f27e2047]
+                  - row [ref=f27e2048]:
+                    - cell [ref=f27e2049]:
+                      - code [ref=f27e2050]: is_parallel_worker
+                    - cell "boolean" [ref=f27e2051]
+                    - cell "Whether this subagent is running as a parallel worker" [ref=f27e2052]
+                  - row [ref=f27e2053]:
+                    - cell [ref=f27e2054]:
+                      - code [ref=f27e2055]: git_branch
+                    - cell "string (optional)" [ref=f27e2056]
+                    - cell "Git branch the subagent will operate on, if applicable" [ref=f27e2057]
+              - table [ref=f27e2059]:
+                - rowgroup [ref=f27e2060]:
+                  - row [ref=f27e2061]:
+                    - columnheader "Output Field" [ref=f27e2062]
+                    - columnheader "Type" [ref=f27e2063]
+                    - columnheader "Description" [ref=f27e2064]
+                - rowgroup [ref=f27e2065]:
+                  - row [ref=f27e2066]:
+                    - cell [ref=f27e2067]:
+                      - code [ref=f27e2068]: permission
+                    - cell "string" [ref=f27e2069]
+                    - cell [ref=f27e2070]:
+                      - code [ref=f27e2071]: "\"allow\""
+                      - text: to proceed,
+                      - code [ref=f27e2072]: "\"deny\""
+                      - text: to block.
+                      - code [ref=f27e2073]: "\"ask\""
+                      - text: is not supported for
+                      - code [ref=f27e2074]: subagentStart
+                      - text: and is treated as
+                      - code [ref=f27e2075]: "\"deny\""
+                      - text: .
+                  - row [ref=f27e2076]:
+                    - cell [ref=f27e2077]:
+                      - code [ref=f27e2078]: user_message
+                    - cell "string (optional)" [ref=f27e2079]
+                    - cell "Message shown to the user when the subagent is denied" [ref=f27e2080]
+              - heading [level=4] [ref=f27e2081]:
+                - link "Copy link to subagentstop" [ref=f27e2082] [cursor=pointer]:
+                  - /url: "#subagentstop"
+                  - generic [ref=f27e2083]: subagentStop
+              - paragraph [ref=f27e2091]: Called when a subagent completes, errors, or is aborted. Can trigger follow-up actions.
+              - generic [ref=f27e2094]:
+                - button [ref=f27e2095] [cursor=pointer]
+                - code [ref=f27e2101]:
+                  - generic [ref=f27e2102]: // Input
+                  - generic [ref=f27e2103]: "{"
+                  - generic [ref=f27e2104]: "\"subagent_type\": \"generalPurpose\","
+                  - generic [ref=f27e2105]: "\"status\": \"completed\" | \"error\" | \"aborted\","
+                  - generic [ref=f27e2106]: "\"task\": \"Explore the authentication flow\","
+                  - generic [ref=f27e2107]: "\"description\": \"Exploring auth flow\","
+                  - generic [ref=f27e2108]: "\"summary\": \"<subagent output summary>\","
+                  - generic [ref=f27e2109]: "\"duration_ms\": 45000,"
+                  - generic [ref=f27e2110]: "\"message_count\": 12,"
+                  - generic [ref=f27e2111]: "\"tool_call_count\": 8,"
+                  - generic [ref=f27e2112]: "\"loop_count\": 0,"
+                  - generic [ref=f27e2113]: "\"modified_files\": [\"src/auth.ts\"],"
+                  - generic [ref=f27e2114]: "\"agent_transcript_path\": \"/path/to/subagent/transcript.txt\""
+                  - generic [ref=f27e2115]: "}"
+                  - generic [ref=f27e2117]: // Output
+                  - generic [ref=f27e2118]: "{"
+                  - generic [ref=f27e2119]: "\"followup_message\": \"<auto-continue with this message>\""
+                  - generic [ref=f27e2120]: "}"
+              - table [ref=f27e2122]:
+                - rowgroup [ref=f27e2123]:
+                  - row [ref=f27e2124]:
+                    - columnheader "Input Field" [ref=f27e2125]
+                    - columnheader "Type" [ref=f27e2126]
+                    - columnheader "Description" [ref=f27e2127]
+                - rowgroup [ref=f27e2128]:
+                  - row [ref=f27e2129]:
+                    - cell [ref=f27e2130]:
+                      - code [ref=f27e2131]: subagent_type
+                    - cell "string" [ref=f27e2132]
+                    - cell [ref=f27e2133]:
+                      - text: "Type of subagent:"
+                      - code [ref=f27e2134]: generalPurpose
+                      - text: ","
+                      - code [ref=f27e2135]: explore
+                      - text: ","
+                      - code [ref=f27e2136]: shell
+                      - text: ", etc."
+                  - row [ref=f27e2137]:
+                    - cell [ref=f27e2138]:
+                      - code [ref=f27e2139]: status
+                    - cell "string" [ref=f27e2140]
+                    - cell [ref=f27e2141]:
+                      - code [ref=f27e2142]: "\"completed\""
+                      - text: ","
+                      - code [ref=f27e2143]: "\"error\""
+                      - text: ", or"
+                      - code [ref=f27e2144]: "\"aborted\""
+                  - row [ref=f27e2145]:
+                    - cell [ref=f27e2146]:
+                      - code [ref=f27e2147]: task
+                    - cell "string" [ref=f27e2148]
+                    - cell "The task description given to the subagent" [ref=f27e2149]
+                  - row [ref=f27e2150]:
+                    - cell [ref=f27e2151]:
+                      - code [ref=f27e2152]: description
+                    - cell "string" [ref=f27e2153]
+                    - cell "Short description of the subagent's purpose" [ref=f27e2154]
+                  - row [ref=f27e2155]:
+                    - cell [ref=f27e2156]:
+                      - code [ref=f27e2157]: summary
+                    - cell "string" [ref=f27e2158]
+                    - cell "Output summary from the subagent" [ref=f27e2159]
+                  - row [ref=f27e2160]:
+                    - cell [ref=f27e2161]:
+                      - code [ref=f27e2162]: duration_ms
+                    - cell "number" [ref=f27e2163]
+                    - cell "Execution time in milliseconds" [ref=f27e2164]
+                  - row [ref=f27e2165]:
+                    - cell [ref=f27e2166]:
+                      - code [ref=f27e2167]: message_count
+                    - cell "number" [ref=f27e2168]
+                    - cell "Number of messages exchanged during the subagent session" [ref=f27e2169]
+                  - row [ref=f27e2170]:
+                    - cell [ref=f27e2171]:
+                      - code [ref=f27e2172]: tool_call_count
+                    - cell "number" [ref=f27e2173]
+                    - cell "Number of tool calls the subagent made" [ref=f27e2174]
+                  - row [ref=f27e2175]:
+                    - cell [ref=f27e2176]:
+                      - code [ref=f27e2177]: loop_count
+                    - cell "number" [ref=f27e2178]
+                    - cell [ref=f27e2179]:
+                      - text: Number of times a
+                      - code [ref=f27e2180]: subagentStop
+                      - text: follow-up has already triggered for this subagent (starts at 0)
+                  - row [ref=f27e2181]:
+                    - cell [ref=f27e2182]:
+                      - code [ref=f27e2183]: modified_files
+                    - cell "string[]" [ref=f27e2184]
+                    - cell "Files the subagent modified" [ref=f27e2185]
+                  - row [ref=f27e2186]:
+                    - cell [ref=f27e2187]:
+                      - code [ref=f27e2188]: agent_transcript_path
+                    - cell "string | null" [ref=f27e2189]
+                    - cell "Path to the subagent's own transcript file (separate from the parent conversation)" [ref=f27e2190]
+              - table [ref=f27e2192]:
+                - rowgroup [ref=f27e2193]:
+                  - row [ref=f27e2194]:
+                    - columnheader "Output Field" [ref=f27e2195]
+                    - columnheader "Type" [ref=f27e2196]
+                    - columnheader "Description" [ref=f27e2197]
+                - rowgroup [ref=f27e2198]:
+                  - row [ref=f27e2199]:
+                    - cell [ref=f27e2200]:
+                      - code [ref=f27e2201]: followup_message
+                    - cell "string (optional)" [ref=f27e2202]
+                    - cell [ref=f27e2203]:
+                      - text: Auto-continue with this message. Only consumed when
+                      - code [ref=f27e2204]: status
+                      - text: is
+                      - code [ref=f27e2205]: "\"completed\""
+                      - text: .
+              - paragraph [ref=f27e2206]:
+                - text: The
+                - code [ref=f27e2207]: followup_message
+                - text: field enables loop-style flows where subagent completion triggers the next iteration. Follow-ups are subject to the same configurable loop limit as the
+                - code [ref=f27e2208]: stop
+                - text: hook (default 5, configurable via
+                - code [ref=f27e2209]: loop_limit
+                - text: ).
+              - paragraph [ref=f27e2210]:
+                - code [ref=f27e2211]: subagentStop
+                - text: fires each time the subagent finishes, so a subagent that continues with a follow-up fires it again with
+                - code [ref=f27e2212]: loop_count
+                - text: increased by one. The subagent is done after a
+                - code [ref=f27e2213]: subagentStop
+                - text: call returns no
+                - code [ref=f27e2214]: followup_message
+                - text: or the loop limit is reached.
+              - heading [level=4] [ref=f27e2215]:
+                - link "Copy link to beforeshellexecution-beforemcpexecution" [ref=f27e2216] [cursor=pointer]:
+                  - /url: "#beforeshellexecution-beforemcpexecution"
+                  - generic [ref=f27e2217]: beforeShellExecution / beforeMCPExecution
+              - paragraph [ref=f27e2225]: Called before any shell command or MCP tool is executed. Return a permission decision.
+              - alert [ref=f27e2226]:
+                - paragraph [ref=f27e2230]:
+                  - text: Invalid JSON or a response that doesn't match the hook's schema blocks the action. Crashes, timeouts, and non-zero exit codes other than
+                  - code [ref=f27e2231]: "2"
+                  - text: "fail open by default: Cursor logs the failure and allows the action through. Set"
+                  - code [ref=f27e2232]: "failClosed: true"
+                  - text: on the hook definition to block on those failures too. This is recommended for security-critical
+                  - code [ref=f27e2233]: beforeMCPExecution
+                  - text: hooks.
+              - generic [ref=f27e2236]:
+                - button [ref=f27e2237] [cursor=pointer]
+                - code [ref=f27e2243]:
+                  - generic [ref=f27e2244]: // beforeShellExecution input
+                  - generic [ref=f27e2245]: "{"
+                  - generic [ref=f27e2246]: "\"command\": \"<full terminal command>\","
+                  - generic [ref=f27e2247]: "\"cwd\": \"<current working directory>\","
+                  - generic [ref=f27e2248]: "\"sandbox\": false"
+                  - generic [ref=f27e2249]: "}"
+                  - generic [ref=f27e2251]: // beforeMCPExecution input
+                  - generic [ref=f27e2252]: "{"
+                  - generic [ref=f27e2253]: "\"tool_name\": \"<tool name>\","
+                  - generic [ref=f27e2254]: "\"tool_input\": \"<json params>\","
+                  - generic [ref=f27e2255]: "\"mcp_server_name\": \"<server name from mcp.json>\""
+                  - generic [ref=f27e2256]: "}"
+                  - generic [ref=f27e2257]: "// Plus either (HTTP/SSE servers):"
+                  - generic [ref=f27e2258]: "{ \"url\": \"<server url>\", \"mcp_server_url\": \"<server url>\" }"
+                  - generic [ref=f27e2259]: "// Or (stdio servers):"
+                  - generic [ref=f27e2260]: "{ \"command\": \"<launch command and args>\" }"
+                  - generic [ref=f27e2262]: // Output
+                  - generic [ref=f27e2263]: "{"
+                  - generic [ref=f27e2264]: "\"permission\": \"allow\" | \"deny\" | \"ask\","
+                  - generic [ref=f27e2265]: "\"user_message\": \"<message shown in client>\","
+                  - generic [ref=f27e2266]: "\"agent_message\": \"<message sent to agent>\""
+                  - generic [ref=f27e2267]: "}"
+              - table [ref=f27e2269]:
+                - rowgroup [ref=f27e2270]:
+                  - row [ref=f27e2271]:
+                    - columnheader "Field" [ref=f27e2272]
+                    - columnheader "Type" [ref=f27e2273]
+                    - columnheader "Description" [ref=f27e2274]
+                - rowgroup [ref=f27e2275]:
+                  - row [ref=f27e2276]:
+                    - cell [ref=f27e2277]:
+                      - code [ref=f27e2278]: tool_name
+                    - cell "string" [ref=f27e2279]
+                    - cell "Name of the MCP tool about to run" [ref=f27e2280]
+                  - row [ref=f27e2281]:
+                    - cell [ref=f27e2282]:
+                      - code [ref=f27e2283]: tool_input
+                    - cell "string" [ref=f27e2284]
+                    - cell "JSON params string that will be passed to the tool" [ref=f27e2285]
+                  - row [ref=f27e2286]:
+                    - cell [ref=f27e2287]:
+                      - code [ref=f27e2288]: mcp_server_name
+                    - cell "string" [ref=f27e2289]
+                    - cell [ref=f27e2290]:
+                      - text: The server's key in its
+                      - code [ref=f27e2291]: mcp.json
+                      - text: (for example,
+                      - code [ref=f27e2292]: linear
+                      - text: ). Use this to recognize a specific server.
+                  - row [ref=f27e2293]:
+                    - cell [ref=f27e2294]:
+                      - code [ref=f27e2295]: mcp_server_url
+                    - cell "string" [ref=f27e2296]
+                    - cell "Server URL, present only for HTTP/SSE servers" [ref=f27e2297]
+                  - row [ref=f27e2298]:
+                    - cell [ref=f27e2299]:
+                      - code [ref=f27e2300]: url
+                    - cell "string" [ref=f27e2301]
+                    - cell [ref=f27e2302]:
+                      - text: Same as
+                      - code [ref=f27e2303]: mcp_server_url
+                      - text: ; present only for HTTP/SSE servers
+                  - row [ref=f27e2304]:
+                    - cell [ref=f27e2305]:
+                      - code [ref=f27e2306]: command
+                    - cell "string" [ref=f27e2307]
+                    - cell "The stdio launch command and arguments joined with spaces; present only for stdio servers" [ref=f27e2308]
+              - alert [ref=f27e2309]:
+                - paragraph [ref=f27e2313]:
+                  - text: Match on
+                  - code [ref=f27e2314]: mcp_server_name
+                  - text: (and
+                  - code [ref=f27e2315]: tool_name
+                  - text: ) to decide whether a call targets your server.
+                  - code [ref=f27e2316]: command
+                  - text: "is the launch string from the server's config and can differ between installs: relative paths,"
+                  - code [ref=f27e2317]: "${CURSOR_PLUGIN_ROOT}"
+                  - text: expansion, or an HTTP transport (which has no
+                  - code [ref=f27e2318]: command
+                  - text: at all). A hook that allows anything it does not recognize should treat a missing or unexpected
+                  - code [ref=f27e2319]: mcp_server_name
+                  - text: as a deny.
+              - heading [level=4] [ref=f27e2320]:
+                - link "Copy link to aftershellexecution" [ref=f27e2321] [cursor=pointer]:
+                  - /url: "#aftershellexecution"
+                  - generic [ref=f27e2322]: afterShellExecution
+              - paragraph [ref=f27e2330]: Fires after a shell command executes; useful for auditing or collecting metrics from command output.
+              - generic [ref=f27e2333]:
+                - button [ref=f27e2334] [cursor=pointer]
+                - code [ref=f27e2340]:
+                  - generic [ref=f27e2341]: // Input
+                  - generic [ref=f27e2342]: "{"
+                  - generic [ref=f27e2343]: "\"command\": \"<full terminal command>\","
+                  - generic [ref=f27e2344]: "\"output\": \"<full terminal output>\","
+                  - generic [ref=f27e2345]: "\"duration\": 1234,"
+                  - generic [ref=f27e2346]: "\"sandbox\": false"
+                  - generic [ref=f27e2347]: "}"
+              - table [ref=f27e2349]:
+                - rowgroup [ref=f27e2350]:
+                  - row [ref=f27e2351]:
+                    - columnheader "Field" [ref=f27e2352]
+                    - columnheader "Type" [ref=f27e2353]
+                    - columnheader "Description" [ref=f27e2354]
+                - rowgroup [ref=f27e2355]:
+                  - row [ref=f27e2356]:
+                    - cell [ref=f27e2357]:
+                      - code [ref=f27e2358]: command
+                    - cell "string" [ref=f27e2359]
+                    - cell "The full terminal command that was executed" [ref=f27e2360]
+                  - row [ref=f27e2361]:
+                    - cell [ref=f27e2362]:
+                      - code [ref=f27e2363]: output
+                    - cell "string" [ref=f27e2364]
+                    - cell "Full output captured from the terminal" [ref=f27e2365]
+                  - row [ref=f27e2366]:
+                    - cell [ref=f27e2367]:
+                      - code [ref=f27e2368]: duration
+                    - cell "number" [ref=f27e2369]
+                    - cell "Duration in milliseconds spent executing the shell command (excludes approval wait time)" [ref=f27e2370]
+                  - row [ref=f27e2371]:
+                    - cell [ref=f27e2372]:
+                      - code [ref=f27e2373]: sandbox
+                    - cell "boolean" [ref=f27e2374]
+                    - cell "Whether the command ran in a sandboxed environment" [ref=f27e2375]
+              - heading [level=4] [ref=f27e2376]:
+                - link "Copy link to aftermcpexecution" [ref=f27e2377] [cursor=pointer]:
+                  - /url: "#aftermcpexecution"
+                  - generic [ref=f27e2378]: afterMCPExecution
+              - paragraph [ref=f27e2386]: Fires after an MCP tool executes; includes the tool's input parameters and full JSON result.
+              - generic [ref=f27e2389]:
+                - button [ref=f27e2390] [cursor=pointer]
+                - code [ref=f27e2396]:
+                  - generic [ref=f27e2397]: // Input
+                  - generic [ref=f27e2398]: "{"
+                  - generic [ref=f27e2399]: "\"tool_name\": \"<tool name>\","
+                  - generic [ref=f27e2400]: "\"tool_input\": \"<json params>\","
+                  - generic [ref=f27e2401]: "\"mcp_server_name\": \"<server name from mcp.json>\","
+                  - generic [ref=f27e2402]: "\"result_json\": \"<tool result json>\","
+                  - generic [ref=f27e2403]: "\"duration\": 1234"
+                  - generic [ref=f27e2404]: "}"
+              - table [ref=f27e2406]:
+                - rowgroup [ref=f27e2407]:
+                  - row [ref=f27e2408]:
+                    - columnheader "Field" [ref=f27e2409]
+                    - columnheader "Type" [ref=f27e2410]
+                    - columnheader "Description" [ref=f27e2411]
+                - rowgroup [ref=f27e2412]:
+                  - row [ref=f27e2413]:
+                    - cell [ref=f27e2414]:
+                      - code [ref=f27e2415]: tool_name
+                    - cell "string" [ref=f27e2416]
+                    - cell "Name of the MCP tool that was executed" [ref=f27e2417]
+                  - row [ref=f27e2418]:
+                    - cell [ref=f27e2419]:
+                      - code [ref=f27e2420]: tool_input
+                    - cell "string" [ref=f27e2421]
+                    - cell "JSON params string passed to the tool" [ref=f27e2422]
+                  - row [ref=f27e2423]:
+                    - cell [ref=f27e2424]:
+                      - code [ref=f27e2425]: mcp_server_name
+                    - cell "string" [ref=f27e2426]
+                    - cell [ref=f27e2427]:
+                      - text: The server's key in its
+                      - code [ref=f27e2428]: mcp.json
+                  - row [ref=f27e2429]:
+                    - cell [ref=f27e2430]:
+                      - code [ref=f27e2431]: mcp_server_url
+                    - cell "string" [ref=f27e2432]
+                    - cell "Server URL, present only for HTTP/SSE servers" [ref=f27e2433]
+                  - row [ref=f27e2434]:
+                    - cell [ref=f27e2435]:
+                      - code [ref=f27e2436]: result_json
+                    - cell "string" [ref=f27e2437]
+                    - cell "JSON string of the tool response" [ref=f27e2438]
+                  - row [ref=f27e2439]:
+                    - cell [ref=f27e2440]:
+                      - code [ref=f27e2441]: duration
+                    - cell "number" [ref=f27e2442]
+                    - cell "Duration in milliseconds spent executing the MCP tool (excludes approval wait time)" [ref=f27e2443]
+              - heading [level=4] [ref=f27e2444]:
+                - link "Copy link to afterfileedit" [ref=f27e2445] [cursor=pointer]:
+                  - /url: "#afterfileedit"
+                  - generic [ref=f27e2446]: afterFileEdit
+              - paragraph [ref=f27e2454]: Fires after the Agent edits a file; useful for formatters or accounting of agent-written code.
+              - generic [ref=f27e2457]:
+                - button [ref=f27e2458] [cursor=pointer]
+                - code [ref=f27e2464]:
+                  - generic [ref=f27e2465]: // Input
+                  - generic [ref=f27e2466]: "{"
+                  - generic [ref=f27e2467]: "\"file_path\": \"<absolute path>\","
+                  - generic [ref=f27e2468]: "\"edits\": [{ \"old_string\": \"<search>\", \"new_string\": \"<replace>\" }]"
+                  - generic [ref=f27e2469]: "}"
+              - heading [level=4] [ref=f27e2470]:
+                - link "Copy link to beforereadfile" [ref=f27e2471] [cursor=pointer]:
+                  - /url: "#beforereadfile"
+                  - generic [ref=f27e2472]: beforeReadFile
+              - paragraph [ref=f27e2480]: Called before Agent reads a file. Use for access control to block sensitive files from being sent to the model.
+              - alert [ref=f27e2481]:
+                - paragraph [ref=f27e2485]:
+                  - text: Invalid JSON or a response that doesn't match the hook's schema blocks the read. Crashes, timeouts, and non-zero exit codes other than
+                  - code [ref=f27e2486]: "2"
+                  - text: are logged and the read is allowed through by default. Set
+                  - code [ref=f27e2487]: "failClosed: true"
+                  - text: on the hook definition to block the read on those failures too.
+              - generic [ref=f27e2490]:
+                - button [ref=f27e2491] [cursor=pointer]
+                - code [ref=f27e2497]:
+                  - generic [ref=f27e2498]: // Input
+                  - generic [ref=f27e2499]: "{"
+                  - generic [ref=f27e2500]: "\"file_path\": \"<absolute path>\","
+                  - generic [ref=f27e2501]: "\"content\": \"<file contents>\","
+                  - generic [ref=f27e2502]: "\"attachments\": ["
+                  - generic [ref=f27e2503]: "{"
+                  - generic [ref=f27e2504]: "\"type\": \"file\" | \"rule\","
+                  - generic [ref=f27e2505]: "\"file_path\": \"<absolute path>\""
+                  - generic [ref=f27e2506]: "}"
+                  - generic [ref=f27e2507]: "]"
+                  - generic [ref=f27e2508]: "}"
+                  - generic [ref=f27e2510]: // Output
+                  - generic [ref=f27e2511]: "{"
+                  - generic [ref=f27e2512]: "\"permission\": \"allow\" | \"deny\","
+                  - generic [ref=f27e2513]: "\"user_message\": \"<message shown when denied>\""
+                  - generic [ref=f27e2514]: "}"
+              - table [ref=f27e2516]:
+                - rowgroup [ref=f27e2517]:
+                  - row [ref=f27e2518]:
+                    - columnheader "Input Field" [ref=f27e2519]
+                    - columnheader "Type" [ref=f27e2520]
+                    - columnheader "Description" [ref=f27e2521]
+                - rowgroup [ref=f27e2522]:
+                  - row [ref=f27e2523]:
+                    - cell [ref=f27e2524]:
+                      - code [ref=f27e2525]: file_path
+                    - cell "string" [ref=f27e2526]
+                    - cell "Absolute path to the file being read" [ref=f27e2527]
+                  - row [ref=f27e2528]:
+                    - cell [ref=f27e2529]:
+                      - code [ref=f27e2530]: content
+                    - cell "string" [ref=f27e2531]
+                    - cell "Full contents of the file" [ref=f27e2532]
+                  - row [ref=f27e2533]:
+                    - cell [ref=f27e2534]:
+                      - code [ref=f27e2535]: attachments
+                    - cell "array" [ref=f27e2536]
+                    - cell [ref=f27e2537]:
+                      - text: Context attachments associated with the prompt. Each entry has a
+                      - code [ref=f27e2538]: type
+                      - text: (
+                      - code [ref=f27e2539]: "\"file\""
+                      - text: or
+                      - code [ref=f27e2540]: "\"rule\""
+                      - text: ) and a
+                      - code [ref=f27e2541]: file_path
+                      - text: .
+              - table [ref=f27e2543]:
+                - rowgroup [ref=f27e2544]:
+                  - row [ref=f27e2545]:
+                    - columnheader "Output Field" [ref=f27e2546]
+                    - columnheader "Type" [ref=f27e2547]
+                    - columnheader "Description" [ref=f27e2548]
+                - rowgroup [ref=f27e2549]:
+                  - row [ref=f27e2550]:
+                    - cell [ref=f27e2551]:
+                      - code [ref=f27e2552]: permission
+                    - cell "string" [ref=f27e2553]
+                    - cell [ref=f27e2554]:
+                      - code [ref=f27e2555]: "\"allow\""
+                      - text: to proceed,
+                      - code [ref=f27e2556]: "\"deny\""
+                      - text: to block
+                  - row [ref=f27e2557]:
+                    - cell [ref=f27e2558]:
+                      - code [ref=f27e2559]: user_message
+                    - cell "string (optional)" [ref=f27e2560]
+                    - cell "Message shown to user when denied" [ref=f27e2561]
+              - heading [level=4] [ref=f27e2562]:
+                - link "Copy link to beforetabfileread" [ref=f27e2563] [cursor=pointer]:
+                  - /url: "#beforetabfileread"
+                  - generic [ref=f27e2564]: beforeTabFileRead
+              - paragraph [ref=f27e2572]: Called before Tab (inline completions) reads a file. Enable redaction or access control before Tab accesses file contents.
+              - paragraph [ref=f27e2573]:
+                - strong [ref=f27e2574]:
+                  - text: Key differences from
+                  - code [ref=f27e2575]: beforeReadFile
+                  - text: ":"
+              - list [ref=f27e2576]:
+                - listitem [ref=f27e2577]: Only triggered by Tab, not Agent
+                - listitem [ref=f27e2578]:
+                  - text: Does not include
+                  - code [ref=f27e2579]: attachments
+                  - text: field (Tab doesn't use prompt attachments)
+                - listitem [ref=f27e2580]: Useful for applying different policies to autonomous Tab operations
+              - generic [ref=f27e2583]:
+                - button [ref=f27e2584] [cursor=pointer]
+                - code [ref=f27e2590]:
+                  - generic [ref=f27e2591]: // Input
+                  - generic [ref=f27e2592]: "{"
+                  - generic [ref=f27e2593]: "\"file_path\": \"<absolute path>\","
+                  - generic [ref=f27e2594]: "\"content\": \"<file contents>\""
+                  - generic [ref=f27e2595]: "}"
+                  - generic [ref=f27e2597]: // Output
+                  - generic [ref=f27e2598]: "{"
+                  - generic [ref=f27e2599]: "\"permission\": \"allow\" | \"deny\""
+                  - generic [ref=f27e2600]: "}"
+              - heading [level=4] [ref=f27e2601]:
+                - link "Copy link to aftertabfileedit" [ref=f27e2602] [cursor=pointer]:
+                  - /url: "#aftertabfileedit"
+                  - generic [ref=f27e2603]: afterTabFileEdit
+              - paragraph [ref=f27e2611]: Called after Tab (inline completions) edits a file. Useful for formatters or auditing of Tab-written code.
+              - paragraph [ref=f27e2612]:
+                - strong [ref=f27e2613]:
+                  - text: Key differences from
+                  - code [ref=f27e2614]: afterFileEdit
+                  - text: ":"
+              - list [ref=f27e2615]:
+                - listitem [ref=f27e2616]: Only triggered by Tab, not Agent
+                - listitem [ref=f27e2617]:
+                  - text: "Includes detailed edit information:"
+                  - code [ref=f27e2618]: range
+                  - text: ","
+                  - code [ref=f27e2619]: old_line
+                  - text: ", and"
+                  - code [ref=f27e2620]: new_line
+                  - text: for precise edit tracking
+                - listitem [ref=f27e2621]: Useful for fine-grained formatting or analysis of Tab edits
+              - generic [ref=f27e2624]:
+                - button [ref=f27e2625] [cursor=pointer]
+                - code [ref=f27e2631]:
+                  - generic [ref=f27e2632]: // Input
+                  - generic [ref=f27e2633]: "{"
+                  - generic [ref=f27e2634]: "\"file_path\": \"<absolute path>\","
+                  - generic [ref=f27e2635]: "\"edits\": ["
+                  - generic [ref=f27e2636]: "{"
+                  - generic [ref=f27e2637]: "\"old_string\": \"<search>\","
+                  - generic [ref=f27e2638]: "\"new_string\": \"<replace>\","
+                  - generic [ref=f27e2639]: "\"range\": {"
+                  - generic [ref=f27e2640]: "\"start_line_number\": 10,"
+                  - generic [ref=f27e2641]: "\"start_column\": 5,"
+                  - generic [ref=f27e2642]: "\"end_line_number\": 10,"
+                  - generic [ref=f27e2643]: "\"end_column\": 20"
+                  - generic [ref=f27e2644]: "},"
+                  - generic [ref=f27e2645]: "\"old_line\": \"<line before edit>\","
+                  - generic [ref=f27e2646]: "\"new_line\": \"<line after edit>\""
+                  - generic [ref=f27e2647]: "}"
+                  - generic [ref=f27e2648]: "]"
+                  - generic [ref=f27e2649]: "}"
+                  - generic [ref=f27e2651]: // Output
+                  - generic [ref=f27e2652]: "{"
+                  - generic [ref=f27e2653]: // No output fields currently supported
+                  - generic [ref=f27e2654]: "}"
+              - heading [level=4] [ref=f27e2655]:
+                - link "Copy link to beforesubmitprompt" [ref=f27e2656] [cursor=pointer]:
+                  - /url: "#beforesubmitprompt"
+                  - generic [ref=f27e2657]: beforeSubmitPrompt
+              - paragraph [ref=f27e2665]: Called right after user hits send but before backend request. Can prevent submission.
+              - generic [ref=f27e2668]:
+                - button [ref=f27e2669] [cursor=pointer]
+                - code [ref=f27e2675]:
+                  - generic [ref=f27e2676]: // Input
+                  - generic [ref=f27e2677]: "{"
+                  - generic [ref=f27e2678]: "\"prompt\": \"<user prompt text>\","
+                  - generic [ref=f27e2679]: "\"attachments\": ["
+                  - generic [ref=f27e2680]: "{"
+                  - generic [ref=f27e2681]: "\"type\": \"file\" | \"rule\","
+                  - generic [ref=f27e2682]: "\"file_path\": \"<absolute path>\""
+                  - generic [ref=f27e2683]: "}"
+                  - generic [ref=f27e2684]: "]"
+                  - generic [ref=f27e2685]: "}"
+                  - generic [ref=f27e2687]: // Output
+                  - generic [ref=f27e2688]: "{"
+                  - generic [ref=f27e2689]: "\"continue\": true | false,"
+                  - generic [ref=f27e2690]: "\"user_message\": \"<message shown to user when blocked>\""
+                  - generic [ref=f27e2691]: "}"
+              - table [ref=f27e2693]:
+                - rowgroup [ref=f27e2694]:
+                  - row [ref=f27e2695]:
+                    - columnheader "Output Field" [ref=f27e2696]
+                    - columnheader "Type" [ref=f27e2697]
+                    - columnheader "Description" [ref=f27e2698]
+                - rowgroup [ref=f27e2699]:
+                  - row [ref=f27e2700]:
+                    - cell [ref=f27e2701]:
+                      - code [ref=f27e2702]: continue
+                    - cell "boolean" [ref=f27e2703]
+                    - cell "Whether to allow the prompt submission to proceed" [ref=f27e2704]
+                  - row [ref=f27e2705]:
+                    - cell [ref=f27e2706]:
+                      - code [ref=f27e2707]: user_message
+                    - cell "string (optional)" [ref=f27e2708]
+                    - cell "Message shown to the user when the prompt is blocked" [ref=f27e2709]
+              - heading [level=4] [ref=f27e2710]:
+                - link "Copy link to afteragentresponse" [ref=f27e2711] [cursor=pointer]:
+                  - /url: "#afteragentresponse"
+                  - generic [ref=f27e2712]: afterAgentResponse
+              - paragraph [ref=f27e2720]: Called after the agent has completed an assistant message.
+              - generic [ref=f27e2723]:
+                - button [ref=f27e2724] [cursor=pointer]
+                - code [ref=f27e2730]:
+                  - generic [ref=f27e2731]: // Input
+                  - generic [ref=f27e2732]: "{"
+                  - generic [ref=f27e2733]: "\"text\": \"<assistant final text>\""
+                  - generic [ref=f27e2734]: "}"
+              - heading [level=4] [ref=f27e2735]:
+                - link "Copy link to afteragentthought" [ref=f27e2736] [cursor=pointer]:
+                  - /url: "#afteragentthought"
+                  - generic [ref=f27e2737]: afterAgentThought
+              - paragraph [ref=f27e2745]: Called after the agent completes a thinking block. Useful for observing the agent's reasoning process.
+              - generic [ref=f27e2748]:
+                - button [ref=f27e2749] [cursor=pointer]
+                - code [ref=f27e2755]:
+                  - generic [ref=f27e2756]: // Input
+                  - generic [ref=f27e2757]: "{"
+                  - generic [ref=f27e2758]: "\"text\": \"<fully aggregated thinking text>\","
+                  - generic [ref=f27e2759]: "\"duration_ms\": 5000"
+                  - generic [ref=f27e2760]: "}"
+                  - generic [ref=f27e2762]: // Output
+                  - generic [ref=f27e2763]: "{"
+                  - generic [ref=f27e2764]: // No output fields currently supported
+                  - generic [ref=f27e2765]: "}"
+              - table [ref=f27e2767]:
+                - rowgroup [ref=f27e2768]:
+                  - row [ref=f27e2769]:
+                    - columnheader "Field" [ref=f27e2770]
+                    - columnheader "Type" [ref=f27e2771]
+                    - columnheader "Description" [ref=f27e2772]
+                - rowgroup [ref=f27e2773]:
+                  - row [ref=f27e2774]:
+                    - cell [ref=f27e2775]:
+                      - code [ref=f27e2776]: text
+                    - cell "string" [ref=f27e2777]
+                    - cell "Fully aggregated thinking text for the completed block" [ref=f27e2778]
+                  - row [ref=f27e2779]:
+                    - cell [ref=f27e2780]:
+                      - code [ref=f27e2781]: duration_ms
+                    - cell "number (optional)" [ref=f27e2782]
+                    - cell "Duration in milliseconds for the thinking block" [ref=f27e2783]
+              - heading [level=4] [ref=f27e2784]:
+                - link "Copy link to stop" [ref=f27e2785] [cursor=pointer]:
+                  - /url: "#stop"
+                  - generic [ref=f27e2786]: stop
+              - paragraph [ref=f27e2794]: Called when the agent loop ends. Can optionally auto-submit a follow-up user message to keep iterating.
+              - generic [ref=f27e2797]:
+                - button [ref=f27e2798] [cursor=pointer]
+                - code [ref=f27e2804]:
+                  - generic [ref=f27e2805]: // Input
+                  - generic [ref=f27e2806]: "{"
+                  - generic [ref=f27e2807]: "\"status\": \"completed\" | \"aborted\" | \"error\","
+                  - generic [ref=f27e2808]: "\"loop_count\": 0"
+                  - generic [ref=f27e2809]: "}"
+              - generic [ref=f27e2812]:
+                - button [ref=f27e2813] [cursor=pointer]
+                - code [ref=f27e2819]:
+                  - generic [ref=f27e2820]: // Output
+                  - generic [ref=f27e2821]: "{"
+                  - generic [ref=f27e2822]: "\"followup_message\": \"<message text>\""
+                  - generic [ref=f27e2823]: "}"
+              - list [ref=f27e2824]:
+                - listitem [ref=f27e2825]:
+                  - text: The optional
+                  - code [ref=f27e2826]: followup_message
+                  - text: is a string. When provided and non-empty, Cursor will automatically submit it as the next user message. This enables loop-style flows (e.g., iterate until a goal is met).
+                - listitem [ref=f27e2827]:
+                  - text: The
+                  - code [ref=f27e2828]: loop_count
+                  - text: field indicates how many times the stop hook has already triggered an automatic follow-up for this conversation (starts at 0). The default limit is 5 auto follow-ups per script, configurable via the
+                  - code [ref=f27e2829]: loop_limit
+                  - text: option. Set
+                  - code [ref=f27e2830]: loop_limit
+                  - text: to
+                  - code [ref=f27e2831]: "null"
+                  - text: to remove the cap. The same limit applies to
+                  - code [ref=f27e2832]: subagentStop
+                  - text: follow-ups.
+              - heading [level=4] [ref=f27e2833]:
+                - link "Copy link to sessionstart" [ref=f27e2834] [cursor=pointer]:
+                  - /url: "#sessionstart"
+                  - generic [ref=f27e2835]: sessionStart
+              - paragraph [ref=f27e2843]: Called when a new composer conversation is created. This hook runs as fire-and-forget; the agent loop does not wait for or enforce a blocking response. Use it to set up session-specific environment variables or inject additional context.
+              - generic [ref=f27e2846]:
+                - button [ref=f27e2847] [cursor=pointer]
+                - code [ref=f27e2853]:
+                  - generic [ref=f27e2854]: // Input
+                  - generic [ref=f27e2855]: "{"
+                  - generic [ref=f27e2856]: "\"session_id\": \"<unique session identifier>\","
+                  - generic [ref=f27e2857]: "\"is_background_agent\": true | false,"
+                  - generic [ref=f27e2858]: "\"composer_mode\": \"agent\" | \"ask\" | \"edit\""
+                  - generic [ref=f27e2859]: "}"
+              - generic [ref=f27e2862]:
+                - button [ref=f27e2863] [cursor=pointer]
+                - code [ref=f27e2869]:
+                  - generic [ref=f27e2870]: // Output
+                  - generic [ref=f27e2871]: "{"
+                  - generic [ref=f27e2872]: "\"env\": { \"<key>\": \"<value>\" },"
+                  - generic [ref=f27e2873]: "\"additional_context\": \"<context to add to conversation>\""
+                  - generic [ref=f27e2874]: "}"
+              - table [ref=f27e2876]:
+                - rowgroup [ref=f27e2877]:
+                  - row [ref=f27e2878]:
+                    - columnheader "Input Field" [ref=f27e2879]
+                    - columnheader "Type" [ref=f27e2880]
+                    - columnheader "Description" [ref=f27e2881]
+                - rowgroup [ref=f27e2882]:
+                  - row [ref=f27e2883]:
+                    - cell [ref=f27e2884]:
+                      - code [ref=f27e2885]: session_id
+                    - cell "string" [ref=f27e2886]
+                    - cell [ref=f27e2887]:
+                      - text: Unique identifier for this session (same as
+                      - code [ref=f27e2888]: conversation_id
+                      - text: )
+                  - row [ref=f27e2889]:
+                    - cell [ref=f27e2890]:
+                      - code [ref=f27e2891]: is_background_agent
+                    - cell "boolean" [ref=f27e2892]
+                    - cell "Whether this is a background agent session vs interactive session" [ref=f27e2893]
+                  - row [ref=f27e2894]:
+                    - cell [ref=f27e2895]:
+                      - code [ref=f27e2896]: composer_mode
+                    - cell "string (optional)" [ref=f27e2897]
+                    - cell "The mode the composer is starting in (e.g., \"agent\", \"ask\", \"edit\")" [ref=f27e2898]
+              - table [ref=f27e2900]:
+                - rowgroup [ref=f27e2901]:
+                  - row [ref=f27e2902]:
+                    - columnheader "Output Field" [ref=f27e2903]
+                    - columnheader "Type" [ref=f27e2904]
+                    - columnheader "Description" [ref=f27e2905]
+                - rowgroup [ref=f27e2906]:
+                  - row [ref=f27e2907]:
+                    - cell [ref=f27e2908]:
+                      - code [ref=f27e2909]: env
+                    - cell "object (optional)" [ref=f27e2910]
+                    - cell "Environment variables to set for this session. Available to all subsequent hook executions" [ref=f27e2911]
+                  - row [ref=f27e2912]:
+                    - cell [ref=f27e2913]:
+                      - code [ref=f27e2914]: additional_context
+                    - cell "string (optional)" [ref=f27e2915]
+                    - cell "Additional context to add to the conversation's initial system context" [ref=f27e2916]
+              - alert [ref=f27e2917]:
+                - paragraph [ref=f27e2921]:
+                  - text: The schema also accepts
+                  - code [ref=f27e2922]: continue
+                  - text: and
+                  - code [ref=f27e2923]: user_message
+                  - text: fields, but current callers do not enforce them. Session creation is not blocked even when
+                  - code [ref=f27e2924]: continue
+                  - text: is
+                  - code [ref=f27e2925]: "false"
+                  - text: .
+              - heading [level=4] [ref=f27e2926]:
+                - link "Copy link to sessionend" [ref=f27e2927] [cursor=pointer]:
+                  - /url: "#sessionend"
+                  - generic [ref=f27e2928]: sessionEnd
+              - paragraph [ref=f27e2936]: Called when a composer conversation ends. This is a fire-and-forget hook useful for logging, analytics, or cleanup tasks. The response is logged but not used.
+              - generic [ref=f27e2939]:
+                - button [ref=f27e2940] [cursor=pointer]
+                - code [ref=f27e2946]:
+                  - generic [ref=f27e2947]: // Input
+                  - generic [ref=f27e2948]: "{"
+                  - generic [ref=f27e2949]: "\"session_id\": \"<unique session identifier>\","
+                  - generic [ref=f27e2950]: "\"reason\": \"completed\" | \"aborted\" | \"error\" | \"window_close\" | \"user_close\","
+                  - generic [ref=f27e2951]: "\"duration_ms\": 45000,"
+                  - generic [ref=f27e2952]: "\"is_background_agent\": true | false,"
+                  - generic [ref=f27e2953]: "\"final_status\": \"<status string>\","
+                  - generic [ref=f27e2954]: "\"error_message\": \"<error details if reason is 'error'>\""
+                  - generic [ref=f27e2955]: "}"
+              - generic [ref=f27e2958]:
+                - button [ref=f27e2959] [cursor=pointer]
+                - code [ref=f27e2965]:
+                  - generic [ref=f27e2966]: // Output
+                  - generic [ref=f27e2967]: "{"
+                  - generic [ref=f27e2968]: // No output fields - fire and forget
+                  - generic [ref=f27e2969]: "}"
+              - table [ref=f27e2971]:
+                - rowgroup [ref=f27e2972]:
+                  - row [ref=f27e2973]:
+                    - columnheader "Input Field" [ref=f27e2974]
+                    - columnheader "Type" [ref=f27e2975]
+                    - columnheader "Description" [ref=f27e2976]
+                - rowgroup [ref=f27e2977]:
+                  - row [ref=f27e2978]:
+                    - cell [ref=f27e2979]:
+                      - code [ref=f27e2980]: session_id
+                    - cell "string" [ref=f27e2981]
+                    - cell "Unique identifier for the session that is ending" [ref=f27e2982]
+                  - row [ref=f27e2983]:
+                    - cell [ref=f27e2984]:
+                      - code [ref=f27e2985]: reason
+                    - cell "string" [ref=f27e2986]
+                    - 'cell "How the session ended: \"completed\", \"aborted\", \"error\", \"window_close\", or \"user_close\"" [ref=f27e2987]'
+                  - row [ref=f27e2988]:
+                    - cell [ref=f27e2989]:
+                      - code [ref=f27e2990]: duration_ms
+                    - cell "number" [ref=f27e2991]
+                    - cell "Total duration of the session in milliseconds" [ref=f27e2992]
+                  - row [ref=f27e2993]:
+                    - cell [ref=f27e2994]:
+                      - code [ref=f27e2995]: is_background_agent
+                    - cell "boolean" [ref=f27e2996]
+                    - cell "Whether this was a background agent session" [ref=f27e2997]
+                  - row [ref=f27e2998]:
+                    - cell [ref=f27e2999]:
+                      - code [ref=f27e3000]: final_status
+                    - cell "string" [ref=f27e3001]
+                    - cell "Final status of the session" [ref=f27e3002]
+                  - row [ref=f27e3003]:
+                    - cell [ref=f27e3004]:
+                      - code [ref=f27e3005]: error_message
+                    - cell "string (optional)" [ref=f27e3006]
+                    - cell "Error message if reason is \"error\"" [ref=f27e3007]
+              - heading [level=4] [ref=f27e3008]:
+                - link "Copy link to precompact" [ref=f27e3009] [cursor=pointer]:
+                  - /url: "#precompact"
+                  - generic [ref=f27e3010]: preCompact
+              - paragraph [ref=f27e3018]: Called before context window compaction/summarization occurs. This is an observational hook that cannot block or modify the compaction behavior. Useful for logging when compaction happens or notifying users.
+              - generic [ref=f27e3021]:
+                - button [ref=f27e3022] [cursor=pointer]
+                - code [ref=f27e3028]:
+                  - generic [ref=f27e3029]: // Input
+                  - generic [ref=f27e3030]: "{"
+                  - generic [ref=f27e3031]: "\"trigger\": \"auto\" | \"manual\","
+                  - generic [ref=f27e3032]: "\"context_usage_percent\": 85,"
+                  - generic [ref=f27e3033]: "\"context_tokens\": 120000,"
+                  - generic [ref=f27e3034]: "\"context_window_size\": 128000,"
+                  - generic [ref=f27e3035]: "\"message_count\": 45,"
+                  - generic [ref=f27e3036]: "\"messages_to_compact\": 30,"
+                  - generic [ref=f27e3037]: "\"is_first_compaction\": true | false"
+                  - generic [ref=f27e3038]: "}"
+              - generic [ref=f27e3041]:
+                - button [ref=f27e3042] [cursor=pointer]
+                - code [ref=f27e3048]:
+                  - generic [ref=f27e3049]: // Output
+                  - generic [ref=f27e3050]: "{"
+                  - generic [ref=f27e3051]: "\"user_message\": \"<message to show when compaction occurs>\""
+                  - generic [ref=f27e3052]: "}"
+              - table [ref=f27e3054]:
+                - rowgroup [ref=f27e3055]:
+                  - row [ref=f27e3056]:
+                    - columnheader "Input Field" [ref=f27e3057]
+                    - columnheader "Type" [ref=f27e3058]
+                    - columnheader "Description" [ref=f27e3059]
+                - rowgroup [ref=f27e3060]:
+                  - row [ref=f27e3061]:
+                    - cell [ref=f27e3062]:
+                      - code [ref=f27e3063]: trigger
+                    - cell "string" [ref=f27e3064]
+                    - 'cell "What triggered the compaction: \"auto\" or \"manual\"" [ref=f27e3065]'
+                  - row [ref=f27e3066]:
+                    - cell [ref=f27e3067]:
+                      - code [ref=f27e3068]: context_usage_percent
+                    - cell "number" [ref=f27e3069]
+                    - cell "Current context window usage as a percentage (0-100)" [ref=f27e3070]
+                  - row [ref=f27e3071]:
+                    - cell [ref=f27e3072]:
+                      - code [ref=f27e3073]: context_tokens
+                    - cell "number" [ref=f27e3074]
+                    - cell "Current context window token count" [ref=f27e3075]
+                  - row [ref=f27e3076]:
+                    - cell [ref=f27e3077]:
+                      - code [ref=f27e3078]: context_window_size
+                    - cell "number" [ref=f27e3079]
+                    - cell "Maximum context window size in tokens" [ref=f27e3080]
+                  - row [ref=f27e3081]:
+                    - cell [ref=f27e3082]:
+                      - code [ref=f27e3083]: message_count
+                    - cell "number" [ref=f27e3084]
+                    - cell "Number of messages in the conversation" [ref=f27e3085]
+                  - row [ref=f27e3086]:
+                    - cell [ref=f27e3087]:
+                      - code [ref=f27e3088]: messages_to_compact
+                    - cell "number" [ref=f27e3089]
+                    - cell "Number of messages that will be summarized" [ref=f27e3090]
+                  - row [ref=f27e3091]:
+                    - cell [ref=f27e3092]:
+                      - code [ref=f27e3093]: is_first_compaction
+                    - cell "boolean" [ref=f27e3094]
+                    - cell "Whether this is the first compaction for this conversation" [ref=f27e3095]
+              - table [ref=f27e3097]:
+                - rowgroup [ref=f27e3098]:
+                  - row [ref=f27e3099]:
+                    - columnheader "Output Field" [ref=f27e3100]
+                    - columnheader "Type" [ref=f27e3101]
+                    - columnheader "Description" [ref=f27e3102]
+                - rowgroup [ref=f27e3103]:
+                  - row [ref=f27e3104]:
+                    - cell [ref=f27e3105]:
+                      - code [ref=f27e3106]: user_message
+                    - cell "string (optional)" [ref=f27e3107]
+                    - cell "Message to show to the user when compaction occurs" [ref=f27e3108]
+              - heading [level=4] [ref=f27e3109]:
+                - link "Copy link to workspaceopen" [ref=f27e3110] [cursor=pointer]:
+                  - /url: "#workspaceopen"
+                  - generic [ref=f27e3111]: workspaceOpen
+              - paragraph [ref=f27e3119]: Fires once when Cursor opens a workspace and again on every workspace folder change. Skipped when the window has zero workspace folders. Runs in the Cursor desktop app and CLI.
+              - generic [ref=f27e3122]:
+                - button [ref=f27e3123] [cursor=pointer]
+                - code [ref=f27e3129]:
+                  - generic [ref=f27e3130]: // Input
+                  - generic [ref=f27e3131]: "{"
+                  - generic [ref=f27e3132]: "\"hook_event_name\": \"workspaceOpen\","
+                  - generic [ref=f27e3133]: "\"cursor_version\": \"string\","
+                  - generic [ref=f27e3134]: "\"workspace_roots\": [\"<absolute path>\"],"
+                  - generic [ref=f27e3135]: "\"user_email\": \"string | null\""
+                  - generic [ref=f27e3136]: "}"
+                  - generic [ref=f27e3138]: // Output
+                  - generic [ref=f27e3139]: "{"
+                  - generic [ref=f27e3140]: "\"pluginPaths\": [\"<absolute path>\", \"...\"]"
+                  - generic [ref=f27e3141]: "}"
+              - table [ref=f27e3143]:
+                - rowgroup [ref=f27e3144]:
+                  - row [ref=f27e3145]:
+                    - columnheader "Output Field" [ref=f27e3146]
+                    - columnheader "Type" [ref=f27e3147]
+                    - columnheader "Description" [ref=f27e3148]
+                - rowgroup [ref=f27e3149]:
+                  - row [ref=f27e3150]:
+                    - cell [ref=f27e3151]:
+                      - code [ref=f27e3152]: pluginPaths
+                    - cell "string[] (optional)" [ref=f27e3153]
+                    - cell "Absolute paths to plugin directories to load for the current workspace." [ref=f27e3154]
+              - heading [level=2] [ref=f27e3155]:
+                - link "Copy link to environment-variables" [ref=f27e3156] [cursor=pointer]:
+                  - /url: "#environment-variables"
+                  - generic [ref=f27e3157]: Environment Variables
+              - paragraph [ref=f27e3165]: "Hook scripts receive environment variables when executed:"
+              - table [ref=f27e3167]:
+                - rowgroup [ref=f27e3168]:
+                  - row [ref=f27e3169]:
+                    - columnheader "Variable" [ref=f27e3170]
+                    - columnheader "Description" [ref=f27e3171]
+                    - columnheader "Always Present" [ref=f27e3172]
+                - rowgroup [ref=f27e3173]:
+                  - row [ref=f27e3174]:
+                    - cell [ref=f27e3175]:
+                      - code [ref=f27e3176]: CURSOR_PROJECT_DIR
+                    - cell "Workspace root directory" [ref=f27e3177]
+                    - cell "Yes" [ref=f27e3178]
+                  - row [ref=f27e3179]:
+                    - cell [ref=f27e3180]:
+                      - code [ref=f27e3181]: CURSOR_VERSION
+                    - cell "Cursor version string" [ref=f27e3182]
+                    - cell "Yes" [ref=f27e3183]
+                  - row [ref=f27e3184]:
+                    - cell [ref=f27e3185]:
+                      - code [ref=f27e3186]: CURSOR_USER_EMAIL
+                    - cell "Authenticated user email" [ref=f27e3187]
+                    - cell "If logged in" [ref=f27e3188]
+                  - row [ref=f27e3189]:
+                    - cell [ref=f27e3190]:
+                      - code [ref=f27e3191]: CURSOR_TRANSCRIPT_PATH
+                    - cell "Path to the conversation transcript file" [ref=f27e3192]
+                    - cell "If transcripts enabled" [ref=f27e3193]
+                  - row [ref=f27e3194]:
+                    - cell [ref=f27e3195]:
+                      - code [ref=f27e3196]: CURSOR_CODE_REMOTE
+                    - cell [ref=f27e3197]:
+                      - text: Set to the string
+                      - code [ref=f27e3198]: "\"true\""
+                      - text: when running in a remote workspace
+                    - cell "For remote workspaces" [ref=f27e3199]
+                  - row [ref=f27e3200]:
+                    - cell [ref=f27e3201]:
+                      - code [ref=f27e3202]: CURSOR_PLUGIN_ROOT
+                    - cell "Install directory of the plugin that provides the hook" [ref=f27e3203]
+                    - cell "For plugin hooks" [ref=f27e3204]
+                  - row [ref=f27e3205]:
+                    - cell [ref=f27e3206]:
+                      - code [ref=f27e3207]: CLAUDE_PROJECT_DIR
+                    - cell "Alias for project dir (Claude compatibility)" [ref=f27e3208]
+                    - cell "Yes" [ref=f27e3209]
+              - paragraph [ref=f27e3210]:
+                - text: Session-scoped environment variables from
+                - code [ref=f27e3211]: sessionStart
+                - text: hooks are passed to all subsequent hook executions within that session.
+              - heading [level=2] [ref=f27e3212]:
+                - link "Copy link to troubleshooting" [ref=f27e3213] [cursor=pointer]:
+                  - /url: "#troubleshooting"
+                  - generic [ref=f27e3214]: Troubleshooting
+              - paragraph [ref=f27e3222]:
+                - strong [ref=f27e3223]: How to confirm hooks are active
+              - paragraph [ref=f27e3224]:
+                - text: There is a Hooks tab in
+                - strong [ref=f27e3225]: Customize
+                - text: and a Hooks output channel to debug configured and executed hooks and see errors.
+              - paragraph [ref=f27e3226]:
+                - strong [ref=f27e3227]: If hooks are not working
+              - list [ref=f27e3228]:
+                - listitem [ref=f27e3229]:
+                  - text: Cursor watches
+                  - code [ref=f27e3230]: hooks.json
+                  - text: files and reloads them on save. If hooks still do not load, restart Cursor.
+                - listitem [ref=f27e3231]:
+                  - text: "Check that relative paths are correct for your hook source:"
+                  - list [ref=f27e3232]:
+                    - listitem [ref=f27e3233]:
+                      - text: For
+                      - strong [ref=f27e3234]: project hooks
+                      - text: ", paths are relative to the"
+                      - strong [ref=f27e3235]: project root
+                      - text: (e.g.,
+                      - code [ref=f27e3236]: .cursor/hooks/script.sh
+                      - text: )
+                    - listitem [ref=f27e3237]:
+                      - text: For
+                      - strong [ref=f27e3238]: user hooks
+                      - text: ", paths are relative to"
+                      - code [ref=f27e3239]: ~/.cursor/
+                      - text: (e.g.,
+                      - code [ref=f27e3240]: ./hooks/script.sh
+                      - text: or
+                      - code [ref=f27e3241]: hooks/script.sh
+                      - text: )
+              - paragraph [ref=f27e3242]:
+                - strong [ref=f27e3243]: Exit code blocking
+              - paragraph [ref=f27e3244]:
+                - text: Exit code
+                - code [ref=f27e3245]: "2"
+                - text: from command hooks blocks the action (equivalent to returning
+                - code [ref=f27e3246]: "permission: \"deny\""
+                - text: ). This matches Claude Code behavior for compatibility.
+              - generic [ref=f27e3247]:
+                - generic [ref=f27e3248]:
+                  - paragraph [ref=f27e3249]: Enterprise hooks and distribution
+                  - paragraph [ref=f27e3250]: Cloud distribution and team-wide hook management are available on Enterprise.
+                - link "Contact Sales" [ref=f27e3251] [cursor=pointer]:
+                  - /url: https://cursor.com/contact-sales?source=docs-hooks
+          - navigation [ref=f27e3254]:
+            - generic [ref=f27e3255]:
+              - list [ref=f27e3256]:
+                - listitem [ref=f27e3257]:
+                  - link "Hook categories" [ref=f27e3258] [cursor=pointer]:
+                    - /url: "#hook-categories"
+                - listitem [ref=f27e3259]:
+                  - link "Cloud agent support" [ref=f27e3260] [cursor=pointer]:
+                    - /url: "#cloud-agent-support"
+                - listitem [ref=f27e3261]:
+                  - link "Supported hooks" [ref=f27e3262] [cursor=pointer]:
+                    - /url: "#supported-hooks"
+                - listitem [ref=f27e3263]:
+                  - link "Hooks not available in cloud agents" [ref=f27e3264] [cursor=pointer]:
+                    - /url: "#hooks-not-available-in-cloud-agents"
+                - listitem [ref=f27e3265]:
+                  - link "Configuration sources" [ref=f27e3266] [cursor=pointer]:
+                    - /url: "#configuration-sources"
+                - listitem [ref=f27e3267]:
+                  - link "Execution type limits" [ref=f27e3268] [cursor=pointer]:
+                    - /url: "#execution-type-limits"
+                - listitem [ref=f27e3269]:
+                  - link "Quickstart" [ref=f27e3270] [cursor=pointer]:
+                    - /url: "#quickstart"
+                - listitem [ref=f27e3271]:
+                  - link "Hook Types" [ref=f27e3272] [cursor=pointer]:
+                    - /url: "#hook-types"
+                - listitem [ref=f27e3273]:
+                  - link "Command-Based Hooks" [ref=f27e3274] [cursor=pointer]:
+                    - /url: "#command-based-hooks"
+                - listitem [ref=f27e3275]:
+                  - link "Prompt-Based Hooks" [ref=f27e3276] [cursor=pointer]:
+                    - /url: "#prompt-based-hooks"
+                - listitem [ref=f27e3277]:
+                  - link "Examples" [ref=f27e3278] [cursor=pointer]:
+                    - /url: "#examples"
+                - listitem [ref=f27e3279]:
+                  - link "TypeScript stop automation hook" [ref=f27e3280] [cursor=pointer]:
+                    - /url: "#typescript-stop-automation-hook"
+                - listitem [ref=f27e3281]:
+                  - link "Python manifest guard hook" [ref=f27e3282] [cursor=pointer]:
+                    - /url: "#python-manifest-guard-hook"
+                - listitem [ref=f27e3283]:
+                  - link "Partner Integrations" [ref=f27e3284] [cursor=pointer]:
+                    - /url: "#partner-integrations"
+                - listitem [ref=f27e3285]:
+                  - link "MCP governance and visibility" [ref=f27e3286] [cursor=pointer]:
+                    - /url: "#mcp-governance-and-visibility"
+                - listitem [ref=f27e3287]:
+                  - link "Code security and best practices" [ref=f27e3288] [cursor=pointer]:
+                    - /url: "#code-security-and-best-practices"
+                - listitem [ref=f27e3289]:
+                  - link "Dependency security" [ref=f27e3290] [cursor=pointer]:
+                    - /url: "#dependency-security"
+                - listitem [ref=f27e3291]:
+                  - link "Agent security and safety" [ref=f27e3292] [cursor=pointer]:
+                    - /url: "#agent-security-and-safety"
+                - listitem [ref=f27e3293]:
+                  - link "Secrets management" [ref=f27e3294] [cursor=pointer]:
+                    - /url: "#secrets-management"
+                - listitem [ref=f27e3295]:
+                  - link "Configuration" [ref=f27e3296] [cursor=pointer]:
+                    - /url: "#configuration"
+                - listitem [ref=f27e3297]:
+                  - link "Configuration file" [ref=f27e3298] [cursor=pointer]:
+                    - /url: "#configuration-file"
+                - listitem [ref=f27e3299]:
+                  - link "Global Configuration Options" [ref=f27e3300] [cursor=pointer]:
+                    - /url: "#global-configuration-options"
+                - listitem [ref=f27e3301]:
+                  - link "Per-Script Configuration Options" [ref=f27e3302] [cursor=pointer]:
+                    - /url: "#per-script-configuration-options"
+                - listitem [ref=f27e3303]:
+                  - link "Matcher Configuration" [ref=f27e3304] [cursor=pointer]:
+                    - /url: "#matcher-configuration"
+                - listitem [ref=f27e3305]:
+                  - link "Team Distribution" [ref=f27e3306] [cursor=pointer]:
+                    - /url: "#team-distribution"
+                - listitem [ref=f27e3307]:
+                  - link "Project Hooks (Version Control)" [ref=f27e3308] [cursor=pointer]:
+                    - /url: "#project-hooks-version-control"
+                - listitem [ref=f27e3309]:
+                  - link "MDM Distribution" [ref=f27e3310] [cursor=pointer]:
+                    - /url: "#mdm-distribution"
+                - listitem [ref=f27e3311]:
+                  - link "Cloud Distribution (Enterprise Only)" [ref=f27e3312] [cursor=pointer]:
+                    - /url: "#cloud-distribution-enterprise-only"
+                - listitem [ref=f27e3313]:
+                  - link "Reference" [ref=f27e3314] [cursor=pointer]:
+                    - /url: "#reference"
+                - listitem [ref=f27e3315]:
+                  - link "Common schema" [ref=f27e3316] [cursor=pointer]:
+                    - /url: "#common-schema"
+                - listitem [ref=f27e3317]:
+                  - link "Input (all hooks)" [ref=f27e3318] [cursor=pointer]:
+                    - /url: "#input-all-hooks"
+                - listitem [ref=f27e3319]:
+                  - link "Hook events" [ref=f27e3320] [cursor=pointer]:
+                    - /url: "#hook-events"
+                - listitem [ref=f27e3321]:
+                  - link "preToolUse" [ref=f27e3322] [cursor=pointer]:
+                    - /url: "#pretooluse"
+                - listitem [ref=f27e3323]:
+                  - link "postToolUse" [ref=f27e3324] [cursor=pointer]:
+                    - /url: "#posttooluse"
+                - listitem [ref=f27e3325]:
+                  - link "postToolUseFailure" [ref=f27e3326] [cursor=pointer]:
+                    - /url: "#posttoolusefailure"
+                - listitem [ref=f27e3327]:
+                  - link "subagentStart" [ref=f27e3328] [cursor=pointer]:
+                    - /url: "#subagentstart"
+                - listitem [ref=f27e3329]:
+                  - link "subagentStop" [ref=f27e3330] [cursor=pointer]:
+                    - /url: "#subagentstop"
+                - listitem [ref=f27e3331]:
+                  - link "beforeShellExecution / beforeMCPExecution" [ref=f27e3332] [cursor=pointer]:
+                    - /url: "#beforeshellexecution-beforemcpexecution"
+                - listitem [ref=f27e3333]:
+                  - link "afterShellExecution" [ref=f27e3334] [cursor=pointer]:
+                    - /url: "#aftershellexecution"
+                - listitem [ref=f27e3335]:
+                  - link "afterMCPExecution" [ref=f27e3336] [cursor=pointer]:
+                    - /url: "#aftermcpexecution"
+                - listitem [ref=f27e3337]:
+                  - link "afterFileEdit" [ref=f27e3338] [cursor=pointer]:
+                    - /url: "#afterfileedit"
+                - listitem [ref=f27e3339]:
+                  - link "beforeReadFile" [ref=f27e3340] [cursor=pointer]:
+                    - /url: "#beforereadfile"
+                - listitem [ref=f27e3341]:
+                  - link "beforeTabFileRead" [ref=f27e3342] [cursor=pointer]:
+                    - /url: "#beforetabfileread"
+                - listitem [ref=f27e3343]:
+                  - link "afterTabFileEdit" [ref=f27e3344] [cursor=pointer]:
+                    - /url: "#aftertabfileedit"
+                - listitem [ref=f27e3345]:
+                  - link "beforeSubmitPrompt" [ref=f27e3346] [cursor=pointer]:
+                    - /url: "#beforesubmitprompt"
+                - listitem [ref=f27e3347]:
+                  - link "afterAgentResponse" [ref=f27e3348] [cursor=pointer]:
+                    - /url: "#afteragentresponse"
+                - listitem [ref=f27e3349]:
+                  - link "afterAgentThought" [ref=f27e3350] [cursor=pointer]:
+                    - /url: "#afteragentthought"
+                - listitem [ref=f27e3351]:
+                  - link "stop" [ref=f27e3352] [cursor=pointer]:
+                    - /url: "#stop"
+                - listitem [ref=f27e3353]:
+                  - link "sessionStart" [ref=f27e3354] [cursor=pointer]:
+                    - /url: "#sessionstart"
+                - listitem [ref=f27e3355]:
+                  - link "sessionEnd" [ref=f27e3356] [cursor=pointer]:
+                    - /url: "#sessionend"
+                - listitem [ref=f27e3357]:
+                  - link "preCompact" [ref=f27e3358] [cursor=pointer]:
+                    - /url: "#precompact"
+                - listitem [ref=f27e3359]:
+                  - link "workspaceOpen" [ref=f27e3360] [cursor=pointer]:
+                    - /url: "#workspaceopen"
+                - listitem [ref=f27e3361]:
+                  - link "Environment Variables" [ref=f27e3362] [cursor=pointer]:
+                    - /url: "#environment-variables"
+                - listitem [ref=f27e3363]:
+                  - link "Troubleshooting" [ref=f27e3364] [cursor=pointer]:
+                    - /url: "#troubleshooting"
+              - button "Copy page" [ref=f27e3368] [cursor=pointer]

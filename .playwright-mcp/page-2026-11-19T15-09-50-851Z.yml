@@ -1,0 +1,608 @@
+- generic [active] [ref=f94e1]:
+  - generic [ref=f94e3]:
+    - link "Skip to main content" [ref=f94e4] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=f94e5]:
+      - banner [ref=f94e6]:
+        - generic [ref=f94e7]:
+          - generic [ref=f94e8]:
+            - link "Cursor Home" [ref=f94e9] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=f94e10]
+            - navigation [ref=f94e13]:
+              - link "Docs" [ref=f94e14] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=f94e16] [cursor=pointer]:
+                - /url: /docs/api
+              - link "Learn" [ref=f94e17] [cursor=pointer]:
+                - /url: /learn
+              - link "Help" [ref=f94e18] [cursor=pointer]:
+                - /url: /help
+          - button "Search docs... ⌘K" [ref=f94e22] [cursor=pointer]:
+            - generic [ref=f94e26]: Search docs...
+            - generic [ref=f94e27]: ⌘K
+      - generic [ref=f94e32]:
+        - heading "Command Palette" [level=2] [ref=f94e33]
+        - paragraph [ref=f94e34]: Search for a command to run...
+    - generic [ref=f94e35]:
+      - generic [ref=f94e37]:
+        - button [ref=f94e38]:
+          - button "Toggle Docs Sidebar" [ref=f94e40] [cursor=pointer]
+        - generic [ref=f94e44]:
+          - generic [ref=f94e45]:
+            - heading "Get Started" [level=2] [ref=f94e46]
+            - generic [ref=f94e47]:
+              - link "Welcome" [ref=f94e48] [cursor=pointer]:
+                - /url: /docs
+              - link "Quickstart" [ref=f94e51] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+              - button "Models & Pricing" [ref=f94e54] [cursor=pointer]
+              - link "Changelog" [ref=f94e60] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+              - link "Release Notes" [ref=f94e63] [cursor=pointer]:
+                - /url: /docs/release-notes
+          - generic [ref=f94e66]:
+            - heading "Agent" [level=2] [ref=f94e67]
+            - generic [ref=f94e68]:
+              - link "Overview" [ref=f94e69] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - link "Agents Window" [ref=f94e72] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - link "Projects" [ref=f94e75] [cursor=pointer]:
+                - /url: /docs/agent/projects
+              - link "Agent Review" [ref=f94e78] [cursor=pointer]:
+                - /url: /docs/agent/agent-review
+              - link "Planning" [ref=f94e81] [cursor=pointer]:
+                - /url: /docs/agent/plan-mode
+              - link "Prompting" [ref=f94e84] [cursor=pointer]:
+                - /url: /docs/agent/prompting
+              - link "Voice Chat" [ref=f94e87] [cursor=pointer]:
+                - /url: /docs/agent/voice-chat
+              - link "Debugging" [ref=f94e90] [cursor=pointer]:
+                - /url: /docs/agent/debug-mode
+              - link "Design Mode" [ref=f94e93] [cursor=pointer]:
+                - /url: /docs/agent/design-mode
+              - button "Tools" [ref=f94e96] [cursor=pointer]
+              - generic [ref=f94e104]:
+                - link "Terminal" [ref=f94e106] [cursor=pointer]:
+                  - /url: /docs/agent/tools/terminal
+                - link "Browser" [ref=f94e110] [cursor=pointer]:
+                  - /url: /docs/agent/tools/browser
+                - link "Search" [ref=f94e114] [cursor=pointer]:
+                  - /url: /docs/agent/tools/search
+                - link "Canvases" [ref=f94e118] [cursor=pointer]:
+                  - /url: /docs/agent/tools/canvas
+                - link "Worktrees" [ref=f94e122] [cursor=pointer]:
+                  - /url: /docs/configuration/worktrees
+              - button "Security" [ref=f94e125] [cursor=pointer]
+          - generic [ref=f94e131]:
+            - heading "Customize" [level=2] [ref=f94e132]
+            - generic [ref=f94e133]:
+              - link "Overview" [ref=f94e134] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+              - link "Plugins" [ref=f94e137] [cursor=pointer]:
+                - /url: /docs/plugins
+              - link "Rules" [ref=f94e140] [cursor=pointer]:
+                - /url: /docs/rules
+              - link "Skills" [ref=f94e143] [cursor=pointer]:
+                - /url: /docs/skills
+              - link "Subagents" [ref=f94e146] [cursor=pointer]:
+                - /url: /docs/subagents
+              - link "Hooks" [ref=f94e149] [cursor=pointer]:
+                - /url: /docs/hooks
+              - link "MCP" [ref=f94e152] [cursor=pointer]:
+                - /url: /docs/mcp
+          - generic [ref=f94e155]:
+            - heading "Cloud Agents" [level=2] [ref=f94e156]
+            - generic [ref=f94e157]:
+              - link "Overview" [ref=f94e158] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - link "Setup" [ref=f94e161] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - link "Builds" [ref=f94e164] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - link "Apps" [ref=f94e167] [cursor=pointer]:
+                - /url: /docs/cloud-agent/apps
+              - button "Capabilities" [ref=f94e170] [cursor=pointer]
+              - link "Best Practices" [ref=f94e176] [cursor=pointer]:
+                - /url: /docs/cloud-agent/best-practices
+              - link "Choose Where Cloud Agents Run" [ref=f94e179] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted/choose-runtime
+              - link "Automations" [ref=f94e182] [cursor=pointer]:
+                - /url: /docs/cloud-agent/automations
+              - link "Bugbot" [ref=f94e185] [cursor=pointer]:
+                - /url: /docs/bugbot
+              - link "Security Review" [ref=f94e188] [cursor=pointer]:
+                - /url: /docs/security-review
+              - link "Vulnerability Remediation" [ref=f94e191] [cursor=pointer]:
+                - /url: /docs/vulnerability-remediation
+              - link "PR Routing & Approval" [ref=f94e194] [cursor=pointer]:
+                - /url: /docs/approval-agents
+              - link "Rollouts" [ref=f94e197] [cursor=pointer]:
+                - /url: /docs/rollouts
+              - link "Mobile" [ref=f94e200] [cursor=pointer]:
+                - /url: /docs/cloud-agent/mobile
+              - button "Security" [ref=f94e203] [cursor=pointer]
+              - button "Self-Hosted Machines" [ref=f94e209] [cursor=pointer]
+              - link "Settings" [ref=f94e215] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings
+              - link "API" [ref=f94e218] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints
+          - generic [ref=f94e221]:
+            - heading "Origin" [level=2] [ref=f94e222]
+            - generic [ref=f94e223]:
+              - link "Overview" [ref=f94e224] [cursor=pointer]:
+                - /url: /docs/origin
+              - button "CLI" [ref=f94e227] [cursor=pointer]
+              - link "Create a repository" [ref=f94e233] [cursor=pointer]:
+                - /url: /docs/origin/create-repository
+              - link "Mirror GitHub" [ref=f94e236] [cursor=pointer]:
+                - /url: /docs/origin/mirror-github
+              - link "Clone, Push & Pull" [ref=f94e239] [cursor=pointer]:
+                - /url: /docs/origin/git
+              - link "CloneKit in CI" [ref=f94e242] [cursor=pointer]:
+                - /url: /docs/origin/clonekit-ci
+              - link "Pull requests" [ref=f94e245] [cursor=pointer]:
+                - /url: /docs/origin/pull-requests
+              - link "Code Tours" [ref=f94e248] [cursor=pointer]:
+                - /url: /docs/origin/code-tours
+              - link "Browse & Search" [ref=f94e251] [cursor=pointer]:
+                - /url: /docs/origin/browse
+              - link "Agents and Automations" [ref=f94e254] [cursor=pointer]:
+                - /url: /docs/origin/agents
+              - button "Apps" [ref=f94e257] [cursor=pointer]
+              - link "Settings" [ref=f94e263] [cursor=pointer]:
+                - /url: /docs/origin/settings
+          - generic [ref=f94e266]:
+            - heading "Integrations" [level=2] [ref=f94e267]
+            - generic [ref=f94e268]:
+              - link "Slack" [ref=f94e269] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - link "Microsoft Teams" [ref=f94e272] [cursor=pointer]:
+                - /url: /docs/integrations/microsoft-teams
+              - link "Jira" [ref=f94e275] [cursor=pointer]:
+                - /url: /docs/integrations/jira
+              - link "Linear" [ref=f94e278] [cursor=pointer]:
+                - /url: /docs/integrations/linear
+              - link "Notion" [ref=f94e281] [cursor=pointer]:
+                - /url: /docs/integrations/notion
+              - link "GitHub" [ref=f94e284] [cursor=pointer]:
+                - /url: /docs/integrations/github
+              - link "GitLab" [ref=f94e287] [cursor=pointer]:
+                - /url: /docs/integrations/gitlab
+              - link "Azure DevOps" [ref=f94e290] [cursor=pointer]:
+                - /url: /docs/integrations/azure-devops
+              - link "Bitbucket" [ref=f94e293] [cursor=pointer]:
+                - /url: /docs/integrations/bitbucket
+              - link "JetBrains" [ref=f94e296] [cursor=pointer]:
+                - /url: /docs/integrations/jetbrains
+              - link "Xcode" [ref=f94e299] [cursor=pointer]:
+                - /url: /docs/integrations/xcode
+              - link "Tailscale" [ref=f94e302] [cursor=pointer]:
+                - /url: /docs/integrations/tailscale
+              - link "Deeplinks" [ref=f94e305] [cursor=pointer]:
+                - /url: /docs/reference/deeplinks
+          - generic [ref=f94e308]:
+            - heading "SDK" [level=2] [ref=f94e309]
+            - generic [ref=f94e310]:
+              - link "TypeScript" [ref=f94e311] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - link "Python" [ref=f94e314] [cursor=pointer]:
+                - /url: /docs/sdk/python
+              - link "Bridge" [ref=f94e317] [cursor=pointer]:
+                - /url: /docs/sdk/bridge
+              - link "Changelog" [ref=f94e320] [cursor=pointer]:
+                - /url: /docs/release-notes/sdk
+          - generic [ref=f94e323]:
+            - heading "Agent SDK" [level=2] [ref=f94e324]
+            - generic [ref=f94e325]:
+              - button "Getting started" [ref=f94e326] [cursor=pointer]
+              - button "Integrations" [ref=f94e332] [cursor=pointer]
+              - button "Extensions" [ref=f94e338] [cursor=pointer]
+              - button "Guides" [ref=f94e344] [cursor=pointer]
+              - button "Templates" [ref=f94e350] [cursor=pointer]
+              - button "Reference" [ref=f94e356] [cursor=pointer]
+          - generic [ref=f94e362]:
+            - heading "CLI" [level=2] [ref=f94e363]
+            - generic [ref=f94e364]:
+              - link "Overview" [ref=f94e365] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - link "Installation" [ref=f94e368] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - link "Capabilities" [ref=f94e371] [cursor=pointer]:
+                - /url: /docs/cli/using
+              - link "Changelog" [ref=f94e374] [cursor=pointer]:
+                - /url: /docs/cli/changelog
+              - link "Shell Mode" [ref=f94e377] [cursor=pointer]:
+                - /url: /docs/cli/shell-mode
+              - link "ACP" [ref=f94e380] [cursor=pointer]:
+                - /url: /docs/cli/acp
+              - link "Headless / CI" [ref=f94e383] [cursor=pointer]:
+                - /url: /docs/cli/headless
+              - button "Reference" [ref=f94e386] [cursor=pointer]
+          - generic [ref=f94e392]:
+            - heading "Teams & Enterprise" [level=2] [ref=f94e393]
+            - generic [ref=f94e394]:
+              - button "Teams" [ref=f94e395] [cursor=pointer]
+              - button "Enterprise" [ref=f94e401] [cursor=pointer]
+      - main [ref=f94e407]:
+        - generic [ref=f94e410]:
+          - generic [ref=f94e411]:
+            - generic [ref=f94e412]: Agent
+            - generic [ref=f94e414]:
+              - heading "Browser" [level=1] [ref=f94e415]
+              - paragraph [ref=f94e416]: Agent can control a web browser to test applications, audit accessibility, convert designs into code, and more. With full access to console logs and network traffic, Agent can debug issues and automate comprehensive testing workflows.
+              - alert [ref=f94e420]:
+                - paragraph [ref=f94e424]: For enterprise customers, browser controls are governed by MCP allowlist or denylist.
+              - heading [level=2] [ref=f94e425]:
+                - link "Copy link to native-integration" [ref=f94e426] [cursor=pointer]:
+                  - /url: "#native-integration"
+                  - generic [ref=f94e427]: Native integration
+              - paragraph [ref=f94e435]: Agent displays browser actions like screenshots and actions in the chat, as well as the browser window itself either in a separate window or an inline pane.
+              - paragraph [ref=f94e436]: "We've optimized the browser tools to be more efficient and reduce token usage, as well as:"
+              - list [ref=f94e437]:
+                - listitem [ref=f94e438]:
+                  - strong [ref=f94e439]: Efficient log handling
+                  - text: ": Browser logs are written to files that Agent can grep and selectively read. Instead of summarizing verbose output after every action, Agent reads only the relevant lines it needs. This preserves full context while minimizing token usage."
+                - listitem [ref=f94e440]:
+                  - strong [ref=f94e441]: Visual feedback with images
+                  - text: ": Screenshots are integrated directly with the file reading tool, so Agent actually sees the browser state as images rather than relying on text descriptions. This enables better understanding of visual layouts and UI elements."
+                - listitem [ref=f94e442]:
+                  - strong [ref=f94e443]: Smart prompting
+                  - text: ": Agent receives additional context about browser logs, including total line counts and preview snippets, helping it make informed decisions about what to inspect."
+                - listitem [ref=f94e444]:
+                  - strong [ref=f94e445]: Development server awareness
+                  - text: ": Agent is prompted to detect running development servers and use the correct ports instead of starting duplicate servers or guessing port numbers."
+              - paragraph [ref=f94e446]: You can use Browser without installing or configuring any external tools.
+              - heading [level=2] [ref=f94e447]:
+                - link "Copy link to browser-capabilities" [ref=f94e448] [cursor=pointer]:
+                  - /url: "#browser-capabilities"
+                  - generic [ref=f94e449]: Browser capabilities
+              - paragraph [ref=f94e457]: "Agent has access to the following browser tools:"
+              - generic [ref=f94e458]:
+                - heading [level=3] [ref=f94e460]:
+                  - button "Navigate" [ref=f94e461] [cursor=pointer]
+                - heading [level=3] [ref=f94e470]:
+                  - button "Click" [ref=f94e471] [cursor=pointer]
+                - heading [level=3] [ref=f94e478]:
+                  - button "Type" [ref=f94e479] [cursor=pointer]
+                - heading [level=3] [ref=f94e485]:
+                  - button "Scroll" [ref=f94e486] [cursor=pointer]
+                - heading [level=3] [ref=f94e492]:
+                  - button "Screenshot" [ref=f94e493] [cursor=pointer]
+                - heading [level=3] [ref=f94e500]:
+                  - button "Console Output" [ref=f94e501] [cursor=pointer]
+                - heading [level=3] [ref=f94e507]:
+                  - button "Network Traffic" [ref=f94e508] [cursor=pointer]
+              - heading [level=2] [ref=f94e515]:
+                - link "Copy link to session-persistence" [ref=f94e516] [cursor=pointer]:
+                  - /url: "#session-persistence"
+                  - generic [ref=f94e517]: Session persistence
+              - paragraph [ref=f94e525]: "Browser state persists between Agent sessions based on your workspace. This means:"
+              - list [ref=f94e526]:
+                - listitem [ref=f94e527]:
+                  - strong [ref=f94e528]: Cookies
+                  - text: ": Authentication cookies and session data remain available across browser sessions"
+                - listitem [ref=f94e529]:
+                  - strong [ref=f94e530]: Local Storage
+                  - text: ": Data stored in"
+                  - code [ref=f94e531]: localStorage
+                  - text: and
+                  - code [ref=f94e532]: sessionStorage
+                  - text: persists
+                - listitem [ref=f94e533]:
+                  - strong [ref=f94e534]: IndexedDB
+                  - text: ": Database content is retained between sessions"
+              - paragraph [ref=f94e535]: The browser context is isolated per workspace, ensuring that different projects maintain separate storage and cookie states.
+              - heading [level=2] [ref=f94e536]:
+                - link "Copy link to use-cases" [ref=f94e537] [cursor=pointer]:
+                  - /url: "#use-cases"
+                  - generic [ref=f94e538]: Use cases
+              - heading [level=3] [ref=f94e546]:
+                - link "Copy link to web-development-workflow" [ref=f94e547] [cursor=pointer]:
+                  - /url: "#web-development-workflow"
+                  - generic [ref=f94e548]: Web development workflow
+              - paragraph [ref=f94e556]:
+                - text: Browser integrates into web development workflows alongside tools like Figma and Linear. See the
+                - link "Web Development cookbook" [ref=f94e557] [cursor=pointer]:
+                  - /url: /for/web-development
+                - text: for a complete guide on using Browser with design systems, project management tools, and component libraries.
+              - heading [level=3] [ref=f94e558]:
+                - link "Copy link to accessibility-improvements" [ref=f94e559] [cursor=pointer]:
+                  - /url: "#accessibility-improvements"
+                  - generic [ref=f94e560]: Accessibility improvements
+              - paragraph [ref=f94e568]: Agent can audit and improve web accessibility to meet WCAG compliance standards.
+              - generic [ref=f94e571]:
+                - paragraph [ref=f94e572]: "@browser Check color contrast ratios, verify semantic HTML and ARIA labels, test keyboard navigation, and identify missing alt text"
+                - link "Cursor Logo Try in Cursor" [ref=f94e573] [cursor=pointer]:
+                  - /url: cursor://anysphere.cursor-deeplink/prompt?text=%40browser%20Check%20color%20contrast%20ratios%2C%20verify%20semantic%20HTML%20and%20ARIA%20labels%2C%20test%20keyboard%20navigation%2C%20and%20identify%20missing%20alt%20text
+                  - img "Cursor Logo"
+                  - generic [ref=f94e574]: Try in Cursor
+              - heading [level=3] [ref=f94e575]:
+                - link "Copy link to automated-testing" [ref=f94e576] [cursor=pointer]:
+                  - /url: "#automated-testing"
+                  - generic [ref=f94e577]: Automated testing
+              - paragraph [ref=f94e585]: Agent can execute comprehensive test suites and capture screenshots for visual regression testing.
+              - generic [ref=f94e588]:
+                - paragraph [ref=f94e589]: "@browser Fill out forms with test data, click through workflows, test responsive designs, validate error messages, and monitor console for JavaScript errors"
+                - link "Cursor Logo Try in Cursor" [ref=f94e590] [cursor=pointer]:
+                  - /url: cursor://anysphere.cursor-deeplink/prompt?text=%40browser%20Fill%20out%20forms%20with%20test%20data%2C%20click%20through%20workflows%2C%20test%20responsive%20designs%2C%20validate%20error%20messages%2C%20and%20monitor%20console%20for%20JavaScript%20errors
+                  - img "Cursor Logo"
+                  - generic [ref=f94e591]: Try in Cursor
+              - heading [level=3] [ref=f94e592]:
+                - link "Copy link to design-to-code" [ref=f94e593] [cursor=pointer]:
+                  - /url: "#design-to-code"
+                  - generic [ref=f94e594]: Design to code
+              - paragraph [ref=f94e602]: Agent can convert designs into working code with responsive layouts.
+              - generic [ref=f94e605]:
+                - paragraph [ref=f94e606]: "@browser Analyze this design mockup, extract colors and typography, and generate pixel-perfect HTML and CSS code"
+                - link "Cursor Logo Try in Cursor" [ref=f94e607] [cursor=pointer]:
+                  - /url: cursor://anysphere.cursor-deeplink/prompt?text=%40browser%20Analyze%20this%20design%20mockup%2C%20extract%20colors%20and%20typography%2C%20and%20generate%20pixel-perfect%20HTML%20and%20CSS%20code
+                  - img "Cursor Logo"
+                  - generic [ref=f94e608]: Try in Cursor
+              - heading [level=3] [ref=f94e609]:
+                - link "Copy link to adjusting-ui-design-from-screenshots" [ref=f94e610] [cursor=pointer]:
+                  - /url: "#adjusting-ui-design-from-screenshots"
+                  - generic [ref=f94e611]: Adjusting UI design from screenshots
+              - paragraph [ref=f94e619]: Agent can refine existing interfaces by identifying visual discrepancies and updating component styles.
+              - generic [ref=f94e622]:
+                - paragraph [ref=f94e623]: "@browser Compare current UI against this design screenshot and adjust spacing, colors, and typography to match"
+                - link "Cursor Logo Try in Cursor" [ref=f94e624] [cursor=pointer]:
+                  - /url: cursor://anysphere.cursor-deeplink/prompt?text=%40browser%20Compare%20current%20UI%20against%20this%20design%20screenshot%20and%20adjust%20spacing%2C%20colors%2C%20and%20typography%20to%20match
+                  - img "Cursor Logo"
+                  - generic [ref=f94e625]: Try in Cursor
+              - heading [level=2] [ref=f94e626]:
+                - link "Copy link to security" [ref=f94e627] [cursor=pointer]:
+                  - /url: "#security"
+                  - generic [ref=f94e628]: Security
+              - paragraph [ref=f94e636]: Browser runs as a secure web view and is controlled using an MCP server running as an extension. Multiple layers protect you from unauthorized access and malicious actions. Cursor's Browser integrations have also been reviewed by multiple external security auditors.
+              - heading [level=3] [ref=f94e637]:
+                - link "Copy link to authentication-and-isolation" [ref=f94e638] [cursor=pointer]:
+                  - /url: "#authentication-and-isolation"
+                  - generic [ref=f94e639]: Authentication and isolation
+              - paragraph [ref=f94e647]: "The browser implements several security measures:"
+              - list [ref=f94e648]:
+                - listitem [ref=f94e649]:
+                  - strong [ref=f94e650]: Token authentication
+                  - text: ": Agent layout generates a random authentication token before each browser session starts"
+                - listitem [ref=f94e651]:
+                  - strong [ref=f94e652]: Tab isolation
+                  - text: ": Each browser tab receives a unique random ID to prevent cross-tab interference"
+                - listitem [ref=f94e653]:
+                  - strong [ref=f94e654]: Session-based security
+                  - text: ": Tokens regenerate for each new browser session"
+              - heading [level=3] [ref=f94e655]:
+                - link "Copy link to tool-approval" [ref=f94e656] [cursor=pointer]:
+                  - /url: "#tool-approval"
+                  - generic [ref=f94e657]: Tool approval
+              - paragraph [ref=f94e665]: Browser tools require your approval by default. Review each action before Agent executes it. This prevents unexpected navigation, data submission, or script execution.
+              - paragraph [ref=f94e666]: "You can configure approval settings in Agent Settings. Available modes:"
+              - table [ref=f94e668]:
+                - rowgroup [ref=f94e669]:
+                  - row [ref=f94e670]:
+                    - columnheader "Mode" [ref=f94e671]
+                    - columnheader "Description" [ref=f94e672]
+                - rowgroup [ref=f94e673]:
+                  - row [ref=f94e674]:
+                    - cell [ref=f94e675]:
+                      - strong [ref=f94e676]: Manual approval
+                    - cell "Review and approve each browser action individually (recommended)" [ref=f94e677]
+                  - row [ref=f94e678]:
+                    - cell [ref=f94e679]:
+                      - strong [ref=f94e680]: Allow-listed actions
+                    - cell "Actions matching your allow list run automatically; others require approval" [ref=f94e681]
+                  - row [ref=f94e682]:
+                    - cell [ref=f94e683]:
+                      - strong [ref=f94e684]: Auto-run
+                    - cell "All browser actions execute immediately without approval (use with caution)" [ref=f94e685]
+              - heading [level=3] [ref=f94e686]:
+                - link "Copy link to allow-and-block-lists" [ref=f94e687] [cursor=pointer]:
+                  - /url: "#allow-and-block-lists"
+                  - generic [ref=f94e688]: Allow and block lists
+              - paragraph [ref=f94e696]:
+                - text: Browser tools integrate with Cursor's
+                - link "security guardrails" [ref=f94e697] [cursor=pointer]:
+                  - /url: /docs/agent/security
+                - text: ". Configure which browser actions run automatically:"
+              - list [ref=f94e698]:
+                - listitem [ref=f94e699]:
+                  - strong [ref=f94e700]: Allow list
+                  - text: ": Specify trusted actions that skip approval prompts"
+                - listitem [ref=f94e701]:
+                  - strong [ref=f94e702]: Block list
+                  - text: ": Define actions that should always be blocked"
+                - listitem [ref=f94e703]:
+                  - text: "Access settings through:"
+                  - strong [ref=f94e704]: Cursor Settings > Agents > Auto-Run
+              - paragraph [ref=f94e705]: The allow/block list system provides best-effort protection. AI behavior can be unpredictable due to prompt injection and other issues. Review auto-approved actions regularly.
+              - alert [ref=f94e706]:
+                - paragraph [ref=f94e710]: Never use auto-run mode with untrusted code or unfamiliar websites. Agent could execute malicious scripts or submit sensitive data without your knowledge.
+              - heading [level=3] [ref=f94e711]:
+                - link "Copy link to browser-context" [ref=f94e712] [cursor=pointer]:
+                  - /url: "#browser-context"
+                  - generic [ref=f94e713]: Browser context
+              - paragraph [ref=f94e721]: The browser opens as a pane within Cursor, giving Agent full control through MCP tools.
+              - heading [level=2] [ref=f94e722]:
+                - link "Copy link to recommended-models" [ref=f94e723] [cursor=pointer]:
+                  - /url: "#recommended-models"
+                  - generic [ref=f94e724]: Recommended models
+              - paragraph [ref=f94e732]: We recommend using Sonnet 4.5, GPT-5, and Auto for the best performance.
+              - heading [level=2] [ref=f94e733]:
+                - link "Copy link to enterprise-usage" [ref=f94e734] [cursor=pointer]:
+                  - /url: "#enterprise-usage"
+                  - generic [ref=f94e735]: Enterprise usage
+              - paragraph [ref=f94e743]: For enterprise customers, browser functionality is managed through toggling availability under MCP controls. Admins have granular controls over each MCP server, as well as over browser access.
+              - heading [level=3] [ref=f94e744]:
+                - link "Copy link to enabling-browser-for-enterprise" [ref=f94e745] [cursor=pointer]:
+                  - /url: "#enabling-browser-for-enterprise"
+                  - generic [ref=f94e746]: Enabling browser for enterprise
+              - paragraph [ref=f94e754]: "To enable browser capabilities for your enterprise team:"
+              - list [ref=f94e755]:
+                - listitem [ref=f94e756]:
+                  - text: Navigate to your
+                  - link "Settings Dashboard" [ref=f94e757] [cursor=pointer]:
+                    - /url: https://cursor.com/dashboard/settings
+                - listitem [ref=f94e758]:
+                  - text: Go to
+                  - strong [ref=f94e759]: MCP Configuration
+                - listitem [ref=f94e760]: Toggle "browser features"
+              - paragraph [ref=f94e761]: Once configured, users in your organization will have access to browser tools based on your MCP allowlist or denylist settings.
+              - heading [level=3] [ref=f94e762]:
+                - link "Copy link to origin-allowlist" [ref=f94e763] [cursor=pointer]:
+                  - /url: "#origin-allowlist"
+                  - generic [ref=f94e764]: Origin allowlist
+              - paragraph [ref=f94e772]: Enterprise administrators can configure an origin allowlist that restricts which sites the agent can automatically navigate to and where MCP tools can run. This provides granular control over browser access for security and compliance.
+              - alert [ref=f94e773]:
+                - paragraph [ref=f94e777]: The Browser Origin Allowlist feature must be enabled for your organization before it appears in your dashboard. Contact your Cursor account team to request access.
+              - heading [level=4] [ref=f94e778]:
+                - link "Copy link to configuration" [ref=f94e779] [cursor=pointer]:
+                  - /url: "#configuration"
+                  - generic [ref=f94e780]: Configuration
+              - paragraph [ref=f94e788]: "To configure the origin allowlist:"
+              - list [ref=f94e789]:
+                - listitem [ref=f94e790]:
+                  - text: Navigate to your
+                  - link "Admin Dashboard" [ref=f94e791] [cursor=pointer]:
+                    - /url: https://cursor.com/dashboard/settings
+                - listitem [ref=f94e792]:
+                  - text: Go to
+                  - strong [ref=f94e793]: MCP Configuration
+                - listitem [ref=f94e794]:
+                  - text: Ensure
+                  - strong [ref=f94e795]: Enable Browser Automation Features (v2.0+)
+                  - text: is enabled
+                - listitem [ref=f94e796]:
+                  - text: Under
+                  - strong [ref=f94e797]: Browser Origin Allowlist (v2.1+)
+                  - text: ", click"
+                  - strong [ref=f94e798]: Add Origin
+                - listitem [ref=f94e799]:
+                  - text: Enter the origins you want to allow (e.g.,
+                  - code [ref=f94e800]: "*"
+                  - text: ","
+                  - code [ref=f94e801]: http://localhost:3000
+                  - text: ","
+                  - code [ref=f94e802]: https://internal.example.com
+                  - text: )
+              - alert [ref=f94e803]:
+                - paragraph [ref=f94e807]: Leave the allowlist empty to allow all origins. Each origin should be added separately using the Add Origin button.
+              - button "Open image in full screen" [ref=f94e808] [cursor=pointer]:
+                - img "MCP Configuration showing Browser Origin Allowlist settings with Add Origin button" [ref=f94e809]
+              - heading [level=4] [ref=f94e810]:
+                - link "Copy link to behavior" [ref=f94e811] [cursor=pointer]:
+                  - /url: "#behavior"
+                  - generic [ref=f94e812]: Behavior
+              - paragraph [ref=f94e820]: "When an origin allowlist is configured:"
+              - list [ref=f94e821]:
+                - listitem [ref=f94e822]:
+                  - strong [ref=f94e823]: Automatic navigation
+                  - text: ": The agent can only use the"
+                  - code [ref=f94e824]: browser_navigate
+                  - text: tool to visit URLs matching origins in the allowlist
+                - listitem [ref=f94e825]:
+                  - strong [ref=f94e826]: MCP tool execution
+                  - text: ": MCP tools can only run on origins that are in the allowlist"
+                - listitem [ref=f94e827]:
+                  - strong [ref=f94e828]: Manual navigation
+                  - text: ": Users can still manually navigate the browser to any URL, including origins outside the allowlist (useful for viewing documentation or inspecting external sites)"
+                - listitem [ref=f94e829]:
+                  - strong [ref=f94e830]: Tool restrictions
+                  - text: ": Once the browser is on an origin not in the allowlist, browser tools (click, type, navigate) are blocked, even if the user navigated there manually"
+              - heading [level=4] [ref=f94e831]:
+                - link "Copy link to edge-cases" [ref=f94e832] [cursor=pointer]:
+                  - /url: "#edge-cases"
+                  - generic [ref=f94e833]: Edge cases
+              - paragraph [ref=f94e841]: "The origin allowlist provides best-effort protection. Be aware of these behaviors:"
+              - list [ref=f94e842]:
+                - listitem [ref=f94e843]:
+                  - strong [ref=f94e844]: Link navigation
+                  - text: ": If the agent clicks a link on an allowed domain that navigates to a non-allowed origin, the navigation will succeed"
+                - listitem [ref=f94e845]:
+                  - strong [ref=f94e846]: Redirects
+                  - text: ": If the agent navigates to an allowed origin that subsequently redirects to a non-allowed origin, the redirect will be permitted"
+                - listitem [ref=f94e847]:
+                  - strong [ref=f94e848]: JavaScript navigation
+                  - text: ": Client-side navigation (via"
+                  - code [ref=f94e849]: window.location
+                  - text: or similar) from an allowed origin to a non-allowed origin will succeed
+              - alert [ref=f94e850]:
+                - paragraph [ref=f94e854]: The origin allowlist restricts automatic agent navigation but cannot prevent all navigation paths. Review your allowlist regularly and consider the security implications of allowing access to domains that may redirect or link to external sites.
+              - heading [level=2] [ref=f94e855]:
+                - link "Copy link to related" [ref=f94e856] [cursor=pointer]:
+                  - /url: "#related"
+                  - generic [ref=f94e857]: Related
+              - list [ref=f94e865]:
+                - listitem [ref=f94e866]:
+                  - link "Browser tool help" [ref=f94e867] [cursor=pointer]:
+                    - /url: /help/ai-features/browser
+          - navigation [ref=f94e870]:
+            - generic [ref=f94e871]:
+              - list [ref=f94e872]:
+                - listitem [ref=f94e873]:
+                  - link "Native integration" [ref=f94e874] [cursor=pointer]:
+                    - /url: "#native-integration"
+                - listitem [ref=f94e875]:
+                  - link "Browser capabilities" [ref=f94e876] [cursor=pointer]:
+                    - /url: "#browser-capabilities"
+                - listitem [ref=f94e877]:
+                  - link "Session persistence" [ref=f94e878] [cursor=pointer]:
+                    - /url: "#session-persistence"
+                - listitem [ref=f94e879]:
+                  - link "Use cases" [ref=f94e880] [cursor=pointer]:
+                    - /url: "#use-cases"
+                - listitem [ref=f94e881]:
+                  - link "Web development workflow" [ref=f94e882] [cursor=pointer]:
+                    - /url: "#web-development-workflow"
+                - listitem [ref=f94e883]:
+                  - link "Accessibility improvements" [ref=f94e884] [cursor=pointer]:
+                    - /url: "#accessibility-improvements"
+                - listitem [ref=f94e885]:
+                  - link "Automated testing" [ref=f94e886] [cursor=pointer]:
+                    - /url: "#automated-testing"
+                - listitem [ref=f94e887]:
+                  - link "Design to code" [ref=f94e888] [cursor=pointer]:
+                    - /url: "#design-to-code"
+                - listitem [ref=f94e889]:
+                  - link "Adjusting UI design from screenshots" [ref=f94e890] [cursor=pointer]:
+                    - /url: "#adjusting-ui-design-from-screenshots"
+                - listitem [ref=f94e891]:
+                  - link "Security" [ref=f94e892] [cursor=pointer]:
+                    - /url: "#security"
+                - listitem [ref=f94e893]:
+                  - link "Authentication and isolation" [ref=f94e894] [cursor=pointer]:
+                    - /url: "#authentication-and-isolation"
+                - listitem [ref=f94e895]:
+                  - link "Tool approval" [ref=f94e896] [cursor=pointer]:
+                    - /url: "#tool-approval"
+                - listitem [ref=f94e897]:
+                  - link "Allow and block lists" [ref=f94e898] [cursor=pointer]:
+                    - /url: "#allow-and-block-lists"
+                - listitem [ref=f94e899]:
+                  - link "Browser context" [ref=f94e900] [cursor=pointer]:
+                    - /url: "#browser-context"
+                - listitem [ref=f94e901]:
+                  - link "Recommended models" [ref=f94e902] [cursor=pointer]:
+                    - /url: "#recommended-models"
+                - listitem [ref=f94e903]:
+                  - link "Enterprise usage" [ref=f94e904] [cursor=pointer]:
+                    - /url: "#enterprise-usage"
+                - listitem [ref=f94e905]:
+                  - link "Enabling browser for enterprise" [ref=f94e906] [cursor=pointer]:
+                    - /url: "#enabling-browser-for-enterprise"
+                - listitem [ref=f94e907]:
+                  - link "Origin allowlist" [ref=f94e908] [cursor=pointer]:
+                    - /url: "#origin-allowlist"
+                - listitem [ref=f94e909]:
+                  - link "Configuration" [ref=f94e910] [cursor=pointer]:
+                    - /url: "#configuration"
+                - listitem [ref=f94e911]:
+                  - link "Behavior" [ref=f94e912] [cursor=pointer]:
+                    - /url: "#behavior"
+                - listitem [ref=f94e913]:
+                  - link "Edge cases" [ref=f94e914] [cursor=pointer]:
+                    - /url: "#edge-cases"
+                - listitem [ref=f94e915]:
+                  - link "Related" [ref=f94e916] [cursor=pointer]:
+                    - /url: "#related"
+              - button "Copy page" [ref=f94e920] [cursor=pointer]
+  - alert [ref=f94e923]

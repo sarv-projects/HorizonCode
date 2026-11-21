@@ -142,6 +142,8 @@ test("a provider key in the environment is a detection, never an override", () =
   expect(missingKey(detected)).toBeNull();
 
   expect(loadConfig({ ...floor, OPENAI_API_KEY: "sk-openai" }, file).provider).toBe("openai");
+  // Smart key detection: Groq keys (gsk_*) without a custom base URL do not usurp a valid NVIDIA key
+  expect(loadConfig({ ...floor, OPENAI_API_KEY: "gsk_something", NVIDIA_API_KEY: "nvapi-test" }, file).provider).toBe("nvidia");
   // An explicit provider always wins over a detected key.
   expect(loadConfig({ ...floor, ANTHROPIC_API_KEY: "sk-ant", HZ_PROVIDER: "mock" }, file).provider).toBe("mock");
 

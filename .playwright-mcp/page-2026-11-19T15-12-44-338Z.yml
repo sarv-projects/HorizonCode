@@ -1,0 +1,890 @@
+- generic [ref=f187e3]:
+  - link "Skip to main content" [ref=f187e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f187e5]:
+    - banner [ref=f187e6]:
+      - generic [ref=f187e7]:
+        - generic [ref=f187e8]:
+          - link "Cursor Home" [ref=f187e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=f187e10]
+          - navigation [ref=f187e13]:
+            - link "Docs" [ref=f187e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=f187e16] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=f187e17] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=f187e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=f187e22] [cursor=pointer]:
+          - generic [ref=f187e26]: Search docs...
+          - generic [ref=f187e27]: ⌘K
+    - generic [ref=f187e32]:
+      - heading "Command Palette" [level=2] [ref=f187e33]
+      - paragraph [ref=f187e34]: Search for a command to run...
+  - generic [ref=f187e35]:
+    - generic [ref=f187e37]:
+      - button [ref=f187e38]:
+        - button "Toggle Docs Sidebar" [ref=f187e40] [cursor=pointer]
+      - generic [ref=f187e44]:
+        - generic [ref=f187e45]:
+          - heading "Get Started" [level=2] [ref=f187e46]
+          - generic [ref=f187e47]:
+            - link "Welcome" [ref=f187e48] [cursor=pointer]:
+              - /url: /docs
+            - link "Quickstart" [ref=f187e51] [cursor=pointer]:
+              - /url: /docs/get-started/quickstart
+            - button "Models & Pricing" [ref=f187e54] [cursor=pointer]
+            - link "Changelog" [ref=f187e60] [cursor=pointer]:
+              - /url: https://cursor.com/changelog
+            - link "Release Notes" [ref=f187e63] [cursor=pointer]:
+              - /url: /docs/release-notes
+        - generic [ref=f187e66]:
+          - heading "Agent" [level=2] [ref=f187e67]
+          - generic [ref=f187e68]:
+            - link "Overview" [ref=f187e69] [cursor=pointer]:
+              - /url: /docs/agent/overview
+            - link "Agents Window" [ref=f187e72] [cursor=pointer]:
+              - /url: /docs/agent/agents-window
+            - link "Projects" [ref=f187e75] [cursor=pointer]:
+              - /url: /docs/agent/projects
+            - link "Agent Review" [ref=f187e78] [cursor=pointer]:
+              - /url: /docs/agent/agent-review
+            - link "Planning" [ref=f187e81] [cursor=pointer]:
+              - /url: /docs/agent/plan-mode
+            - link "Prompting" [ref=f187e84] [cursor=pointer]:
+              - /url: /docs/agent/prompting
+            - link "Voice Chat" [ref=f187e87] [cursor=pointer]:
+              - /url: /docs/agent/voice-chat
+            - link "Debugging" [ref=f187e90] [cursor=pointer]:
+              - /url: /docs/agent/debug-mode
+            - link "Design Mode" [ref=f187e93] [cursor=pointer]:
+              - /url: /docs/agent/design-mode
+            - button "Tools" [ref=f187e96] [cursor=pointer]
+            - button "Security" [ref=f187e102] [cursor=pointer]
+            - generic [ref=f187e110]:
+              - link "Overview" [ref=f187e112] [cursor=pointer]:
+                - /url: /docs/agent/security
+              - link "Run Modes" [ref=f187e116] [cursor=pointer]:
+                - /url: /docs/agent/security/run-modes
+        - generic [ref=f187e119]:
+          - heading "Customize" [level=2] [ref=f187e120]
+          - generic [ref=f187e121]:
+            - link "Overview" [ref=f187e122] [cursor=pointer]:
+              - /url: /docs/customize-cursor
+            - link "Plugins" [ref=f187e125] [cursor=pointer]:
+              - /url: /docs/plugins
+            - link "Rules" [ref=f187e128] [cursor=pointer]:
+              - /url: /docs/rules
+            - link "Skills" [ref=f187e131] [cursor=pointer]:
+              - /url: /docs/skills
+            - link "Subagents" [ref=f187e134] [cursor=pointer]:
+              - /url: /docs/subagents
+            - link "Hooks" [ref=f187e137] [cursor=pointer]:
+              - /url: /docs/hooks
+            - link "MCP" [ref=f187e140] [cursor=pointer]:
+              - /url: /docs/mcp
+        - generic [ref=f187e143]:
+          - heading "Cloud Agents" [level=2] [ref=f187e144]
+          - generic [ref=f187e145]:
+            - link "Overview" [ref=f187e146] [cursor=pointer]:
+              - /url: /docs/cloud-agent
+            - link "Setup" [ref=f187e149] [cursor=pointer]:
+              - /url: /docs/cloud-agent/setup
+            - link "Builds" [ref=f187e152] [cursor=pointer]:
+              - /url: /docs/cloud-agent/builds
+            - link "Apps" [ref=f187e155] [cursor=pointer]:
+              - /url: /docs/cloud-agent/apps
+            - button "Capabilities" [ref=f187e158] [cursor=pointer]
+            - link "Best Practices" [ref=f187e164] [cursor=pointer]:
+              - /url: /docs/cloud-agent/best-practices
+            - link "Choose Where Cloud Agents Run" [ref=f187e167] [cursor=pointer]:
+              - /url: /docs/cloud-agent/self-hosted/choose-runtime
+            - link "Automations" [ref=f187e170] [cursor=pointer]:
+              - /url: /docs/cloud-agent/automations
+            - link "Bugbot" [ref=f187e173] [cursor=pointer]:
+              - /url: /docs/bugbot
+            - link "Security Review" [ref=f187e176] [cursor=pointer]:
+              - /url: /docs/security-review
+            - link "Vulnerability Remediation" [ref=f187e179] [cursor=pointer]:
+              - /url: /docs/vulnerability-remediation
+            - link "PR Routing & Approval" [ref=f187e182] [cursor=pointer]:
+              - /url: /docs/approval-agents
+            - link "Rollouts" [ref=f187e185] [cursor=pointer]:
+              - /url: /docs/rollouts
+            - link "Mobile" [ref=f187e188] [cursor=pointer]:
+              - /url: /docs/cloud-agent/mobile
+            - button "Security" [ref=f187e191] [cursor=pointer]
+            - button "Self-Hosted Machines" [ref=f187e197] [cursor=pointer]
+            - link "Settings" [ref=f187e203] [cursor=pointer]:
+              - /url: /docs/cloud-agent/settings
+            - link "API" [ref=f187e206] [cursor=pointer]:
+              - /url: /docs/cloud-agent/api/endpoints
+        - generic [ref=f187e209]:
+          - heading "Origin" [level=2] [ref=f187e210]
+          - generic [ref=f187e211]:
+            - link "Overview" [ref=f187e212] [cursor=pointer]:
+              - /url: /docs/origin
+            - button "CLI" [ref=f187e215] [cursor=pointer]
+            - link "Create a repository" [ref=f187e221] [cursor=pointer]:
+              - /url: /docs/origin/create-repository
+            - link "Mirror GitHub" [ref=f187e224] [cursor=pointer]:
+              - /url: /docs/origin/mirror-github
+            - link "Clone, Push & Pull" [ref=f187e227] [cursor=pointer]:
+              - /url: /docs/origin/git
+            - link "CloneKit in CI" [ref=f187e230] [cursor=pointer]:
+              - /url: /docs/origin/clonekit-ci
+            - link "Pull requests" [ref=f187e233] [cursor=pointer]:
+              - /url: /docs/origin/pull-requests
+            - link "Code Tours" [ref=f187e236] [cursor=pointer]:
+              - /url: /docs/origin/code-tours
+            - link "Browse & Search" [ref=f187e239] [cursor=pointer]:
+              - /url: /docs/origin/browse
+            - link "Agents and Automations" [ref=f187e242] [cursor=pointer]:
+              - /url: /docs/origin/agents
+            - button "Apps" [ref=f187e245] [cursor=pointer]
+            - link "Settings" [ref=f187e251] [cursor=pointer]:
+              - /url: /docs/origin/settings
+        - generic [ref=f187e254]:
+          - heading "Integrations" [level=2] [ref=f187e255]
+          - generic [ref=f187e256]:
+            - link "Slack" [ref=f187e257] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+            - link "Microsoft Teams" [ref=f187e260] [cursor=pointer]:
+              - /url: /docs/integrations/microsoft-teams
+            - link "Jira" [ref=f187e263] [cursor=pointer]:
+              - /url: /docs/integrations/jira
+            - link "Linear" [ref=f187e266] [cursor=pointer]:
+              - /url: /docs/integrations/linear
+            - link "Notion" [ref=f187e269] [cursor=pointer]:
+              - /url: /docs/integrations/notion
+            - link "GitHub" [ref=f187e272] [cursor=pointer]:
+              - /url: /docs/integrations/github
+            - link "GitLab" [ref=f187e275] [cursor=pointer]:
+              - /url: /docs/integrations/gitlab
+            - link "Azure DevOps" [ref=f187e278] [cursor=pointer]:
+              - /url: /docs/integrations/azure-devops
+            - link "Bitbucket" [ref=f187e281] [cursor=pointer]:
+              - /url: /docs/integrations/bitbucket
+            - link "JetBrains" [ref=f187e284] [cursor=pointer]:
+              - /url: /docs/integrations/jetbrains
+            - link "Xcode" [ref=f187e287] [cursor=pointer]:
+              - /url: /docs/integrations/xcode
+            - link "Tailscale" [ref=f187e290] [cursor=pointer]:
+              - /url: /docs/integrations/tailscale
+            - link "Deeplinks" [ref=f187e293] [cursor=pointer]:
+              - /url: /docs/reference/deeplinks
+        - generic [ref=f187e296]:
+          - heading "SDK" [level=2] [ref=f187e297]
+          - generic [ref=f187e298]:
+            - link "TypeScript" [ref=f187e299] [cursor=pointer]:
+              - /url: /docs/sdk/typescript
+            - link "Python" [ref=f187e302] [cursor=pointer]:
+              - /url: /docs/sdk/python
+            - link "Bridge" [ref=f187e305] [cursor=pointer]:
+              - /url: /docs/sdk/bridge
+            - link "Changelog" [ref=f187e308] [cursor=pointer]:
+              - /url: /docs/release-notes/sdk
+        - generic [ref=f187e311]:
+          - heading "Agent SDK" [level=2] [ref=f187e312]
+          - generic [ref=f187e313]:
+            - button "Getting started" [ref=f187e314] [cursor=pointer]
+            - button "Integrations" [ref=f187e320] [cursor=pointer]
+            - button "Extensions" [ref=f187e326] [cursor=pointer]
+            - button "Guides" [ref=f187e332] [cursor=pointer]
+            - button "Templates" [ref=f187e338] [cursor=pointer]
+            - button "Reference" [ref=f187e344] [cursor=pointer]
+        - generic [ref=f187e350]:
+          - heading "CLI" [level=2] [ref=f187e351]
+          - generic [ref=f187e352]:
+            - link "Overview" [ref=f187e353] [cursor=pointer]:
+              - /url: /docs/cli/overview
+            - link "Installation" [ref=f187e356] [cursor=pointer]:
+              - /url: /docs/cli/installation
+            - link "Capabilities" [ref=f187e359] [cursor=pointer]:
+              - /url: /docs/cli/using
+            - link "Changelog" [ref=f187e362] [cursor=pointer]:
+              - /url: /docs/cli/changelog
+            - link "Shell Mode" [ref=f187e365] [cursor=pointer]:
+              - /url: /docs/cli/shell-mode
+            - link "ACP" [ref=f187e368] [cursor=pointer]:
+              - /url: /docs/cli/acp
+            - link "Headless / CI" [ref=f187e371] [cursor=pointer]:
+              - /url: /docs/cli/headless
+            - button "Reference" [ref=f187e374] [cursor=pointer]
+        - generic [ref=f187e380]:
+          - heading "Teams & Enterprise" [level=2] [ref=f187e381]
+          - generic [ref=f187e382]:
+            - button "Teams" [ref=f187e383] [cursor=pointer]
+            - button "Enterprise" [ref=f187e389] [cursor=pointer]
+    - main [ref=f187e395]:
+      - generic [ref=f187e398]:
+        - generic [ref=f187e399]:
+          - generic [ref=f187e400]: Agent
+          - generic [ref=f187e402]:
+            - heading "Run Modes" [level=1] [ref=f187e403]
+            - paragraph [ref=f187e404]: Run Modes control how the Cursor agent runs tool calls, and when Cursor interrupts you for approval.
+            - paragraph [ref=f187e405]:
+              - text: Use them to decide how much autonomy the agent gets for shell commands, MCP tools, and Fetch calls. The safest useful setup for most people is
+              - strong [ref=f187e406]: Auto-review
+              - text: . It runs known-safe calls, sandboxes shell commands when it can, and asks a classifier to review anything else.
+            - heading [level=2] [ref=f187e407]:
+              - link "Copy link to pick-a-mode" [ref=f187e408] [cursor=pointer]:
+                - /url: "#pick-a-mode"
+                - generic [ref=f187e409]: Pick a mode
+            - paragraph [ref=f187e417]:
+              - text: In the desktop application, go to
+              - strong [ref=f187e418]: Settings > Agents > Approvals & Execution
+              - text: .
+            - table [ref=f187e420]:
+              - rowgroup [ref=f187e421]:
+                - row [ref=f187e422]:
+                  - columnheader "Mode" [ref=f187e423]
+                  - columnheader "What runs without asking" [ref=f187e424]
+                  - columnheader "Sandbox" [ref=f187e425]
+                  - columnheader "Classifier" [ref=f187e426]
+                  - columnheader "Use it when" [ref=f187e427]
+              - rowgroup [ref=f187e428]:
+                - row [ref=f187e429]:
+                  - cell [ref=f187e430]:
+                    - strong [ref=f187e431]: Auto-review
+                  - cell "Allowlisted calls run immediately. Other shell commands run in the sandbox when possible. Calls that do not use the sandbox go to the Auto-review classifier." [ref=f187e432]
+                  - cell "Yes, for shell commands" [ref=f187e433]
+                  - cell "Yes" [ref=f187e434]
+                  - cell "You want fewer prompts with a safety review before higher-risk calls run." [ref=f187e435]
+                - row [ref=f187e436]:
+                  - cell [ref=f187e437]:
+                    - strong [ref=f187e438]: Allowlist
+                  - cell "Actions in your allowlist run without approval. With sandboxing enabled, supported shell commands can run in the sandbox." [ref=f187e439]
+                  - cell "Optional, for shell commands" [ref=f187e440]
+                  - cell "No" [ref=f187e441]
+                  - cell "You want deterministic behavior with a small set of trusted repeat actions." [ref=f187e442]
+                - row [ref=f187e443]:
+                  - cell [ref=f187e444]:
+                    - strong [ref=f187e445]: Run Everything
+                  - cell "Every tool call runs automatically." [ref=f187e446]
+                  - cell "No" [ref=f187e447]
+                  - cell "No" [ref=f187e448]
+                  - cell "You accept the risk and want zero prompts." [ref=f187e449]
+            - heading [level=2] [ref=f187e450]:
+              - link "Copy link to how-auto-review-works" [ref=f187e451] [cursor=pointer]:
+                - /url: "#how-auto-review-works"
+                - generic [ref=f187e452]: How Auto-review works
+            - paragraph [ref=f187e460]: "Auto-review applies to shell, MCP, and Fetch tool calls. Cursor checks each call in this order:"
+            - button "Open image in full screen" [ref=f187e461] [cursor=pointer]:
+              - img "The execution lifecycle of agent actions on Auto-review mode. On your local machine, allowlisted shell, Fetch, and MCP calls run outside the sandbox. Other shell commands run in the sandbox when they can. Shell commands that can't use the sandbox, sandboxed commands that fail, and other calls go to an LLM classifier on the Cursor backend. The classifier can run read-only ReadFile, Grep, Glob, and ListDir calls on your machine. Allowed calls run outside the sandbox. For blocked calls, the agent chooses a different approach or asks you to approve the action." [ref=f187e462]
+            - paragraph [ref=f187e463]: A shell command "can run in the sandbox" when it works under the sandbox's file and network limits. Commands that need more access, like full network access, writes outside the workspace, or privileged operations, can't use the sandbox, so they go to the classifier instead.
+            - paragraph [ref=f187e464]: If a sandboxed command fails on a sandbox restriction, such as a permission error, the agent can rerun it outside the sandbox. The classifier reviews that rerun.
+            - paragraph [ref=f187e465]: Sandboxing is a layer on top of Run Modes for shell commands. It controls where a supported terminal command runs, not whether the mode uses the Auto-review classifier.
+            - paragraph [ref=f187e466]:
+              - text: The classifier runs on the Cursor backend. To judge a call, it can make read-only
+              - code [ref=f187e467]: ReadFile
+              - text: ","
+              - code [ref=f187e468]: Grep
+              - text: ","
+              - code [ref=f187e469]: Glob
+              - text: ", and"
+              - code [ref=f187e470]: ListDir
+              - text: calls on your machine, for example to read a script the command runs.
+            - paragraph [ref=f187e471]: When the classifier blocks a call, Cursor can try another approach. If the agent decides that the action makes sense despite what the classifier said, Cursor will show you an approval prompt.
+            - alert [ref=f187e472]:
+              - generic [ref=f187e475]: Auto-review is not a security boundary
+              - paragraph [ref=f187e477]: The classifier can make mistakes. It can allow a call you would have blocked, or block a call you would have allowed.
+            - heading [level=3] [ref=f187e478]:
+              - link "Copy link to auto-review-classifier-requirements" [ref=f187e479] [cursor=pointer]:
+                - /url: "#auto-review-classifier-requirements"
+                - generic [ref=f187e480]: Auto-review classifier requirements
+            - paragraph [ref=f187e488]:
+              - text: Auto-review's classifier runs on small Cursor-managed models. Today it uses
+              - link "Gemini 3.5 Flash Lite" [ref=f187e489] [cursor=pointer]:
+                - /url: /docs/models/gemini-3-5-flash-lite
+              - text: ", with Haiku as the fallback."
+            - paragraph [ref=f187e490]:
+              - text: Enterprise
+              - link "model access controls" [ref=f187e491] [cursor=pointer]:
+                - /url: /docs/enterprise/model-and-integration-management#model-access-control
+              - text: apply to both. Keep Claude 4.5 Haiku allowed for the team. Allowing it keeps Auto-review available in
+              - strong [ref=f187e492]: Settings > Agents > Approvals & Execution
+              - text: ", and Auto-review uses it for every review when Gemini 3.5 Flash Lite is blocked. Blocking Claude 4.5 Haiku can disable Auto-review there, even when team Run Modes includes it. Members then use Allowlist instead."
+            - paragraph [ref=f187e493]:
+              - text: If Auto-review is grayed out, enable Claude 4.5 Haiku in
+              - link "Team Settings → Models" [ref=f187e494] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard/team-settings/models
+              - text: ", fully quit and reopen Cursor, then check Approvals & Execution again."
+            - alert [ref=f187e495]:
+              - generic [ref=f187e498]: Gemini 3.5 Flash Lite is only available in Cursor as a model for Auto-review. For that reason, enabling it for an organization will not make it available for coding agents.
+            - heading [level=3] [ref=f187e499]:
+              - link "Copy link to configuring-auto-review" [ref=f187e500] [cursor=pointer]:
+                - /url: "#configuring-auto-review"
+                - generic [ref=f187e501]: Configuring Auto-review
+            - paragraph [ref=f187e509]: Configuration is not required for Auto-review to work well. If there are specific actions you always want to review manually, describe them in plain English.
+            - paragraph [ref=f187e510]:
+              - text: The easiest way to set this up is to ask the Cursor agent to do it. Tell it something like "I want every AWS CLI command to go through approval first," and it edits your
+              - code [ref=f187e511]: permissions.json
+              - text: for you.
+            - paragraph [ref=f187e512]:
+              - text: You can also edit the file yourself. Auto-review reads
+              - code [ref=f187e513]: permissions.json
+              - text: "from two locations:"
+            - table [ref=f187e515]:
+              - rowgroup [ref=f187e516]:
+                - row [ref=f187e517]:
+                  - columnheader "Location" [ref=f187e518]
+                  - columnheader "Scope" [ref=f187e519]
+              - rowgroup [ref=f187e520]:
+                - row [ref=f187e521]:
+                  - cell [ref=f187e522]:
+                    - code [ref=f187e523]: ~/.cursor/permissions.json
+                  - cell "Applies to all project directories on your machine." [ref=f187e524]
+                - row [ref=f187e525]:
+                  - cell [ref=f187e526]:
+                    - code [ref=f187e527]: <project-dir>/.cursor/permissions.json
+                  - cell "Applies to one project directory. Commit it when the project should share the same guidance." [ref=f187e528]
+            - paragraph [ref=f187e529]: If both files exist, Cursor merges them. Your personal instructions and the project instructions both apply.
+            - paragraph [ref=f187e530]: Teams can also define a global Auto-review configuration in the dashboard. When a team configuration is defined, it takes priority and Cursor ignores the user-level and project-level files.
+            - paragraph [ref=f187e531]:
+              - text: Both local files use the same schema. Each instruction is a plain-English sentence, so a request like "I want every AWS CLI command to go through approval first" maps straight onto
+              - code [ref=f187e532]: block_instructions
+              - text: ":"
+            - generic [ref=f187e535]:
+              - button [ref=f187e536] [cursor=pointer]
+              - code [ref=f187e542]:
+                - generic [ref=f187e543]: "{"
+                - generic [ref=f187e544]: "\"autoRun\": {"
+                - generic [ref=f187e545]: "\"allow_instructions\": [],"
+                - generic [ref=f187e546]: "\"block_instructions\": ["
+                - generic [ref=f187e547]: "\"Every AWS CLI command should go through approval first.\","
+                - generic [ref=f187e548]: "\"Every command that modifies Kubernetes resources should go through approval first.\""
+                - generic [ref=f187e549]: "]"
+                - generic [ref=f187e550]: "}"
+                - generic [ref=f187e551]: "}"
+            - list [ref=f187e552]:
+              - listitem [ref=f187e553]:
+                - code [ref=f187e554]: allow_instructions
+                - text: describe actions Auto-review should lean toward allowing.
+              - listitem [ref=f187e555]:
+                - code [ref=f187e556]: block_instructions
+                - text: describe actions Auto-review should lean toward blocking so the agent can choose another path or ask you to approve.
+            - paragraph [ref=f187e557]:
+              - text: For more on policy design, read
+              - link "Governing agent autonomy with Auto-review" [ref=f187e558] [cursor=pointer]:
+                - /url: https://cursor.com/blog/agent-autonomy-auto-review
+              - text: .
+            - heading [level=2] [ref=f187e559]:
+              - link "Copy link to sandboxing" [ref=f187e560] [cursor=pointer]:
+                - /url: "#sandboxing"
+                - generic [ref=f187e561]: Sandboxing
+            - paragraph [ref=f187e569]: Sandboxing lets Cursor run terminal commands without giving them full machine access. A sandboxed command can work in your project, but it cannot freely read protected files, write outside approved paths, or contact arbitrary network destinations.
+            - paragraph [ref=f187e570]:
+              - text: For the engineering deep dive, read
+              - link "Implementing a secure sandbox for local agents" [ref=f187e571] [cursor=pointer]:
+                - /url: https://cursor.com/blog/agent-sandboxing
+              - text: .
+            - alert [ref=f187e572]:
+              - generic [ref=f187e575]: permissions.json and sandbox.json do different jobs
+              - paragraph [ref=f187e577]:
+                - code [ref=f187e578]: permissions.json
+                - text: steers which calls Auto-review runs automatically and which it reviews.
+                - code [ref=f187e579]: sandbox.json
+                - text: controls what a sandboxed command can reach, like network domains and extra readable or writable paths. You don't need either file to get started.
+            - table [ref=f187e581]:
+              - rowgroup [ref=f187e582]:
+                - row [ref=f187e583]:
+                  - columnheader "Access" [ref=f187e584]
+                  - columnheader "Default sandbox behavior for terminal commands" [ref=f187e585]
+              - rowgroup [ref=f187e586]:
+                - row [ref=f187e587]:
+                  - cell [ref=f187e588]:
+                    - strong [ref=f187e589]: Workspace files
+                  - cell [ref=f187e590]:
+                    - text: Read and write access inside the workspace.
+                    - code [ref=f187e591]: .cursorignore
+                    - text: can hide files from the agent.
+                - row [ref=f187e592]:
+                  - cell [ref=f187e593]:
+                    - strong [ref=f187e594]: Protected paths
+                  - cell [ref=f187e595]:
+                    - text: Cursor protects paths like
+                    - code [ref=f187e596]: .git/config
+                    - text: ","
+                    - code [ref=f187e597]: .git/hooks
+                    - text: ","
+                    - code [ref=f187e598]: .vscode
+                    - text: ","
+                    - code [ref=f187e599]: .cursorignore
+                    - text: ", and sensitive Cursor config files."
+                - row [ref=f187e600]:
+                  - cell [ref=f187e601]:
+                    - strong [ref=f187e602]: Network
+                  - cell [ref=f187e603]:
+                    - text: Blocked by default, then opened by your network mode and
+                    - link [ref=f187e604] [cursor=pointer]:
+                      - /url: /docs/reference/sandbox
+                      - code [ref=f187e605]: sandbox.json
+                    - text: .
+                - row [ref=f187e606]:
+                  - cell [ref=f187e607]:
+                    - strong [ref=f187e608]: Temporary files
+                  - cell [ref=f187e609]:
+                    - code [ref=f187e610]: /tmp
+                    - text: and platform temp directories are writable unless disabled in
+                    - code [ref=f187e611]: sandbox.json
+                    - text: .
+            - paragraph [ref=f187e612]: Some commands need full system access and bypass the sandbox. Cursor will indicate when a command runs outside the sandbox and ask for your approval.
+            - heading [level=3] [ref=f187e613]:
+              - link "Copy link to sandbox-configuration" [ref=f187e614] [cursor=pointer]:
+                - /url: "#sandbox-configuration"
+                - generic [ref=f187e615]: Sandbox configuration
+            - paragraph [ref=f187e623]:
+              - text: Customize sandbox behavior with a
+              - code [ref=f187e624]: sandbox.json
+              - text: "file:"
+            - table [ref=f187e626]:
+              - rowgroup [ref=f187e627]:
+                - row [ref=f187e628]:
+                  - columnheader "Location" [ref=f187e629]
+                  - columnheader "Scope" [ref=f187e630]
+              - rowgroup [ref=f187e631]:
+                - row [ref=f187e632]:
+                  - cell [ref=f187e633]:
+                    - code [ref=f187e634]: ~/.cursor/sandbox.json
+                  - cell "Applies to all project directories on your machine." [ref=f187e635]
+                - row [ref=f187e636]:
+                  - cell [ref=f187e637]:
+                    - code [ref=f187e638]: <project-dir>/.cursor/sandbox.json
+                  - cell "Applies to one project directory. Commit it when the project should share the same sandbox rules." [ref=f187e639]
+            - paragraph [ref=f187e640]: If both files exist, Cursor merges them with the project-level file taking priority. Team-admin policies and Cursor's hardcoded security rules layer on top, so local files cannot weaken those protections.
+            - paragraph [ref=f187e641]:
+              - text: Use
+              - code [ref=f187e642]: sandbox.json
+              - text: to control network policy, extra readable or writable paths, temporary directory writes, and shared build caches. See the
+              - link [ref=f187e643] [cursor=pointer]:
+                - /url: /docs/reference/sandbox
+                - code [ref=f187e644]: sandbox.json
+                - text: reference
+              - text: for the full schema.
+            - heading [level=3] [ref=f187e645]:
+              - link "Copy link to read-access" [ref=f187e646] [cursor=pointer]:
+                - /url: "#read-access"
+                - generic [ref=f187e647]: Read access
+            - paragraph [ref=f187e655]: Read access controls whether the agent can read files outside your workspace without asking you first. It covers the agent's file reads and searches, plus terminal commands that run in the sandbox.
+            - alert [ref=f187e656]:
+              - generic [ref=f187e659]: Read access requires Cursor 3.23 or later.
+            - paragraph [ref=f187e660]:
+              - text: Set it in
+              - strong [ref=f187e661]: Settings > Agents > Approvals & Execution > Read Access
+              - text: ":"
+            - table [ref=f187e663]:
+              - rowgroup [ref=f187e664]:
+                - row [ref=f187e665]:
+                  - columnheader "Mode" [ref=f187e666]
+                  - columnheader "Behavior" [ref=f187e667]
+              - rowgroup [ref=f187e668]:
+                - row [ref=f187e669]:
+                  - cell [ref=f187e670]:
+                    - strong [ref=f187e671]: System
+                  - cell "The agent can read files outside the workspace without approval. This is the default." [ref=f187e672]
+                - row [ref=f187e673]:
+                  - cell [ref=f187e674]:
+                    - strong [ref=f187e675]: Workspace
+                  - cell "The agent reads freely inside the workspace. Anything outside needs your approval unless it's on your Read Allowlist." [ref=f187e676]
+            - paragraph [ref=f187e677]:
+              - text: With
+              - strong [ref=f187e678]: Workspace
+              - text: "selected:"
+            - list [ref=f187e679]:
+              - listitem [ref=f187e680]:
+                - strong [ref=f187e681]: File reads outside the workspace ask first.
+                - text: The approval card shows the full path and why Cursor is asking. Click
+                - strong [ref=f187e682]: Allow
+                - text: to let the read through.
+              - listitem [ref=f187e683]:
+                - strong [ref=f187e684]: Searches stay inside the boundary.
+                - text: Grep results skip files outside the workspace and your Read Allowlist.
+              - listitem [ref=f187e685]:
+                - strong [ref=f187e686]: Sandboxed commands see less of your machine.
+                - text: On macOS and Linux, a sandboxed command can read the workspace, your Read Allowlist, and the system paths common tools need to run, like system libraries, toolchains, and certificate stores. Commands get a private temp directory for the project instead of the host temp directory.
+            - paragraph [ref=f187e687]:
+              - text: The workspace boundary also includes this project's folder under
+              - code [ref=f187e688]: ~/.cursor/projects
+              - text: ", plus the skills, rules, and plugins folders in"
+              - code [ref=f187e689]: ~/.cursor
+              - text: .
+            - paragraph [ref=f187e690]:
+              - text: Read access doesn't apply in
+              - strong [ref=f187e691]: Run Everything
+              - text: mode, which runs every call without checks, so the setting is hidden there.
+            - heading [level=4] [ref=f187e692]:
+              - link "Copy link to read-allowlist" [ref=f187e693] [cursor=pointer]:
+                - /url: "#read-allowlist"
+                - generic [ref=f187e694]: Read Allowlist
+            - paragraph [ref=f187e702]:
+              - text: Add paths the agent can read outside the workspace to the
+              - strong [ref=f187e703]: Read Allowlist
+              - text: in the same settings section. In Auto-review, expand
+              - strong [ref=f187e704]: Allowlist Options
+              - text: to find it. The list only applies when Read Access is
+              - strong [ref=f187e705]: Workspace
+              - text: .
+            - list [ref=f187e706]:
+              - listitem [ref=f187e707]:
+                - strong [ref=f187e708]: Folders.
+                - text: An absolute folder path like
+                - code [ref=f187e709]: /opt/shared/design-tokens
+                - text: allows everything under it.
+              - listitem [ref=f187e710]:
+                - strong [ref=f187e711]: Globs.
+                - text: A pattern with
+                - code [ref=f187e712]: "*"
+                - text: ", like"
+                - code [ref=f187e713]: ~/notes/*.md
+                - text: ", allows the files it matches. Sandboxed commands can't match globs, so they get read access to the pattern's parent folder."
+              - listitem [ref=f187e714]:
+                - strong [ref=f187e715]: Home directory.
+                - code [ref=f187e716]: "~"
+                - text: expands to your home directory.
+            - heading [level=4] [ref=f187e717]:
+              - link "Copy link to configure-read-access-in-sandboxjson" [ref=f187e718] [cursor=pointer]:
+                - /url: "#configure-read-access-in-sandboxjson"
+                - generic [ref=f187e719]:
+                  - text: Configure read access in
+                  - code [ref=f187e720]: sandbox.json
+            - paragraph [ref=f187e728]:
+              - text: Set
+              - code [ref=f187e729]: readBoundary
+              - text: and
+              - code [ref=f187e730]: additionalReadPaths
+              - text: in
+              - code [ref=f187e731]: sandbox.json
+              - text: "to configure read access per machine or per project:"
+            - generic [ref=f187e734]:
+              - button [ref=f187e735] [cursor=pointer]
+              - code [ref=f187e741]:
+                - generic [ref=f187e742]: "{"
+                - generic [ref=f187e743]: "\"readBoundary\": \"workspace\","
+                - generic [ref=f187e744]: "\"additionalReadPaths\": [\"/opt/shared/design-tokens\", \"~/notes/*.md\"]"
+                - generic [ref=f187e745]: "}"
+            - paragraph [ref=f187e746]:
+              - text: A value in
+              - code [ref=f187e747]: sandbox.json
+              - text: replaces the one in Cursor settings, and the project file wins over
+              - code [ref=f187e748]: ~/.cursor/sandbox.json
+              - text: . Settings show which file controls the value.
+            - paragraph [ref=f187e749]:
+              - text: In the
+              - link "CLI" [ref=f187e750] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - text: ", set"
+              - code [ref=f187e751]: sandbox.readBoundary
+              - text: in
+              - link [ref=f187e752] [cursor=pointer]:
+                - /url: /docs/cli/reference/configuration
+                - code [ref=f187e753]: cli-config.json
+              - text: and add
+              - code [ref=f187e754]: Read(...)
+              - text: entries to
+              - link [ref=f187e755] [cursor=pointer]:
+                - /url: /docs/cli/reference/permissions
+                - code [ref=f187e756]: permissions.allow
+              - text: for the allowlist.
+              - code [ref=f187e757]: sandbox.json
+              - text: overrides both.
+            - heading [level=4] [ref=f187e758]:
+              - link "Copy link to team-read-policy" [ref=f187e759] [cursor=pointer]:
+                - /url: "#team-read-policy"
+                - generic [ref=f187e760]: Team read policy
+            - paragraph [ref=f187e768]:
+              - text: Admins on Enterprise plans can set a read policy for the team in
+              - link "Team Settings > Security & automation" [ref=f187e769] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard/team-settings?view=extension-security
+              - text: ", or for an"
+              - link "organization group" [ref=f187e770] [cursor=pointer]:
+                - /url: /docs/enterprise/organization-groups#auto-run-and-smart-auto
+              - text: . Turn on
+              - strong [ref=f187e771]: Read Controls
+              - text: ", then pick a mode:"
+            - list [ref=f187e772]:
+              - listitem [ref=f187e773]:
+                - strong [ref=f187e774]: System
+                - text: leaves the choice to each member.
+              - listitem [ref=f187e775]:
+                - strong [ref=f187e776]: Workspace
+                - text: turns on Workspace for every member. Their setting shows as controlled by the admin, and approval cards explain that the read needs approval under the team's read policy.
+            - paragraph [ref=f187e777]:
+              - text: With
+              - strong [ref=f187e778]: Workspace
+              - text: ", the team's"
+              - strong [ref=f187e779]: Read Allowlist
+              - text: adds to each member's own list. Turn off
+              - strong [ref=f187e780]: Read Control User Extensions
+              - text: to apply only the team list and ignore paths from member settings and
+              - code [ref=f187e781]: sandbox.json
+              - text: .
+            - heading [level=3] [ref=f187e782]:
+              - link "Copy link to how-sandboxing-works-on-your-platform" [ref=f187e783] [cursor=pointer]:
+                - /url: "#how-sandboxing-works-on-your-platform"
+                - generic [ref=f187e784]: How sandboxing works on your platform
+            - generic [ref=f187e792]:
+              - tablist [ref=f187e793]:
+                - tab "macOS" [selected] [ref=f187e794] [cursor=pointer]
+                - tab "Linux" [ref=f187e795] [cursor=pointer]
+              - tabpanel "macOS" [ref=f187e796]:
+                - paragraph [ref=f187e797]:
+                  - text: Cursor uses Seatbelt through
+                  - code [ref=f187e798]: sandbox-exec
+                  - text: . A generated sandbox profile limits file access, network access, and other process behavior for the full subprocess tree.
+                - paragraph [ref=f187e799]:
+                  - strong [ref=f187e800]: Requirements
+                - list [ref=f187e801]:
+                  - listitem [ref=f187e802]: Cursor v2.0 or later
+                  - listitem [ref=f187e803]: No extra setup needed
+            - heading [level=3] [ref=f187e804]:
+              - link "Copy link to environment-variables" [ref=f187e805] [cursor=pointer]:
+                - /url: "#environment-variables"
+                - generic [ref=f187e806]: Environment variables
+            - paragraph [ref=f187e814]: Cursor injects environment variables into every sandboxed child process. These are available to your scripts, build tools, and automation running inside the sandbox.
+            - table [ref=f187e817]:
+              - rowgroup [ref=f187e818]:
+                - row [ref=f187e819]:
+                  - columnheader "Variable" [ref=f187e820]
+                  - columnheader "Platforms" [ref=f187e821]
+                  - columnheader "Description" [ref=f187e822]
+              - rowgroup [ref=f187e823]:
+                - row [ref=f187e824]:
+                  - cell [ref=f187e825]:
+                    - code [ref=f187e826]: CURSOR_SANDBOX
+                  - cell "macOS, Linux" [ref=f187e827]
+                  - cell [ref=f187e828]:
+                    - text: Set to
+                    - code [ref=f187e829]: "\"seatbelt\""
+                    - text: (macOS) or
+                    - code [ref=f187e830]: "\"native\""
+                    - text: (Linux) when the process is running inside the sandbox.
+                - row [ref=f187e831]:
+                  - cell [ref=f187e832]:
+                    - code [ref=f187e833]: CURSOR_ORIG_UID
+                  - cell "macOS, Linux" [ref=f187e834]
+                  - cell "The UID of the user who launched Cursor, captured before the sandbox applies any namespace or identity changes." [ref=f187e835]
+                - row [ref=f187e836]:
+                  - cell [ref=f187e837]:
+                    - code [ref=f187e838]: CURSOR_ORIG_GID
+                  - cell "macOS, Linux" [ref=f187e839]
+                  - cell "The GID of the user who launched Cursor, captured before sandbox identity changes." [ref=f187e840]
+                - row [ref=f187e841]:
+                  - cell [ref=f187e842]:
+                    - code [ref=f187e843]: CURSOR_SANDBOX_LANDLOCK_STATUS
+                  - cell "Linux" [ref=f187e844]
+                  - cell [ref=f187e845]:
+                    - text: "Reports the active sandbox backend:"
+                    - code [ref=f187e846]: fully_enforced
+                    - text: (Landlock),
+                    - code [ref=f187e847]: bubblewrap
+                    - text: (Bubblewrap fallback). Useful for diagnostics.
+            - alert [ref=f187e848]:
+              - generic [ref=f187e851]: "Linux: UID inside the sandbox may not match your real user"
+              - paragraph [ref=f187e853]:
+                - text: On Linux, the sandbox creates a user namespace and remaps the process to UID 0 (root) inside that namespace. This means
+                - code [ref=f187e854]: id -u
+                - text: and
+                - code [ref=f187e855]: $UID
+                - text: inside a sandboxed command return 0, not your host user ID. If your scripts or automation need the host user ID, for example, to set file ownership or pass
+                - code [ref=f187e856]: "--user"
+                - text: to Docker, read
+                - code [ref=f187e857]: CURSOR_ORIG_UID
+                - text: and
+                - code [ref=f187e858]: CURSOR_ORIG_GID
+                - text: instead.
+            - heading [level=4] [ref=f187e859]:
+              - link "Copy link to docker-and-container-automation" [ref=f187e860] [cursor=pointer]:
+                - /url: "#docker-and-container-automation"
+                - generic [ref=f187e861]: Docker and container automation
+            - paragraph [ref=f187e869]:
+              - text: A common pattern in automation rules and scripts is running Docker containers that need to match the host user's identity. Because the sandbox remaps the UID on Linux, relying on
+              - code [ref=f187e870]: $(id -u)
+              - text: produces the wrong value. Use the
+              - code [ref=f187e871]: CURSOR_ORIG_*
+              - text: "variables instead:"
+            - generic [ref=f187e874]:
+              - button [ref=f187e875] [cursor=pointer]
+              - code [ref=f187e881]:
+                - generic [ref=f187e882]: docker run --rm \
+                - generic [ref=f187e883]: "--user \"${CURSOR_ORIG_UID:-$(id -u)}:${CURSOR_ORIG_GID:-$(id -g)}\" \\"
+                - generic [ref=f187e884]: "-v \"$PWD:/work\" -w /work \\"
+                - generic [ref=f187e885]: my-image build
+            - paragraph [ref=f187e886]:
+              - text: The
+              - code [ref=f187e887]: "${CURSOR_ORIG_UID:-$(id -u)}"
+              - text: fallback ensures the command also works outside the sandbox, where the variables are not set.
+            - heading [level=3] [ref=f187e888]:
+              - link "Copy link to network-access" [ref=f187e889] [cursor=pointer]:
+                - /url: "#network-access"
+                - generic [ref=f187e890]: Network access
+            - paragraph [ref=f187e898]: "Choose how sandboxed terminal commands access the network:"
+            - table [ref=f187e900]:
+              - rowgroup [ref=f187e901]:
+                - row [ref=f187e902]:
+                  - columnheader "Mode" [ref=f187e903]
+                  - columnheader "Behavior" [ref=f187e904]
+              - rowgroup [ref=f187e905]:
+                - row [ref=f187e906]:
+                  - cell [ref=f187e907]:
+                    - strong [ref=f187e908]: sandbox.json Only
+                  - cell [ref=f187e909]:
+                    - text: Network is limited to domains in your
+                    - code [ref=f187e910]: sandbox.json
+                    - text: allowlist. Cursor defaults are not added.
+                - row [ref=f187e911]:
+                  - cell [ref=f187e912]:
+                    - strong [ref=f187e913]: sandbox.json + Defaults
+                  - cell "Your allowlist plus Cursor's built-in defaults for common package managers and language tools. This is the default." [ref=f187e914]
+                - row [ref=f187e915]:
+                  - cell [ref=f187e916]:
+                    - strong [ref=f187e917]: Allow All
+                  - cell [ref=f187e918]:
+                    - text: All network access is allowed in the sandbox, regardless of
+                    - code [ref=f187e919]: sandbox.json
+                    - text: .
+            - heading [level=3] [ref=f187e922]:
+              - button "View default allowed domains" [ref=f187e923] [cursor=pointer]
+            - heading [level=2] [ref=f187e926]:
+              - link "Copy link to other-protections" [ref=f187e927] [cursor=pointer]:
+                - /url: "#other-protections"
+                - generic [ref=f187e928]: Other protections
+            - paragraph [ref=f187e936]: "Run Modes and sandboxing are not the only safety controls. These protections can require approval even when a mode would otherwise run automatically:"
+            - table [ref=f187e938]:
+              - rowgroup [ref=f187e939]:
+                - row [ref=f187e940]:
+                  - columnheader "Protection" [ref=f187e941]
+                  - columnheader "What it does" [ref=f187e942]
+              - rowgroup [ref=f187e943]:
+                - row [ref=f187e944]:
+                  - cell [ref=f187e945]:
+                    - strong [ref=f187e946]: Browser Protection
+                  - cell "Prevents the agent from automatically running Browser tools." [ref=f187e947]
+                - row [ref=f187e948]:
+                  - cell [ref=f187e949]:
+                    - strong [ref=f187e950]: File-Deletion Protection
+                  - cell [ref=f187e951]:
+                    - text: Prevents the agent from automatically deleting files, including
+                    - code [ref=f187e952]: rm
+                    - text: commands.
+                - row [ref=f187e953]:
+                  - cell [ref=f187e954]:
+                    - strong [ref=f187e955]: External-File Protection
+                  - cell "Prevents the agent from automatically creating, modifying or deleting files outside the workspace." [ref=f187e956]
+            - heading [level=2] [ref=f187e957]:
+              - link "Copy link to team-controls" [ref=f187e958] [cursor=pointer]:
+                - /url: "#team-controls"
+                - generic [ref=f187e959]: Team controls
+            - paragraph [ref=f187e967]:
+              - text: Admins can override which modes are available for their users, configure the sandbox networking rules for terminal commands, set a
+              - link "team read policy" [ref=f187e968] [cursor=pointer]:
+                - /url: "#team-read-policy"
+              - text: ", and more. All of these settings are available in the web dashboard."
+            - paragraph [ref=f187e969]:
+              - text: Team settings take precedence over individual and project configuration. Use them when you want a consistent baseline for everyone. If you enable Auto-review for the team, keep one of the
+              - link "models the classifier needs" [ref=f187e970] [cursor=pointer]:
+                - /url: "#auto-review-model-requirements"
+              - text: allowed under
+              - link "model access control" [ref=f187e971] [cursor=pointer]:
+                - /url: /docs/enterprise/model-and-integration-management#model-access-control
+              - text: .
+            - heading [level=2] [ref=f187e972]:
+              - link "Copy link to changelog" [ref=f187e973] [cursor=pointer]:
+                - /url: "#changelog"
+                - generic [ref=f187e974]: Changelog
+            - table [ref=f187e983]:
+              - rowgroup [ref=f187e984]:
+                - row [ref=f187e985]:
+                  - columnheader "Cursor version" [ref=f187e986]
+                  - columnheader "Date" [ref=f187e987]
+                  - columnheader "Change" [ref=f187e988]
+              - rowgroup [ref=f187e989]:
+                - row [ref=f187e990]:
+                  - cell [ref=f187e991]:
+                    - strong [ref=f187e992]: "3.23"
+                  - cell "Oct 1, 2026" [ref=f187e993]
+                  - cell [ref=f187e994]:
+                    - link "Read access" [ref=f187e995] [cursor=pointer]:
+                      - /url: "#read-access"
+                    - text: added a Workspace mode that asks before the agent reads files outside the workspace, with a Read Allowlist and a team read policy.
+                - row [ref=f187e996]:
+                  - cell [ref=f187e997]:
+                    - strong [ref=f187e998]: "3.6"
+                  - cell "May 29, 2026" [ref=f187e999]
+                  - cell [ref=f187e1000]:
+                    - link "Auto-review" [ref=f187e1001] [cursor=pointer]:
+                      - /url: /changelog/auto-review
+                    - text: shipped as the recommended default.
+                - row [ref=f187e1002]:
+                  - cell [ref=f187e1003]:
+                    - strong [ref=f187e1004]: "3.5"
+                  - cell "May 22, 2026" [ref=f187e1005]
+                  - cell [ref=f187e1006]:
+                    - strong [ref=f187e1007]: Ask Every Time
+                    - text: was deprecated. New users cannot choose it. Use
+                    - strong [ref=f187e1008]: Allowlist
+                    - text: with an empty allowlist for the same behavior.
+                    - strong [ref=f187e1009]: Run in Sandbox
+                    - text: was folded into
+                    - strong [ref=f187e1010]: Allowlist
+                    - text: with sandboxing enabled.
+            - alert [ref=f187e1011]:
+              - generic [ref=f187e1014]: Cloud Agents do not use Run Modes
+              - paragraph [ref=f187e1016]: Run Modes apply to local agents. Cloud Agents run inside their own dedicated machine, so the agent never asks you to approve an action.
+        - navigation [ref=f187e1019]:
+          - generic [ref=f187e1020]:
+            - list [ref=f187e1021]:
+              - listitem [ref=f187e1022]:
+                - link "Pick a mode" [ref=f187e1023] [cursor=pointer]:
+                  - /url: "#pick-a-mode"
+              - listitem [ref=f187e1024]:
+                - link "How Auto-review works" [ref=f187e1025] [cursor=pointer]:
+                  - /url: "#how-auto-review-works"
+              - listitem [ref=f187e1026]:
+                - link "Auto-review classifier requirements" [ref=f187e1027] [cursor=pointer]:
+                  - /url: "#auto-review-classifier-requirements"
+              - listitem [ref=f187e1028]:
+                - link "Configuring Auto-review" [ref=f187e1029] [cursor=pointer]:
+                  - /url: "#configuring-auto-review"
+              - listitem [ref=f187e1030]:
+                - link "Sandboxing" [ref=f187e1031] [cursor=pointer]:
+                  - /url: "#sandboxing"
+              - listitem [ref=f187e1032]:
+                - link "Sandbox configuration" [ref=f187e1033] [cursor=pointer]:
+                  - /url: "#sandbox-configuration"
+              - listitem [ref=f187e1034]:
+                - link "Read access" [ref=f187e1035] [cursor=pointer]:
+                  - /url: "#read-access"
+              - listitem [ref=f187e1036]:
+                - link "Read Allowlist" [ref=f187e1037] [cursor=pointer]:
+                  - /url: "#read-allowlist"
+              - listitem [ref=f187e1038]:
+                - link "Configure read access in sandbox.json" [ref=f187e1039] [cursor=pointer]:
+                  - /url: "#configure-read-access-in-sandboxjson"
+              - listitem [ref=f187e1040]:
+                - link "Team read policy" [ref=f187e1041] [cursor=pointer]:
+                  - /url: "#team-read-policy"
+              - listitem [ref=f187e1042]:
+                - link "How sandboxing works on your platform" [ref=f187e1043] [cursor=pointer]:
+                  - /url: "#how-sandboxing-works-on-your-platform"
+              - listitem [ref=f187e1044]:
+                - link "Environment variables" [ref=f187e1045] [cursor=pointer]:
+                  - /url: "#environment-variables"
+              - listitem [ref=f187e1046]:
+                - link "Docker and container automation" [ref=f187e1047] [cursor=pointer]:
+                  - /url: "#docker-and-container-automation"
+              - listitem [ref=f187e1048]:
+                - link "Network access" [ref=f187e1049] [cursor=pointer]:
+                  - /url: "#network-access"
+              - listitem [ref=f187e1050]:
+                - link "Other protections" [ref=f187e1051] [cursor=pointer]:
+                  - /url: "#other-protections"
+              - listitem [ref=f187e1052]:
+                - link "Team controls" [ref=f187e1053] [cursor=pointer]:
+                  - /url: "#team-controls"
+              - listitem [ref=f187e1054]:
+                - link "Changelog" [ref=f187e1055] [cursor=pointer]:
+                  - /url: "#changelog"
+            - button "Copy page" [ref=f187e1059] [cursor=pointer]

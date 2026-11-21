@@ -482,6 +482,87 @@ export function loadUserEnvFile(opts: LoadUserEnvOptions = {}): UserEnvLoad {
   return { path: file, loaded };
 }
 
+/**
+ * Saves or updates an environment variable in `<user config dir>/env`.
+ * Enforces 0600 permissions, refuses symlinks, creates the directory 0700 if absent,
+ * and sets the variable in target (default `process.env`).
+ */
+export function saveUserEnvVar(
+  key: string,
+  value: string,
+  opts: { home?: string; configDir?: string; target?: EnvLike; platform?: NodeJS.Platform } = {},
+): { path: string; saved: boolean; error?: string } {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    return { path: "", saved: false, error: `invalid environment variable name ${JSON.stringify(key)}` };
+  }
+  const home = opts.home ?? process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const configDir = opts.configDir ?? (home === "" ? "" : userConfigDir(home));
+  if (configDir === "") {
+    return { path: "", saved: false, error: "cannot resolve user config directory" };
+  }
+  const file = path.join(configDir, "env");
+  const platform = opts.platform ?? process.platform;
+  const target = opts.target ?? process.env;
+
+  try {
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    return { path: file, saved: false, error: `cannot create config directory: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  let lines: string[] = [];
+  if (existsSync(file)) {
+    let stat;
+    try {
+      stat = lstatSync(file);
+    } catch (err) {
+      return { path: file, saved: false, error: `cannot stat ${file}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!stat.isFile()) {
+      return { path: file, saved: false, error: "not a regular file (symlinks are refused)" };
+    }
+    try {
+      lines = readFileSync(file, "utf8").split(/\r?\n/);
+    } catch (err) {
+      return { path: file, saved: false, error: `cannot read ${file}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  let replaced = false;
+  const quoted = `"${value.replace(/"/g, '\\"')}"`;
+  const newLine = `${key}=${quoted}`;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    const withoutExport = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
+    const at = withoutExport.indexOf("=");
+    if (at > 0 && withoutExport.slice(0, at).trim() === key) {
+      lines[i] = newLine;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    if (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+      lines[lines.length - 1] = newLine;
+      lines.push("");
+    } else {
+      lines.push(newLine);
+      lines.push("");
+    }
+  }
+
+  try {
+    writeFileSync(file, lines.join("\n"), { mode: 0o600 });
+    if (platform !== "win32") {
+      chmodSync(file, 0o600);
+    }
+    target[key] = value;
+    return { path: file, saved: true };
+  } catch (err) {
+    return { path: file, saved: false, error: `cannot write ${file}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 /** Infer `HOME` from `~/.config/horizon/config.json` so catalog cache is test-hermetic. */
 function homeFromConfigPath(file: string): string | undefined {
   if (!file.endsWith(`${path.sep}config.json`)) return undefined;
@@ -994,10 +1075,29 @@ export function readConfigFile(file: string = defaultConfigPath()): ConfigFile {
 /** A provider key sitting in the environment is a hint, not an order. */
 function detectProvider(env: EnvLike): ProviderName | undefined {
   if (str(env.ANTHROPIC_API_KEY)) return "anthropic";
-  if (str(env.OPENAI_API_KEY)) return "openai";
+  const openAiKey = str(env.OPENAI_API_KEY);
+  const isGroqKey = openAiKey?.startsWith("gsk_") && !str(env.OPENAI_BASE_URL) && !str(env.HZ_BASE_URL);
+  if (openAiKey && !isGroqKey) return "openai";
   if (str(env.GEMINI_API_KEY) || str(env.GOOGLE_API_KEY)) return "google";
   if (str(env.NVIDIA_API_KEY)) return "nvidia";
+  if (openAiKey) return "openai";
   return undefined;
+}
+
+/** Providers that have valid/usable credentials configured in the environment. */
+export function detectAvailableProviders(env: EnvLike): ProviderName[] {
+  const list: ProviderName[] = [];
+  if (str(env.ANTHROPIC_API_KEY)) list.push("anthropic");
+  const openAiKey = str(env.OPENAI_API_KEY);
+  if (openAiKey && (!openAiKey.startsWith("gsk_") || str(env.OPENAI_BASE_URL) || str(env.HZ_BASE_URL))) {
+    list.push("openai");
+  }
+  if (str(env.GEMINI_API_KEY) || str(env.GOOGLE_API_KEY)) list.push("google");
+  if (str(env.NVIDIA_API_KEY)) list.push("nvidia");
+  if (openAiKey?.startsWith("gsk_") && !list.includes("openai")) {
+    list.push("openai");
+  }
+  return list;
 }
 
 function providerKey(provider: ProviderName, env: EnvLike): string | undefined {

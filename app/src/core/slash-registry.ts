@@ -17,6 +17,7 @@ export interface SlashCommandRow {
 
 export const BUILTIN_SLASH_REGISTRY: readonly SlashCommandRow[] = [
   { name: "help", usage: "/help", description: "this list", aliases: ["?"] },
+  { name: "auth", usage: "/auth", description: "configure provider credentials (interactive setup wizard)", aliases: ["login"] },
   { name: "palette", usage: "/palette [query]", description: "ranked slash commands (scrollback print; fullscreen overlay + Ctrl+P)", aliases: ["commands"] },
   { name: "transcript", usage: "/transcript", description: "open this chat in $PAGER (plain text)" },
   { name: "new", usage: "/new", description: "start a fresh session" },

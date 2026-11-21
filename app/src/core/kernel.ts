@@ -1257,7 +1257,12 @@ export class LocalKernel {
           reason: `memory-manifest-protected: writing MEMORY.md needs approval`,
         });
       }
-      return wire({ decision: "allow" });
+      const leaseId = newId();
+      return wire({
+        decision: "allow",
+        leaseId,
+        reason: `policy allow: ${allow.kind} @ ${allow.scope} (action ${action.kind} on ${action.target}; minted one-use lease ${leaseId})`,
+      });
     }
 
     return wire({ decision: "ask", reason: `no policy rule allows ${action.kind}` });
@@ -1910,6 +1915,11 @@ export class KernelClient {
       } catch {
         /* already gone */
       }
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) return resolve();
+        child.once("exit", () => resolve());
+        setTimeout(resolve, 200);
+      });
     }
   }
 

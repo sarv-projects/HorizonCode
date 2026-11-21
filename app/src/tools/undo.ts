@@ -27,6 +27,7 @@ import { readFile } from "node:fs/promises";
 import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { realpathish } from "../core/paths";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 import { isRefused, writeAtomic } from "./atomic-write";
 import {
   BEFORE_MAX_BYTES,
@@ -169,7 +170,7 @@ export const undoTool: Tool = {
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
-      if (decision.decision === "ask") {
+      if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
         const what = entry.before === null ? `remove ${rel} (created by a recorded change)` : `restore ${rel} to its prior content`;
         const targetNote = real === target.requested ? "" : ` [resolves to ${real}]`;
         const approved = await ctx.approve(

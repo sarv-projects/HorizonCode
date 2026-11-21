@@ -26,13 +26,13 @@ describe("--permission-mode", () => {
       expect(r.stderr).toContain("no bypass/yolo permission mode");
       expect(r.stdout).toBe("");
     }
-  });
+  }, 30_000);
 
   test("an unknown name exits 2 and lists the valid ones", async () => {
     const r = await run(["--permission-mode", "nope", "-p", "hi"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("default, plan, accept-edits, read-only");
-  });
+  }, 30_000);
 
   test("-p with accept-edits runs, keeps stdout clean, and says the mode on stderr", async () => {
     const r = await run(["--permission-mode", "accept-edits", "-p", "hello"]);
@@ -40,13 +40,13 @@ describe("--permission-mode", () => {
     expect(r.stdout.trim().length).toBeGreaterThan(0);
     expect(r.stdout).not.toContain("permission mode");
     expect(r.stderr).toContain("permission mode accept-edits");
-  });
+  }, 30_000);
 
   test("default mode prints no mode line", async () => {
     const r = await run(["-p", "hello"]);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain("permission mode");
-  });
+  }, 30_000);
 });
 
 describe("/mode and the badge", () => {

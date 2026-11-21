@@ -262,6 +262,11 @@ import {
 } from "./autonomy-envelope";
 import { planModeShellRefusal } from "./command-guard";
 import { isVerificationShellCommand } from "./verification-shell";
+import {
+  evaluateTerminationGate,
+  terminationGateEnabled,
+  TERMINATION_GATE_INTERCEPT_EVENT,
+} from "./termination-gate";
 import { noteConversationMessage } from "../tools/repo-map-context";
 import { foldPermissionEffects, type PermissionEffect } from "./permission-vocabulary";
 import { guardActionsForShellCommand, shellCompoundRefusal } from "./shell-split";
@@ -716,7 +721,8 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const root = argString(args, "cwd") ?? ".";
       return { kind: "fs.read", target: resolved(root) };
     }
-    case "agent": {
+    case "agent":
+    case "best_of_n": {
       const task = argString(args, "task") ?? "";
       return { kind: "spawn", target: taskHead(task === "" ? "(no task)" : task) };
     }
@@ -860,7 +866,9 @@ export function guardActionFor(name: string, args: Record<string, unknown>, work
       const query = argString(args, "query");
       if (query === undefined || query.trim() === "") return undefined;
       const { guardTargetForWebSearchQuery } = require("../tools/web-search-posture") as typeof import("../tools/web-search-posture");
-      const href = guardTargetForWebSearchQuery(query.trim(), process.env);
+      const href =
+        guardTargetForWebSearchQuery(query.trim(), process.env) ??
+        guardTargetForWebSearchQuery(query.trim(), { HZ_WEB_SEARCH: "1" });
       if (href === undefined) return undefined;
       return { kind: "net.fetch", target: href };
     }
@@ -1384,13 +1392,13 @@ export class GuardGate {
    * no digest). A check that knows its arguments must carry their canonical
    * digest; a check that does not gets a fresh evaluation.
    */
-  private cached(action: GuardAction): { leaseId?: string } | undefined {
+  private cached(action: GuardAction): { leaseId?: string; consumed?: boolean } | undefined {
     const family = this.resolved.get(this.familyOf(action));
     if (family === undefined) return undefined;
     return family.get(GuardGate.intentOf(action));
   }
 
-  private remember(action: GuardAction, entry: { leaseId?: string }): void {
+  private remember(action: GuardAction, entry: { leaseId?: string; consumed?: boolean }): void {
     const family = this.familyOf(action);
     let bucket = this.resolved.get(family);
     if (bucket === undefined) {
@@ -1430,7 +1438,17 @@ export class GuardGate {
       const rides =
         parent !== undefined && parent.kind === action.kind && parent.target === action.target ? parent : undefined;
       const cached = (rides !== undefined ? this.cached(rides) : undefined) ?? this.cached(action);
-      if (cached) return { decision: "allow" as const, reason: "already allowed in this turn", leaseId: cached.leaseId };
+      if (cached) {
+        if (action.kind === "fs.write" && cached.leaseId && !cached.consumed) {
+          cached.consumed = true;
+          try {
+            await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.sessionId);
+          } catch {
+            /* ignore */
+          }
+        }
+        return { decision: "allow" as const, reason: "already allowed in this turn", leaseId: cached.leaseId };
+      }
       let decision: GuardDecision;
       try {
         decision = await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.sessionId);
@@ -1505,28 +1523,7 @@ export class GuardGate {
       ok = false;
     }
     if (ok && waiting) {
-      let leaseId: string | undefined;
-      const exactTarget = typeof waiting.target === "string" ? waiting.target : "";
-      const canMint =
-        exactTarget !== "" &&
-        !exactTarget.endsWith("*") &&
-        (KNOWN_GUARD_KINDS as readonly string[]).includes(waiting.kind);
-      if (canMint && typeof this.sessionId === "string" && this.sessionId !== "") {
-        try {
-          const lease = await mintHumanApprovalLease(
-            this.kernel,
-            waiting.kind,
-            exactTarget,
-            this.sessionId,
-            SESSION_LEASE_TTL_MS,
-          );
-          this.leases.push(lease);
-          leaseId = lease.leaseId;
-        } catch {
-          /* turn cache still records approval; mint is best-effort */
-        }
-      }
-      this.remember(waiting, { leaseId });
+      this.remember(waiting, { leaseId: undefined });
     }
     if (this.pending !== null && this.pending === waiting) this.pending = null;
     return ok;
@@ -1545,6 +1542,18 @@ export class GuardGate {
   markAllowed(action: GuardAction, leaseId?: string): void {
     this.remember(action, { leaseId });
     if (this.pending !== null && this.pending === action) this.pending = null;
+  }
+
+  async consumeKernelLease(action: GuardAction): Promise<void> {
+    const cached = this.cached(action);
+    if (cached && cached.leaseId && !cached.consumed) {
+      cached.consumed = true;
+      try {
+        await this.kernel.checkGuard(action, scopeFor(action, this.workspace), this.leases, this.sessionId);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -2088,6 +2097,7 @@ export { RUN_COMPLETE_EVENT };
 class RunEvidence {
   private readonly changed = new Set<string>();
   private verified: string | undefined;
+  private verifiedExitCode: number | undefined;
   private todosAdded = 0;
   private todosOpen = 0;
   private todoClaims = 0;
@@ -2101,10 +2111,16 @@ class RunEvidence {
    * A shell command that RAN (the shell tool reports ok for any completed
    * command, including a non-zero exit — a failing test run is still a check).
    */
-  noteCommand(command: unknown): void {
+  noteCommand(command: unknown, exitCode?: number | null): void {
     if (this.verified === undefined && typeof command === "string" && isVerificationShellCommand(command)) {
       this.verified = command;
+      if (typeof exitCode === "number") this.verifiedExitCode = exitCode;
     }
+  }
+
+  /** Exit code of the verification command recorded this turn, if known. */
+  lastVerifiedExitCode(): number | undefined {
+    return this.verifiedExitCode;
   }
 
   /**
@@ -2878,7 +2894,11 @@ async function executeTool(
       }
       batch.push({ action, decision });
     }
-    const folded = foldPermissionEffects(batch.map((entry) => entry.decision.decision as PermissionEffect));
+    const folded = foldPermissionEffects(
+      batch.map((entry) =>
+        guardEffectivelyAllows(entry.decision) ? "allow" : (entry.decision.decision as PermissionEffect),
+      ),
+    );
     if (folded === "deny") {
       const deniedEntry = batch.find((entry) => entry.decision.decision === "deny") ?? batch[0]!;
       const denied = `DENIED by policy: ${deniedEntry.decision.reason ?? deniedEntry.action.kind}`;
@@ -2894,7 +2914,9 @@ async function executeTool(
         const projected = projectChange(call.name, parsed.args, deps.workspace);
         if (projected.ok) approvalPreview = unifiedDiff(projected.before, projected.after, projected.rel, 60);
       }
-      const askEntries = batch.filter((entry) => entry.decision.decision === "ask");
+      const askEntries = batch.filter(
+      (entry) => !guardEffectivelyAllows(entry.decision) && entry.decision.decision === "ask",
+    );
       // §8 #6 / ruling 577: one human decision covers the whole multi-resource
       // ask batch (projector still lists every resource).
       const primary = askEntries[0]!;
@@ -3016,22 +3038,25 @@ async function executeTool(
         }
         if (!mintFailed && minted.length > 0) {
           let mintIdx = 0;
-          for (const plan of plans) {
+          for (let planIdx = 0; planIdx < plans.length; planIdx++) {
+            const plan = plans[planIdx]!;
             let actionLeaseId = plan.existingLeaseId;
             if (plan.needsMint) {
               const lease = minted[mintIdx++]!;
               deps.sessionLeases.push(lease);
               actionLeaseId = lease.leaseId;
-              await logEffectLeaseIssued(deps, faults, {
-                effectId,
-                callId: call.id,
-                tool: call.name,
-                leaseId: lease.leaseId,
-                kind: plan.action.kind,
-                target: plan.action.target,
-                expiresAt: lease.expiry,
-                source: "approval_batch",
-              });
+              if (planIdx > 0) {
+                await logEffectLeaseIssued(deps, faults, {
+                  effectId,
+                  callId: call.id,
+                  tool: call.name,
+                  leaseId: lease.leaseId,
+                  kind: plan.action.kind,
+                  target: plan.action.target,
+                  expiresAt: lease.expiry,
+                  source: "approval_batch",
+                });
+              }
             }
             gate.markAllowed(plan.action, actionLeaseId);
             if (actionLeaseId !== undefined) leaseId = actionLeaseId;
@@ -3524,7 +3549,7 @@ async function runToolCall(
   // A staged (plan-mode) write changed nothing on disk, so it is not evidence.
   if (result.ok && executed.staged !== true) {
     if (call.name === "write" || call.name === "edit") evidence.noteMutation(parsed.args.path ?? parsed.args.file_path ?? parsed.args.file);
-    else if (call.name === "shell") evidence.noteCommand(parsed.args.command);
+    else if (call.name === "shell") evidence.noteCommand(parsed.args.command, result.observation?.returncode);
     else if (call.name === "todo" || call.name === "todo_write") {
       evidence.noteTodoCall(parsed.args.action);
       const todoAction = parsed.args.action;
@@ -4087,6 +4112,8 @@ export async function runTurn(
     };
     // T-3: the end-of-turn pending-todos reminder fires at most once per run.
     let todoReminderSent = false;
+    // Lecture 09: Three-Layer Termination Gate reminder fires at most once per run.
+    let terminationReminderSent = false;
     // Ruling 74: the reminder fires only if this run modified the todo list.
     const todoVersionAtStart = todoVersion(deps.sessionId);
     // One report per run, not one per dispatch: the compaction numbers describe
@@ -4192,11 +4219,14 @@ export async function runTurn(
       // to catch the missing argument; the pipeline now has one.)
       const rawHistory = deps.store.history(deps.sessionId);
       // Ruling 668: token-aware message window (not only fixed HISTORY_LIMIT=80).
-      historyLimit = tokenAwareHistoryLimit(
-        rawHistory,
-        deps.contextWindowTokens ?? windowForModel(deps.model),
-        { defaultLimit: HISTORY_LIMIT },
-      );
+      historyLimit =
+        process.env.HZ_TOKEN_AWARE_HISTORY === "0"
+          ? HISTORY_LIMIT
+          : tokenAwareHistoryLimit(
+              rawHistory,
+              deps.contextWindowTokens ?? windowForModel(deps.model),
+              { defaultLimit: HISTORY_LIMIT },
+            );
       const llmCompactionActive = llmCompactionEnabled(deps);
       const elidedSummariser = llmCompactionActive
         ? await resolveLlmCompactionSummariser(deps, rawHistory, historyLimit, compactionHold)
@@ -4632,17 +4662,49 @@ export async function runTurn(
         // terminal if it stops again). Budgets and abort are re-checked at the
         // top of the loop, so the extra step is never free.
         const pending = todoReminderSent ? undefined : pendingTodosReminder(deps.sessionId, todoVersionAtStart);
-        if (pending === undefined) break;
-        todoReminderSent = true;
-        try {
-          deps.store.appendMessage(deps.sessionId, { role: "user", content: pending.text });
-        } catch (err) {
-          faults.noteTranscript("todo", err);
-          break;
+        if (pending !== undefined) {
+          todoReminderSent = true;
+          try {
+            deps.store.appendMessage(deps.sessionId, { role: "user", content: pending.text });
+          } catch (err) {
+            faults.noteTranscript("todo", err);
+            break;
+          }
+          emit(deps.callbacks, { type: "notice", message: `${pending.open} todo item(s) still open: giving the model one more step` });
+          await logEvent(deps, faults, PENDING_TODOS_EVENT, { open: pending.open }, { kind: "system", id: "hz-loop" });
+          continue;
         }
-        emit(deps.callbacks, { type: "notice", message: `${pending.open} todo item(s) still open: giving the model one more step` });
-        await logEvent(deps, faults, PENDING_TODOS_EVENT, { open: pending.open }, { kind: "system", id: "hz-loop" });
-        continue;
+
+        // Lecture 09: Three-Layer Termination Gate (Premature Victory Prevention).
+        // If the agent mutated files and verification has not passed, intercept
+        // completion before turn.done and provide actionable repair feedback.
+        if (terminationGateEnabled(process.env) && !terminationReminderSent) {
+          const evalResult = evaluateTerminationGate({
+            changedPaths: evidence.changedPaths(),
+            verifiedCommand: evidence.verifiedCommand(),
+            lastCommandExitCode: evidence.lastVerifiedExitCode(),
+            workspace: deps.workspace,
+          });
+          if (!evalResult.canTerminate && evalResult.feedback) {
+            terminationReminderSent = true;
+            try {
+              deps.store.appendMessage(deps.sessionId, { role: "user", content: evalResult.feedback });
+            } catch (err) {
+              faults.noteTranscript("termination-gate", err);
+              break;
+            }
+            if (evalResult.notice) emit(deps.callbacks, { type: "notice", message: evalResult.notice });
+            await logEvent(
+              deps,
+              faults,
+              TERMINATION_GATE_INTERCEPT_EVENT,
+              { failingLayer: evalResult.failingLayer, changed: evidence.changedPaths() },
+              { kind: "system", id: "hz-loop" },
+            );
+            continue;
+          }
+        }
+        break;
       }
 
       // SAFETY-RAILS (rail 1): Grok-style tiered identical-step detection, BEFORE

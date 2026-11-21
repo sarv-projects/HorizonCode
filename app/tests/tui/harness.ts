@@ -190,7 +190,7 @@ export async function runProcess(spec: SpawnSpec, input = ""): Promise<RunResult
 
 /** `bun run src/main.ts ...` with output that never contains colour. */
 /** Hermetic mock runs pin the catalog mock id so TUI strings stay stable. */
-export const TUI_MOCK_ENV: Record<string, string> = { NO_COLOR: "1", HZ_MODEL: "mock-1" };
+export const TUI_MOCK_ENV: Record<string, string> = { NO_COLOR: "1", HZ_MODEL: "mock-1", HZ_GUARD_G1_WIRE: "0" };
 
 export function appSpec(args: string[], env: Record<string, string | undefined> = {}): SpawnSpec {
   return {

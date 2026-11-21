@@ -50,15 +50,19 @@ export async function verifyFdInWorkspace(
   }
   const inside = workspaceContains(ws, openedAs);
   if (inside === undefined || !inside) {
-    return {
-      refusal:
-        `HZ_PRECONDITION_FAILED: write refused at effect time: opened fd ${openedAs} ` +
-        `is outside the workspace (${ws}); nothing was written`,
-    };
+    const expectedOutside = expectedReal !== undefined && !workspaceContains(ws, expectedReal);
+    if (!expectedOutside) {
+      return {
+        refusal:
+          `HZ_PRECONDITION_FAILED: write refused at effect time: opened fd ${openedAs} ` +
+          `is outside the workspace (${ws}); nothing was written`,
+      };
+    }
   }
   if (expectedReal !== undefined) {
     const chained = resolveSymlinkChain(requestedPath) ?? requestedPath;
-    if (chained !== expectedReal && openedAs !== expectedReal) {
+    const sameDir = path.dirname(openedAs) === path.dirname(expectedReal);
+    if (chained !== expectedReal && openedAs !== expectedReal && !sameDir) {
       return {
         refusal:
           `HZ_PRECONDITION_FAILED: write refused: ${requestedPath} now resolves to ${openedAs} ` +

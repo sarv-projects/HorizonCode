@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import type { ToolContext } from "../contracts";
-import { getTool } from "../tools";
+import { shellTool } from "../tools/shell";
 import type { BestOfNAttempt, BestOfNWorktreeSlot } from "./best-of-n";
 import { resolveWorktreeAcquire } from "./worktree-pool";
 import { worktreeRemoveCommand } from "./worktree";
@@ -33,7 +33,7 @@ export function gitWorktreePorcelain(cwd: string): string | undefined {
 /** Shell via guarded `shell` tool (`danger-full-access` for sibling `git worktree` ops). */
 export function createBestOfNWorktreeShellFromCtx(ctx: ToolContext): BestOfNWorktreeShell {
   return async (command: string) => {
-    const shell = getTool("shell");
+    const shell = shellTool;
     if (!shell) return { ok: false, output: "the shell tool is not available" };
     const child = await shell.execute(
       { command },

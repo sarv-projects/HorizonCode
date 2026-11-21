@@ -1057,6 +1057,11 @@ async function runLoginCommand(args: string[]): Promise<number> {
   const device = args.includes("--device");
   const provider = args.find((a, i) => i > 0 && !a.startsWith("-"))?.trim();
   if (!provider) {
+    if (Boolean(process.stdin.isTTY)) {
+      const { runAuthWizard } = await import("./tui/onboarding-wizard");
+      const res = await runAuthWizard();
+      return res.configured ? 0 : 1;
+    }
     process.stderr.write(`usage: hzcode ${verb} <provider> [--device]\n`);
     return 2;
   }
@@ -1551,7 +1556,7 @@ async function main(): Promise<number> {
   if (rawArgs[0] === "commit") return runCommitCommand(rawArgs.slice(1));
   if (rawArgs[0] === "suggest") return runSuggestCommand(rawArgs.slice(1));
   if (rawArgs[0] === "models") return runModelsCommand(rawArgs.slice(1));
-  if (rawArgs[0] === "login" || rawArgs[0] === "logout") return runLoginCommand(rawArgs);
+  if (rawArgs[0] === "login" || rawArgs[0] === "logout" || rawArgs[0] === "auth") return runLoginCommand(rawArgs);
   if (rawArgs[0] === "config") return await runConfigCommand(rawArgs.slice(1));
   if (rawArgs[0] === "keybind") return runKeybindCommand(rawArgs.slice(1));
   if (rawArgs[0] === "tui") return runTuiCommand(rawArgs.slice(1));

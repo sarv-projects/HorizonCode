@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { applyPatchKernelPath, astEditKernelPath } from "./effect-kernel-tool-projection";
 
-const POSTIMAGE_TOOLS = new Set(["write", "edit", "apply_patch", "ast_edit", "multi_edit"]);
+const POSTIMAGE_TOOLS = new Set(["write", "edit", "apply_patch", "ast_edit", "multi_edit", "rename", "fs.rename"]);
 
 export interface ReceiptPostimage {
   path: string;
@@ -33,6 +33,17 @@ export function postimagePathForTool(
   if (!POSTIMAGE_TOOLS.has(tool)) return undefined;
   if (tool === "apply_patch") return applyPatchKernelPath(args, workspace);
   if (tool === "ast_edit") return astEditKernelPath(args, workspace);
+  if (tool === "rename" || tool === "fs.rename") {
+    const rawTo =
+      (typeof args.to === "string" && args.to) ||
+      (typeof args.destination === "string" && args.destination) ||
+      (typeof args.target === "string" && args.target);
+    if (!rawTo) return undefined;
+    const resolved = path.isAbsolute(rawTo) ? rawTo : path.resolve(workspace, rawTo);
+    const root = path.resolve(workspace);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) return undefined;
+    return resolved;
+  }
   const raw =
     (typeof args.path === "string" && args.path) ||
     (typeof args.file === "string" && args.file) ||

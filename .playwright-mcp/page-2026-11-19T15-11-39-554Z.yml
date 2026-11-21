@@ -1,0 +1,642 @@
+- generic [active] [ref=f169e1]:
+  - generic [ref=f169e3]:
+    - link "Skip to main content" [ref=f169e4] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=f169e5]:
+      - banner [ref=f169e6]:
+        - generic [ref=f169e7]:
+          - generic [ref=f169e8]:
+            - link "Cursor Home" [ref=f169e9] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=f169e10]
+            - navigation [ref=f169e13]:
+              - link "Docs" [ref=f169e14] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=f169e16] [cursor=pointer]:
+                - /url: /docs/api
+              - link "Learn" [ref=f169e17] [cursor=pointer]:
+                - /url: /learn
+              - link "Help" [ref=f169e18] [cursor=pointer]:
+                - /url: /help
+          - button "Search docs... ⌘K" [ref=f169e22] [cursor=pointer]:
+            - generic [ref=f169e26]: Search docs...
+            - generic [ref=f169e27]: ⌘K
+      - generic [ref=f169e32]:
+        - heading "Command Palette" [level=2] [ref=f169e33]
+        - paragraph [ref=f169e34]: Search for a command to run...
+    - generic [ref=f169e35]:
+      - generic [ref=f169e37]:
+        - button [ref=f169e38]:
+          - button "Toggle Docs Sidebar" [ref=f169e40] [cursor=pointer]
+        - generic [ref=f169e44]:
+          - generic [ref=f169e45]:
+            - heading "Get Started" [level=2] [ref=f169e46]
+            - generic [ref=f169e47]:
+              - link "Welcome" [ref=f169e48] [cursor=pointer]:
+                - /url: /docs
+              - link "Quickstart" [ref=f169e51] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+              - button "Models & Pricing" [ref=f169e54] [cursor=pointer]
+              - link "Changelog" [ref=f169e60] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+              - link "Release Notes" [ref=f169e63] [cursor=pointer]:
+                - /url: /docs/release-notes
+          - generic [ref=f169e66]:
+            - heading "Agent" [level=2] [ref=f169e67]
+            - generic [ref=f169e68]:
+              - link "Overview" [ref=f169e69] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - link "Agents Window" [ref=f169e72] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - link "Projects" [ref=f169e75] [cursor=pointer]:
+                - /url: /docs/agent/projects
+              - link "Agent Review" [ref=f169e78] [cursor=pointer]:
+                - /url: /docs/agent/agent-review
+              - link "Planning" [ref=f169e81] [cursor=pointer]:
+                - /url: /docs/agent/plan-mode
+              - link "Prompting" [ref=f169e84] [cursor=pointer]:
+                - /url: /docs/agent/prompting
+              - link "Voice Chat" [ref=f169e87] [cursor=pointer]:
+                - /url: /docs/agent/voice-chat
+              - link "Debugging" [ref=f169e90] [cursor=pointer]:
+                - /url: /docs/agent/debug-mode
+              - link "Design Mode" [ref=f169e93] [cursor=pointer]:
+                - /url: /docs/agent/design-mode
+              - button "Tools" [ref=f169e96] [cursor=pointer]
+              - button "Security" [ref=f169e102] [cursor=pointer]
+          - generic [ref=f169e108]:
+            - heading "Customize" [level=2] [ref=f169e109]
+            - generic [ref=f169e110]:
+              - link "Overview" [ref=f169e111] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+              - link "Plugins" [ref=f169e114] [cursor=pointer]:
+                - /url: /docs/plugins
+              - link "Rules" [ref=f169e117] [cursor=pointer]:
+                - /url: /docs/rules
+              - link "Skills" [ref=f169e120] [cursor=pointer]:
+                - /url: /docs/skills
+              - link "Subagents" [ref=f169e123] [cursor=pointer]:
+                - /url: /docs/subagents
+              - link "Hooks" [ref=f169e126] [cursor=pointer]:
+                - /url: /docs/hooks
+              - link "MCP" [ref=f169e129] [cursor=pointer]:
+                - /url: /docs/mcp
+          - generic [ref=f169e132]:
+            - heading "Cloud Agents" [level=2] [ref=f169e133]
+            - generic [ref=f169e134]:
+              - link "Overview" [ref=f169e135] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - link "Setup" [ref=f169e138] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - link "Builds" [ref=f169e141] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - link "Apps" [ref=f169e144] [cursor=pointer]:
+                - /url: /docs/cloud-agent/apps
+              - button "Capabilities" [ref=f169e147] [cursor=pointer]
+              - link "Best Practices" [ref=f169e153] [cursor=pointer]:
+                - /url: /docs/cloud-agent/best-practices
+              - link "Choose Where Cloud Agents Run" [ref=f169e156] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted/choose-runtime
+              - link "Automations" [ref=f169e159] [cursor=pointer]:
+                - /url: /docs/cloud-agent/automations
+              - link "Bugbot" [ref=f169e162] [cursor=pointer]:
+                - /url: /docs/bugbot
+              - link "Security Review" [ref=f169e165] [cursor=pointer]:
+                - /url: /docs/security-review
+              - link "Vulnerability Remediation" [ref=f169e168] [cursor=pointer]:
+                - /url: /docs/vulnerability-remediation
+              - link "PR Routing & Approval" [ref=f169e171] [cursor=pointer]:
+                - /url: /docs/approval-agents
+              - link "Rollouts" [ref=f169e174] [cursor=pointer]:
+                - /url: /docs/rollouts
+              - link "Mobile" [ref=f169e177] [cursor=pointer]:
+                - /url: /docs/cloud-agent/mobile
+              - button "Security" [ref=f169e180] [cursor=pointer]
+              - button "Self-Hosted Machines" [ref=f169e186] [cursor=pointer]
+              - link "Settings" [ref=f169e192] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings
+              - link "API" [ref=f169e195] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints
+          - generic [ref=f169e198]:
+            - heading "Origin" [level=2] [ref=f169e199]
+            - generic [ref=f169e200]:
+              - link "Overview" [ref=f169e201] [cursor=pointer]:
+                - /url: /docs/origin
+              - button "CLI" [ref=f169e204] [cursor=pointer]
+              - link "Create a repository" [ref=f169e210] [cursor=pointer]:
+                - /url: /docs/origin/create-repository
+              - link "Mirror GitHub" [ref=f169e213] [cursor=pointer]:
+                - /url: /docs/origin/mirror-github
+              - link "Clone, Push & Pull" [ref=f169e216] [cursor=pointer]:
+                - /url: /docs/origin/git
+              - link "CloneKit in CI" [ref=f169e219] [cursor=pointer]:
+                - /url: /docs/origin/clonekit-ci
+              - link "Pull requests" [ref=f169e222] [cursor=pointer]:
+                - /url: /docs/origin/pull-requests
+              - link "Code Tours" [ref=f169e225] [cursor=pointer]:
+                - /url: /docs/origin/code-tours
+              - link "Browse & Search" [ref=f169e228] [cursor=pointer]:
+                - /url: /docs/origin/browse
+              - link "Agents and Automations" [ref=f169e231] [cursor=pointer]:
+                - /url: /docs/origin/agents
+              - button "Apps" [ref=f169e234] [cursor=pointer]
+              - link "Settings" [ref=f169e240] [cursor=pointer]:
+                - /url: /docs/origin/settings
+          - generic [ref=f169e243]:
+            - heading "Integrations" [level=2] [ref=f169e244]
+            - generic [ref=f169e245]:
+              - link "Slack" [ref=f169e246] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - link "Microsoft Teams" [ref=f169e249] [cursor=pointer]:
+                - /url: /docs/integrations/microsoft-teams
+              - link "Jira" [ref=f169e252] [cursor=pointer]:
+                - /url: /docs/integrations/jira
+              - link "Linear" [ref=f169e255] [cursor=pointer]:
+                - /url: /docs/integrations/linear
+              - link "Notion" [ref=f169e258] [cursor=pointer]:
+                - /url: /docs/integrations/notion
+              - link "GitHub" [ref=f169e261] [cursor=pointer]:
+                - /url: /docs/integrations/github
+              - link "GitLab" [ref=f169e264] [cursor=pointer]:
+                - /url: /docs/integrations/gitlab
+              - link "Azure DevOps" [ref=f169e267] [cursor=pointer]:
+                - /url: /docs/integrations/azure-devops
+              - link "Bitbucket" [ref=f169e270] [cursor=pointer]:
+                - /url: /docs/integrations/bitbucket
+              - link "JetBrains" [ref=f169e273] [cursor=pointer]:
+                - /url: /docs/integrations/jetbrains
+              - link "Xcode" [ref=f169e276] [cursor=pointer]:
+                - /url: /docs/integrations/xcode
+              - link "Tailscale" [ref=f169e279] [cursor=pointer]:
+                - /url: /docs/integrations/tailscale
+              - link "Deeplinks" [ref=f169e282] [cursor=pointer]:
+                - /url: /docs/reference/deeplinks
+          - generic [ref=f169e285]:
+            - heading "SDK" [level=2] [ref=f169e286]
+            - generic [ref=f169e287]:
+              - link "TypeScript" [ref=f169e288] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - link "Python" [ref=f169e291] [cursor=pointer]:
+                - /url: /docs/sdk/python
+              - link "Bridge" [ref=f169e294] [cursor=pointer]:
+                - /url: /docs/sdk/bridge
+              - link "Changelog" [ref=f169e297] [cursor=pointer]:
+                - /url: /docs/release-notes/sdk
+          - generic [ref=f169e300]:
+            - heading "Agent SDK" [level=2] [ref=f169e301]
+            - generic [ref=f169e302]:
+              - button "Getting started" [ref=f169e303] [cursor=pointer]
+              - button "Integrations" [ref=f169e309] [cursor=pointer]
+              - button "Extensions" [ref=f169e315] [cursor=pointer]
+              - button "Guides" [ref=f169e321] [cursor=pointer]
+              - button "Templates" [ref=f169e327] [cursor=pointer]
+              - button "Reference" [ref=f169e333] [cursor=pointer]
+          - generic [ref=f169e339]:
+            - heading "CLI" [level=2] [ref=f169e340]
+            - generic [ref=f169e341]:
+              - link "Overview" [ref=f169e342] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - link "Installation" [ref=f169e345] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - link "Capabilities" [ref=f169e348] [cursor=pointer]:
+                - /url: /docs/cli/using
+              - link "Changelog" [ref=f169e351] [cursor=pointer]:
+                - /url: /docs/cli/changelog
+              - link "Shell Mode" [ref=f169e354] [cursor=pointer]:
+                - /url: /docs/cli/shell-mode
+              - link "ACP" [ref=f169e357] [cursor=pointer]:
+                - /url: /docs/cli/acp
+              - link "Headless / CI" [ref=f169e360] [cursor=pointer]:
+                - /url: /docs/cli/headless
+              - button "Reference" [ref=f169e363] [cursor=pointer]
+              - generic [ref=f169e371]:
+                - link "Slash Commands" [ref=f169e373] [cursor=pointer]:
+                  - /url: /docs/cli/reference/slash-commands
+                - link "Parameters" [ref=f169e377] [cursor=pointer]:
+                  - /url: /docs/cli/reference/parameters
+                - link "Authentication" [ref=f169e381] [cursor=pointer]:
+                  - /url: /docs/cli/reference/authentication
+                - link "Permissions" [ref=f169e385] [cursor=pointer]:
+                  - /url: /docs/cli/reference/permissions
+                - link "Configuration" [ref=f169e389] [cursor=pointer]:
+                  - /url: /docs/cli/reference/configuration
+          - generic [ref=f169e392]:
+            - heading "Teams & Enterprise" [level=2] [ref=f169e393]
+            - generic [ref=f169e394]:
+              - button "Teams" [ref=f169e395] [cursor=pointer]
+              - button "Enterprise" [ref=f169e401] [cursor=pointer]
+      - main [ref=f169e407]:
+        - generic [ref=f169e410]:
+          - generic [ref=f169e411]:
+            - generic [ref=f169e412]: CLI
+            - generic [ref=f169e414]:
+              - heading "Configuration" [level=1] [ref=f169e415]
+              - paragraph [ref=f169e416]:
+                - text: Configure the Agent CLI using the
+                - code [ref=f169e417]: cli-config.json
+                - text: file.
+              - heading [level=2] [ref=f169e418]:
+                - link "Copy link to file-location" [ref=f169e419] [cursor=pointer]:
+                  - /url: "#file-location"
+                  - generic [ref=f169e420]: File location
+              - table [ref=f169e430]:
+                - rowgroup [ref=f169e431]:
+                  - row [ref=f169e432]:
+                    - columnheader "Type" [ref=f169e433]
+                    - columnheader "Platform" [ref=f169e434]
+                    - columnheader "Path" [ref=f169e435]
+                - rowgroup [ref=f169e436]:
+                  - row [ref=f169e437]:
+                    - cell "Global" [ref=f169e438]
+                    - cell "macOS/Linux" [ref=f169e439]
+                    - cell [ref=f169e440]:
+                      - code [ref=f169e441]: ~/.cursor/cli-config.json
+                  - row [ref=f169e442]:
+                    - cell "Global" [ref=f169e443]
+                    - cell "Windows" [ref=f169e444]
+                    - cell [ref=f169e445]:
+                      - code [ref=f169e446]: $env:USERPROFILE\.cursor\cli-config.json
+                  - row [ref=f169e447]:
+                    - cell "Project" [ref=f169e448]
+                    - cell "All" [ref=f169e449]
+                    - cell [ref=f169e450]:
+                      - code [ref=f169e451]: <project>/.cursor/cli.json
+              - alert [ref=f169e452]:
+                - paragraph [ref=f169e456]: Only permissions can be configured at the project level. All other CLI settings must be set globally.
+              - paragraph [ref=f169e457]: "Override with environment variables:"
+              - list [ref=f169e458]:
+                - listitem [ref=f169e459]:
+                  - strong [ref=f169e460]:
+                    - code [ref=f169e461]: CURSOR_CONFIG_DIR
+                  - text: ": custom directory path"
+                - listitem [ref=f169e462]:
+                  - strong [ref=f169e463]:
+                    - code [ref=f169e464]: XDG_CONFIG_HOME
+                  - text: "(Linux/BSD): uses"
+                  - code [ref=f169e465]: $XDG_CONFIG_HOME/cursor/cli-config.json
+              - heading [level=2] [ref=f169e466]:
+                - link "Copy link to schema" [ref=f169e467] [cursor=pointer]:
+                  - /url: "#schema"
+                  - generic [ref=f169e468]: Schema
+              - heading [level=3] [ref=f169e476]:
+                - link "Copy link to required-fields" [ref=f169e477] [cursor=pointer]:
+                  - /url: "#required-fields"
+                  - generic [ref=f169e478]: Required fields
+              - table [ref=f169e488]:
+                - rowgroup [ref=f169e489]:
+                  - row [ref=f169e490]:
+                    - columnheader "Field" [ref=f169e491]
+                    - columnheader "Type" [ref=f169e492]
+                    - columnheader "Description" [ref=f169e493]
+                - rowgroup [ref=f169e494]:
+                  - row [ref=f169e495]:
+                    - cell [ref=f169e496]:
+                      - code [ref=f169e497]: version
+                    - cell "number" [ref=f169e498]
+                    - cell [ref=f169e499]:
+                      - text: "Config schema version (current:"
+                      - code [ref=f169e500]: "1"
+                      - text: )
+                  - row [ref=f169e501]:
+                    - cell [ref=f169e502]:
+                      - code [ref=f169e503]: editor.vimMode
+                    - cell "boolean" [ref=f169e504]
+                    - cell [ref=f169e505]:
+                      - text: "Enable Vim keybindings (default:"
+                      - code [ref=f169e506]: "false"
+                      - text: )
+                  - row [ref=f169e507]:
+                    - cell [ref=f169e508]:
+                      - code [ref=f169e509]: permissions.allow
+                    - cell "string[]" [ref=f169e510]
+                    - cell [ref=f169e511]:
+                      - text: Permitted operations (see
+                      - link "Permissions" [ref=f169e512] [cursor=pointer]:
+                        - /url: /docs/cli/reference/permissions
+                      - text: )
+                  - row [ref=f169e513]:
+                    - cell [ref=f169e514]:
+                      - code [ref=f169e515]: permissions.deny
+                    - cell "string[]" [ref=f169e516]
+                    - cell [ref=f169e517]:
+                      - text: Forbidden operations (see
+                      - link "Permissions" [ref=f169e518] [cursor=pointer]:
+                        - /url: /docs/cli/reference/permissions
+                      - text: )
+              - heading [level=3] [ref=f169e519]:
+                - link "Copy link to optional-fields" [ref=f169e520] [cursor=pointer]:
+                  - /url: "#optional-fields"
+                  - generic [ref=f169e521]: Optional fields
+              - table [ref=f169e531]:
+                - rowgroup [ref=f169e532]:
+                  - row [ref=f169e533]:
+                    - columnheader "Field" [ref=f169e534]
+                    - columnheader "Type" [ref=f169e535]
+                    - columnheader "Description" [ref=f169e536]
+                - rowgroup [ref=f169e537]:
+                  - row [ref=f169e538]:
+                    - cell [ref=f169e539]:
+                      - code [ref=f169e540]: channel
+                    - cell "string" [ref=f169e541]
+                    - cell "Release channel used for CLI updates" [ref=f169e542]
+                  - row [ref=f169e543]:
+                    - cell [ref=f169e544]:
+                      - code [ref=f169e545]: model
+                    - cell "object" [ref=f169e546]
+                    - cell "Selected model configuration" [ref=f169e547]
+                  - row [ref=f169e548]:
+                    - cell [ref=f169e549]:
+                      - code [ref=f169e550]: maxMode
+                    - cell "boolean" [ref=f169e551]
+                    - cell "Persisted preference for max mode in the model picker" [ref=f169e552]
+                  - row [ref=f169e553]:
+                    - cell [ref=f169e554]:
+                      - code [ref=f169e555]: hasChangedDefaultModel
+                    - cell "boolean" [ref=f169e556]
+                    - cell "CLI-managed model override flag" [ref=f169e557]
+                  - row [ref=f169e558]:
+                    - cell [ref=f169e559]:
+                      - code [ref=f169e560]: notifications
+                    - cell "boolean" [ref=f169e561]
+                    - cell "Send a terminal notification when the agent finishes or needs input" [ref=f169e562]
+                  - row [ref=f169e563]:
+                    - cell [ref=f169e564]:
+                      - code [ref=f169e565]: hints
+                    - cell "boolean" [ref=f169e566]
+                    - cell "Show CLI hints while the agent is working" [ref=f169e567]
+                  - row [ref=f169e568]:
+                    - cell [ref=f169e569]:
+                      - code [ref=f169e570]: rewind
+                    - cell "boolean" [ref=f169e571]
+                    - cell [ref=f169e572]:
+                      - text: Enable
+                      - code [ref=f169e573]: /rewind
+                      - text: to restore an earlier message in the session
+                  - row [ref=f169e574]:
+                    - cell [ref=f169e575]:
+                      - code [ref=f169e576]: suggestNextPrompt
+                    - cell "boolean" [ref=f169e577]
+                    - cell "Suggest a follow-up prompt at the end of each turn" [ref=f169e578]
+                  - row [ref=f169e579]:
+                    - cell [ref=f169e580]:
+                      - code [ref=f169e581]: display.showLineNumbers
+                    - cell "boolean" [ref=f169e582]
+                    - cell "Show line numbers in rendered code blocks" [ref=f169e583]
+                  - row [ref=f169e584]:
+                    - cell [ref=f169e585]:
+                      - code [ref=f169e586]: display.showThinkingBlocks
+                    - cell "boolean" [ref=f169e587]
+                    - cell "Render model thinking blocks when available" [ref=f169e588]
+                  - row [ref=f169e589]:
+                    - cell [ref=f169e590]:
+                      - code [ref=f169e591]: display.showStatusIndicators
+                    - cell "boolean" [ref=f169e592]
+                    - cell "Enable terminal title status indicators" [ref=f169e593]
+                  - row [ref=f169e594]:
+                    - cell [ref=f169e595]:
+                      - code [ref=f169e596]: display.showStatusLineRunningTime
+                    - cell "boolean" [ref=f169e597]
+                    - cell "Show elapsed running time in the status line" [ref=f169e598]
+                  - row [ref=f169e599]:
+                    - cell [ref=f169e600]:
+                      - code [ref=f169e601]: approvalMode
+                    - cell "string" [ref=f169e602]
+                    - cell [ref=f169e603]:
+                      - text: "Approval mode:"
+                      - code [ref=f169e604]: allowlist
+                      - text: ","
+                      - code [ref=f169e605]: auto-review
+                      - text: ", or"
+                      - code [ref=f169e606]: unrestricted
+                  - row [ref=f169e607]:
+                    - cell [ref=f169e608]:
+                      - code [ref=f169e609]: sandbox.mode
+                    - cell "string" [ref=f169e610]
+                    - cell "Sandbox mode override" [ref=f169e611]
+                  - row [ref=f169e612]:
+                    - cell [ref=f169e613]:
+                      - code [ref=f169e614]: sandbox.networkAccess
+                    - cell "string" [ref=f169e615]
+                    - cell "Network access setting for sandbox mode" [ref=f169e616]
+                  - row [ref=f169e617]:
+                    - cell [ref=f169e618]:
+                      - code [ref=f169e619]: sandbox.readBoundary
+                    - cell "string" [ref=f169e620]
+                    - cell [ref=f169e621]:
+                      - link "Read access" [ref=f169e622] [cursor=pointer]:
+                        - /url: /docs/agent/security/run-modes#read-access
+                      - text: "mode:"
+                      - code [ref=f169e623]: system
+                      - text: (default) or
+                      - code [ref=f169e624]: workspace
+                  - row [ref=f169e625]:
+                    - cell [ref=f169e626]:
+                      - code [ref=f169e627]: network.useHttp1ForAgent
+                    - cell "boolean" [ref=f169e628]
+                    - cell [ref=f169e629]:
+                      - text: "Use HTTP/1.1 instead of HTTP/2 for agent connections (default:"
+                      - code [ref=f169e630]: "false"
+                      - text: )
+                  - row [ref=f169e631]:
+                    - cell [ref=f169e632]:
+                      - code [ref=f169e633]: attribution.attributeCommitsToAgent
+                    - cell "boolean" [ref=f169e634]
+                    - cell [ref=f169e635]:
+                      - text: "Add \"Made with Cursor\" trailer to Agent commits (default:"
+                      - code [ref=f169e636]: "true"
+                      - text: )
+                  - row [ref=f169e637]:
+                    - cell [ref=f169e638]:
+                      - code [ref=f169e639]: attribution.attributePRsToAgent
+                    - cell "boolean" [ref=f169e640]
+                    - cell [ref=f169e641]:
+                      - text: "Add \"Made with Cursor\" footer to Agent PRs (default:"
+                      - code [ref=f169e642]: "true"
+                      - text: )
+              - heading [level=2] [ref=f169e643]:
+                - link "Copy link to examples" [ref=f169e644] [cursor=pointer]:
+                  - /url: "#examples"
+                  - generic [ref=f169e645]: Examples
+              - heading [level=3] [ref=f169e653]:
+                - link "Copy link to minimal-config" [ref=f169e654] [cursor=pointer]:
+                  - /url: "#minimal-config"
+                  - generic [ref=f169e655]: Minimal config
+              - generic [ref=f169e665]:
+                - button [ref=f169e666] [cursor=pointer]
+                - code [ref=f169e672]:
+                  - generic [ref=f169e673]: "{"
+                  - generic [ref=f169e674]: "\"version\": 1,"
+                  - generic [ref=f169e675]: "\"editor\": { \"vimMode\": false },"
+                  - generic [ref=f169e676]: "\"permissions\": { \"allow\": [\"Shell(ls)\"], \"deny\": [] }"
+                  - generic [ref=f169e677]: "}"
+              - heading [level=3] [ref=f169e678]:
+                - link "Copy link to enable-vim-mode" [ref=f169e679] [cursor=pointer]:
+                  - /url: "#enable-vim-mode"
+                  - generic [ref=f169e680]: Enable Vim mode
+              - generic [ref=f169e690]:
+                - button [ref=f169e691] [cursor=pointer]
+                - code [ref=f169e697]:
+                  - generic [ref=f169e698]: "{"
+                  - generic [ref=f169e699]: "\"version\": 1,"
+                  - generic [ref=f169e700]: "\"editor\": { \"vimMode\": true },"
+                  - generic [ref=f169e701]: "\"permissions\": { \"allow\": [\"Shell(ls)\"], \"deny\": [] }"
+                  - generic [ref=f169e702]: "}"
+              - heading [level=3] [ref=f169e703]:
+                - link "Copy link to configure-permissions" [ref=f169e704] [cursor=pointer]:
+                  - /url: "#configure-permissions"
+                  - generic [ref=f169e705]: Configure permissions
+              - generic [ref=f169e715]:
+                - button [ref=f169e716] [cursor=pointer]
+                - code [ref=f169e722]:
+                  - generic [ref=f169e723]: "{"
+                  - generic [ref=f169e724]: "\"version\": 1,"
+                  - generic [ref=f169e725]: "\"editor\": { \"vimMode\": false },"
+                  - generic [ref=f169e726]: "\"permissions\": {"
+                  - generic [ref=f169e727]: "\"allow\": [\"Shell(ls)\", \"Shell(echo)\"],"
+                  - generic [ref=f169e728]: "\"deny\": [\"Shell(rm)\"]"
+                  - generic [ref=f169e729]: "}"
+                  - generic [ref=f169e730]: "}"
+              - paragraph [ref=f169e731]:
+                - text: See
+                - link "Permissions" [ref=f169e732] [cursor=pointer]:
+                  - /url: /docs/cli/reference/permissions
+                - text: for available permission types and examples.
+              - heading [level=2] [ref=f169e733]:
+                - link "Copy link to troubleshooting" [ref=f169e734] [cursor=pointer]:
+                  - /url: "#troubleshooting"
+                  - generic [ref=f169e735]: Troubleshooting
+              - paragraph [ref=f169e743]:
+                - strong [ref=f169e744]: Config errors
+                - text: ": Move the file aside and restart:"
+              - generic [ref=f169e747]:
+                - button [ref=f169e748] [cursor=pointer]
+                - code [ref=f169e754]:
+                  - generic [ref=f169e755]: mv ~/.cursor/cli-config.json ~/.cursor/cli-config.json.bad
+              - paragraph [ref=f169e756]:
+                - strong [ref=f169e757]: Changes don't persist
+                - text: ": Ensure valid JSON and write permissions. Some fields are CLI-managed and may be overwritten."
+              - heading [level=2] [ref=f169e758]:
+                - link "Copy link to notes" [ref=f169e759] [cursor=pointer]:
+                  - /url: "#notes"
+                  - generic [ref=f169e760]: Notes
+              - list [ref=f169e768]:
+                - listitem [ref=f169e769]: Pure JSON format (no comments)
+                - listitem [ref=f169e770]: CLI performs self-repair for missing fields
+                - listitem [ref=f169e771]:
+                  - text: Corrupted files are backed up as
+                  - code [ref=f169e772]: .bad
+                  - text: and recreated
+                - listitem [ref=f169e773]:
+                  - text: Permission entries are exact strings (see
+                  - link "Permissions" [ref=f169e774] [cursor=pointer]:
+                    - /url: /docs/cli/reference/permissions
+                  - text: for details)
+              - heading [level=2] [ref=f169e775]:
+                - link "Copy link to models" [ref=f169e776] [cursor=pointer]:
+                  - /url: "#models"
+                  - generic [ref=f169e777]: Models
+              - paragraph [ref=f169e785]:
+                - text: You can select a model for the CLI using the
+                - code [ref=f169e786]: /model
+                - text: slash command.
+              - generic [ref=f169e789]:
+                - button [ref=f169e790] [cursor=pointer]
+                - code [ref=f169e796]:
+                  - generic [ref=f169e797]: /model auto
+                  - generic [ref=f169e798]: /model gpt-5
+                  - generic [ref=f169e799]: /model sonnet-4-thinking
+              - paragraph [ref=f169e800]:
+                - text: See the
+                - link "Slash commands" [ref=f169e801] [cursor=pointer]:
+                  - /url: /docs/cli/reference/slash-commands
+                - text: docs for other commands.
+              - heading [level=2] [ref=f169e802]:
+                - link "Copy link to proxy-configuration" [ref=f169e803] [cursor=pointer]:
+                  - /url: "#proxy-configuration"
+                  - generic [ref=f169e804]: Proxy configuration
+              - paragraph [ref=f169e812]: If your network routes traffic through a proxy server, configure the CLI using environment variables and the config file.
+              - heading [level=3] [ref=f169e813]:
+                - link "Copy link to environment-variables" [ref=f169e814] [cursor=pointer]:
+                  - /url: "#environment-variables"
+                  - generic [ref=f169e815]: Environment variables
+              - paragraph [ref=f169e823]: "Set these environment variables before running the CLI:"
+              - generic [ref=f169e826]:
+                - button [ref=f169e827] [cursor=pointer]
+                - code [ref=f169e833]:
+                  - generic [ref=f169e834]: export HTTP_PROXY=http://your-proxy:port
+                  - generic [ref=f169e835]: export HTTPS_PROXY=http://your-proxy:port
+                  - generic [ref=f169e836]: export NODE_USE_ENV_PROXY=1
+              - paragraph [ref=f169e837]: "If your proxy performs SSL inspection (man-in-the-middle), also trust your organization's CA certificate:"
+              - generic [ref=f169e840]:
+                - button [ref=f169e841] [cursor=pointer]
+                - code [ref=f169e847]:
+                  - generic [ref=f169e848]: export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca-cert.pem
+              - heading [level=3] [ref=f169e849]:
+                - link "Copy link to http11-fallback" [ref=f169e850] [cursor=pointer]:
+                  - /url: "#http11-fallback"
+                  - generic [ref=f169e851]: HTTP/1.1 fallback
+              - paragraph [ref=f169e859]: "Some enterprise proxies (like Zscaler) don't support HTTP/2 bidirectional streaming. Enable HTTP/1.1 mode in your config:"
+              - generic [ref=f169e862]:
+                - button [ref=f169e863] [cursor=pointer]
+                - code [ref=f169e869]:
+                  - generic [ref=f169e870]: "{"
+                  - generic [ref=f169e871]: "\"version\": 1,"
+                  - generic [ref=f169e872]: "\"editor\": { \"vimMode\": false },"
+                  - generic [ref=f169e873]: "\"permissions\": { \"allow\": [], \"deny\": [] },"
+                  - generic [ref=f169e874]: "\"network\": {"
+                  - generic [ref=f169e875]: "\"useHttp1ForAgent\": true"
+                  - generic [ref=f169e876]: "}"
+                  - generic [ref=f169e877]: "}"
+              - paragraph [ref=f169e878]: This switches agent connections to HTTP/1.1 with Server-Sent Events (SSE), which works with most corporate proxies.
+              - paragraph [ref=f169e879]:
+                - text: See
+                - link "Network Configuration" [ref=f169e880] [cursor=pointer]:
+                  - /url: /docs/enterprise/network-configuration
+                - text: for proxy testing commands and troubleshooting.
+          - navigation [ref=f169e883]:
+            - generic [ref=f169e884]:
+              - list [ref=f169e885]:
+                - listitem [ref=f169e886]:
+                  - link "File location" [ref=f169e887] [cursor=pointer]:
+                    - /url: "#file-location"
+                - listitem [ref=f169e888]:
+                  - link "Schema" [ref=f169e889] [cursor=pointer]:
+                    - /url: "#schema"
+                - listitem [ref=f169e890]:
+                  - link "Required fields" [ref=f169e891] [cursor=pointer]:
+                    - /url: "#required-fields"
+                - listitem [ref=f169e892]:
+                  - link "Optional fields" [ref=f169e893] [cursor=pointer]:
+                    - /url: "#optional-fields"
+                - listitem [ref=f169e894]:
+                  - link "Examples" [ref=f169e895] [cursor=pointer]:
+                    - /url: "#examples"
+                - listitem [ref=f169e896]:
+                  - link "Minimal config" [ref=f169e897] [cursor=pointer]:
+                    - /url: "#minimal-config"
+                - listitem [ref=f169e898]:
+                  - link "Enable Vim mode" [ref=f169e899] [cursor=pointer]:
+                    - /url: "#enable-vim-mode"
+                - listitem [ref=f169e900]:
+                  - link "Configure permissions" [ref=f169e901] [cursor=pointer]:
+                    - /url: "#configure-permissions"
+                - listitem [ref=f169e902]:
+                  - link "Troubleshooting" [ref=f169e903] [cursor=pointer]:
+                    - /url: "#troubleshooting"
+                - listitem [ref=f169e904]:
+                  - link "Notes" [ref=f169e905] [cursor=pointer]:
+                    - /url: "#notes"
+                - listitem [ref=f169e906]:
+                  - link "Models" [ref=f169e907] [cursor=pointer]:
+                    - /url: "#models"
+                - listitem [ref=f169e908]:
+                  - link "Proxy configuration" [ref=f169e909] [cursor=pointer]:
+                    - /url: "#proxy-configuration"
+                - listitem [ref=f169e910]:
+                  - link "Environment variables" [ref=f169e911] [cursor=pointer]:
+                    - /url: "#environment-variables"
+                - listitem [ref=f169e912]:
+                  - link "HTTP/1.1 fallback" [ref=f169e913] [cursor=pointer]:
+                    - /url: "#http11-fallback"
+              - button "Copy page" [ref=f169e917] [cursor=pointer]
+  - alert [ref=f169e920]

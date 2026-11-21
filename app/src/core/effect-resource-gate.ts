@@ -15,7 +15,17 @@ import { postimagePathForTool } from "./receipt-postimage";
 import { applyPatchKernelProjections } from "./effect-kernel-tool-projection";
 import type { EffectHost, EffectRecord } from "./effect-host";
 
-const GATE_TOOLS = new Set(["write", "edit", "apply_patch", "ast_edit", "multi_edit"]);
+const GATE_TOOLS = new Set([
+  "write",
+  "edit",
+  "apply_patch",
+  "ast_edit",
+  "multi_edit",
+  "rename",
+  "fs.rename",
+  "fs.batch",
+  "shell.exec",
+]);
 
 /** SQLite / session-store mutators — fail-closed under R170 gates (ruling **690**). */
 const SQLITE_MUTATION_TOOLS = new Set([
@@ -107,12 +117,57 @@ export function mutationResourceTargets(
 ): string[] | undefined {
   // A shell command may write ANY path regardless of cwd or explicit path
   // hints; treating a declared cwd as exhaustive evidence is unsafe.
-  if (tool === "shell" || tool === "bash") return undefined;
+  if (tool === "shell" || tool === "bash" || tool === "shell.exec") return undefined;
   // SQLite mutators touch session DB paths we do not project here — fail closed.
   if (SQLITE_MUTATION_TOOLS.has(tool)) return undefined;
   if (isMcpToolName(tool)) {
     if (mcpToolClaimsReadOnly(tool)) return [];
     return mcpMutationResourceTargets(args, workspace);
+  }
+  if (tool === "rename" || tool === "fs.rename") {
+    const rawFrom =
+      (typeof args.from === "string" && args.from) ||
+      (typeof args.source === "string" && args.source);
+    const rawTo =
+      (typeof args.to === "string" && args.to) ||
+      (typeof args.destination === "string" && args.destination) ||
+      (typeof args.target === "string" && args.target);
+    const paths: string[] = [];
+    if (rawFrom) {
+      const fromPath = workspaceBoundedPath(workspace, rawFrom);
+      if (!fromPath) return undefined;
+      paths.push(fromPath);
+    }
+    if (rawTo) {
+      const toPath = workspaceBoundedPath(workspace, rawTo);
+      if (!toPath) return undefined;
+      paths.push(toPath);
+    }
+    return paths.length > 0 ? paths : undefined;
+  }
+  if (tool === "fs.batch") {
+    const ops = Array.isArray(args.ops) ? args.ops : undefined;
+    if (!ops || ops.length === 0) return undefined;
+    const paths = new Set<string>();
+    for (const op of ops) {
+      if (!op || typeof op !== "object") return undefined;
+      const opObj = op as Record<string, unknown>;
+      const rawPath =
+        (typeof opObj.path === "string" && opObj.path) ||
+        (typeof opObj.file === "string" && opObj.file) ||
+        (typeof opObj.from === "string" && opObj.from);
+      if (rawPath) {
+        const resolved = workspaceBoundedPath(workspace, rawPath);
+        if (!resolved) return undefined;
+        paths.add(resolved);
+      }
+      if (typeof opObj.to === "string" && opObj.to) {
+        const resolvedTo = workspaceBoundedPath(workspace, opObj.to);
+        if (!resolvedTo) return undefined;
+        paths.add(resolvedTo);
+      }
+    }
+    return paths.size > 0 ? [...paths] : undefined;
   }
   if (tool === "apply_patch") {
     const projections = applyPatchKernelProjections(args);

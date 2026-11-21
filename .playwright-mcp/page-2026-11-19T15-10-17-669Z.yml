@@ -1,0 +1,507 @@
+- generic [ref=f117e3]:
+  - link "Skip to main content" [ref=f117e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f117e5]:
+    - banner [ref=f117e6]:
+      - generic [ref=f117e7]:
+        - generic [ref=f117e8]:
+          - link "Cursor Home" [ref=f117e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=f117e10]
+          - navigation [ref=f117e13]:
+            - link "Docs" [ref=f117e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=f117e16] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=f117e17] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=f117e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=f117e22] [cursor=pointer]:
+          - generic [ref=f117e26]: Search docs...
+          - generic [ref=f117e27]: ⌘K
+    - generic [ref=f117e32]:
+      - heading "Command Palette" [level=2] [ref=f117e33]
+      - paragraph [ref=f117e34]: Search for a command to run...
+  - generic [ref=f117e35]:
+    - generic [ref=f117e37]:
+      - button [ref=f117e38]:
+        - button "Toggle Docs Sidebar" [ref=f117e40] [cursor=pointer]
+      - generic [ref=f117e44]:
+        - generic [ref=f117e45]:
+          - heading "Get Started" [level=2] [ref=f117e46]
+          - generic [ref=f117e47]:
+            - link "Welcome" [ref=f117e48] [cursor=pointer]:
+              - /url: /docs
+            - link "Quickstart" [ref=f117e51] [cursor=pointer]:
+              - /url: /docs/get-started/quickstart
+            - button "Models & Pricing" [ref=f117e54] [cursor=pointer]
+            - link "Changelog" [ref=f117e60] [cursor=pointer]:
+              - /url: https://cursor.com/changelog
+            - link "Release Notes" [ref=f117e63] [cursor=pointer]:
+              - /url: /docs/release-notes
+        - generic [ref=f117e66]:
+          - heading "Agent" [level=2] [ref=f117e67]
+          - generic [ref=f117e68]:
+            - link "Overview" [ref=f117e69] [cursor=pointer]:
+              - /url: /docs/agent/overview
+            - link "Agents Window" [ref=f117e72] [cursor=pointer]:
+              - /url: /docs/agent/agents-window
+            - link "Projects" [ref=f117e75] [cursor=pointer]:
+              - /url: /docs/agent/projects
+            - link "Agent Review" [ref=f117e78] [cursor=pointer]:
+              - /url: /docs/agent/agent-review
+            - link "Planning" [ref=f117e81] [cursor=pointer]:
+              - /url: /docs/agent/plan-mode
+            - link "Prompting" [ref=f117e84] [cursor=pointer]:
+              - /url: /docs/agent/prompting
+            - link "Voice Chat" [ref=f117e87] [cursor=pointer]:
+              - /url: /docs/agent/voice-chat
+            - link "Debugging" [ref=f117e90] [cursor=pointer]:
+              - /url: /docs/agent/debug-mode
+            - link "Design Mode" [ref=f117e93] [cursor=pointer]:
+              - /url: /docs/agent/design-mode
+            - button "Tools" [ref=f117e96] [cursor=pointer]
+            - button "Security" [ref=f117e102] [cursor=pointer]
+        - generic [ref=f117e108]:
+          - heading "Customize" [level=2] [ref=f117e109]
+          - generic [ref=f117e110]:
+            - link "Overview" [ref=f117e111] [cursor=pointer]:
+              - /url: /docs/customize-cursor
+            - link "Plugins" [ref=f117e114] [cursor=pointer]:
+              - /url: /docs/plugins
+            - link "Rules" [ref=f117e117] [cursor=pointer]:
+              - /url: /docs/rules
+            - link "Skills" [ref=f117e120] [cursor=pointer]:
+              - /url: /docs/skills
+            - link "Subagents" [ref=f117e123] [cursor=pointer]:
+              - /url: /docs/subagents
+            - link "Hooks" [ref=f117e126] [cursor=pointer]:
+              - /url: /docs/hooks
+            - link "MCP" [ref=f117e129] [cursor=pointer]:
+              - /url: /docs/mcp
+        - generic [ref=f117e132]:
+          - heading "Cloud Agents" [level=2] [ref=f117e133]
+          - generic [ref=f117e134]:
+            - link "Overview" [ref=f117e135] [cursor=pointer]:
+              - /url: /docs/cloud-agent
+            - link "Setup" [ref=f117e138] [cursor=pointer]:
+              - /url: /docs/cloud-agent/setup
+            - link "Builds" [ref=f117e141] [cursor=pointer]:
+              - /url: /docs/cloud-agent/builds
+            - link "Apps" [ref=f117e144] [cursor=pointer]:
+              - /url: /docs/cloud-agent/apps
+            - button "Capabilities" [ref=f117e147] [cursor=pointer]
+            - link "Best Practices" [ref=f117e153] [cursor=pointer]:
+              - /url: /docs/cloud-agent/best-practices
+            - link "Choose Where Cloud Agents Run" [ref=f117e156] [cursor=pointer]:
+              - /url: /docs/cloud-agent/self-hosted/choose-runtime
+            - link "Automations" [ref=f117e159] [cursor=pointer]:
+              - /url: /docs/cloud-agent/automations
+            - link "Bugbot" [ref=f117e162] [cursor=pointer]:
+              - /url: /docs/bugbot
+            - link "Security Review" [ref=f117e165] [cursor=pointer]:
+              - /url: /docs/security-review
+            - link "Vulnerability Remediation" [ref=f117e168] [cursor=pointer]:
+              - /url: /docs/vulnerability-remediation
+            - link "PR Routing & Approval" [ref=f117e171] [cursor=pointer]:
+              - /url: /docs/approval-agents
+            - link "Rollouts" [ref=f117e174] [cursor=pointer]:
+              - /url: /docs/rollouts
+            - link "Mobile" [ref=f117e177] [cursor=pointer]:
+              - /url: /docs/cloud-agent/mobile
+            - button "Security" [ref=f117e180] [cursor=pointer]
+            - button "Self-Hosted Machines" [ref=f117e186] [cursor=pointer]
+            - link "Settings" [ref=f117e192] [cursor=pointer]:
+              - /url: /docs/cloud-agent/settings
+            - link "API" [ref=f117e195] [cursor=pointer]:
+              - /url: /docs/cloud-agent/api/endpoints
+        - generic [ref=f117e198]:
+          - heading "Origin" [level=2] [ref=f117e199]
+          - generic [ref=f117e200]:
+            - link "Overview" [ref=f117e201] [cursor=pointer]:
+              - /url: /docs/origin
+            - button "CLI" [ref=f117e204] [cursor=pointer]
+            - link "Create a repository" [ref=f117e210] [cursor=pointer]:
+              - /url: /docs/origin/create-repository
+            - link "Mirror GitHub" [ref=f117e213] [cursor=pointer]:
+              - /url: /docs/origin/mirror-github
+            - link "Clone, Push & Pull" [ref=f117e216] [cursor=pointer]:
+              - /url: /docs/origin/git
+            - link "CloneKit in CI" [ref=f117e219] [cursor=pointer]:
+              - /url: /docs/origin/clonekit-ci
+            - link "Pull requests" [ref=f117e222] [cursor=pointer]:
+              - /url: /docs/origin/pull-requests
+            - link "Code Tours" [ref=f117e225] [cursor=pointer]:
+              - /url: /docs/origin/code-tours
+            - link "Browse & Search" [ref=f117e228] [cursor=pointer]:
+              - /url: /docs/origin/browse
+            - link "Agents and Automations" [ref=f117e231] [cursor=pointer]:
+              - /url: /docs/origin/agents
+            - button "Apps" [ref=f117e234] [cursor=pointer]
+            - link "Settings" [ref=f117e240] [cursor=pointer]:
+              - /url: /docs/origin/settings
+        - generic [ref=f117e243]:
+          - heading "Integrations" [level=2] [ref=f117e244]
+          - generic [ref=f117e245]:
+            - link "Slack" [ref=f117e246] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+            - link "Microsoft Teams" [ref=f117e249] [cursor=pointer]:
+              - /url: /docs/integrations/microsoft-teams
+            - link "Jira" [ref=f117e252] [cursor=pointer]:
+              - /url: /docs/integrations/jira
+            - link "Linear" [ref=f117e255] [cursor=pointer]:
+              - /url: /docs/integrations/linear
+            - link "Notion" [ref=f117e258] [cursor=pointer]:
+              - /url: /docs/integrations/notion
+            - link "GitHub" [ref=f117e261] [cursor=pointer]:
+              - /url: /docs/integrations/github
+            - link "GitLab" [ref=f117e264] [cursor=pointer]:
+              - /url: /docs/integrations/gitlab
+            - link "Azure DevOps" [ref=f117e267] [cursor=pointer]:
+              - /url: /docs/integrations/azure-devops
+            - link "Bitbucket" [ref=f117e270] [cursor=pointer]:
+              - /url: /docs/integrations/bitbucket
+            - link "JetBrains" [ref=f117e273] [cursor=pointer]:
+              - /url: /docs/integrations/jetbrains
+            - link "Xcode" [ref=f117e276] [cursor=pointer]:
+              - /url: /docs/integrations/xcode
+            - link "Tailscale" [ref=f117e279] [cursor=pointer]:
+              - /url: /docs/integrations/tailscale
+            - link "Deeplinks" [ref=f117e282] [cursor=pointer]:
+              - /url: /docs/reference/deeplinks
+        - generic [ref=f117e285]:
+          - heading "SDK" [level=2] [ref=f117e286]
+          - generic [ref=f117e287]:
+            - link "TypeScript" [ref=f117e288] [cursor=pointer]:
+              - /url: /docs/sdk/typescript
+            - link "Python" [ref=f117e291] [cursor=pointer]:
+              - /url: /docs/sdk/python
+            - link "Bridge" [ref=f117e294] [cursor=pointer]:
+              - /url: /docs/sdk/bridge
+            - link "Changelog" [ref=f117e297] [cursor=pointer]:
+              - /url: /docs/release-notes/sdk
+        - generic [ref=f117e300]:
+          - heading "Agent SDK" [level=2] [ref=f117e301]
+          - generic [ref=f117e302]:
+            - button "Getting started" [ref=f117e303] [cursor=pointer]
+            - button "Integrations" [ref=f117e309] [cursor=pointer]
+            - button "Extensions" [ref=f117e315] [cursor=pointer]
+            - button "Guides" [ref=f117e321] [cursor=pointer]
+            - button "Templates" [ref=f117e327] [cursor=pointer]
+            - button "Reference" [ref=f117e333] [cursor=pointer]
+        - generic [ref=f117e339]:
+          - heading "CLI" [level=2] [ref=f117e340]
+          - generic [ref=f117e341]:
+            - link "Overview" [ref=f117e342] [cursor=pointer]:
+              - /url: /docs/cli/overview
+            - link "Installation" [ref=f117e345] [cursor=pointer]:
+              - /url: /docs/cli/installation
+            - link "Capabilities" [ref=f117e348] [cursor=pointer]:
+              - /url: /docs/cli/using
+            - link "Changelog" [ref=f117e351] [cursor=pointer]:
+              - /url: /docs/cli/changelog
+            - link "Shell Mode" [ref=f117e354] [cursor=pointer]:
+              - /url: /docs/cli/shell-mode
+            - link "ACP" [ref=f117e357] [cursor=pointer]:
+              - /url: /docs/cli/acp
+            - link "Headless / CI" [ref=f117e360] [cursor=pointer]:
+              - /url: /docs/cli/headless
+            - button "Reference" [ref=f117e363] [cursor=pointer]
+        - generic [ref=f117e369]:
+          - heading "Teams & Enterprise" [level=2] [ref=f117e370]
+          - generic [ref=f117e371]:
+            - button "Teams" [ref=f117e372] [cursor=pointer]
+            - button "Enterprise" [ref=f117e378] [cursor=pointer]
+    - main [ref=f117e384]:
+      - generic [ref=f117e387]:
+        - generic [ref=f117e388]:
+          - generic [ref=f117e389]: Agent
+          - generic [ref=f117e391]:
+            - heading "Projects" [level=1] [ref=f117e392]
+            - paragraph [ref=f117e393]:
+              - text: A Project takes on a larger body of work, such as a feature, a migration, or a full app. You direct it by chatting with its coordinator agent. The coordinator doesn't write code itself. It plans the work, delegates it to
+              - link "agents" [ref=f117e394] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - text: that write the code, and brings the finished work back to you to check. Projects live in the left-hand nav of the
+              - link "Agents Window" [ref=f117e395] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - text: and run on
+              - link "Cloud Agents" [ref=f117e396] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - text: .
+            - alert [ref=f117e397]:
+              - paragraph [ref=f117e401]: "Projects is available on every plan that includes Cloud Agents: Premium and higher, Teams, Enterprise, and legacy paid Cursor plans. Enterprise teams need Cursor 3.21.9 or later. Projects isn't available on Free, Plus, or the legacy Hobby plan, which don't include Cloud Agents. It also isn't available with Privacy Mode (Legacy), because Projects run on Cloud Agents, which store code in the cloud while they run."
+            - heading [level=2] [ref=f117e402]:
+              - link "Copy link to how-a-project-works" [ref=f117e403] [cursor=pointer]:
+                - /url: "#how-a-project-works"
+                - generic [ref=f117e404]: How a Project works
+            - paragraph [ref=f117e412]: A Project maintains context over months of work, delegates tasks to many agents in parallel, and performs recurring work without being prompted.
+            - list [ref=f117e413]:
+              - listitem [ref=f117e414]:
+                - strong [ref=f117e415]: The coordinator plans and delegates.
+                - text: It creates and manages agents on your behalf, running as many in parallel as the work needs. Because it delegates rather than executes, it stays responsive to your direction.
+              - listitem [ref=f117e416]:
+                - strong [ref=f117e417]: Agents work inside the Project.
+                - text: Open any agent the coordinator starts to follow its work or talk to it directly.
+              - listitem [ref=f117e418]:
+                - strong [ref=f117e419]: Work reaches other repos.
+                - text: When the work needs another repo or environment, the coordinator asks for access and starts agents there. See
+                - link "Access Other Repositories" [ref=f117e420] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/repo-access#in-a-project
+                - text: .
+            - heading [level=2] [ref=f117e421]:
+              - link "Copy link to create-a-project" [ref=f117e422] [cursor=pointer]:
+                - /url: "#create-a-project"
+                - generic [ref=f117e423]: Create a Project
+            - generic [ref=f117e431]:
+              - generic [ref=f117e433]:
+                - generic [ref=f117e434]: "1"
+                - generic [ref=f117e436]:
+                  - heading "Open Projects in the left-hand nav" [level=3] [ref=f117e437]
+                  - paragraph [ref=f117e439]:
+                    - text: In the
+                    - link "Agents Window" [ref=f117e440] [cursor=pointer]:
+                      - /url: /docs/agent/agents-window
+                    - text: ", find the"
+                    - strong [ref=f117e441]: Projects
+                    - text: section in the sidebar and click
+                    - strong [ref=f117e442]: New Project
+                    - text: .
+              - generic [ref=f117e443]:
+                - generic [ref=f117e444]: "2"
+                - generic [ref=f117e446]:
+                  - heading "Name the Project" [level=3] [ref=f117e447]
+                  - paragraph [ref=f117e449]:
+                    - text: Choose an icon and enter a project name. If you leave the name empty, the Project is called
+                    - strong [ref=f117e450]: New Project
+                    - text: .
+              - generic [ref=f117e451]:
+                - generic [ref=f117e452]: "3"
+                - generic [ref=f117e454]:
+                  - heading "Choose a workspace and model" [level=3] [ref=f117e455]
+                  - paragraph [ref=f117e457]:
+                    - text: Under
+                    - strong [ref=f117e458]: Workspace
+                    - text: ", pick the repository the Project works in. Projects run in the cloud, so the list shows the repositories available to your cloud agents. If GitHub isn't connected yet, the menu offers"
+                    - strong [ref=f117e459]: Connect GitHub
+                    - text: . Under
+                    - strong [ref=f117e460]: Model
+                    - text: ", pick the model the coordinator uses."
+              - generic [ref=f117e461]:
+                - generic [ref=f117e462]: "4"
+                - generic [ref=f117e464]:
+                  - heading "Click Create Project" [level=3] [ref=f117e465]
+                  - paragraph [ref=f117e467]: The Project opens as a chat with its coordinator. Describe what you want built, and the coordinator takes it from there.
+            - paragraph [ref=f117e468]:
+              - text: To create and manage Projects from code, use the
+              - link "Projects endpoints" [ref=f117e469] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints#projects
+              - text: of the Cloud Agents API.
+            - paragraph [ref=f117e470]: "Projects work best on work that outlives a single chat: a feature with several PRs, a migration, or a job you want handled while you're away."
+            - heading [level=2] [ref=f117e471]:
+              - link "Copy link to add-and-remove-chats" [ref=f117e472] [cursor=pointer]:
+                - /url: "#add-and-remove-chats"
+                - generic [ref=f117e473]: Add and remove chats
+            - paragraph [ref=f117e481]:
+              - text: Drag an eligible top-level Cloud Agent chat from the sidebar onto a Project row to add it. You can also open the chat's sidebar menu and choose
+              - strong [ref=f117e482]: Add to Project
+              - text: . If the action is available for a local chat, Cursor converts it to Remote Control before adding it. The chat then appears under the Project row and in the
+              - strong [ref=f117e483]: Agents
+              - text: list above the Project's chat input.
+            - paragraph [ref=f117e484]:
+              - text: To take a chat out, open its menu in the
+              - strong [ref=f117e485]: Agents
+              - text: list and choose
+              - strong [ref=f117e486]: Remove from Project
+              - text: .
+            - heading [level=2] [ref=f117e487]:
+              - link "Copy link to cloud-by-default-local-when-needed" [ref=f117e488] [cursor=pointer]:
+                - /url: "#cloud-by-default-local-when-needed"
+                - generic [ref=f117e489]: Cloud by default, local when needed
+            - paragraph [ref=f117e497]: A Project runs on its own computer in the cloud, so closing your laptop doesn't stop it. Running in the cloud also lets a Project run more agents in parallel than your laptop could support.
+            - paragraph [ref=f117e498]: When something needs testing on your machine, the coordinator starts a local agent to run it there.
+            - heading [level=2] [ref=f117e499]:
+              - link "Copy link to shared-context" [ref=f117e500] [cursor=pointer]:
+                - /url: "#shared-context"
+                - generic [ref=f117e501]: Shared context
+            - paragraph [ref=f117e509]: You shouldn't have to onboard an agent every time you start a task. Each Project maintains a set of files that sync across every cloud and local machine its agents use. Agents add research and artifacts, along with what they learn about the codebase and how you prefer work to be done. If one agent figures out how to test a service, every future agent can use those instructions.
+            - paragraph [ref=f117e510]: The shared context grows with the Project, making the coordinator more effective over time.
+            - heading [level=2] [ref=f117e511]:
+              - link "Copy link to subscriptions" [ref=f117e512] [cursor=pointer]:
+                - /url: "#subscriptions"
+                - generic [ref=f117e513]: Subscriptions
+            - paragraph [ref=f117e521]:
+              - text: Tell the coordinator to watch a Slack channel, run on a schedule, or follow your pull requests. It then acts on the signals it detects without waiting for your prompt. For example, connect
+              - link "Slack" [ref=f117e522] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - text: ", point the coordinator at a bug-report channel, and it delegates a fix each time a bug comes in."
+            - paragraph [ref=f117e523]:
+              - text: The coordinator creates a subscription when you ask it to. Once it has at least one, a
+              - strong [ref=f117e524]: Listening
+              - text: pill appears above the chat input. Click it to see every event the Project listens for, such as a message posted in a channel, PR activity in a repository, CI runs on a branch, or a schedule like every day at 8:00 AM. Remove a subscription from the same list when you no longer need it.
+            - heading [level=2] [ref=f117e525]:
+              - link "Copy link to multiplayer-projects" [ref=f117e526] [cursor=pointer]:
+                - /url: "#multiplayer-projects"
+                - generic [ref=f117e527]: Multiplayer Projects
+            - paragraph [ref=f117e535]: "Invite teammates into a Project to work on it together. Each person who joins gets their own chat in the Project, with their own coordinator and workers. Their chat runs and bills as them. Members share two parts of the Project:"
+            - list [ref=f117e536]:
+              - listitem [ref=f117e537]:
+                - strong [ref=f117e538]: The task board.
+                - text: Everyone works from the same tasks in the Project's list and board.
+              - listitem [ref=f117e539]:
+                - strong [ref=f117e540]: Shared context.
+                - text: The Project's
+                - link "shared context" [ref=f117e541] [cursor=pointer]:
+                  - /url: "#shared-context"
+                - text: ", shown as"
+                - strong [ref=f117e542]: Context
+                - text: in the app, is one Agent Store that every member's agents read and write.
+            - alert [ref=f117e543]:
+              - paragraph [ref=f117e547]: Sharing a Project needs a team account and Cursor 3.26.13 or later.
+            - heading [level=3] [ref=f117e548]:
+              - link "Copy link to how-coordinators-message-each-other" [ref=f117e549] [cursor=pointer]:
+                - /url: "#how-coordinators-message-each-other"
+                - generic [ref=f117e550]: How coordinators message each other
+            - paragraph [ref=f117e558]: "When your coordinator needs something from a teammate's work, it messages their coordinator directly, so you don't have to relay it. Cursor delivers every message and holds it to these rules:"
+            - list [ref=f117e559]:
+              - listitem [ref=f117e560]:
+                - strong [ref=f117e561]: Messages are labeled as agent input.
+                - text: The receiving agent is told which teammate's agent sent the message. It treats the text as untrusted input to weigh, not as a request from the person it works for, and asks before sharing that person's personal files or connector data.
+              - listitem [ref=f117e562]:
+                - strong [ref=f117e563]: Your chat isn't interrupted.
+                - text: A teammate's message goes to a side chat forked from your chat, called
+                - strong [ref=f117e564]: "Chat with {name}'s agent"
+                - text: . It answers from what your chat knows, its reply goes back to the sender's chat, and your chat gets a note about the exchange on its next turn.
+              - listitem [ref=f117e565]:
+                - strong [ref=f117e566]: Side chats only answer.
+                - text: You can read, stop, or archive a side chat, but you can't message it. It never shares secrets, credentials, or tokens. It can read the task board but not change it, and it can't ask you questions, request access, connect source control, or manage routines.
+            - heading [level=3] [ref=f117e567]:
+              - link "Copy link to context-and-your-personal-store" [ref=f117e568] [cursor=pointer]:
+                - /url: "#context-and-your-personal-store"
+                - generic [ref=f117e569]: Context and your personal store
+            - paragraph [ref=f117e577]: "Agents in a Project use two stores:"
+            - table [ref=f117e579]:
+              - rowgroup [ref=f117e580]:
+                - row [ref=f117e581]:
+                  - columnheader "Store" [ref=f117e582]
+                  - columnheader "Path" [ref=f117e583]
+                  - columnheader "Who reads and writes it" [ref=f117e584]
+              - rowgroup [ref=f117e585]:
+                - row [ref=f117e586]:
+                  - cell [ref=f117e587]:
+                    - text: Project store (
+                    - strong [ref=f117e588]: Context
+                    - text: )
+                  - cell [ref=f117e589]:
+                    - code [ref=f117e590]: /cursor/stores/self
+                  - cell "Every member's agents" [ref=f117e591]
+                - row [ref=f117e592]:
+                  - cell "Personal user store" [ref=f117e593]
+                  - cell [ref=f117e594]:
+                    - code [ref=f117e595]: /cursor/stores/user
+                  - cell "Your own agents" [ref=f117e596]
+            - paragraph [ref=f117e597]:
+              - text: Each person's agents mount their own personal store at
+              - code [ref=f117e598]: /cursor/stores/user
+              - text: ", so a teammate's agents never see yours. It holds your preferences and skills, which follow you between Projects without reaching your teammates. When a teammate joins, your coordinator can offer to copy entries from your preferences that describe how to work in this Project into the Project's rules. It copies only what you approve."
+            - heading [level=3] [ref=f117e599]:
+              - link "Copy link to who-can-join" [ref=f117e600] [cursor=pointer]:
+                - /url: "#who-can-join"
+                - generic [ref=f117e601]: Who can join
+            - paragraph [ref=f117e609]: Projects are shared within a Cursor team, and joining takes an invite. Someone on a personal account, or on another team, can't join.
+            - generic [ref=f117e610]:
+              - generic [ref=f117e612]:
+                - generic [ref=f117e613]: "1"
+                - generic [ref=f117e615]:
+                  - heading "Open the invite menu" [level=3] [ref=f117e616]
+                  - paragraph [ref=f117e618]:
+                    - text: At the top of the Project, click
+                    - strong [ref=f117e619]: Invite
+                    - text: . After the first invite, click the row of faces in its place.
+              - generic [ref=f117e620]:
+                - generic [ref=f117e621]: "2"
+                - generic [ref=f117e623]:
+                  - heading "Invite teammates" [level=3] [ref=f117e624]
+                  - paragraph [ref=f117e626]:
+                    - text: Under
+                    - strong [ref=f117e627]: Invite teammates to this project
+                    - text: ", search for teammates by name or email and send the invite."
+              - generic [ref=f117e628]:
+                - generic [ref=f117e629]: "3"
+                - generic [ref=f117e631]:
+                  - heading "Your teammate joins" [level=3] [ref=f117e632]
+                  - paragraph [ref=f117e634]:
+                    - text: Your teammate clicks
+                    - strong [ref=f117e635]: Accept Invite
+                    - text: on the Project's invite card and gets their own chat in the Project.
+            - paragraph [ref=f117e636]:
+              - text: "The owner and anyone who has joined can invite teammates. People can also join from the Project's link:"
+              - strong [ref=f117e637]: Copy link
+              - text: in the same menu copies it, and only people in the Project can copy it. The owner can choose
+              - strong [ref=f117e638]: Reset Share Link
+              - text: to stop earlier copies from working.
+            - paragraph [ref=f117e639]: A teammate needs access to the Project's repository to join. Joining isn't available with Privacy Mode (Legacy), on a Project that runs on a self-hosted machine, or on an archived Project.
+            - paragraph [ref=f117e640]:
+              - text: To stop working in a shared Project, open its menu in the sidebar and choose
+              - strong [ref=f117e641]: Leave Project
+              - text: . You can rejoin later from an invite or the link. The owner can remove anyone else from the invite menu with
+              - strong [ref=f117e642]: Remove
+              - text: .
+            - heading [level=2] [ref=f117e643]:
+              - link "Copy link to related-pages" [ref=f117e644] [cursor=pointer]:
+                - /url: "#related-pages"
+                - generic [ref=f117e645]: Related pages
+            - list [ref=f117e653]:
+              - listitem [ref=f117e654]:
+                - link "Agents Window" [ref=f117e655] [cursor=pointer]:
+                  - /url: /docs/agent/agents-window
+              - listitem [ref=f117e656]:
+                - link "Cloud Agents" [ref=f117e657] [cursor=pointer]:
+                  - /url: /docs/cloud-agent
+              - listitem [ref=f117e658]:
+                - link "Subagents" [ref=f117e659] [cursor=pointer]:
+                  - /url: /docs/subagents
+              - listitem [ref=f117e660]:
+                - link "Automations" [ref=f117e661] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/automations
+              - listitem [ref=f117e662]:
+                - link "Slack integration" [ref=f117e663] [cursor=pointer]:
+                  - /url: /docs/integrations/slack
+        - navigation [ref=f117e666]:
+          - generic [ref=f117e667]:
+            - list [ref=f117e668]:
+              - listitem [ref=f117e669]:
+                - link "How a Project works" [ref=f117e670] [cursor=pointer]:
+                  - /url: "#how-a-project-works"
+              - listitem [ref=f117e671]:
+                - link "Create a Project" [ref=f117e672] [cursor=pointer]:
+                  - /url: "#create-a-project"
+              - listitem [ref=f117e673]:
+                - link "Add and remove chats" [ref=f117e674] [cursor=pointer]:
+                  - /url: "#add-and-remove-chats"
+              - listitem [ref=f117e675]:
+                - link "Cloud by default, local when needed" [ref=f117e676] [cursor=pointer]:
+                  - /url: "#cloud-by-default-local-when-needed"
+              - listitem [ref=f117e677]:
+                - link "Shared context" [ref=f117e678] [cursor=pointer]:
+                  - /url: "#shared-context"
+              - listitem [ref=f117e679]:
+                - link "Subscriptions" [ref=f117e680] [cursor=pointer]:
+                  - /url: "#subscriptions"
+              - listitem [ref=f117e681]:
+                - link "Multiplayer Projects" [ref=f117e682] [cursor=pointer]:
+                  - /url: "#multiplayer-projects"
+              - listitem [ref=f117e683]:
+                - link "How coordinators message each other" [ref=f117e684] [cursor=pointer]:
+                  - /url: "#how-coordinators-message-each-other"
+              - listitem [ref=f117e685]:
+                - link "Context and your personal store" [ref=f117e686] [cursor=pointer]:
+                  - /url: "#context-and-your-personal-store"
+              - listitem [ref=f117e687]:
+                - link "Who can join" [ref=f117e688] [cursor=pointer]:
+                  - /url: "#who-can-join"
+              - listitem [ref=f117e689]:
+                - link "Related pages" [ref=f117e690] [cursor=pointer]:
+                  - /url: "#related-pages"
+            - button "Copy page" [ref=f117e694] [cursor=pointer]

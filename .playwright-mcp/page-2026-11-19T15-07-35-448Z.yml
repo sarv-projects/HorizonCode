@@ -1,0 +1,532 @@
+- generic [active] [ref=f9e1]:
+  - alert [ref=f9e2]
+  - generic [ref=f9e3]:
+    - generic [ref=f9e4]:
+      - link "Skip to main content" [ref=f9e5] [cursor=pointer]:
+        - /url: "#main-content"
+      - generic [ref=f9e6]:
+        - banner [ref=f9e7]:
+          - generic [ref=f9e8]:
+            - generic [ref=f9e9]:
+              - link "Cursor Home" [ref=f9e10] [cursor=pointer]:
+                - /url: /docs
+                - img "Cursor Logo" [ref=f9e11]
+              - navigation [ref=f9e14]:
+                - link "Docs" [ref=f9e15] [cursor=pointer]:
+                  - /url: /docs
+                - link "API" [ref=f9e17] [cursor=pointer]:
+                  - /url: /docs/api
+                - link "Learn" [ref=f9e18] [cursor=pointer]:
+                  - /url: /learn
+                - link "Help" [ref=f9e19] [cursor=pointer]:
+                  - /url: /help
+            - button "Search docs... ⌘K" [ref=f9e23] [cursor=pointer]:
+              - generic [ref=f9e27]: Search docs...
+              - generic [ref=f9e28]: ⌘K
+            - generic [ref=f9e30]:
+              - link "Sign in" [ref=f9e31] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard
+              - link "Download" [ref=f9e32] [cursor=pointer]:
+                - /url: https://cursor.com/downloads
+        - generic [ref=f9e33]:
+          - heading "Command Palette" [level=2] [ref=f9e34]
+          - paragraph [ref=f9e35]: Search for a command to run...
+      - generic [ref=f9e36]:
+        - generic [ref=f9e38]:
+          - button [ref=f9e39]:
+            - button "Toggle Docs Sidebar" [ref=f9e41] [cursor=pointer]
+          - generic [ref=f9e45]:
+            - generic [ref=f9e46]:
+              - heading "Get Started" [level=2] [ref=f9e47]
+              - generic [ref=f9e48]:
+                - link "Welcome" [ref=f9e49] [cursor=pointer]:
+                  - /url: /docs
+                - link "Quickstart" [ref=f9e52] [cursor=pointer]:
+                  - /url: /docs/get-started/quickstart
+                - button "Models & Pricing" [ref=f9e55] [cursor=pointer]
+                - link "Changelog" [ref=f9e61] [cursor=pointer]:
+                  - /url: https://cursor.com/changelog
+                - link "Release Notes" [ref=f9e64] [cursor=pointer]:
+                  - /url: /docs/release-notes
+            - generic [ref=f9e67]:
+              - heading "Agent" [level=2] [ref=f9e68]
+              - generic [ref=f9e69]:
+                - link "Overview" [ref=f9e70] [cursor=pointer]:
+                  - /url: /docs/agent/overview
+                - link "Agents Window" [ref=f9e73] [cursor=pointer]:
+                  - /url: /docs/agent/agents-window
+                - link "Projects" [ref=f9e76] [cursor=pointer]:
+                  - /url: /docs/agent/projects
+                - link "Agent Review" [ref=f9e79] [cursor=pointer]:
+                  - /url: /docs/agent/agent-review
+                - link "Planning" [ref=f9e82] [cursor=pointer]:
+                  - /url: /docs/agent/plan-mode
+                - link "Prompting" [ref=f9e85] [cursor=pointer]:
+                  - /url: /docs/agent/prompting
+                - link "Voice Chat" [ref=f9e88] [cursor=pointer]:
+                  - /url: /docs/agent/voice-chat
+                - link "Debugging" [ref=f9e91] [cursor=pointer]:
+                  - /url: /docs/agent/debug-mode
+                - link "Design Mode" [ref=f9e94] [cursor=pointer]:
+                  - /url: /docs/agent/design-mode
+                - button "Tools" [ref=f9e97] [cursor=pointer]
+                - button "Security" [ref=f9e103] [cursor=pointer]
+            - generic [ref=f9e109]:
+              - heading "Customize" [level=2] [ref=f9e110]
+              - generic [ref=f9e111]:
+                - link "Overview" [ref=f9e112] [cursor=pointer]:
+                  - /url: /docs/customize-cursor
+                - link "Plugins" [ref=f9e115] [cursor=pointer]:
+                  - /url: /docs/plugins
+                - link "Rules" [ref=f9e118] [cursor=pointer]:
+                  - /url: /docs/rules
+                - link "Skills" [ref=f9e121] [cursor=pointer]:
+                  - /url: /docs/skills
+                - link "Subagents" [ref=f9e124] [cursor=pointer]:
+                  - /url: /docs/subagents
+                - link "Hooks" [ref=f9e127] [cursor=pointer]:
+                  - /url: /docs/hooks
+                - link "MCP" [ref=f9e130] [cursor=pointer]:
+                  - /url: /docs/mcp
+            - generic [ref=f9e133]:
+              - heading "Cloud Agents" [level=2] [ref=f9e134]
+              - generic [ref=f9e135]:
+                - link "Overview" [ref=f9e136] [cursor=pointer]:
+                  - /url: /docs/cloud-agent
+                - link "Setup" [ref=f9e139] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/setup
+                - link "Builds" [ref=f9e142] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/builds
+                - link "Apps" [ref=f9e145] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/apps
+                - button "Capabilities" [ref=f9e148] [cursor=pointer]
+                - link "Best Practices" [ref=f9e154] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/best-practices
+                - link "Choose Where Cloud Agents Run" [ref=f9e157] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/self-hosted/choose-runtime
+                - link "Automations" [ref=f9e160] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/automations
+                - link "Bugbot" [ref=f9e163] [cursor=pointer]:
+                  - /url: /docs/bugbot
+                - link "Security Review" [ref=f9e166] [cursor=pointer]:
+                  - /url: /docs/security-review
+                - link "Vulnerability Remediation" [ref=f9e169] [cursor=pointer]:
+                  - /url: /docs/vulnerability-remediation
+                - link "PR Routing & Approval" [ref=f9e172] [cursor=pointer]:
+                  - /url: /docs/approval-agents
+                - link "Rollouts" [ref=f9e175] [cursor=pointer]:
+                  - /url: /docs/rollouts
+                - link "Mobile" [ref=f9e178] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/mobile
+                - button "Security" [ref=f9e181] [cursor=pointer]
+                - button "Self-Hosted Machines" [ref=f9e187] [cursor=pointer]
+                - link "Settings" [ref=f9e193] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/settings
+                - link "API" [ref=f9e196] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/api/endpoints
+            - generic [ref=f9e199]:
+              - heading "Origin" [level=2] [ref=f9e200]
+              - generic [ref=f9e201]:
+                - link "Overview" [ref=f9e202] [cursor=pointer]:
+                  - /url: /docs/origin
+                - button "CLI" [ref=f9e205] [cursor=pointer]
+                - link "Create a repository" [ref=f9e211] [cursor=pointer]:
+                  - /url: /docs/origin/create-repository
+                - link "Mirror GitHub" [ref=f9e214] [cursor=pointer]:
+                  - /url: /docs/origin/mirror-github
+                - link "Clone, Push & Pull" [ref=f9e217] [cursor=pointer]:
+                  - /url: /docs/origin/git
+                - link "CloneKit in CI" [ref=f9e220] [cursor=pointer]:
+                  - /url: /docs/origin/clonekit-ci
+                - link "Pull requests" [ref=f9e223] [cursor=pointer]:
+                  - /url: /docs/origin/pull-requests
+                - link "Code Tours" [ref=f9e226] [cursor=pointer]:
+                  - /url: /docs/origin/code-tours
+                - link "Browse & Search" [ref=f9e229] [cursor=pointer]:
+                  - /url: /docs/origin/browse
+                - link "Agents and Automations" [ref=f9e232] [cursor=pointer]:
+                  - /url: /docs/origin/agents
+                - button "Apps" [ref=f9e235] [cursor=pointer]
+                - link "Settings" [ref=f9e241] [cursor=pointer]:
+                  - /url: /docs/origin/settings
+            - generic [ref=f9e244]:
+              - heading "Integrations" [level=2] [ref=f9e245]
+              - generic [ref=f9e246]:
+                - link "Slack" [ref=f9e247] [cursor=pointer]:
+                  - /url: /docs/integrations/slack
+                - link "Microsoft Teams" [ref=f9e250] [cursor=pointer]:
+                  - /url: /docs/integrations/microsoft-teams
+                - link "Jira" [ref=f9e253] [cursor=pointer]:
+                  - /url: /docs/integrations/jira
+                - link "Linear" [ref=f9e256] [cursor=pointer]:
+                  - /url: /docs/integrations/linear
+                - link "Notion" [ref=f9e259] [cursor=pointer]:
+                  - /url: /docs/integrations/notion
+                - link "GitHub" [ref=f9e262] [cursor=pointer]:
+                  - /url: /docs/integrations/github
+                - link "GitLab" [ref=f9e265] [cursor=pointer]:
+                  - /url: /docs/integrations/gitlab
+                - link "Azure DevOps" [ref=f9e268] [cursor=pointer]:
+                  - /url: /docs/integrations/azure-devops
+                - link "Bitbucket" [ref=f9e271] [cursor=pointer]:
+                  - /url: /docs/integrations/bitbucket
+                - link "JetBrains" [ref=f9e274] [cursor=pointer]:
+                  - /url: /docs/integrations/jetbrains
+                - link "Xcode" [ref=f9e277] [cursor=pointer]:
+                  - /url: /docs/integrations/xcode
+                - link "Tailscale" [ref=f9e280] [cursor=pointer]:
+                  - /url: /docs/integrations/tailscale
+                - link "Deeplinks" [ref=f9e283] [cursor=pointer]:
+                  - /url: /docs/reference/deeplinks
+            - generic [ref=f9e286]:
+              - heading "SDK" [level=2] [ref=f9e287]
+              - generic [ref=f9e288]:
+                - link "TypeScript" [ref=f9e289] [cursor=pointer]:
+                  - /url: /docs/sdk/typescript
+                - link "Python" [ref=f9e292] [cursor=pointer]:
+                  - /url: /docs/sdk/python
+                - link "Bridge" [ref=f9e295] [cursor=pointer]:
+                  - /url: /docs/sdk/bridge
+                - link "Changelog" [ref=f9e298] [cursor=pointer]:
+                  - /url: /docs/release-notes/sdk
+            - generic [ref=f9e301]:
+              - heading "Agent SDK" [level=2] [ref=f9e302]
+              - generic [ref=f9e303]:
+                - button "Getting started" [ref=f9e304] [cursor=pointer]
+                - button "Integrations" [ref=f9e310] [cursor=pointer]
+                - button "Extensions" [ref=f9e316] [cursor=pointer]
+                - button "Guides" [ref=f9e322] [cursor=pointer]
+                - button "Templates" [ref=f9e328] [cursor=pointer]
+                - button "Reference" [ref=f9e334] [cursor=pointer]
+            - generic [ref=f9e340]:
+              - heading "CLI" [level=2] [ref=f9e341]
+              - generic [ref=f9e342]:
+                - link "Overview" [ref=f9e343] [cursor=pointer]:
+                  - /url: /docs/cli/overview
+                - link "Installation" [ref=f9e346] [cursor=pointer]:
+                  - /url: /docs/cli/installation
+                - link "Capabilities" [ref=f9e349] [cursor=pointer]:
+                  - /url: /docs/cli/using
+                - link "Changelog" [ref=f9e352] [cursor=pointer]:
+                  - /url: /docs/cli/changelog
+                - link "Shell Mode" [ref=f9e355] [cursor=pointer]:
+                  - /url: /docs/cli/shell-mode
+                - link "ACP" [ref=f9e358] [cursor=pointer]:
+                  - /url: /docs/cli/acp
+                - link "Headless / CI" [ref=f9e361] [cursor=pointer]:
+                  - /url: /docs/cli/headless
+                - button "Reference" [ref=f9e364] [cursor=pointer]
+            - generic [ref=f9e370]:
+              - heading "Teams & Enterprise" [level=2] [ref=f9e371]
+              - generic [ref=f9e372]:
+                - button "Teams" [ref=f9e373] [cursor=pointer]
+                - button "Enterprise" [ref=f9e379] [cursor=pointer]
+        - main [ref=f9e385]:
+          - generic [ref=f9e388]:
+            - generic [ref=f9e389]:
+              - generic [ref=f9e390]: Agent
+              - generic [ref=f9e392]:
+                - heading "Cursor Agent" [level=1] [ref=f9e393]
+                - paragraph [ref=f9e394]:
+                  - text: Agent is Cursor's assistant that can complete complex coding tasks independently, run terminal commands, and edit code. Access in sidepane with
+                  - generic [ref=f9e395]: Ctrl+I
+                  - text: .
+                - paragraph [ref=f9e397]:
+                  - text: Learn more about
+                  - link "how agents work" [ref=f9e398] [cursor=pointer]:
+                    - /url: /learn/agents
+                  - text: and help you build faster.
+                - paragraph [ref=f9e399]:
+                  - text: For a larger body of work, such as a feature or a migration, create a
+                  - link "Project" [ref=f9e400] [cursor=pointer]:
+                    - /url: /docs/agent/projects
+                  - text: ": a coordinator agent plans the work and delegates it to other agents."
+                - region "video player" [ref=f9e405]:
+                  - button "play" [ref=f9e409] [cursor=pointer]
+                - heading [level=2] [ref=f9e413]:
+                  - link "Copy link to how-agent-works" [ref=f9e414] [cursor=pointer]:
+                    - /url: "#how-agent-works"
+                    - generic [ref=f9e415]: How Agent works
+                - paragraph [ref=f9e423]: "An agent is built on three components:"
+                - list [ref=f9e424]:
+                  - listitem [ref=f9e425]:
+                    - strong [ref=f9e426]: Instructions
+                    - text: ": The system prompt and"
+                    - link "rules" [ref=f9e427] [cursor=pointer]:
+                      - /url: /docs/rules
+                    - text: that guide agent behavior
+                  - listitem [ref=f9e428]:
+                    - strong [ref=f9e429]: Tools
+                    - text: ": File editing, codebase search, terminal execution, and more"
+                  - listitem [ref=f9e430]:
+                    - strong [ref=f9e431]: Model
+                    - text: ": The agent model you pick for the task"
+                - paragraph [ref=f9e432]: Cursor's agent orchestrates these components for each model we support, tuning instructions and tools specifically for every frontier model. As new models are released, you can focus on building software while Cursor handles the model-specific optimizations.
+                - heading [level=2] [ref=f9e433]:
+                  - link "Copy link to tools" [ref=f9e434] [cursor=pointer]:
+                    - /url: "#tools"
+                    - generic [ref=f9e435]: Tools
+                - paragraph [ref=f9e443]: Tools are the building blocks of Agent. They are used to search your codebase and the web to find relevant information, make edits to your files, run terminal commands, and more.
+                - paragraph [ref=f9e444]:
+                  - text: To understand how tool calling works under the hood, see our
+                  - link "tool calling fundamentals" [ref=f9e445] [cursor=pointer]:
+                    - /url: /learn/tool-calling
+                  - text: .
+                - paragraph [ref=f9e446]: There is no limit on the number of tool calls Agent can make during a task.
+                - generic [ref=f9e447]:
+                  - generic [ref=f9e448]:
+                    - heading [level=3] [ref=f9e449]:
+                      - button "Search files and folders" [ref=f9e450] [cursor=pointer]
+                    - region "Search files and folders"
+                  - generic [ref=f9e457]:
+                    - heading [level=3] [ref=f9e458]:
+                      - button "Web" [ref=f9e459] [cursor=pointer]
+                    - region "Web"
+                  - generic [ref=f9e465]:
+                    - heading [level=3] [ref=f9e466]:
+                      - button "Fetch Rules" [ref=f9e467] [cursor=pointer]
+                    - region "Fetch Rules"
+                  - generic [ref=f9e476]:
+                    - heading [level=3] [ref=f9e477]:
+                      - button "Read files" [ref=f9e478] [cursor=pointer]
+                    - region "Read files"
+                  - generic [ref=f9e484]:
+                    - heading [level=3] [ref=f9e485]:
+                      - button "Edit files" [ref=f9e486] [cursor=pointer]
+                    - region "Edit files"
+                  - generic [ref=f9e492]:
+                    - heading [level=3] [ref=f9e493]:
+                      - button "Run shell commands" [ref=f9e494] [cursor=pointer]
+                    - region "Run shell commands"
+                  - generic [ref=f9e499]:
+                    - heading [level=3] [ref=f9e500]:
+                      - button "Browser" [ref=f9e501] [cursor=pointer]
+                    - region "Browser"
+                  - generic [ref=f9e507]:
+                    - heading [level=3] [ref=f9e508]:
+                      - button "Image generation" [ref=f9e509] [cursor=pointer]
+                    - region "Image generation"
+                  - generic [ref=f9e516]:
+                    - heading [level=3] [ref=f9e517]:
+                      - button "Ask questions" [ref=f9e518] [cursor=pointer]
+                    - region "Ask questions"
+                - heading [level=2] [ref=f9e524]:
+                  - link "Copy link to checkpoints" [ref=f9e525] [cursor=pointer]:
+                    - /url: "#checkpoints"
+                    - generic [ref=f9e526]: Checkpoints
+                - paragraph [ref=f9e534]: Checkpoints save snapshots of your codebase during an Agent session. Agent automatically creates them before making significant changes, capturing the state of all modified files.
+                - paragraph [ref=f9e535]:
+                  - text: If Agent takes a wrong turn, click any checkpoint in the chat timeline to preview your files at that point, then restore to revert all files to that state. You can also restore from the
+                  - code [ref=f9e536]: Restore Checkpoint
+                  - text: button on previous requests or the + button when hovering over a message. Restoring a checkpoint reverts files only; it does not remove messages from the conversation.
+                - paragraph [ref=f9e537]: Checkpoints are useful for exploratory work, complex refactoring, and iterative development where you want safe rollback points.
+                - alert [ref=f9e538]:
+                  - paragraph [ref=f9e542]: Checkpoints are stored locally and separate from Git. Only use them for undoing Agent changes; use Git for permanent version control.
+                - heading [level=2] [ref=f9e543]:
+                  - link "Copy link to queued-messages" [ref=f9e544] [cursor=pointer]:
+                    - /url: "#queued-messages"
+                    - generic [ref=f9e545]: Queued messages
+                - paragraph [ref=f9e553]:
+                  - text: You have two ways to talk to an agent while it works. Queue a message and it waits for the current task to finish.
+                  - link "Send a follow-up now" [ref=f9e554] [cursor=pointer]:
+                    - /url: "#steer-a-running-agent"
+                  - text: and it steers the active turn at the agent's next tool call.
+                - heading [level=3] [ref=f9e556]:
+                  - link "Copy link to using-the-queue" [ref=f9e557] [cursor=pointer]:
+                    - /url: "#using-the-queue"
+                    - generic [ref=f9e558]: Using the queue
+                - list [ref=f9e566]:
+                  - listitem [ref=f9e567]: While Agent is working, type your next instruction
+                  - listitem [ref=f9e568]:
+                    - text: Press
+                    - generic [ref=f9e569]: Enter
+                    - text: to add it to the queue
+                  - listitem [ref=f9e571]: Messages appear in order below the active task
+                  - listitem [ref=f9e572]: Drag to reorder queued messages as needed
+                  - listitem [ref=f9e573]: Agent processes them sequentially after finishing
+                - heading [level=3] [ref=f9e574]:
+                  - link "Copy link to keyboard-shortcuts" [ref=f9e575] [cursor=pointer]:
+                    - /url: "#keyboard-shortcuts"
+                    - generic [ref=f9e576]: Keyboard shortcuts
+                - paragraph [ref=f9e584]: "While Agent is working:"
+                - list [ref=f9e585]:
+                  - listitem [ref=f9e586]:
+                    - text: Press
+                    - generic [ref=f9e587]: Enter
+                    - text: to queue your message (it waits until Agent finishes the current task)
+                  - listitem [ref=f9e589]:
+                    - text: Press
+                    - generic [ref=f9e590]: Ctrl+Enter
+                    - text: to send immediately, bypassing the queue
+                - heading [level=3] [ref=f9e592]:
+                  - link "Copy link to immediate-messaging" [ref=f9e593] [cursor=pointer]:
+                    - /url: "#immediate-messaging"
+                    - generic [ref=f9e594]: Immediate messaging
+                - paragraph [ref=f9e602]:
+                  - text: When you use
+                  - generic [ref=f9e603]: Ctrl+Enter
+                  - text: to send immediately, your message is appended to the most recent user message in the chat and processed right away without waiting in the queue.
+                - list [ref=f9e605]:
+                  - listitem [ref=f9e606]: Your message attaches to tool results and sends immediately
+                  - listitem [ref=f9e607]: This creates a more responsive experience for urgent follow-ups
+                  - listitem [ref=f9e608]: Use this when you need to interrupt or redirect Agent's current work
+                - heading [level=3] [ref=f9e609]:
+                  - link "Copy link to steer-a-running-agent" [ref=f9e610] [cursor=pointer]:
+                    - /url: "#steer-a-running-agent"
+                    - generic [ref=f9e611]: Steer a running agent
+                - paragraph [ref=f9e619]:
+                  - text: You can send a follow-up to steer the agent while it's working, without interrupting it. Type a follow-up and hit
+                  - strong [ref=f9e620]: Send now
+                  - text: ", or press"
+                  - generic [ref=f9e621]: Enter
+                  - text: twice. The message is delivered at the agent's next tool call instead of cutting off work mid-action, which preserves in-flight work and keeps the agent on task.
+                - paragraph [ref=f9e623]:
+                  - text: This is available on
+                  - link "cursor.com/agents" [ref=f9e624] [cursor=pointer]:
+                    - /url: https://cursor.com/agents
+                  - text: now and rolling out in the
+                  - link "Agents Window" [ref=f9e625] [cursor=pointer]:
+                    - /url: /docs/agent/agents-window
+                  - text: . Press
+                  - generic [ref=f9e626]: Tab
+                  - text: to queue the message for after the turn instead.
+                - paragraph [ref=f9e628]:
+                  - text: In the
+                  - link "CLI" [ref=f9e629] [cursor=pointer]:
+                    - /url: /docs/cli/overview
+                  - text: ", pressing"
+                  - generic [ref=f9e630]: Enter
+                  - text: while the agent works steers the active run at a safe boundary, and pressing
+                  - generic [ref=f9e632]: Enter
+                  - text: again interrupts the turn.
+                - heading [level=2] [ref=f9e634]:
+                  - link "Copy link to side-chats" [ref=f9e635] [cursor=pointer]:
+                    - /url: "#side-chats"
+                    - generic [ref=f9e636]: Side chats
+                - paragraph [ref=f9e644]:
+                  - text: Open a
+                  - link "side chat" [ref=f9e645] [cursor=pointer]:
+                    - /url: /help/ai-features/side-chats
+                  - text: to ask a question or investigate a tangent without interrupting the main conversation. Type
+                  - code [ref=f9e646]: /side
+                  - text: or
+                  - code [ref=f9e647]: /btw
+                  - text: in the chat input, optionally followed by your question, or use the plus button at the top of the chat panel.
+                - paragraph [ref=f9e648]: A side chat is a durable agent conversation. It uses the parent thread as hidden reference context and keeps its own transcript. @-mention the side chat in the main thread to pull that context back.
+                - heading [level=2] [ref=f9e649]:
+                  - link "Copy link to conversation-search" [ref=f9e650] [cursor=pointer]:
+                    - /url: "#conversation-search"
+                    - generic [ref=f9e651]: Conversation search
+                - paragraph [ref=f9e659]:
+                  - text: Search past agent transcripts from the
+                  - link "Agents Window" [ref=f9e660] [cursor=pointer]:
+                    - /url: /docs/agent/agents-window
+                  - text: . Press
+                  - generic [ref=f9e661]: Ctrl
+                  - text: +
+                  - generic [ref=f9e663]: K
+                  - text: on Mac or
+                  - generic [ref=f9e665]: Ctrl
+                  - text: +
+                  - generic [ref=f9e667]: K
+                  - text: on Windows and Linux to open the command palette, then search across conversations. Cursor builds a local search index.
+                - paragraph [ref=f9e669]:
+                  - text: To find text in the open conversation, press
+                  - generic [ref=f9e670]: Ctrl
+                  - text: +
+                  - generic [ref=f9e672]: F
+                  - text: on Mac or
+                  - generic [ref=f9e674]: Ctrl
+                  - text: +
+                  - generic [ref=f9e676]: F
+                  - text: on Windows and Linux.
+                - heading [level=2] [ref=f9e678]:
+                  - link "Copy link to goals-with-goal" [ref=f9e679] [cursor=pointer]:
+                    - /url: "#goals-with-goal"
+                    - generic [ref=f9e680]: Goals with /goal
+                - paragraph [ref=f9e688]:
+                  - text: Agent reads each message as a new job. Use
+                  - code [ref=f9e689]: /goal
+                  - text: "to give the agent a long-lived objective to work towards until it's fully complete:"
+                - generic [ref=f9e692]:
+                  - button [ref=f9e693] [cursor=pointer]
+                  - code [ref=f9e699]:
+                    - generic [ref=f9e700]: /goal fix all flaky tests and make CI green
+                - paragraph [ref=f9e701]:
+                  - text: In the
+                  - link "CLI" [ref=f9e702] [cursor=pointer]:
+                    - /url: /docs/cli/overview
+                  - text: ","
+                  - generic [ref=f9e703]: Ctrl+C
+                  - text: pauses the goal. Pair a goal with a
+                  - link "Custom Mode" [ref=f9e705] [cursor=pointer]:
+                    - /url: /docs/agent/prompting#custom-modes
+                  - text: when you want the agent to follow a playbook, or with the built-in
+                  - link [ref=f9e706] [cursor=pointer]:
+                    - /url: /docs/skills#built-in-cursor-skills
+                    - code [ref=f9e707]: /loop
+                  - text: skill to run a prompt or skill on a recurring or variable interval. If you don't specify a fixed interval, the agent chooses when to wake. Stop the loop when you want it to end.
+                - alert [ref=f9e708]:
+                  - paragraph [ref=f9e712]:
+                    - code [ref=f9e713]: /goal
+                    - text: is rolling out. If you don't see it, try it in a new chat.
+              - generic [ref=f9e714]:
+                - generic [ref=f9e715]:
+                  - button "System theme" [ref=f9e717] [cursor=pointer]
+                  - button "Light theme" [ref=f9e720] [cursor=pointer]
+                  - button "Dark theme" [ref=f9e727] [cursor=pointer]
+                - button "Privacy choices" [ref=f9e730] [cursor=pointer]
+            - navigation [ref=f9e732]:
+              - generic [ref=f9e733]:
+                - list [ref=f9e734]:
+                  - listitem [ref=f9e735]:
+                    - link "How Agent works" [ref=f9e736] [cursor=pointer]:
+                      - /url: "#how-agent-works"
+                  - listitem [ref=f9e737]:
+                    - link "Tools" [ref=f9e738] [cursor=pointer]:
+                      - /url: "#tools"
+                  - listitem [ref=f9e739]:
+                    - link "Checkpoints" [ref=f9e740] [cursor=pointer]:
+                      - /url: "#checkpoints"
+                  - listitem [ref=f9e741]:
+                    - link "Queued messages" [ref=f9e742] [cursor=pointer]:
+                      - /url: "#queued-messages"
+                  - listitem [ref=f9e743]:
+                    - link "Using the queue" [ref=f9e744] [cursor=pointer]:
+                      - /url: "#using-the-queue"
+                  - listitem [ref=f9e745]:
+                    - link "Keyboard shortcuts" [ref=f9e746] [cursor=pointer]:
+                      - /url: "#keyboard-shortcuts"
+                  - listitem [ref=f9e747]:
+                    - link "Immediate messaging" [ref=f9e748] [cursor=pointer]:
+                      - /url: "#immediate-messaging"
+                  - listitem [ref=f9e749]:
+                    - link "Steer a running agent" [ref=f9e750] [cursor=pointer]:
+                      - /url: "#steer-a-running-agent"
+                  - listitem [ref=f9e751]:
+                    - link "Side chats" [ref=f9e752] [cursor=pointer]:
+                      - /url: "#side-chats"
+                  - listitem [ref=f9e753]:
+                    - link "Conversation search" [ref=f9e754] [cursor=pointer]:
+                      - /url: "#conversation-search"
+                  - listitem [ref=f9e755]:
+                    - link "Goals with /goal" [ref=f9e756] [cursor=pointer]:
+                      - /url: "#goals-with-goal"
+                - button "Copy page" [ref=f9e760] [cursor=pointer]
+    - region "Cookie notice" [ref=f9e763]:
+      - button "Dismiss cookie notice" [ref=f9e764] [cursor=pointer]
+      - paragraph [ref=f9e765]:
+        - text: Essential cookies keep the site working and stay on. Optional cookies help with performance and advertising — accept, reject, or manage them. Learn more in our
+        - link "Cookie Policy" [ref=f9e766] [cursor=pointer]:
+          - /url: https://cursor.com/cookie-policy
+        - text: ","
+        - link "Privacy Policy" [ref=f9e767] [cursor=pointer]:
+          - /url: https://cursor.com/privacy
+        - text: ", and"
+        - link "Terms of Service" [ref=f9e768] [cursor=pointer]:
+          - /url: https://cursor.com/terms-of-service
+        - text: .
+      - generic [ref=f9e769]:
+        - button "Cookies Settings" [ref=f9e770] [cursor=pointer]
+        - button "Reject All" [ref=f9e771] [cursor=pointer]
+        - button "Accept All Cookies" [ref=f9e772] [cursor=pointer]

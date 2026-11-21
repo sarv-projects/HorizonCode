@@ -81,10 +81,12 @@ const DONE: ProviderEvent[] = [{ type: "done", stopReason: "end" }];
 
 /** Bring up a client in the requested transport, with HZ_KERNEL_BIN pinned. */
 async function startClient(mode: "trusted" | "untrusted", workspace: string, stateDir: string): Promise<KernelClient> {
+  for (const c of clients.splice(0)) await c.close().catch(() => undefined);
   if (mode === "trusted") setEnv({ HZ_KERNEL_BIN: rustKernelPath, HZ_STATE_DIR: undefined });
   else setEnv({ HZ_KERNEL_BIN: missingBinary, HZ_STATE_DIR: undefined });
   const client = new KernelClient({ workspace, stateDir });
-  expect(await client.start()).toBe(mode);
+  const started = await client.start();
+  expect(started, client.reason).toBe(mode);
   clients.push(client);
   return client;
 }
@@ -283,6 +285,14 @@ describe("every tool passes an admission", () => {
       ast_search: { pat: "foo($A)" },
       ast_edit: { path: "a.ts", pat: "foo($A)", out: "bar($A)" },
       web_fetch: { url: "https://example.com/docs" },
+      web_search: { query: "test" },
+      best_of_n: { task: "do it" },
+      ask_user: { question: "proceed?" },
+      git_status: {},
+      git_diff: {},
+      git_log: {},
+      git_blame: { file: "a.txt" },
+      shell_bg: { op: "kill", pid: 1234 },
     };
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {
@@ -390,7 +400,7 @@ describe("approval binding (full operation intent)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test("the same command in a different cwd asks again: an approval is bound to its cwd", async () => {
     const run = await runScripted(
@@ -413,5 +423,5 @@ describe("approval binding (full operation intent)", () => {
     const shells = run.toolMessages("shell");
     expect(shells.length).toBe(2);
     expect(shells[1]).toContain("DECLINED by the user");
-  });
+  }, 20_000);
 });

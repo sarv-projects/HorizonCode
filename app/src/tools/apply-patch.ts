@@ -51,6 +51,7 @@ import type { GuardAction, Tool, ToolContext, ToolResult } from "../contracts";
 import { sha256Hex } from "../core/canon";
 import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffixes } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { acquireLock, targetLockPath } from "../core/file-lock";
 import { recordChangeGuarded } from "./change-journal";
@@ -318,7 +319,7 @@ async function guardAndPreimage(
   if (decision.decision === "deny") {
     return { ok: false, error: `apply_patch: denied by policy${decision.reason ? `: ${decision.reason}` : ""} (${rel})` };
   }
-  if (decision.decision === "ask") {
+  if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
     const targetNote = real === resolved ? "" : `; resolves to ${real}`;
     const approved = await ctx.approve({ title: `${verb} ${rel}`, detail: `${verb}${targetNote}`, kind: "fs.write" }, action);
     if (!approved) return { ok: false, error: `apply_patch: declined by user (${rel})` };

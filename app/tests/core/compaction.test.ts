@@ -336,6 +336,7 @@ function harness(workspace: string, sessionId: string): Harness {
 
 describe("eval case: a live turn over a 92-message transcript", () => {
   test("the request is compacted, reported once, logged once, and the chain verifies", async () => {
+    process.env.HZ_TOKEN_AWARE_HISTORY = "0";
     const workspace = tempDir("hz-compaction-");
     const store0 = new SessionStore(workspace);
     const sessionId = store0.createSession("compaction-eval").id;
@@ -404,6 +405,7 @@ describe("eval case: a live turn over a 92-message transcript", () => {
       expect(after.map((message) => message.content).join("\n")).not.toContain(PINNED_HEADING);
       expect(after.length).toBe(93);
     } finally {
+      delete process.env.HZ_TOKEN_AWARE_HISTORY;
       await h.kernel.close();
       h.store.close();
     }

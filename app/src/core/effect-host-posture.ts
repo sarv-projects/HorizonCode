@@ -121,7 +121,7 @@ export function effectHostDoctorPosture(env: Record<string, string | undefined> 
       detail:
         `HZ_EFFECT_HOST_KERNEL=default: recommended prototype posture — routes ${covered}; ` +
         "never-routable ambient tools refused (**653**); mutating mcp.invoke refused (**721**); MCP stdio spawn refused (**702**); compound/interpreter shell refused (**652**); " +
-        "shape-ineligible write/edit/apply_patch refused (**667**); user hooks suppressed (**666**); " +
+        "shape-ineligible write/edit/apply_patch refused (**667**); user hooks suppressed (**666**); ambient Bun fallback for kernel-unavailable / fuzz; " +
         shellResidual,
       hint: honestyHint
         ? `${honestyHint}; ambient fallback residual: ${multiChunkResidual}`

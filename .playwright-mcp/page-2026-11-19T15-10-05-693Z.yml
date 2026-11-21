@@ -1,0 +1,267 @@
+- generic [ref=f104e3]:
+  - link "Skip to main content" [ref=f104e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f104e5]:
+    - banner [ref=f104e6]:
+      - generic [ref=f104e7]:
+        - generic [ref=f104e8]:
+          - link "Cursor Home" [ref=f104e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=f104e10]
+          - navigation [ref=f104e13]:
+            - link "Docs" [ref=f104e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=f104e15] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=f104e16] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=f104e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=f104e22] [cursor=pointer]:
+          - generic [ref=f104e26]: Search docs...
+          - generic [ref=f104e27]: ⌘K
+    - generic [ref=f104e32]:
+      - heading "Command Palette" [level=2] [ref=f104e33]
+      - paragraph [ref=f104e34]: Search for a command to run...
+  - generic [ref=f104e35]:
+    - generic [ref=f104e37]:
+      - button [ref=f104e38]:
+        - button "Toggle Course Sidebar" [ref=f104e40] [cursor=pointer]
+      - generic [ref=f104e44]:
+        - generic [ref=f104e45]:
+          - link [ref=f104e46] [cursor=pointer]:
+            - /url: /learn
+            - heading "AI Foundations" [level=2] [ref=f104e47]
+          - generic [ref=f104e48]:
+            - link "1 How AI models work" [ref=f104e49] [cursor=pointer]:
+              - /url: /learn/how-ai-models-work
+              - generic [ref=f104e50]:
+                - generic [ref=f104e51]: "1"
+                - generic [ref=f104e53]: How AI models work
+            - link "2 Hallucination & limitations" [ref=f104e54] [cursor=pointer]:
+              - /url: /learn/hallucination-limitations
+              - generic [ref=f104e55]:
+                - generic [ref=f104e56]: "2"
+                - generic [ref=f104e58]: Hallucination & limitations
+            - link "3 Tokens & pricing" [ref=f104e59] [cursor=pointer]:
+              - /url: /learn/tokens-pricing
+              - generic [ref=f104e60]:
+                - generic [ref=f104e61]: "3"
+                - generic [ref=f104e63]: Tokens & pricing
+            - link "4 Context" [ref=f104e64] [cursor=pointer]:
+              - /url: /learn/context
+              - generic [ref=f104e65]:
+                - generic [ref=f104e66]: "4"
+                - generic [ref=f104e68]: Context
+            - link "5 Tool calling" [ref=f104e69] [cursor=pointer]:
+              - /url: /learn/tool-calling
+              - generic [ref=f104e70]:
+                - generic [ref=f104e71]: "5"
+                - generic [ref=f104e73]: Tool calling
+            - link "6 Agents" [ref=f104e74] [cursor=pointer]:
+              - /url: /learn/agents
+              - generic [ref=f104e75]:
+                - generic [ref=f104e76]: "6"
+                - generic [ref=f104e78]: Agents
+        - generic [ref=f104e79]:
+          - heading "Coding Agents" [level=2] [ref=f104e80]
+          - generic [ref=f104e81]:
+            - link "1 Working with agents" [ref=f104e82] [cursor=pointer]:
+              - /url: /learn/working-with-agents
+              - generic [ref=f104e83]:
+                - generic [ref=f104e84]: "1"
+                - generic [ref=f104e86]: Working with agents
+            - link "2 Understanding your codebase" [ref=f104e87] [cursor=pointer]:
+              - /url: /learn/understanding-your-codebase
+              - generic [ref=f104e88]:
+                - generic [ref=f104e89]: "2"
+                - generic [ref=f104e91]: Understanding your codebase
+            - link "3 Developing features" [ref=f104e92] [cursor=pointer]:
+              - /url: /learn/creating-features
+              - generic [ref=f104e93]:
+                - generic [ref=f104e94]: "3"
+                - generic [ref=f104e96]: Developing features
+            - link "4 Finding and fixing bugs" [ref=f104e97] [cursor=pointer]:
+              - /url: /learn/finding-fixing-bugs
+              - generic [ref=f104e98]:
+                - generic [ref=f104e99]: "4"
+                - generic [ref=f104e101]: Finding and fixing bugs
+            - link "5 Reviewing and testing code" [ref=f104e102] [cursor=pointer]:
+              - /url: /learn/reviewing-testing
+              - generic [ref=f104e103]:
+                - generic [ref=f104e104]: "5"
+                - generic [ref=f104e106]: Reviewing and testing code
+            - link "6 Customizing agents" [ref=f104e107] [cursor=pointer]:
+              - /url: /learn/customizing-agents
+              - generic [ref=f104e108]:
+                - generic [ref=f104e109]: "6"
+                - generic [ref=f104e111]: Customizing agents
+            - link "7 Putting it all together" [ref=f104e112] [cursor=pointer]:
+              - /url: /learn/putting-it-together
+              - generic [ref=f104e113]:
+                - generic [ref=f104e114]: "7"
+                - generic [ref=f104e116]: Putting it all together
+    - main [ref=f104e117]:
+      - generic [ref=f104e122]:
+        - text: AI Foundations
+        - generic [ref=f104e123]:
+          - heading "Tool Calling" [level=1] [ref=f104e124]
+          - paragraph [ref=f104e125]:
+            - text: Now that you understand how context works, let's explore how AI models can do more than just generate text. They can actually take actions and retrieve information dynamically through
+            - strong [ref=f104e126]: tool calling
+            - text: .
+          - paragraph [ref=f104e127]:
+            - text: Remember how we compared AI models to API endpoints? Well, tool calling is like giving those models the ability to call
+            - emphasis [ref=f104e128]: other
+            - text: APIs themselves. It's as if the AI model can learn new skills.
+          - paragraph [ref=f104e129]: Let me give you an analogy. Imagine you're helping a friend cook dinner over the phone. You can give them instructions based on what you know, but you can't actually see what's in their fridge or taste the food they're making.
+          - paragraph [ref=f104e130]: Now imagine if your friend sends you photos of their fridge contents, or if they tell you the exact temperature of their oven. Suddenly, you can give much better advice because you have access to real-time information. That's essentially what tool calling does for AI models.
+          - heading [level=2] [ref=f104e131]:
+            - link "Copy link to how-tool-calling-works" [ref=f104e132] [cursor=pointer]:
+              - /url: "#how-tool-calling-works"
+              - generic [ref=f104e133]: How tool calling works
+          - paragraph [ref=f104e141]: When developers build AI applications, they can define specific "tools" that the AI model can use. These tools are like special abilities that extend what the model can do beyond just thinking and responding with text.
+          - paragraph [ref=f104e142]: You've probably already used tool calling without realizing it! When you ask ChatGPT to generate an image, search the web, or run code, it's using tools behind the scenes.
+          - paragraph [ref=f104e143]: "Here's what happens under the hood:"
+          - list [ref=f104e144]:
+            - listitem [ref=f104e145]: The AI model receives your request and recognizes it needs additional capabilities
+            - listitem [ref=f104e146]: It formats a special response in JSON (a structured data format) that specifies which tool to use and what parameters to pass
+            - listitem [ref=f104e147]: The application runs that tool and returns the results
+            - listitem [ref=f104e148]: The AI model incorporates those results into its context and continues the conversation
+          - heading [level=2] [ref=f104e149]:
+            - link "Copy link to why-tools-matter-for-coding" [ref=f104e150] [cursor=pointer]:
+              - /url: "#why-tools-matter-for-coding"
+              - generic [ref=f104e151]: Why tools matter for coding
+          - paragraph [ref=f104e159]: "For building software, tools are incredibly powerful because they let the AI model:"
+          - list [ref=f104e160]:
+            - listitem [ref=f104e161]:
+              - strong [ref=f104e162]: Read and write files
+              - text: in your codebase
+            - listitem [ref=f104e163]:
+              - strong [ref=f104e164]: Search through code
+              - text: to find relevant functions or patterns
+            - listitem [ref=f104e165]:
+              - strong [ref=f104e166]: Run shell commands
+              - text: to test code or install packages
+            - listitem [ref=f104e167]:
+              - strong [ref=f104e168]: Access documentation
+              - text: or search the web for current information
+            - listitem [ref=f104e169]:
+              - strong [ref=f104e170]: Check for errors
+              - text: by running linters or tests
+          - paragraph [ref=f104e171]: Without tools, the AI model would be limited to only the information you explicitly provide in the context. With tools, it can actively explore and interact with your codebase.
+          - heading [level=2] [ref=f104e172]:
+            - link "Copy link to whats-inside-a-tool-call" [ref=f104e173] [cursor=pointer]:
+              - /url: "#whats-inside-a-tool-call"
+              - generic [ref=f104e174]: What's inside a tool call?
+          - paragraph [ref=f104e182]: "Every tool has three main components:"
+          - list [ref=f104e183]:
+            - listitem [ref=f104e184]:
+              - strong [ref=f104e185]: A name
+              - text: like
+              - code [ref=f104e186]: read_file
+              - text: or
+              - code [ref=f104e187]: search_web
+            - listitem [ref=f104e188]:
+              - strong [ref=f104e189]: A description
+              - text: that tells the model when and how to use the tool
+            - listitem [ref=f104e190]:
+              - strong [ref=f104e191]: Parameters
+              - text: which are the inputs the tool needs to work
+          - paragraph [ref=f104e192]: "Here's an example of what a tool definition might look like:"
+          - generic [ref=f104e195]:
+            - button [ref=f104e196] [cursor=pointer]
+            - code [ref=f104e202]:
+              - generic [ref=f104e203]: "{"
+              - generic [ref=f104e204]: "\"name\": \"read_file\","
+              - generic [ref=f104e205]: "\"description\": \"Read the contents of a file from the codebase\","
+              - generic [ref=f104e206]: "\"parameters\": {"
+              - generic [ref=f104e207]: "\"filepath\": \"The path to the file to read\""
+              - generic [ref=f104e208]: "}"
+              - generic [ref=f104e209]: "}"
+          - paragraph [ref=f104e210]: "When the AI model wants to use this tool, it generates a response like:"
+          - generic [ref=f104e213]:
+            - button [ref=f104e214] [cursor=pointer]
+            - code [ref=f104e220]:
+              - generic [ref=f104e221]: "{"
+              - generic [ref=f104e222]: "\"tool\": \"read_file\","
+              - generic [ref=f104e223]: "\"parameters\": {"
+              - generic [ref=f104e224]: "\"filepath\": \"src/components/Button.tsx\""
+              - generic [ref=f104e225]: "}"
+              - generic [ref=f104e226]: "}"
+          - paragraph [ref=f104e227]: The application then reads that file and adds the contents to the conversation context, allowing the model to understand your Button component and suggest relevant changes.
+          - group "Which are core parts of a tool definition?" [ref=f104e228]:
+            - generic [ref=f104e229]:
+              - paragraph [ref=f104e230]: Which are core parts of a tool definition?
+              - generic [ref=f104e231]: Select all that apply
+            - generic [ref=f104e232]:
+              - generic [ref=f104e233] [cursor=pointer]:
+                - checkbox "Name" [ref=f104e234]
+                - generic [ref=f104e235]: Name
+              - generic [ref=f104e237] [cursor=pointer]:
+                - checkbox "Description" [ref=f104e238]
+                - generic [ref=f104e239]: Description
+              - generic [ref=f104e241] [cursor=pointer]:
+                - checkbox "Parameters schema" [ref=f104e242]
+                - generic [ref=f104e243]: Parameters schema
+              - generic [ref=f104e245] [cursor=pointer]:
+                - checkbox "Provider API key" [ref=f104e246]
+                - generic [ref=f104e247]: Provider API key
+            - generic [ref=f104e249]:
+              - button "Check" [disabled] [ref=f104e250] [cursor=pointer]
+              - button "Reset" [ref=f104e251] [cursor=pointer]
+          - heading [level=2] [ref=f104e252]:
+            - link "Copy link to the-cost-of-tools" [ref=f104e253] [cursor=pointer]:
+              - /url: "#the-cost-of-tools"
+              - generic [ref=f104e254]: The cost of tools
+          - paragraph [ref=f104e262]: "Remember how we talked about tokens and pricing? Tool calls consume tokens in two ways:"
+          - list [ref=f104e263]:
+            - listitem [ref=f104e264]:
+              - strong [ref=f104e265]: Tool definitions
+              - text: are included in the input context (usually a few hundred tokens per tool)
+            - listitem [ref=f104e266]:
+              - strong [ref=f104e267]: Tool results
+              - text: are added to the output context (varies based on what the tool returns)
+          - paragraph [ref=f104e268]: This means conversations with lots of tool usage will fill up the context window faster and cost more. But the tradeoff is usually worth it because the AI can be much more helpful with access to real-time information.
+          - paragraph [ref=f104e269]: When tool calls happen, AI models re-evaluate context up until the tool call itself. Inside of tools like Cursor, this means you’ll see more cached input token usage, since we’re resending context back to the model.
+          - group "Tool calls affect token usage in which two ways?" [ref=f104e270]:
+            - generic [ref=f104e271]:
+              - paragraph [ref=f104e272]: Tool calls affect token usage in which two ways?
+              - generic [ref=f104e273]: Select all that apply
+            - generic [ref=f104e274]:
+              - generic [ref=f104e275] [cursor=pointer]:
+                - checkbox "Tool definitions add input tokens" [ref=f104e276]
+                - generic [ref=f104e277]: Tool definitions add input tokens
+              - generic [ref=f104e279] [cursor=pointer]:
+                - checkbox "Tool results add output tokens" [ref=f104e280]
+                - generic [ref=f104e281]: Tool results add output tokens
+              - generic [ref=f104e283] [cursor=pointer]:
+                - checkbox "Tool calls are free once defined" [ref=f104e284]
+                - generic [ref=f104e285]: Tool calls are free once defined
+              - generic [ref=f104e287] [cursor=pointer]:
+                - checkbox "Streaming removes token costs" [ref=f104e288]
+                - generic [ref=f104e289]: Streaming removes token costs
+            - generic [ref=f104e291]:
+              - button "Check" [disabled] [ref=f104e292] [cursor=pointer]
+              - button "Reset" [ref=f104e293] [cursor=pointer]
+          - heading [level=2] [ref=f104e294]:
+            - link "Copy link to beyond-built-in-tools" [ref=f104e295] [cursor=pointer]:
+              - /url: "#beyond-built-in-tools"
+              - generic [ref=f104e296]: Beyond built-in tools
+          - paragraph [ref=f104e304]:
+            - text: Recently, a new standard called
+            - link "MCP" [ref=f104e305] [cursor=pointer]:
+              - /url: /marketplace
+            - text: (Model Context Protocol) was created. Think of it as a universal way for AI models to use and integrate tools across applications.
+          - paragraph [ref=f104e306]: Just like how USB became a standard for connecting devices to computers, MCP aims to be a standard for connecting tools to AI models. This means developers can build tools once and have them work across many different AI apps.
+          - paragraph [ref=f104e307]: For example, you can use MCP to connect to Figma for design files, Linear to view and manage issues, or even a database to query your data directly. You can also create your own MCP servers to integrate with internal tools and APIs.
+          - paragraph [ref=f104e308]:
+            - text: Now that you understand tool calling, let's see what happens when we let AI models use multiple tools in sequence. That's where things get interesting with
+            - strong [ref=f104e309]: agents
+            - text: .
+        - generic [ref=f104e311]:
+          - heading "You've completed this chapter" [level=2] [ref=f104e312]
+          - link "Keep learning Arrow pointing right" [ref=f104e314] [cursor=pointer]:
+            - /url: /learn/agents
+            - text: Keep learning
+            - img "Arrow pointing right" [ref=f104e315]

@@ -5,4 +5,4 @@
 # Hermetic temp HOME so the developer's config/theme/skills cannot change tests.
 preload = ["./tests/setup.ts"]
 # Hermetic catalog tests expect the 5-provider curated floor; skip a local models-dev.snapshot.json.
-env = { HZ_NO_COMMITTED_SNAPSHOT = "1" }
+env = { HZ_NO_COMMITTED_SNAPSHOT = "1", HZ_SUPERVISOR_LEASE = "0" }

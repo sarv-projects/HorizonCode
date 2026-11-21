@@ -1423,7 +1423,7 @@ fn kernel_stdio_second_owner_refuses_supervisor_lease() {
     assert_eq!(status.code(), Some(2), "second stdio owner must exit 2");
     let err2 = fs::read_to_string(&stderr2).unwrap_or_default();
     assert!(
-        err2.contains("supervisor.lease_held"),
+        err2.contains("supervisor.lease_held") || err2.contains("supervisor.host_lease_held"),
         "expected lease_held; stderr={err2}"
     );
     let _ = fs::remove_file(&stderr2);
@@ -1489,7 +1489,7 @@ fn kernel_socket_second_owner_refuses_supervisor_lease() {
     assert_eq!(status.code(), Some(2), "second owner must exit 2");
     let err2 = fs::read_to_string(&stderr2).unwrap_or_default();
     assert!(
-        err2.contains("supervisor.lease_held"),
+        err2.contains("supervisor.lease_held") || err2.contains("supervisor.host_lease_held"),
         "expected lease_held; stderr={err2}"
     );
     assert!(

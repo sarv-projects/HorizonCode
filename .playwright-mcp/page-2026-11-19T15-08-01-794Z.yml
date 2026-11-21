@@ -1,0 +1,1034 @@
+- generic [active] [ref=f32e1]:
+  - generic [ref=f32e3]:
+    - link "Skip to main content" [ref=f32e4] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=f32e5]:
+      - banner [ref=f32e6]:
+        - generic [ref=f32e7]:
+          - generic [ref=f32e8]:
+            - link "Cursor Home" [ref=f32e9] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=f32e10]
+            - navigation [ref=f32e13]:
+              - link "Docs" [ref=f32e14] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=f32e16] [cursor=pointer]:
+                - /url: /docs/api
+              - link "Learn" [ref=f32e17] [cursor=pointer]:
+                - /url: /learn
+              - link "Help" [ref=f32e18] [cursor=pointer]:
+                - /url: /help
+          - button "Search docs... ⌘K" [ref=f32e22] [cursor=pointer]:
+            - generic [ref=f32e26]: Search docs...
+            - generic [ref=f32e27]: ⌘K
+      - generic [ref=f32e32]:
+        - heading "Command Palette" [level=2] [ref=f32e33]
+        - paragraph [ref=f32e34]: Search for a command to run...
+    - generic [ref=f32e35]:
+      - generic [ref=f32e37]:
+        - button [ref=f32e38]:
+          - button "Toggle Docs Sidebar" [ref=f32e40] [cursor=pointer]
+        - generic [ref=f32e44]:
+          - generic [ref=f32e45]:
+            - heading "Get Started" [level=2] [ref=f32e46]
+            - generic [ref=f32e47]:
+              - link "Welcome" [ref=f32e48] [cursor=pointer]:
+                - /url: /docs
+              - link "Quickstart" [ref=f32e51] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+              - button "Models & Pricing" [ref=f32e54] [cursor=pointer]
+              - link "Changelog" [ref=f32e60] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+              - link "Release Notes" [ref=f32e63] [cursor=pointer]:
+                - /url: /docs/release-notes
+          - generic [ref=f32e66]:
+            - heading "Agent" [level=2] [ref=f32e67]
+            - generic [ref=f32e68]:
+              - link "Overview" [ref=f32e69] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - link "Agents Window" [ref=f32e72] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - link "Projects" [ref=f32e75] [cursor=pointer]:
+                - /url: /docs/agent/projects
+              - link "Agent Review" [ref=f32e78] [cursor=pointer]:
+                - /url: /docs/agent/agent-review
+              - link "Planning" [ref=f32e81] [cursor=pointer]:
+                - /url: /docs/agent/plan-mode
+              - link "Prompting" [ref=f32e84] [cursor=pointer]:
+                - /url: /docs/agent/prompting
+              - link "Voice Chat" [ref=f32e87] [cursor=pointer]:
+                - /url: /docs/agent/voice-chat
+              - link "Debugging" [ref=f32e90] [cursor=pointer]:
+                - /url: /docs/agent/debug-mode
+              - link "Design Mode" [ref=f32e93] [cursor=pointer]:
+                - /url: /docs/agent/design-mode
+              - button "Tools" [ref=f32e96] [cursor=pointer]
+              - button "Security" [ref=f32e102] [cursor=pointer]
+          - generic [ref=f32e108]:
+            - heading "Customize" [level=2] [ref=f32e109]
+            - generic [ref=f32e110]:
+              - link "Overview" [ref=f32e111] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+              - link "Plugins" [ref=f32e114] [cursor=pointer]:
+                - /url: /docs/plugins
+              - link "Rules" [ref=f32e117] [cursor=pointer]:
+                - /url: /docs/rules
+              - link "Skills" [ref=f32e120] [cursor=pointer]:
+                - /url: /docs/skills
+              - link "Subagents" [ref=f32e123] [cursor=pointer]:
+                - /url: /docs/subagents
+              - link "Hooks" [ref=f32e126] [cursor=pointer]:
+                - /url: /docs/hooks
+              - link "MCP" [ref=f32e129] [cursor=pointer]:
+                - /url: /docs/mcp
+          - generic [ref=f32e132]:
+            - heading "Cloud Agents" [level=2] [ref=f32e133]
+            - generic [ref=f32e134]:
+              - link "Overview" [ref=f32e135] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - link "Setup" [ref=f32e138] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - link "Builds" [ref=f32e141] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - link "Apps" [ref=f32e144] [cursor=pointer]:
+                - /url: /docs/cloud-agent/apps
+              - button "Capabilities" [ref=f32e147] [cursor=pointer]
+              - link "Best Practices" [ref=f32e153] [cursor=pointer]:
+                - /url: /docs/cloud-agent/best-practices
+              - link "Choose Where Cloud Agents Run" [ref=f32e156] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted/choose-runtime
+              - link "Automations" [ref=f32e159] [cursor=pointer]:
+                - /url: /docs/cloud-agent/automations
+              - link "Bugbot" [ref=f32e162] [cursor=pointer]:
+                - /url: /docs/bugbot
+              - link "Security Review" [ref=f32e165] [cursor=pointer]:
+                - /url: /docs/security-review
+              - link "Vulnerability Remediation" [ref=f32e168] [cursor=pointer]:
+                - /url: /docs/vulnerability-remediation
+              - link "PR Routing & Approval" [ref=f32e171] [cursor=pointer]:
+                - /url: /docs/approval-agents
+              - link "Rollouts" [ref=f32e174] [cursor=pointer]:
+                - /url: /docs/rollouts
+              - link "Mobile" [ref=f32e177] [cursor=pointer]:
+                - /url: /docs/cloud-agent/mobile
+              - button "Security" [ref=f32e180] [cursor=pointer]
+              - button "Self-Hosted Machines" [ref=f32e186] [cursor=pointer]
+              - link "Settings" [ref=f32e192] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings
+              - link "API" [ref=f32e195] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints
+          - generic [ref=f32e198]:
+            - heading "Origin" [level=2] [ref=f32e199]
+            - generic [ref=f32e200]:
+              - link "Overview" [ref=f32e201] [cursor=pointer]:
+                - /url: /docs/origin
+              - button "CLI" [ref=f32e204] [cursor=pointer]
+              - link "Create a repository" [ref=f32e210] [cursor=pointer]:
+                - /url: /docs/origin/create-repository
+              - link "Mirror GitHub" [ref=f32e213] [cursor=pointer]:
+                - /url: /docs/origin/mirror-github
+              - link "Clone, Push & Pull" [ref=f32e216] [cursor=pointer]:
+                - /url: /docs/origin/git
+              - link "CloneKit in CI" [ref=f32e219] [cursor=pointer]:
+                - /url: /docs/origin/clonekit-ci
+              - link "Pull requests" [ref=f32e222] [cursor=pointer]:
+                - /url: /docs/origin/pull-requests
+              - link "Code Tours" [ref=f32e225] [cursor=pointer]:
+                - /url: /docs/origin/code-tours
+              - link "Browse & Search" [ref=f32e228] [cursor=pointer]:
+                - /url: /docs/origin/browse
+              - link "Agents and Automations" [ref=f32e231] [cursor=pointer]:
+                - /url: /docs/origin/agents
+              - button "Apps" [ref=f32e234] [cursor=pointer]
+              - link "Settings" [ref=f32e240] [cursor=pointer]:
+                - /url: /docs/origin/settings
+          - generic [ref=f32e243]:
+            - heading "Integrations" [level=2] [ref=f32e244]
+            - generic [ref=f32e245]:
+              - link "Slack" [ref=f32e246] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - link "Microsoft Teams" [ref=f32e249] [cursor=pointer]:
+                - /url: /docs/integrations/microsoft-teams
+              - link "Jira" [ref=f32e252] [cursor=pointer]:
+                - /url: /docs/integrations/jira
+              - link "Linear" [ref=f32e255] [cursor=pointer]:
+                - /url: /docs/integrations/linear
+              - link "Notion" [ref=f32e258] [cursor=pointer]:
+                - /url: /docs/integrations/notion
+              - link "GitHub" [ref=f32e261] [cursor=pointer]:
+                - /url: /docs/integrations/github
+              - link "GitLab" [ref=f32e264] [cursor=pointer]:
+                - /url: /docs/integrations/gitlab
+              - link "Azure DevOps" [ref=f32e267] [cursor=pointer]:
+                - /url: /docs/integrations/azure-devops
+              - link "Bitbucket" [ref=f32e270] [cursor=pointer]:
+                - /url: /docs/integrations/bitbucket
+              - link "JetBrains" [ref=f32e273] [cursor=pointer]:
+                - /url: /docs/integrations/jetbrains
+              - link "Xcode" [ref=f32e276] [cursor=pointer]:
+                - /url: /docs/integrations/xcode
+              - link "Tailscale" [ref=f32e279] [cursor=pointer]:
+                - /url: /docs/integrations/tailscale
+              - link "Deeplinks" [ref=f32e282] [cursor=pointer]:
+                - /url: /docs/reference/deeplinks
+          - generic [ref=f32e285]:
+            - heading "SDK" [level=2] [ref=f32e286]
+            - generic [ref=f32e287]:
+              - link "TypeScript" [ref=f32e288] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - link "Python" [ref=f32e291] [cursor=pointer]:
+                - /url: /docs/sdk/python
+              - link "Bridge" [ref=f32e294] [cursor=pointer]:
+                - /url: /docs/sdk/bridge
+              - link "Changelog" [ref=f32e297] [cursor=pointer]:
+                - /url: /docs/release-notes/sdk
+          - generic [ref=f32e300]:
+            - heading "Agent SDK" [level=2] [ref=f32e301]
+            - generic [ref=f32e302]:
+              - button "Getting started" [ref=f32e303] [cursor=pointer]
+              - button "Integrations" [ref=f32e309] [cursor=pointer]
+              - button "Extensions" [ref=f32e315] [cursor=pointer]
+              - button "Guides" [ref=f32e321] [cursor=pointer]
+              - button "Templates" [ref=f32e327] [cursor=pointer]
+              - button "Reference" [ref=f32e333] [cursor=pointer]
+          - generic [ref=f32e339]:
+            - heading "CLI" [level=2] [ref=f32e340]
+            - generic [ref=f32e341]:
+              - link "Overview" [ref=f32e342] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - link "Installation" [ref=f32e345] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - link "Capabilities" [ref=f32e348] [cursor=pointer]:
+                - /url: /docs/cli/using
+              - link "Changelog" [ref=f32e351] [cursor=pointer]:
+                - /url: /docs/cli/changelog
+              - link "Shell Mode" [ref=f32e354] [cursor=pointer]:
+                - /url: /docs/cli/shell-mode
+              - link "ACP" [ref=f32e357] [cursor=pointer]:
+                - /url: /docs/cli/acp
+              - link "Headless / CI" [ref=f32e360] [cursor=pointer]:
+                - /url: /docs/cli/headless
+              - button "Reference" [ref=f32e363] [cursor=pointer]
+          - generic [ref=f32e369]:
+            - heading "Teams & Enterprise" [level=2] [ref=f32e370]
+            - generic [ref=f32e371]:
+              - button "Teams" [ref=f32e372] [cursor=pointer]
+              - button "Enterprise" [ref=f32e378] [cursor=pointer]
+      - main [ref=f32e384]:
+        - generic [ref=f32e387]:
+          - generic [ref=f32e388]:
+            - generic [ref=f32e389]: Customize
+            - generic [ref=f32e391]:
+              - heading "Model Context Protocol (MCP)" [level=1] [ref=f32e392]
+              - heading [level=2] [ref=f32e393]:
+                - link "Copy link to what-is-mcp" [ref=f32e394] [cursor=pointer]:
+                  - /url: "#what-is-mcp"
+                  - generic [ref=f32e395]: What is MCP?
+              - paragraph [ref=f32e403]:
+                - link "Model Context Protocol (MCP)" [ref=f32e404] [cursor=pointer]:
+                  - /url: https://modelcontextprotocol.io/introduction
+                - text: enables Cursor to connect to external tools and data sources. Install and manage MCP servers from the
+                - link "Customize" [ref=f32e405] [cursor=pointer]:
+                  - /url: /docs/customize-cursor
+                - text: page or configure them in
+                - code [ref=f32e406]: mcp.json
+                - text: .
+              - heading [level=3] [ref=f32e410]:
+                - link "Copy link to why-use-mcp" [ref=f32e411] [cursor=pointer]:
+                  - /url: "#why-use-mcp"
+                  - generic [ref=f32e412]: Why use MCP?
+              - paragraph [ref=f32e420]: MCP connects Cursor to external systems and data. Instead of explaining your project structure repeatedly, integrate directly with your tools.
+              - paragraph [ref=f32e421]:
+                - text: Write MCP servers in any language that can print to
+                - code [ref=f32e422]: stdout
+                - text: or serve an HTTP endpoint - Python, JavaScript, Go, etc.
+              - paragraph [ref=f32e423]:
+                - text: Browse official plugins in the
+                - link "Cursor Marketplace" [ref=f32e424] [cursor=pointer]:
+                  - /url: /marketplace
+                - text: . For community plugins and MCP servers, browse
+                - link "cursor.directory" [ref=f32e425] [cursor=pointer]:
+                  - /url: https://cursor.directory
+                - text: .
+              - heading [level=3] [ref=f32e426]:
+                - link "Copy link to how-it-works" [ref=f32e427] [cursor=pointer]:
+                  - /url: "#how-it-works"
+                  - generic [ref=f32e428]: How it works
+              - paragraph [ref=f32e436]: MCP servers expose capabilities through the protocol, connecting Cursor to external tools or data sources.
+              - paragraph [ref=f32e437]: "Cursor supports three transport methods:"
+              - table [ref=f32e440]:
+                - rowgroup [ref=f32e441]:
+                  - row [ref=f32e442]:
+                    - columnheader "Transport" [ref=f32e443]
+                    - columnheader "Execution environment" [ref=f32e444]
+                    - columnheader "Deployment" [ref=f32e445]
+                    - columnheader "Users" [ref=f32e446]
+                    - columnheader "Input" [ref=f32e447]
+                    - columnheader "Auth" [ref=f32e448]
+                - rowgroup [ref=f32e449]:
+                  - row [ref=f32e450]:
+                    - cell [ref=f32e451]:
+                      - strong [ref=f32e452]:
+                        - code [ref=f32e454]: stdio
+                    - cell "Local" [ref=f32e455]
+                    - cell "Cursor manages" [ref=f32e456]
+                    - cell "Single user" [ref=f32e457]
+                    - cell "shell command" [ref=f32e458]
+                    - cell "Manual" [ref=f32e459]
+                  - row [ref=f32e460]:
+                    - cell [ref=f32e461]:
+                      - strong [ref=f32e462]:
+                        - code [ref=f32e464]: SSE
+                    - cell "Local/Remote" [ref=f32e465]
+                    - cell "Deploy as server" [ref=f32e466]
+                    - cell "Multiple users" [ref=f32e467]
+                    - cell "URL to an SSE endpoint" [ref=f32e468]
+                    - cell "OAuth" [ref=f32e469]
+                  - row [ref=f32e470]:
+                    - cell [ref=f32e471]:
+                      - strong [ref=f32e472]:
+                        - code [ref=f32e474]: Streamable HTTP
+                    - cell "Local/Remote" [ref=f32e475]
+                    - cell "Deploy as server" [ref=f32e476]
+                    - cell "Multiple users" [ref=f32e477]
+                    - cell "URL to an HTTP endpoint" [ref=f32e478]
+                    - cell "OAuth" [ref=f32e479]
+              - heading [level=3] [ref=f32e480]:
+                - link "Copy link to protocol-and-extension-support" [ref=f32e481] [cursor=pointer]:
+                  - /url: "#protocol-and-extension-support"
+                  - generic [ref=f32e482]: Protocol and extension support
+              - paragraph [ref=f32e490]: "Cursor supports these MCP protocol capabilities and extensions:"
+              - table [ref=f32e493]:
+                - rowgroup [ref=f32e494]:
+                  - row [ref=f32e495]:
+                    - columnheader "Feature" [ref=f32e496]
+                    - columnheader "Support" [ref=f32e497]
+                    - columnheader "Description" [ref=f32e498]
+                - rowgroup [ref=f32e499]:
+                  - row [ref=f32e500]:
+                    - cell [ref=f32e501]:
+                      - strong [ref=f32e502]: Tools
+                    - cell "Supported" [ref=f32e503]
+                    - cell "Functions for the AI model to execute" [ref=f32e504]
+                  - row [ref=f32e505]:
+                    - cell [ref=f32e506]:
+                      - strong [ref=f32e507]: Prompts
+                    - cell "Supported" [ref=f32e508]
+                    - cell "Templated messages and workflows for users" [ref=f32e509]
+                  - row [ref=f32e510]:
+                    - cell [ref=f32e511]:
+                      - strong [ref=f32e512]: Resources
+                    - cell "Supported" [ref=f32e513]
+                    - cell "Structured data sources that can be read and referenced" [ref=f32e514]
+                  - row [ref=f32e515]:
+                    - cell [ref=f32e516]:
+                      - strong [ref=f32e517]: Roots
+                    - cell "Supported" [ref=f32e518]
+                    - cell "Server-initiated inquiries into URI or filesystem boundaries" [ref=f32e519]
+                  - row [ref=f32e520]:
+                    - cell [ref=f32e521]:
+                      - strong [ref=f32e522]: Elicitation
+                    - cell "Supported" [ref=f32e523]
+                    - cell "Server-initiated requests for additional information from users" [ref=f32e524]
+                  - row [ref=f32e525]:
+                    - cell [ref=f32e526]:
+                      - strong [ref=f32e527]: Apps (extension)
+                    - cell "Supported" [ref=f32e528]
+                    - cell "Interactive UI views returned by MCP tools" [ref=f32e529]
+              - heading [level=3] [ref=f32e530]:
+                - link "Copy link to mcp-apps" [ref=f32e531] [cursor=pointer]:
+                  - /url: "#mcp-apps"
+                  - generic [ref=f32e532]: MCP apps
+              - paragraph [ref=f32e540]:
+                - text: Cursor supports the
+                - link "MCP Apps extension" [ref=f32e541] [cursor=pointer]:
+                  - /url: https://modelcontextprotocol.io/extensions/apps/overview
+                - text: . MCP tools can return interactive UI along with standard tool output.
+              - paragraph [ref=f32e542]: MCP Apps follow progressive enhancement. If a host cannot render app UI, the same tool still works through normal MCP responses.
+              - heading [level=2] [ref=f32e543]:
+                - link "Copy link to installing-mcp-servers" [ref=f32e544] [cursor=pointer]:
+                  - /url: "#installing-mcp-servers"
+                  - generic [ref=f32e545]: Installing MCP servers
+              - heading [level=3] [ref=f32e553]:
+                - link "Copy link to one-click-installation" [ref=f32e554] [cursor=pointer]:
+                  - /url: "#one-click-installation"
+                  - generic [ref=f32e555]: One-click installation
+              - paragraph [ref=f32e563]:
+                - text: Browse the
+                - link "Cursor Marketplace" [ref=f32e564] [cursor=pointer]:
+                  - /url: /marketplace
+                - text: for official plugins with one-click install from
+                - strong [ref=f32e565]: Customize
+                - text: ", or configure custom servers with"
+                - code [ref=f32e566]: mcp.json
+                - text: . For community plugins and MCP servers, browse
+                - link "cursor.directory" [ref=f32e567] [cursor=pointer]:
+                  - /url: https://cursor.directory
+                - text: . Click "Add to Cursor" on a marketplace entry to install it and authenticate with OAuth.
+              - paragraph [ref=f32e568]:
+                - text: Team admins can also distribute MCP servers through a
+                - link "team marketplace" [ref=f32e569] [cursor=pointer]:
+                  - /url: /docs/plugins#team-marketplaces
+                - text: . Team-distributed servers appear in Customize alongside personal and workspace MCP servers.
+              - heading [level=3] [ref=f32e570]:
+                - link "Copy link to using-mcpjson" [ref=f32e571] [cursor=pointer]:
+                  - /url: "#using-mcpjson"
+                  - generic [ref=f32e572]:
+                    - text: Using
+                    - code [ref=f32e573]: mcp.json
+              - paragraph [ref=f32e581]: "Configure custom MCP servers with a JSON file:"
+              - generic [ref=f32e584]:
+                - generic [ref=f32e585]: CLI Server - Node.js
+                - button [ref=f32e587] [cursor=pointer]
+                - code [ref=f32e593]:
+                  - generic [ref=f32e594]: "{"
+                  - generic [ref=f32e595]: "\"mcpServers\": {"
+                  - generic [ref=f32e596]: "\"server-name\": {"
+                  - generic [ref=f32e597]: "\"command\": \"npx\","
+                  - generic [ref=f32e598]: "\"args\": [\"-y\", \"mcp-server\"],"
+                  - generic [ref=f32e599]: "\"env\": {"
+                  - generic [ref=f32e600]: "\"API_KEY\": \"value\""
+                  - generic [ref=f32e601]: "}"
+                  - generic [ref=f32e602]: "}"
+                  - generic [ref=f32e603]: "}"
+                  - generic [ref=f32e604]: "}"
+              - generic [ref=f32e607]:
+                - generic [ref=f32e608]: CLI Server - Python
+                - button [ref=f32e610] [cursor=pointer]
+                - code [ref=f32e616]:
+                  - generic [ref=f32e617]: "{"
+                  - generic [ref=f32e618]: "\"mcpServers\": {"
+                  - generic [ref=f32e619]: "\"server-name\": {"
+                  - generic [ref=f32e620]: "\"command\": \"python\","
+                  - generic [ref=f32e621]: "\"args\": [\"mcp-server.py\"],"
+                  - generic [ref=f32e622]: "\"env\": {"
+                  - generic [ref=f32e623]: "\"API_KEY\": \"value\""
+                  - generic [ref=f32e624]: "}"
+                  - generic [ref=f32e625]: "}"
+                  - generic [ref=f32e626]: "}"
+                  - generic [ref=f32e627]: "}"
+              - generic [ref=f32e630]:
+                - generic [ref=f32e631]: Remote Server
+                - button [ref=f32e633] [cursor=pointer]
+                - code [ref=f32e639]:
+                  - generic [ref=f32e640]: // MCP server using HTTP or SSE - runs on a server
+                  - generic [ref=f32e641]: "{"
+                  - generic [ref=f32e642]: "\"mcpServers\": {"
+                  - generic [ref=f32e643]: "\"server-name\": {"
+                  - generic [ref=f32e644]: "\"url\": \"http://localhost:3000/mcp\","
+                  - generic [ref=f32e645]: "\"headers\": {"
+                  - generic [ref=f32e646]: "\"API_KEY\": \"value\""
+                  - generic [ref=f32e647]: "}"
+                  - generic [ref=f32e648]: "}"
+                  - generic [ref=f32e649]: "}"
+                  - generic [ref=f32e650]: "}"
+              - heading [level=3] [ref=f32e651]:
+                - link "Copy link to static-oauth-for-remote-servers" [ref=f32e652] [cursor=pointer]:
+                  - /url: "#static-oauth-for-remote-servers"
+                  - generic [ref=f32e653]: Static OAuth for remote servers
+              - paragraph [ref=f32e661]:
+                - text: For MCP servers that use OAuth, you can provide
+                - strong [ref=f32e662]: static OAuth client credentials
+                - text: in
+                - code [ref=f32e663]: mcp.json
+                - text: "instead of dynamic client registration. Use this when:"
+              - list [ref=f32e664]:
+                - listitem [ref=f32e665]:
+                  - text: The MCP provider gives you a fixed
+                  - strong [ref=f32e666]: Client ID
+                  - text: (and optionally
+                  - strong [ref=f32e667]: Client Secret
+                  - text: )
+                - listitem [ref=f32e668]:
+                  - text: The provider requires
+                  - strong [ref=f32e669]: whitelisting a redirect URL
+                  - text: (e.g. Figma, Linear)
+                - listitem [ref=f32e670]: The provider does not support OAuth 2.0 Dynamic Client Registration
+              - paragraph [ref=f32e671]:
+                - text: Add an
+                - code [ref=f32e672]: auth
+                - text: object to remote server entries that use
+                - code [ref=f32e673]: url
+                - text: ":"
+              - generic [ref=f32e676]:
+                - generic [ref=f32e677]: Remote Server with Static OAuth
+                - button [ref=f32e679] [cursor=pointer]
+                - code [ref=f32e685]:
+                  - generic [ref=f32e686]: "{"
+                  - generic [ref=f32e687]: "\"mcpServers\": {"
+                  - generic [ref=f32e688]: "\"oauth-server\": {"
+                  - generic [ref=f32e689]: "\"url\": \"https://api.example.com/mcp\","
+                  - generic [ref=f32e690]: "\"auth\": {"
+                  - generic [ref=f32e691]: "\"CLIENT_ID\": \"your-oauth-client-id\","
+                  - generic [ref=f32e692]: "\"CLIENT_SECRET\": \"your-client-secret\","
+                  - generic [ref=f32e693]: "\"scopes\": [\"read\", \"write\"]"
+                  - generic [ref=f32e694]: "}"
+                  - generic [ref=f32e695]: "}"
+                  - generic [ref=f32e696]: "}"
+                  - generic [ref=f32e697]: "}"
+              - table [ref=f32e700]:
+                - rowgroup [ref=f32e701]:
+                  - row [ref=f32e702]:
+                    - columnheader "Field" [ref=f32e703]
+                    - columnheader "Required" [ref=f32e704]
+                    - columnheader "Description" [ref=f32e705]
+                - rowgroup [ref=f32e706]:
+                  - row [ref=f32e707]:
+                    - cell [ref=f32e708]:
+                      - strong [ref=f32e709]: CLIENT_ID
+                    - cell "Yes" [ref=f32e710]
+                    - cell "OAuth 2.0 Client ID from the MCP provider" [ref=f32e711]
+                  - row [ref=f32e712]:
+                    - cell [ref=f32e713]:
+                      - strong [ref=f32e714]: CLIENT_SECRET
+                    - cell "No" [ref=f32e715]
+                    - cell "OAuth 2.0 Client Secret (if the provider uses confidential clients)" [ref=f32e716]
+                  - row [ref=f32e717]:
+                    - cell [ref=f32e718]:
+                      - strong [ref=f32e719]: scopes
+                    - cell "No" [ref=f32e720]
+                    - cell [ref=f32e721]:
+                      - text: OAuth scopes to request. If omitted, Cursor will use
+                      - code [ref=f32e722]: /.well-known/oauth-authorization-server
+                      - text: to discover
+                      - code [ref=f32e723]: scopes_supported
+              - heading [level=4] [ref=f32e724]:
+                - link "Copy link to static-redirect-url" [ref=f32e725] [cursor=pointer]:
+                  - /url: "#static-redirect-url"
+                  - generic [ref=f32e726]: Static redirect URL
+              - paragraph [ref=f32e734]: "Cursor uses fixed OAuth redirect URLs for MCP servers. Register the callback for each surface your users authenticate from:"
+              - generic [ref=f32e737]:
+                - button [ref=f32e738] [cursor=pointer]
+                - code [ref=f32e744]:
+                  - generic [ref=f32e745]: https://www.cursor.com/agents/mcp/oauth/callback
+                  - generic [ref=f32e746]: http://localhost:8787/callback
+              - list [ref=f32e747]:
+                - listitem [ref=f32e748]:
+                  - strong [ref=f32e749]: Web and Cursor Agents
+                  - text: ":"
+                  - code [ref=f32e750]: https://www.cursor.com/agents/mcp/oauth/callback
+                - listitem [ref=f32e751]:
+                  - strong [ref=f32e752]: Desktop app
+                  - text: ":"
+                  - code [ref=f32e753]: http://localhost:8787/callback
+              - paragraph [ref=f32e754]:
+                - text: When configuring the MCP provider's OAuth app, register both URLs as allowed redirect URIs if users authenticate from both web and desktop. The server is identified via the OAuth
+                - code [ref=f32e755]: state
+                - text: parameter, so these redirect URLs work for all MCP servers.
+              - paragraph [ref=f32e756]:
+                - text: With dynamic client registration, the desktop app registers both URLs and can send the provider the web callback. That page then hands the sign-in back to the desktop app. To keep an OAuth app that allows only the desktop app's redirect URL, set a static
+                - code [ref=f32e757]: CLIENT_ID
+                - text: in
+                - code [ref=f32e758]: auth
+                - text: . The desktop app then sends the provider only that URL.
+              - heading [level=4] [ref=f32e759]:
+                - link "Copy link to combining-with-config-interpolation" [ref=f32e760] [cursor=pointer]:
+                  - /url: "#combining-with-config-interpolation"
+                  - generic [ref=f32e761]: Combining with config interpolation
+              - paragraph [ref=f32e769]:
+                - code [ref=f32e770]: auth
+                - text: "values support the same interpolation as other fields:"
+              - generic [ref=f32e773]:
+                - button [ref=f32e774] [cursor=pointer]
+                - code [ref=f32e780]:
+                  - generic [ref=f32e781]: "{"
+                  - generic [ref=f32e782]: "\"mcpServers\": {"
+                  - generic [ref=f32e783]: "\"oauth-server\": {"
+                  - generic [ref=f32e784]: "\"url\": \"https://api.example.com/mcp\","
+                  - generic [ref=f32e785]: "\"auth\": {"
+                  - generic [ref=f32e786]: "\"CLIENT_ID\": \"${env:MCP_CLIENT_ID}\","
+                  - generic [ref=f32e787]: "\"CLIENT_SECRET\": \"${env:MCP_CLIENT_SECRET}\""
+                  - generic [ref=f32e788]: "}"
+                  - generic [ref=f32e789]: "}"
+                  - generic [ref=f32e790]: "}"
+                  - generic [ref=f32e791]: "}"
+              - paragraph [ref=f32e792]: Use environment variables for Client ID and Client Secret instead of hardcoding them.
+              - heading [level=3] [ref=f32e793]:
+                - link "Copy link to stdio-server-configuration" [ref=f32e794] [cursor=pointer]:
+                  - /url: "#stdio-server-configuration"
+                  - generic [ref=f32e795]: STDIO server configuration
+              - paragraph [ref=f32e803]:
+                - text: For STDIO servers (local command-line servers), configure these fields in your
+                - code [ref=f32e804]: mcp.json
+                - text: ":"
+              - table [ref=f32e807]:
+                - rowgroup [ref=f32e808]:
+                  - row [ref=f32e809]:
+                    - columnheader "Field" [ref=f32e810]
+                    - columnheader "Required" [ref=f32e811]
+                    - columnheader "Description" [ref=f32e812]
+                    - columnheader "Examples" [ref=f32e813]
+                - rowgroup [ref=f32e814]:
+                  - row [ref=f32e815]:
+                    - cell [ref=f32e816]:
+                      - strong [ref=f32e817]: type
+                    - cell "Yes" [ref=f32e818]
+                    - cell "Server connection type" [ref=f32e819]
+                    - cell [ref=f32e820]:
+                      - code [ref=f32e821]: "\"stdio\""
+                  - row [ref=f32e822]:
+                    - cell [ref=f32e823]:
+                      - strong [ref=f32e824]: command
+                    - cell "Yes" [ref=f32e825]
+                    - cell "Command to start the server executable. Must be available on your system path or contain its full path." [ref=f32e826]
+                    - cell [ref=f32e827]:
+                      - code [ref=f32e828]: "\"npx\""
+                      - text: ","
+                      - code [ref=f32e829]: "\"node\""
+                      - text: ","
+                      - code [ref=f32e830]: "\"python\""
+                      - text: ","
+                      - code [ref=f32e831]: "\"docker\""
+                  - row [ref=f32e832]:
+                    - cell [ref=f32e833]:
+                      - strong [ref=f32e834]: args
+                    - cell "No" [ref=f32e835]
+                    - cell "Array of arguments passed to the command" [ref=f32e836]
+                    - cell [ref=f32e837]:
+                      - code [ref=f32e838]: "[\"server.py\", \"--port\", \"3000\"]"
+                  - row [ref=f32e839]:
+                    - cell [ref=f32e840]:
+                      - strong [ref=f32e841]: env
+                    - cell "No" [ref=f32e842]
+                    - cell "Environment variables for the server" [ref=f32e843]
+                    - cell [ref=f32e844]:
+                      - code [ref=f32e845]: "{\"API_KEY\": \"${env:api-key}\"}"
+                  - row [ref=f32e846]:
+                    - cell [ref=f32e847]:
+                      - strong [ref=f32e848]: envFile
+                    - cell "No" [ref=f32e849]
+                    - cell "Path to an environment file to load more variables" [ref=f32e850]
+                    - cell [ref=f32e851]:
+                      - code [ref=f32e852]: "\".env\""
+                      - text: ","
+                      - code [ref=f32e853]: "\"${workspaceFolder}/.env\""
+              - alert [ref=f32e854]:
+                - paragraph [ref=f32e858]:
+                  - text: The
+                  - code [ref=f32e859]: envFile
+                  - text: option is only available for STDIO servers. Remote servers (HTTP/SSE) do not support
+                  - code [ref=f32e860]: envFile
+                  - text: . For remote servers, use
+                  - link "config interpolation" [ref=f32e861] [cursor=pointer]:
+                    - /url: "#config-interpolation"
+                  - text: with environment variables set in your shell profile or system environment instead.
+              - heading [level=3] [ref=f32e862]:
+                - link "Copy link to using-the-extension-api" [ref=f32e863] [cursor=pointer]:
+                  - /url: "#using-the-extension-api"
+                  - generic [ref=f32e864]: Using the Extension API
+              - paragraph [ref=f32e872]:
+                - text: For programmatic MCP server registration, Cursor provides an extension API that allows dynamic configuration without modifying
+                - code [ref=f32e873]: mcp.json
+                - text: files. This is particularly useful for enterprise environments and automated setup workflows.
+              - link [ref=f32e874] [cursor=pointer]:
+                - /url: /docs/extension-api
+                - paragraph [ref=f32e879]: Extension API reference
+                - paragraph [ref=f32e881]:
+                  - text: Register MCP servers programmatically using
+                  - code [ref=f32e882]: vscode.cursor.mcp.registerServer()
+              - heading [level=3] [ref=f32e883]:
+                - link "Copy link to configuration-locations" [ref=f32e884] [cursor=pointer]:
+                  - /url: "#configuration-locations"
+                  - generic [ref=f32e885]: Configuration locations
+              - generic [ref=f32e893]:
+                - generic [ref=f32e894]:
+                  - paragraph [ref=f32e901]: Project Configuration
+                  - paragraph [ref=f32e903]:
+                    - text: Create
+                    - code [ref=f32e904]: .cursor/mcp.json
+                    - text: in your project for project-specific tools.
+                - generic [ref=f32e905]:
+                  - paragraph [ref=f32e910]: Global Configuration
+                  - paragraph [ref=f32e912]:
+                    - text: Create
+                    - code [ref=f32e913]: ~/.cursor/mcp.json
+                    - text: in your home directory for tools available everywhere.
+              - heading [level=3] [ref=f32e914]:
+                - link "Copy link to config-interpolation" [ref=f32e915] [cursor=pointer]:
+                  - /url: "#config-interpolation"
+                  - generic [ref=f32e916]: Config interpolation
+              - paragraph [ref=f32e924]:
+                - text: Use variables in
+                - code [ref=f32e925]: mcp.json
+                - text: "values. Cursor resolves variables in these fields:"
+                - code [ref=f32e926]: command
+                - text: ","
+                - code [ref=f32e927]: args
+                - text: ","
+                - code [ref=f32e928]: env
+                - text: ","
+                - code [ref=f32e929]: url
+                - text: ", and"
+                - code [ref=f32e930]: headers
+                - text: .
+              - paragraph [ref=f32e931]: "Supported syntax:"
+              - list [ref=f32e932]:
+                - listitem [ref=f32e933]:
+                  - code [ref=f32e934]: "${env:NAME}"
+                  - text: environment variables
+                - listitem [ref=f32e935]:
+                  - code [ref=f32e936]: "${userHome}"
+                  - text: path to your home folder
+                - listitem [ref=f32e937]:
+                  - code [ref=f32e938]: "${workspaceFolder}"
+                  - text: project root (the folder that contains
+                  - code [ref=f32e939]: .cursor/mcp.json
+                  - text: )
+                - listitem [ref=f32e940]:
+                  - code [ref=f32e941]: "${workspaceFolderBasename}"
+                  - text: name of the project root
+                - listitem [ref=f32e942]:
+                  - code [ref=f32e943]: "${pathSeparator}"
+                  - text: and
+                  - code [ref=f32e944]: "${/}"
+                  - text: OS path separator
+              - paragraph [ref=f32e945]: Examples
+              - generic [ref=f32e948]:
+                - button [ref=f32e949] [cursor=pointer]
+                - code [ref=f32e955]:
+                  - generic [ref=f32e956]: "{"
+                  - generic [ref=f32e957]: "\"mcpServers\": {"
+                  - generic [ref=f32e958]: "\"local-server\": {"
+                  - generic [ref=f32e959]: "\"command\": \"python\","
+                  - generic [ref=f32e960]: "\"args\": [\"${workspaceFolder}/tools/mcp_server.py\"],"
+                  - generic [ref=f32e961]: "\"env\": {"
+                  - generic [ref=f32e962]: "\"API_KEY\": \"${env:API_KEY}\""
+                  - generic [ref=f32e963]: "}"
+                  - generic [ref=f32e964]: "}"
+                  - generic [ref=f32e965]: "}"
+                  - generic [ref=f32e966]: "}"
+              - generic [ref=f32e969]:
+                - button [ref=f32e970] [cursor=pointer]
+                - code [ref=f32e976]:
+                  - generic [ref=f32e977]: "{"
+                  - generic [ref=f32e978]: "\"mcpServers\": {"
+                  - generic [ref=f32e979]: "\"remote-server\": {"
+                  - generic [ref=f32e980]: "\"url\": \"https://api.example.com/mcp\","
+                  - generic [ref=f32e981]: "\"headers\": {"
+                  - generic [ref=f32e982]: "\"Authorization\": \"Bearer ${env:MY_SERVICE_TOKEN}\""
+                  - generic [ref=f32e983]: "}"
+                  - generic [ref=f32e984]: "}"
+                  - generic [ref=f32e985]: "}"
+                  - generic [ref=f32e986]: "}"
+              - heading [level=3] [ref=f32e987]:
+                - link "Copy link to authentication" [ref=f32e988] [cursor=pointer]:
+                  - /url: "#authentication"
+                  - generic [ref=f32e989]: Authentication
+              - paragraph [ref=f32e997]: MCP servers use environment variables for authentication. Pass API keys and tokens through the config.
+              - paragraph [ref=f32e998]: Cursor supports OAuth for servers that require it. Sign-in uses the authorization code flow with PKCE. Cursor reads the server's protected resource metadata (RFC 9728) to find its authorization server and resource indicator (RFC 8707). With dynamic client registration, Cursor registers as a public client with no client secret.
+              - paragraph [ref=f32e999]:
+                - text: Cursor renews an expired access token with the refresh token the server issued. If the server returns an access token with an expiry (
+                - code [ref=f32e1000]: expires_in
+                - text: ) and no refresh token, you sign in again when the token expires. If your provider issues refresh tokens only for a scope such as
+                - code [ref=f32e1001]: offline_access
+                - text: ", add that scope to"
+                - link [ref=f32e1002] [cursor=pointer]:
+                  - /url: "#static-oauth-for-remote-servers"
+                  - code [ref=f32e1003]: auth.scopes
+                - text: .
+              - heading [level=2] [ref=f32e1004]:
+                - link "Copy link to enterprise-admin-controls" [ref=f32e1005] [cursor=pointer]:
+                  - /url: "#enterprise-admin-controls"
+                  - generic [ref=f32e1006]: Enterprise admin controls
+              - paragraph [ref=f32e1014]: MCP distribution and MCP policy are configured separately. Team admins can distribute shared MCP servers. Enterprise admins can configure MCP policy.
+              - heading [level=3] [ref=f32e1015]:
+                - link "Copy link to team-mcp-distribution" [ref=f32e1016] [cursor=pointer]:
+                  - /url: "#team-mcp-distribution"
+                  - generic [ref=f32e1017]: Team MCP distribution
+              - paragraph [ref=f32e1025]:
+                - text: Configure shared Team MCP servers under
+                - strong [ref=f32e1026]: Dashboard > Plugins & MCPs
+                - text: . These servers are available to Cloud Agents.
+              - paragraph [ref=f32e1027]:
+                - text: To run Team MCP servers only on members' computers by default, a team admin turns on
+                - strong [ref=f32e1028]: Run connectors only on members' computers
+                - text: in the team's MCP settings under
+                - strong [ref=f32e1029]: Dashboard > Plugins & MCPs
+                - text: . Cloud Agents can't connect to a server that runs only on members' computers. Turn the switch off to let Cloud Agents use them again.
+              - paragraph [ref=f32e1030]:
+                - text: A Team MCP server's config and a team plugin's variables are shared by the whole team. Editing them from any surface, including an automation's MCP settings, changes the value for every teammate and automation that uses them. Only team admins can edit a Team MCP server or replace credentials a team plugin already has. Org admins have the same access on every team linked to their
+                - link "Organization" [ref=f32e1031] [cursor=pointer]:
+                  - /url: /docs/enterprise/organizations
+                - text: ", even without a team admin role."
+              - paragraph [ref=f32e1032]:
+                - text: To make an existing standalone Team MCP server available in the Agent Window, IDE, and CLI, select
+                - strong [ref=f32e1033]: Add to Team Marketplace
+                - text: under
+                - strong [ref=f32e1034]: Team MCP Servers
+                - text: . Cursor links the server to the Default team marketplace without interrupting Cloud Agent access. Teammates can then install and configure it from Customize.
+              - paragraph [ref=f32e1035]:
+                - text: Linking an MCP server to a marketplace does not install or enable it for everyone. Configure
+                - strong [ref=f32e1036]: Marketplace Access
+                - text: and plugin installation modes under
+                - strong [ref=f32e1037]: Dashboard > Plugins & MCPs
+                - text: . See
+                - link "Migrate existing Team MCPs" [ref=f32e1038] [cursor=pointer]:
+                  - /url: /docs/plugins#migrate-existing-team-mcps
+                - text: for the full flow.
+              - heading [level=3] [ref=f32e1039]:
+                - link "Copy link to mcp-allowlist" [ref=f32e1040] [cursor=pointer]:
+                  - /url: "#mcp-allowlist"
+                  - generic [ref=f32e1041]: MCP Allowlist
+              - paragraph [ref=f32e1049]:
+                - text: Enterprise admins can control which MCP servers users may run from the Cursor dashboard. Open
+                - link "Team Settings > MCP Configuration" [ref=f32e1050] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/team-settings?view=mcp-configuration
+                - text: to configure which servers and tools the team may run. The Plugins & MCPs page also links here. Allowlisting approves an MCP configuration. It does not distribute or install the server.
+              - paragraph [ref=f32e1051]: "Use the MCP Allowlist to define approved servers:"
+              - list [ref=f32e1052]:
+                - listitem [ref=f32e1053]:
+                  - strong [ref=f32e1054]: Command entries
+                  - text: approve local
+                  - code [ref=f32e1055]: stdio
+                  - text: MCP servers by command pattern.
+                - listitem [ref=f32e1056]:
+                  - strong [ref=f32e1057]: URL entries
+                  - text: approve remote HTTP/SSE MCP servers by URL entry pattern.
+                - listitem [ref=f32e1058]:
+                  - strong [ref=f32e1059]: Tool allowlists
+                  - text: restrict which tools from an approved server can run automatically. Leave a tool allowlist empty to allow all tools from that server.
+              - heading [level=3] [ref=f32e1060]:
+                - link "Copy link to network-controls" [ref=f32e1061] [cursor=pointer]:
+                  - /url: "#network-controls"
+                  - generic [ref=f32e1062]: Network controls
+              - paragraph [ref=f32e1070]: Remote MCP URLs are restricted to the configured URL entry pattern.
+              - paragraph [ref=f32e1071]: "Local command-based MCP servers use their per-server network mode:"
+              - list [ref=f32e1072]:
+                - listitem [ref=f32e1073]:
+                  - strong [ref=f32e1074]: Allow all
+                  - text: ": allow outbound network access."
+                - listitem [ref=f32e1075]:
+                  - strong [ref=f32e1076]: Allowlist
+                  - text: ": allow only listed destinations."
+                - listitem [ref=f32e1077]:
+                  - strong [ref=f32e1078]: Deny all
+                  - text: ": block outbound network access."
+                - listitem [ref=f32e1079]:
+                  - strong [ref=f32e1080]: No sandbox
+                  - text: ": run without command or network sandboxing."
+              - heading [level=3] [ref=f32e1081]:
+                - link "Copy link to user-mcp-extensions" [ref=f32e1082] [cursor=pointer]:
+                  - /url: "#user-mcp-extensions"
+                  - generic [ref=f32e1083]: User MCP extensions
+              - paragraph [ref=f32e1091]: Admins can allow users to configure their own MCP servers outside admin-defined command or URL patterns. For user MCPs that do not match an admin-defined pattern, the User MCP Network Denylist can block matching network destinations.
+              - heading [level=2] [ref=f32e1092]:
+                - link "Copy link to using-mcp-in-chat" [ref=f32e1093] [cursor=pointer]:
+                  - /url: "#using-mcp-in-chat"
+                  - generic [ref=f32e1094]: Using MCP in chat
+              - paragraph [ref=f32e1102]:
+                - text: Cursor automatically uses MCP tools listed under
+                - code [ref=f32e1103]: Available Tools
+                - text: when relevant. This includes
+                - link "Plan Mode" [ref=f32e1104] [cursor=pointer]:
+                  - /url: /docs/agent/plan-mode
+                - text: . Ask for a specific tool by name or describe what you need. Enable or disable MCP servers from
+                - strong [ref=f32e1105]: Customize
+                - text: in the sidebar.
+              - heading [level=3] [ref=f32e1106]:
+                - link "Copy link to tool-approval" [ref=f32e1107] [cursor=pointer]:
+                  - /url: "#tool-approval"
+                  - generic [ref=f32e1108]: Tool approval
+              - paragraph [ref=f32e1116]: Cursor asks for approval before using MCP tools by default. Click the arrow next to the tool name to see arguments.
+              - button "Open image in full screen" [ref=f32e1117] [cursor=pointer]:
+                - img "Tool confirmation prompt" [ref=f32e1118]
+              - heading [level=4] [ref=f32e1119]:
+                - link "Copy link to run-mode" [ref=f32e1120] [cursor=pointer]:
+                  - /url: "#run-mode"
+                  - generic [ref=f32e1121]: Run Mode
+              - paragraph [ref=f32e1129]:
+                - text: MCP
+                - link "follows the same Run Modes as terminal commands" [ref=f32e1130] [cursor=pointer]:
+                  - /url: /docs/agent/security/run-modes#run-mode
+                - text: . For example, in
+                - strong [ref=f32e1131]: Auto-review
+                - text: mode, allowlisted MCP tools run immediately and everything else is routed through the classifier.
+              - heading [level=3] [ref=f32e1132]:
+                - link "Copy link to tool-response" [ref=f32e1133] [cursor=pointer]:
+                  - /url: "#tool-response"
+                  - generic [ref=f32e1134]: Tool response
+              - paragraph [ref=f32e1142]: "Cursor shows the response in chat with expandable views of arguments and responses:"
+              - button "Open image in full screen" [ref=f32e1143] [cursor=pointer]:
+                - img "MCP tool call result" [ref=f32e1144]
+              - heading [level=3] [ref=f32e1145]:
+                - link "Copy link to images-as-context" [ref=f32e1146] [cursor=pointer]:
+                  - /url: "#images-as-context"
+                  - generic [ref=f32e1147]: Images as context
+              - paragraph [ref=f32e1155]: "MCP servers can return images - screenshots, diagrams, etc. Return them as base64 encoded strings:"
+              - generic [ref=f32e1158]:
+                - button [ref=f32e1159] [cursor=pointer]
+                - code [ref=f32e1165]:
+                  - generic [ref=f32e1166]: const RED_CIRCLE_BASE64 = "/9j/4AAQSkZJRgABAgEASABIAAD/2w...";
+                  - generic [ref=f32e1167]: // ^ full base64 clipped for readability
+                  - generic [ref=f32e1169]: "server.tool(\"generate_image\", async (params) => {"
+                  - generic [ref=f32e1170]: "return {"
+                  - generic [ref=f32e1171]: "content: ["
+                  - generic [ref=f32e1172]: "{"
+                  - generic [ref=f32e1173]: "type: \"image\","
+                  - generic [ref=f32e1174]: "data: RED_CIRCLE_BASE64,"
+                  - generic [ref=f32e1175]: "mimeType: \"image/jpeg\","
+                  - generic [ref=f32e1176]: "},"
+                  - generic [ref=f32e1177]: "],"
+                  - generic [ref=f32e1178]: "};"
+                  - generic [ref=f32e1179]: "});"
+              - paragraph [ref=f32e1180]:
+                - text: See this
+                - link "example server" [ref=f32e1181] [cursor=pointer]:
+                  - /url: https://github.com/msfeldstein/mcp-test-servers/blob/main/src/image-server.js
+                - text: for implementation details. Cursor attaches returned images to the chat. If the model supports images, it analyzes them.
+              - heading [level=2] [ref=f32e1182]:
+                - link "Copy link to security-considerations" [ref=f32e1183] [cursor=pointer]:
+                  - /url: "#security-considerations"
+                  - generic [ref=f32e1184]: Security considerations
+              - paragraph [ref=f32e1192]: "When installing MCP servers, consider these security practices:"
+              - list [ref=f32e1193]:
+                - listitem [ref=f32e1194]:
+                  - strong [ref=f32e1195]: Verify the source
+                  - text: ": Only install MCP servers from trusted developers and repositories"
+                - listitem [ref=f32e1196]:
+                  - strong [ref=f32e1197]: Review permissions
+                  - text: ": Check what data and APIs the server will access"
+                - listitem [ref=f32e1198]:
+                  - strong [ref=f32e1199]: Limit API keys
+                  - text: ": Use restricted API keys with minimal required permissions"
+                - listitem [ref=f32e1200]:
+                  - strong [ref=f32e1201]: Audit code
+                  - text: ": For critical integrations, review the server's source code"
+              - paragraph [ref=f32e1202]: Remember that MCP servers can access external services and execute code on your behalf. Always understand what a server does before installation.
+              - heading [level=2] [ref=f32e1203]:
+                - link "Copy link to real-world-examples" [ref=f32e1204] [cursor=pointer]:
+                  - /url: "#real-world-examples"
+                  - generic [ref=f32e1205]: Real-world examples
+              - paragraph [ref=f32e1213]: "For practical examples of MCP in action:"
+              - list [ref=f32e1214]:
+                - listitem [ref=f32e1215]:
+                  - strong [ref=f32e1216]:
+                    - link "Xcode integration" [ref=f32e1217] [cursor=pointer]:
+                      - /url: /docs/integrations/xcode
+                  - text: — Connect Cursor to Xcode 26.3+ for builds, tests, SwiftUI previews, and Apple documentation search
+                - listitem [ref=f32e1218]:
+                  - strong [ref=f32e1219]:
+                    - link "Web Development guide" [ref=f32e1220] [cursor=pointer]:
+                      - /url: /for/web-development
+                  - text: — Integrate Linear, Figma, and browser tools into your development workflow
+              - heading [level=2] [ref=f32e1221]:
+                - link "Copy link to faq" [ref=f32e1222] [cursor=pointer]:
+                  - /url: "#faq"
+                  - generic [ref=f32e1223]: FAQ
+              - generic [ref=f32e1231]:
+                - heading [level=3] [ref=f32e1233]:
+                  - button "What's the point of MCP servers?" [ref=f32e1234] [cursor=pointer]
+                - heading [level=3] [ref=f32e1238]:
+                  - button "How do I debug MCP server issues?" [ref=f32e1239] [cursor=pointer]
+                - heading [level=3] [ref=f32e1243]:
+                  - button "Why is my MCP sign-in different in Cloud Agents?" [ref=f32e1244] [cursor=pointer]
+                - heading [level=3] [ref=f32e1248]:
+                  - button "Can I temporarily disable an MCP server?" [ref=f32e1249] [cursor=pointer]
+                - heading [level=3] [ref=f32e1253]:
+                  - button "What happens if an MCP server crashes or times out?" [ref=f32e1254] [cursor=pointer]
+                - heading [level=3] [ref=f32e1258]:
+                  - button "How do I update an MCP server?" [ref=f32e1259] [cursor=pointer]
+                - heading [level=3] [ref=f32e1263]:
+                  - button "Can I use MCP servers with sensitive data?" [ref=f32e1264] [cursor=pointer]
+              - heading [level=2] [ref=f32e1267]:
+                - link "Copy link to related" [ref=f32e1268] [cursor=pointer]:
+                  - /url: "#related"
+                  - generic [ref=f32e1269]: Related
+              - list [ref=f32e1277]:
+                - listitem [ref=f32e1278]:
+                  - link "MCP help" [ref=f32e1279] [cursor=pointer]:
+                    - /url: /help/customization/mcp
+          - navigation [ref=f32e1282]:
+            - generic [ref=f32e1283]:
+              - list [ref=f32e1284]:
+                - listitem [ref=f32e1285]:
+                  - link "What is MCP?" [ref=f32e1286] [cursor=pointer]:
+                    - /url: "#what-is-mcp"
+                - listitem [ref=f32e1287]:
+                  - link "Why use MCP?" [ref=f32e1288] [cursor=pointer]:
+                    - /url: "#why-use-mcp"
+                - listitem [ref=f32e1289]:
+                  - link "How it works" [ref=f32e1290] [cursor=pointer]:
+                    - /url: "#how-it-works"
+                - listitem [ref=f32e1291]:
+                  - link "Protocol and extension support" [ref=f32e1292] [cursor=pointer]:
+                    - /url: "#protocol-and-extension-support"
+                - listitem [ref=f32e1293]:
+                  - link "MCP apps" [ref=f32e1294] [cursor=pointer]:
+                    - /url: "#mcp-apps"
+                - listitem [ref=f32e1295]:
+                  - link "Installing MCP servers" [ref=f32e1296] [cursor=pointer]:
+                    - /url: "#installing-mcp-servers"
+                - listitem [ref=f32e1297]:
+                  - link "One-click installation" [ref=f32e1298] [cursor=pointer]:
+                    - /url: "#one-click-installation"
+                - listitem [ref=f32e1299]:
+                  - link "Using mcp.json" [ref=f32e1300] [cursor=pointer]:
+                    - /url: "#using-mcpjson"
+                - listitem [ref=f32e1301]:
+                  - link "Static OAuth for remote servers" [ref=f32e1302] [cursor=pointer]:
+                    - /url: "#static-oauth-for-remote-servers"
+                - listitem [ref=f32e1303]:
+                  - link "Static redirect URL" [ref=f32e1304] [cursor=pointer]:
+                    - /url: "#static-redirect-url"
+                - listitem [ref=f32e1305]:
+                  - link "Combining with config interpolation" [ref=f32e1306] [cursor=pointer]:
+                    - /url: "#combining-with-config-interpolation"
+                - listitem [ref=f32e1307]:
+                  - link "STDIO server configuration" [ref=f32e1308] [cursor=pointer]:
+                    - /url: "#stdio-server-configuration"
+                - listitem [ref=f32e1309]:
+                  - link "Using the Extension API" [ref=f32e1310] [cursor=pointer]:
+                    - /url: "#using-the-extension-api"
+                - listitem [ref=f32e1311]:
+                  - link "Configuration locations" [ref=f32e1312] [cursor=pointer]:
+                    - /url: "#configuration-locations"
+                - listitem [ref=f32e1313]:
+                  - link "Config interpolation" [ref=f32e1314] [cursor=pointer]:
+                    - /url: "#config-interpolation"
+                - listitem [ref=f32e1315]:
+                  - link "Authentication" [ref=f32e1316] [cursor=pointer]:
+                    - /url: "#authentication"
+                - listitem [ref=f32e1317]:
+                  - link "Enterprise admin controls" [ref=f32e1318] [cursor=pointer]:
+                    - /url: "#enterprise-admin-controls"
+                - listitem [ref=f32e1319]:
+                  - link "Team MCP distribution" [ref=f32e1320] [cursor=pointer]:
+                    - /url: "#team-mcp-distribution"
+                - listitem [ref=f32e1321]:
+                  - link "MCP Allowlist" [ref=f32e1322] [cursor=pointer]:
+                    - /url: "#mcp-allowlist"
+                - listitem [ref=f32e1323]:
+                  - link "Network controls" [ref=f32e1324] [cursor=pointer]:
+                    - /url: "#network-controls"
+                - listitem [ref=f32e1325]:
+                  - link "User MCP extensions" [ref=f32e1326] [cursor=pointer]:
+                    - /url: "#user-mcp-extensions"
+                - listitem [ref=f32e1327]:
+                  - link "Using MCP in chat" [ref=f32e1328] [cursor=pointer]:
+                    - /url: "#using-mcp-in-chat"
+                - listitem [ref=f32e1329]:
+                  - link "Tool approval" [ref=f32e1330] [cursor=pointer]:
+                    - /url: "#tool-approval"
+                - listitem [ref=f32e1331]:
+                  - link "Run Mode" [ref=f32e1332] [cursor=pointer]:
+                    - /url: "#run-mode"
+                - listitem [ref=f32e1333]:
+                  - link "Tool response" [ref=f32e1334] [cursor=pointer]:
+                    - /url: "#tool-response"
+                - listitem [ref=f32e1335]:
+                  - link "Images as context" [ref=f32e1336] [cursor=pointer]:
+                    - /url: "#images-as-context"
+                - listitem [ref=f32e1337]:
+                  - link "Security considerations" [ref=f32e1338] [cursor=pointer]:
+                    - /url: "#security-considerations"
+                - listitem [ref=f32e1339]:
+                  - link "Real-world examples" [ref=f32e1340] [cursor=pointer]:
+                    - /url: "#real-world-examples"
+                - listitem [ref=f32e1341]:
+                  - link "FAQ" [ref=f32e1342] [cursor=pointer]:
+                    - /url: "#faq"
+                - listitem [ref=f32e1343]:
+                  - link "Related" [ref=f32e1344] [cursor=pointer]:
+                    - /url: "#related"
+              - button "Copy page" [ref=f32e1348] [cursor=pointer]
+  - alert [ref=f32e1351]

@@ -14,8 +14,11 @@ import * as path from "node:path";
 import type { ChatMsg, ContextUsage, GuardAction, RunExit, Runtime } from "../contracts";
 import { modelsForProvider } from "../core/catalog/list-models";
 import { formatModelsNotice } from "./models-slash";
+import { formatDidYouMean, suggestModelIds } from "../core/catalog/model-suggest";
 import { BUILTIN_COMMANDS, loadCommands, resolveCommandForMessage } from "../core/commands";
-import { defaultConfigPath, loadConfig, type HzConfig } from "../core/config";
+import { BUILTIN_SLASH_REGISTRY } from "../core/slash-registry";
+import { combineQueuedMessages } from "../core/prompt-combine";
+import { defaultConfigPath, detectAvailableProviders, loadConfig, type HzConfig } from "../core/config";
 import { getSkill } from "../core/skills";
 import { maskSecrets } from "../core/compaction";
 import { chainLine, convoStats, lastOfRole, renderExportHtml, renderExportJson, renderStats, type ChainStatus } from "../core/convo";
@@ -902,6 +905,8 @@ export async function runConvoCommand(
         }
         const statement = await rt.setGoal(trimmed, "active");
         renderer.notice(`goal set: ${statement}`);
+        const { runAutonomousGoalLoop } = await import("../core/goal-runner");
+        await runAutonomousGoalLoop(trimmed, runtime, renderer, { workspace });
         return true;
       }
       case "trust": {
@@ -1481,6 +1486,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
                 contextPercent = (ev.estimatedInput / ev.window) * 100;
               }
               live?.noteUsage(ev.estimatedInput);
+            } else if (ev.type === "error" && ev.code === "AUTH") {
+              const msg = typeof ev.message === "string" ? ev.message : "";
+              if (msg.includes("gsk_")) {
+                renderer.notice("hint: this key starts with 'gsk_', which is a Groq key (not OpenAI). Set HZ_BASE_URL=https://api.groq.com/openai/v1 or switch provider.");
+              }
+              const available = detectAvailableProviders(process.env);
+              const curProv = (runtime as RuntimeWithExtras).providerName;
+              const others = available.filter((p) => p !== curProv);
+              if (others.length > 0) {
+                renderer.notice(`hint: working credentials detected for ${others.join(", ")}. Switch with: hzcode --provider ${others[0]}`);
+              }
             }
           }
           renderer.handle(ev);
@@ -1520,9 +1536,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const drainQueue = async (): Promise<void> => {
     while (!exiting && queued.length > 0) {
-      const next = queued.shift() as string;
-      echoUser(next);
-      await sendTurn(next);
+      const combined = combineQueuedMessages(queued);
+      queued.length = 0;
+      queued.push(...combined.remaining);
+      if (combined.combinedCount > 1) {
+        renderer.notice(`combined ${combined.combinedCount} queued prompts into one turn`);
+      }
+      echoUser(combined.head);
+      await sendTurn(combined.head);
     }
   };
 
@@ -1556,8 +1577,26 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   };
 
   const showOrSetModel = async (arg: string): Promise<void> => {
+    const rt = runtime as RuntimeWithExtras;
+    const provider = rt.providerName ?? "unknown";
+    const list = modelsForProvider(provider, rt.config ?? {});
     if (arg === "") {
-      renderer.notice(`model ${runtime.model} \u00b7 provider ${runtime.providerName}`);
+      if (process.stdin.isTTY) {
+        const { runInteractiveModelPicker } = await import("./interactive-model-picker");
+        const res = await runInteractiveModelPicker(runtime, renderer);
+        if (res.switched && res.model) {
+          return;
+        }
+      }
+      const available = detectAvailableProviders(process.env);
+      const provInfo = available.length > 0 ? ` \u00b7 configured providers: ${available.join(", ")}` : "";
+      renderer.notice(`model ${runtime.model} \u00b7 provider ${provider}${provInfo}`);
+      if (list.length > 0) {
+        renderer.notice(formatModelsNotice(provider, list));
+        renderer.notice(`switch model: /model <name> (e.g. /model ${list[0]})`);
+      } else {
+        renderer.notice(`switch model: /model <name>`);
+      }
       return;
     }
     const setModel = (runtime as RuntimeWithExtras).setModel;
@@ -1565,9 +1604,30 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       renderer.notice(`this session stays on ${runtime.model} \u2014 start with hzcode --model ${arg} to use another model`);
       return;
     }
+    let target = arg.trim();
+    if (list.length > 0 && !list.includes(target)) {
+      const substrMatches = list.filter((id) => id.toLowerCase().includes(target.toLowerCase()));
+      if (substrMatches.length === 1) {
+        target = substrMatches[0];
+      } else if (substrMatches.length > 1) {
+        const prefixMatch = substrMatches.find((id) => id.toLowerCase().startsWith(target.toLowerCase()));
+        if (prefixMatch) {
+          target = prefixMatch;
+        } else {
+          renderer.notice(`multiple models match "${arg}": ${substrMatches.slice(0, 5).join(", ")}`);
+          renderer.notice(`specify exact model: /model <name>`);
+          return;
+        }
+      } else {
+        const suggestions = suggestModelIds(target, list);
+        if (suggestions.length > 0) {
+          renderer.notice(formatDidYouMean(target, suggestions));
+        }
+      }
+    }
     try {
-      const applied = (await Promise.resolve(setModel.call(runtime, arg))) as unknown;
-      renderer.notice(`model \u2192 ${typeof applied === "string" && applied !== "" ? applied : arg}`);
+      const applied = (await Promise.resolve(setModel.call(runtime, target))) as unknown;
+      renderer.notice(`model \u2192 ${typeof applied === "string" && applied !== "" ? applied : target}`);
     } catch (err) {
       renderer.notice(`could not switch model: ${errorMessage(err)}`);
     }
@@ -1633,6 +1693,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "model":
         await showOrSetModel(arg);
         break;
+      case "auth":
+      case "login": {
+        const { runAuthWizard } = await import("./onboarding-wizard");
+        const res = await runAuthWizard();
+        if (res.configured && res.provider) {
+          renderer.notice(`configured provider ${res.provider} (credentials stored in ${res.savedPath})`);
+          const available = detectAvailableProviders(process.env);
+          renderer.notice(`active configured providers: ${available.join(", ")}`);
+        }
+        break;
+      }
       case "models":
         showModels();
         break;
@@ -1700,12 +1771,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         for (const l of sanitizeText(text).trimEnd().split("\n")) renderer.line(dim("\u2503 " + l));
         break;
       }
-      case "palette": {
+      case "palette":
+      case "commands": {
         let custom: string[] = [];
         try {
           custom = loadCommands(workspace).commands.map((c) => c.name);
         } catch {
           /* ignore */
+        }
+        if (arg === "" && process.stdin.isTTY) {
+          const { runInteractiveCommandPalette } = await import("./interactive-command-palette");
+          const chosen = await runInteractiveCommandPalette(custom);
+          if (chosen) {
+            await runSlash(chosen);
+            return;
+          }
         }
         const box = formatCommandPalette(arg, { customNames: custom });
         if (box !== "") process.stdout.write(`\n${box}\n`);
@@ -1799,6 +1879,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         if (getSkill(workspace, name)) {
           await sendUserText(text);
+          break;
+        }
+        // Autocomplete unique prefix match across BUILTIN_SLASH_REGISTRY:
+        const lowerName = name.toLowerCase();
+        const matches = BUILTIN_SLASH_REGISTRY.filter(
+          (r) => r.name.startsWith(lowerName) || (r.aliases ?? []).some((a) => a.startsWith(lowerName))
+        );
+        if (matches.length === 1) {
+          const matched = matches[0]!;
+          renderer.notice(`auto-completing /${name} \u2192 /${matched.name}`);
+          const rewritten = `/${matched.name}${arg ? " " + arg : ""}`;
+          await runSlash(rewritten);
+          return;
+        } else if (matches.length > 1) {
+          renderer.notice(`ambiguous command /${name} \u2014 matches: ${matches.map((m) => "/" + m.name).join(", ")}`);
           break;
         }
         renderer.notice(`unknown command /${name} \u2014 try /help`);

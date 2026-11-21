@@ -696,6 +696,7 @@ fn kernel_sandbox_report_never_claims_enforcement_when_canary_fails() {
         .arg("--state-dir")
         .arg(&dir)
         .env("HZ_SANDBOX_EXEC_BIN", "/bin/false")
+        .env("HZ_SUPERVISOR_LEASE", "0")
         .env_remove("HZ_SANDBOX_EXEC")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -1,0 +1,295 @@
+- generic [active] [ref=f84e1]:
+  - generic [ref=f84e3]:
+    - link "Skip to main content" [ref=f84e4] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=f84e5]:
+      - banner [ref=f84e6]:
+        - generic [ref=f84e7]:
+          - generic [ref=f84e8]:
+            - link "Cursor Home" [ref=f84e9] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=f84e10]
+            - navigation [ref=f84e13]:
+              - link "Docs" [ref=f84e14] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=f84e16] [cursor=pointer]:
+                - /url: /docs/api
+              - link "Learn" [ref=f84e17] [cursor=pointer]:
+                - /url: /learn
+              - link "Help" [ref=f84e18] [cursor=pointer]:
+                - /url: /help
+          - button "Search docs... ⌘K" [ref=f84e22] [cursor=pointer]:
+            - generic [ref=f84e26]: Search docs...
+            - generic [ref=f84e27]: ⌘K
+      - generic [ref=f84e32]:
+        - heading "Command Palette" [level=2] [ref=f84e33]
+        - paragraph [ref=f84e34]: Search for a command to run...
+    - generic [ref=f84e35]:
+      - generic [ref=f84e37]:
+        - button [ref=f84e38]:
+          - button "Toggle Docs Sidebar" [ref=f84e40] [cursor=pointer]
+        - generic [ref=f84e44]:
+          - generic [ref=f84e45]:
+            - heading "Get Started" [level=2] [ref=f84e46]
+            - generic [ref=f84e47]:
+              - link "Welcome" [ref=f84e48] [cursor=pointer]:
+                - /url: /docs
+              - link "Quickstart" [ref=f84e51] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+              - button "Models & Pricing" [ref=f84e54] [cursor=pointer]
+              - link "Changelog" [ref=f84e60] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+              - link "Release Notes" [ref=f84e63] [cursor=pointer]:
+                - /url: /docs/release-notes
+          - generic [ref=f84e66]:
+            - heading "Agent" [level=2] [ref=f84e67]
+            - generic [ref=f84e68]:
+              - link "Overview" [ref=f84e69] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - link "Agents Window" [ref=f84e72] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - link "Projects" [ref=f84e75] [cursor=pointer]:
+                - /url: /docs/agent/projects
+              - link "Agent Review" [ref=f84e78] [cursor=pointer]:
+                - /url: /docs/agent/agent-review
+              - link "Planning" [ref=f84e81] [cursor=pointer]:
+                - /url: /docs/agent/plan-mode
+              - link "Prompting" [ref=f84e84] [cursor=pointer]:
+                - /url: /docs/agent/prompting
+              - link "Voice Chat" [ref=f84e87] [cursor=pointer]:
+                - /url: /docs/agent/voice-chat
+              - link "Debugging" [ref=f84e90] [cursor=pointer]:
+                - /url: /docs/agent/debug-mode
+              - link "Design Mode" [ref=f84e93] [cursor=pointer]:
+                - /url: /docs/agent/design-mode
+              - button "Tools" [ref=f84e96] [cursor=pointer]
+              - generic [ref=f84e104]:
+                - link "Terminal" [ref=f84e106] [cursor=pointer]:
+                  - /url: /docs/agent/tools/terminal
+                - link "Browser" [ref=f84e110] [cursor=pointer]:
+                  - /url: /docs/agent/tools/browser
+                - link "Search" [ref=f84e114] [cursor=pointer]:
+                  - /url: /docs/agent/tools/search
+                - link "Canvases" [ref=f84e118] [cursor=pointer]:
+                  - /url: /docs/agent/tools/canvas
+                - link "Worktrees" [ref=f84e122] [cursor=pointer]:
+                  - /url: /docs/configuration/worktrees
+              - button "Security" [ref=f84e125] [cursor=pointer]
+          - generic [ref=f84e131]:
+            - heading "Customize" [level=2] [ref=f84e132]
+            - generic [ref=f84e133]:
+              - link "Overview" [ref=f84e134] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+              - link "Plugins" [ref=f84e137] [cursor=pointer]:
+                - /url: /docs/plugins
+              - link "Rules" [ref=f84e140] [cursor=pointer]:
+                - /url: /docs/rules
+              - link "Skills" [ref=f84e143] [cursor=pointer]:
+                - /url: /docs/skills
+              - link "Subagents" [ref=f84e146] [cursor=pointer]:
+                - /url: /docs/subagents
+              - link "Hooks" [ref=f84e149] [cursor=pointer]:
+                - /url: /docs/hooks
+              - link "MCP" [ref=f84e152] [cursor=pointer]:
+                - /url: /docs/mcp
+          - generic [ref=f84e155]:
+            - heading "Cloud Agents" [level=2] [ref=f84e156]
+            - generic [ref=f84e157]:
+              - link "Overview" [ref=f84e158] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - link "Setup" [ref=f84e161] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - link "Builds" [ref=f84e164] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - link "Apps" [ref=f84e167] [cursor=pointer]:
+                - /url: /docs/cloud-agent/apps
+              - button "Capabilities" [ref=f84e170] [cursor=pointer]
+              - link "Best Practices" [ref=f84e176] [cursor=pointer]:
+                - /url: /docs/cloud-agent/best-practices
+              - link "Choose Where Cloud Agents Run" [ref=f84e179] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted/choose-runtime
+              - link "Automations" [ref=f84e182] [cursor=pointer]:
+                - /url: /docs/cloud-agent/automations
+              - link "Bugbot" [ref=f84e185] [cursor=pointer]:
+                - /url: /docs/bugbot
+              - link "Security Review" [ref=f84e188] [cursor=pointer]:
+                - /url: /docs/security-review
+              - link "Vulnerability Remediation" [ref=f84e191] [cursor=pointer]:
+                - /url: /docs/vulnerability-remediation
+              - link "PR Routing & Approval" [ref=f84e194] [cursor=pointer]:
+                - /url: /docs/approval-agents
+              - link "Rollouts" [ref=f84e197] [cursor=pointer]:
+                - /url: /docs/rollouts
+              - link "Mobile" [ref=f84e200] [cursor=pointer]:
+                - /url: /docs/cloud-agent/mobile
+              - button "Security" [ref=f84e203] [cursor=pointer]
+              - button "Self-Hosted Machines" [ref=f84e209] [cursor=pointer]
+              - link "Settings" [ref=f84e215] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings
+              - link "API" [ref=f84e218] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints
+          - generic [ref=f84e221]:
+            - heading "Origin" [level=2] [ref=f84e222]
+            - generic [ref=f84e223]:
+              - link "Overview" [ref=f84e224] [cursor=pointer]:
+                - /url: /docs/origin
+              - button "CLI" [ref=f84e227] [cursor=pointer]
+              - link "Create a repository" [ref=f84e233] [cursor=pointer]:
+                - /url: /docs/origin/create-repository
+              - link "Mirror GitHub" [ref=f84e236] [cursor=pointer]:
+                - /url: /docs/origin/mirror-github
+              - link "Clone, Push & Pull" [ref=f84e239] [cursor=pointer]:
+                - /url: /docs/origin/git
+              - link "CloneKit in CI" [ref=f84e242] [cursor=pointer]:
+                - /url: /docs/origin/clonekit-ci
+              - link "Pull requests" [ref=f84e245] [cursor=pointer]:
+                - /url: /docs/origin/pull-requests
+              - link "Code Tours" [ref=f84e248] [cursor=pointer]:
+                - /url: /docs/origin/code-tours
+              - link "Browse & Search" [ref=f84e251] [cursor=pointer]:
+                - /url: /docs/origin/browse
+              - link "Agents and Automations" [ref=f84e254] [cursor=pointer]:
+                - /url: /docs/origin/agents
+              - button "Apps" [ref=f84e257] [cursor=pointer]
+              - link "Settings" [ref=f84e263] [cursor=pointer]:
+                - /url: /docs/origin/settings
+          - generic [ref=f84e266]:
+            - heading "Integrations" [level=2] [ref=f84e267]
+            - generic [ref=f84e268]:
+              - link "Slack" [ref=f84e269] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - link "Microsoft Teams" [ref=f84e272] [cursor=pointer]:
+                - /url: /docs/integrations/microsoft-teams
+              - link "Jira" [ref=f84e275] [cursor=pointer]:
+                - /url: /docs/integrations/jira
+              - link "Linear" [ref=f84e278] [cursor=pointer]:
+                - /url: /docs/integrations/linear
+              - link "Notion" [ref=f84e281] [cursor=pointer]:
+                - /url: /docs/integrations/notion
+              - link "GitHub" [ref=f84e284] [cursor=pointer]:
+                - /url: /docs/integrations/github
+              - link "GitLab" [ref=f84e287] [cursor=pointer]:
+                - /url: /docs/integrations/gitlab
+              - link "Azure DevOps" [ref=f84e290] [cursor=pointer]:
+                - /url: /docs/integrations/azure-devops
+              - link "Bitbucket" [ref=f84e293] [cursor=pointer]:
+                - /url: /docs/integrations/bitbucket
+              - link "JetBrains" [ref=f84e296] [cursor=pointer]:
+                - /url: /docs/integrations/jetbrains
+              - link "Xcode" [ref=f84e299] [cursor=pointer]:
+                - /url: /docs/integrations/xcode
+              - link "Tailscale" [ref=f84e302] [cursor=pointer]:
+                - /url: /docs/integrations/tailscale
+              - link "Deeplinks" [ref=f84e305] [cursor=pointer]:
+                - /url: /docs/reference/deeplinks
+          - generic [ref=f84e308]:
+            - heading "SDK" [level=2] [ref=f84e309]
+            - generic [ref=f84e310]:
+              - link "TypeScript" [ref=f84e311] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - link "Python" [ref=f84e314] [cursor=pointer]:
+                - /url: /docs/sdk/python
+              - link "Bridge" [ref=f84e317] [cursor=pointer]:
+                - /url: /docs/sdk/bridge
+              - link "Changelog" [ref=f84e320] [cursor=pointer]:
+                - /url: /docs/release-notes/sdk
+          - generic [ref=f84e323]:
+            - heading "Agent SDK" [level=2] [ref=f84e324]
+            - generic [ref=f84e325]:
+              - button "Getting started" [ref=f84e326] [cursor=pointer]
+              - button "Integrations" [ref=f84e332] [cursor=pointer]
+              - button "Extensions" [ref=f84e338] [cursor=pointer]
+              - button "Guides" [ref=f84e344] [cursor=pointer]
+              - button "Templates" [ref=f84e350] [cursor=pointer]
+              - button "Reference" [ref=f84e356] [cursor=pointer]
+          - generic [ref=f84e362]:
+            - heading "CLI" [level=2] [ref=f84e363]
+            - generic [ref=f84e364]:
+              - link "Overview" [ref=f84e365] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - link "Installation" [ref=f84e368] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - link "Capabilities" [ref=f84e371] [cursor=pointer]:
+                - /url: /docs/cli/using
+              - link "Changelog" [ref=f84e374] [cursor=pointer]:
+                - /url: /docs/cli/changelog
+              - link "Shell Mode" [ref=f84e377] [cursor=pointer]:
+                - /url: /docs/cli/shell-mode
+              - link "ACP" [ref=f84e380] [cursor=pointer]:
+                - /url: /docs/cli/acp
+              - link "Headless / CI" [ref=f84e383] [cursor=pointer]:
+                - /url: /docs/cli/headless
+              - button "Reference" [ref=f84e386] [cursor=pointer]
+          - generic [ref=f84e392]:
+            - heading "Teams & Enterprise" [level=2] [ref=f84e393]
+            - generic [ref=f84e394]:
+              - button "Teams" [ref=f84e395] [cursor=pointer]
+              - button "Enterprise" [ref=f84e401] [cursor=pointer]
+      - main [ref=f84e407]:
+        - generic [ref=f84e410]:
+          - generic [ref=f84e411]:
+            - generic [ref=f84e412]: Agent
+            - generic [ref=f84e414]:
+              - heading "Search" [level=1] [ref=f84e415]
+              - heading [level=2] [ref=f84e416]:
+                - link "Copy link to instant-grep" [ref=f84e417] [cursor=pointer]:
+                  - /url: "#instant-grep"
+                  - generic [ref=f84e418]: Instant Grep
+              - paragraph [ref=f84e426]: "The fastest way to find code is an exact match: a function name, variable, error string, or regex pattern. Agent uses grep automatically when you reference specific symbols."
+              - paragraph [ref=f84e427]:
+                - text: Cursor ships with
+                - link "Instant Grep" [ref=f84e428] [cursor=pointer]:
+                  - /url: /changelog/2-1#instant-grep-beta
+                - text: ", a custom search engine that outperforms"
+                - code [ref=f84e429]: ripgrep
+                - text: on large codebases. It runs automatically; no configuration needed.
+              - paragraph [ref=f84e430]:
+                - text: Instant Grep supports full regex and word-boundary matching, so Agent can construct patterns like
+                - code [ref=f84e431]: import.*PaymentService
+                - text: or
+                - code [ref=f84e432]: PaymentFailedError
+                - text: to trace references across files.
+              - heading [level=2] [ref=f84e433]:
+                - link "Copy link to privacy-and-security" [ref=f84e434] [cursor=pointer]:
+                  - /url: "#privacy-and-security"
+                  - generic [ref=f84e435]: Privacy and security
+              - paragraph [ref=f84e443]: Instant Grep builds and queries its index on your machine. Cursor does not upload file paths or code to build a search index, and it does not store embeddings of your codebase for search.
+              - paragraph [ref=f84e444]:
+                - text: When Agent opens a match, that file content can still be included in the model request.
+                - link "Data Use" [ref=f84e445] [cursor=pointer]:
+                  - /url: /data-use
+                - text: describes how Cursor handles that data.
+              - heading [level=2] [ref=f84e446]:
+                - link "Copy link to explore-subagent" [ref=f84e447] [cursor=pointer]:
+                  - /url: "#explore-subagent"
+                  - generic [ref=f84e448]: Explore subagent
+              - paragraph [ref=f84e456]:
+                - text: Agent can spawn an
+                - link "Explore subagent" [ref=f84e457] [cursor=pointer]:
+                  - /url: /docs/subagents
+                - text: that runs in its own context window with a faster model. It executes many parallel searches without bloating the main conversation, returning only the relevant findings.
+              - paragraph [ref=f84e458]: "Agent uses the Explore subagent automatically when it decides a task benefits from broad search. You can also request it directly: \"use a subagent to find all the places we validate user input.\""
+              - paragraph [ref=f84e459]: This is useful for context management. Searching through many files generates a lot of context. The subagent keeps the main conversation focused by summarizing results instead of dumping raw file contents.
+              - heading [level=2] [ref=f84e460]:
+                - link "Copy link to faq" [ref=f84e461] [cursor=pointer]:
+                  - /url: "#faq"
+                  - generic [ref=f84e462]: FAQ
+              - heading [level=3] [ref=f84e472]:
+                - button "Does Cursor support multi-root workspaces?" [ref=f84e473] [cursor=pointer]
+          - navigation [ref=f84e478]:
+            - generic [ref=f84e479]:
+              - list [ref=f84e480]:
+                - listitem [ref=f84e481]:
+                  - link "Instant Grep" [ref=f84e482] [cursor=pointer]:
+                    - /url: "#instant-grep"
+                - listitem [ref=f84e483]:
+                  - link "Privacy and security" [ref=f84e484] [cursor=pointer]:
+                    - /url: "#privacy-and-security"
+                - listitem [ref=f84e485]:
+                  - link "Explore subagent" [ref=f84e486] [cursor=pointer]:
+                    - /url: "#explore-subagent"
+                - listitem [ref=f84e487]:
+                  - link "FAQ" [ref=f84e488] [cursor=pointer]:
+                    - /url: "#faq"
+              - button "Copy page" [ref=f84e492] [cursor=pointer]
+  - alert [ref=f84e495]

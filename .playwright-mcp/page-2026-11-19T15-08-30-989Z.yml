@@ -1,0 +1,584 @@
+- generic [ref=f59e3]:
+  - link "Skip to main content" [ref=f59e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f59e5]:
+    - banner [ref=f59e6]:
+      - generic [ref=f59e7]:
+        - generic [ref=f59e8]:
+          - link "Cursor Home" [ref=f59e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=f59e10]
+          - navigation [ref=f59e13]:
+            - link "Docs" [ref=f59e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=f59e16] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=f59e17] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=f59e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=f59e22] [cursor=pointer]:
+          - generic [ref=f59e26]: Search docs...
+          - generic [ref=f59e27]: ⌘K
+    - generic [ref=f59e32]:
+      - heading "Command Palette" [level=2] [ref=f59e33]
+      - paragraph [ref=f59e34]: Search for a command to run...
+  - generic [ref=f59e35]:
+    - generic [ref=f59e37]:
+      - button [ref=f59e38]:
+        - button "Toggle Docs Sidebar" [ref=f59e40] [cursor=pointer]
+      - generic [ref=f59e44]:
+        - generic [ref=f59e45]:
+          - heading "Get Started" [level=2] [ref=f59e46]
+          - generic [ref=f59e47]:
+            - link "Welcome" [ref=f59e48] [cursor=pointer]:
+              - /url: /docs
+            - link "Quickstart" [ref=f59e51] [cursor=pointer]:
+              - /url: /docs/get-started/quickstart
+            - button "Models & Pricing" [ref=f59e54] [cursor=pointer]
+            - link "Changelog" [ref=f59e60] [cursor=pointer]:
+              - /url: https://cursor.com/changelog
+            - link "Release Notes" [ref=f59e63] [cursor=pointer]:
+              - /url: /docs/release-notes
+        - generic [ref=f59e66]:
+          - heading "Agent" [level=2] [ref=f59e67]
+          - generic [ref=f59e68]:
+            - link "Overview" [ref=f59e69] [cursor=pointer]:
+              - /url: /docs/agent/overview
+            - link "Agents Window" [ref=f59e72] [cursor=pointer]:
+              - /url: /docs/agent/agents-window
+            - link "Projects" [ref=f59e75] [cursor=pointer]:
+              - /url: /docs/agent/projects
+            - link "Agent Review" [ref=f59e78] [cursor=pointer]:
+              - /url: /docs/agent/agent-review
+            - link "Planning" [ref=f59e81] [cursor=pointer]:
+              - /url: /docs/agent/plan-mode
+            - link "Prompting" [ref=f59e84] [cursor=pointer]:
+              - /url: /docs/agent/prompting
+            - link "Voice Chat" [ref=f59e87] [cursor=pointer]:
+              - /url: /docs/agent/voice-chat
+            - link "Debugging" [ref=f59e90] [cursor=pointer]:
+              - /url: /docs/agent/debug-mode
+            - link "Design Mode" [ref=f59e93] [cursor=pointer]:
+              - /url: /docs/agent/design-mode
+            - button "Tools" [ref=f59e96] [cursor=pointer]
+            - button "Security" [ref=f59e102] [cursor=pointer]
+        - generic [ref=f59e108]:
+          - heading "Customize" [level=2] [ref=f59e109]
+          - generic [ref=f59e110]:
+            - link "Overview" [ref=f59e111] [cursor=pointer]:
+              - /url: /docs/customize-cursor
+            - link "Plugins" [ref=f59e114] [cursor=pointer]:
+              - /url: /docs/plugins
+            - link "Rules" [ref=f59e117] [cursor=pointer]:
+              - /url: /docs/rules
+            - link "Skills" [ref=f59e120] [cursor=pointer]:
+              - /url: /docs/skills
+            - link "Subagents" [ref=f59e123] [cursor=pointer]:
+              - /url: /docs/subagents
+            - link "Hooks" [ref=f59e126] [cursor=pointer]:
+              - /url: /docs/hooks
+            - link "MCP" [ref=f59e129] [cursor=pointer]:
+              - /url: /docs/mcp
+        - generic [ref=f59e132]:
+          - heading "Cloud Agents" [level=2] [ref=f59e133]
+          - generic [ref=f59e134]:
+            - link "Overview" [ref=f59e135] [cursor=pointer]:
+              - /url: /docs/cloud-agent
+            - link "Setup" [ref=f59e138] [cursor=pointer]:
+              - /url: /docs/cloud-agent/setup
+            - link "Builds" [ref=f59e141] [cursor=pointer]:
+              - /url: /docs/cloud-agent/builds
+            - link "Apps" [ref=f59e144] [cursor=pointer]:
+              - /url: /docs/cloud-agent/apps
+            - button "Capabilities" [ref=f59e147] [cursor=pointer]
+            - link "Best Practices" [ref=f59e153] [cursor=pointer]:
+              - /url: /docs/cloud-agent/best-practices
+            - link "Choose Where Cloud Agents Run" [ref=f59e156] [cursor=pointer]:
+              - /url: /docs/cloud-agent/self-hosted/choose-runtime
+            - link "Automations" [ref=f59e159] [cursor=pointer]:
+              - /url: /docs/cloud-agent/automations
+            - link "Bugbot" [ref=f59e162] [cursor=pointer]:
+              - /url: /docs/bugbot
+            - link "Security Review" [ref=f59e165] [cursor=pointer]:
+              - /url: /docs/security-review
+            - link "Vulnerability Remediation" [ref=f59e168] [cursor=pointer]:
+              - /url: /docs/vulnerability-remediation
+            - link "PR Routing & Approval" [ref=f59e171] [cursor=pointer]:
+              - /url: /docs/approval-agents
+            - link "Rollouts" [ref=f59e174] [cursor=pointer]:
+              - /url: /docs/rollouts
+            - link "Mobile" [ref=f59e177] [cursor=pointer]:
+              - /url: /docs/cloud-agent/mobile
+            - button "Security" [ref=f59e180] [cursor=pointer]
+            - button "Self-Hosted Machines" [ref=f59e186] [cursor=pointer]
+            - link "Settings" [ref=f59e192] [cursor=pointer]:
+              - /url: /docs/cloud-agent/settings
+            - link "API" [ref=f59e195] [cursor=pointer]:
+              - /url: /docs/cloud-agent/api/endpoints
+        - generic [ref=f59e198]:
+          - heading "Origin" [level=2] [ref=f59e199]
+          - generic [ref=f59e200]:
+            - link "Overview" [ref=f59e201] [cursor=pointer]:
+              - /url: /docs/origin
+            - button "CLI" [ref=f59e204] [cursor=pointer]
+            - link "Create a repository" [ref=f59e210] [cursor=pointer]:
+              - /url: /docs/origin/create-repository
+            - link "Mirror GitHub" [ref=f59e213] [cursor=pointer]:
+              - /url: /docs/origin/mirror-github
+            - link "Clone, Push & Pull" [ref=f59e216] [cursor=pointer]:
+              - /url: /docs/origin/git
+            - link "CloneKit in CI" [ref=f59e219] [cursor=pointer]:
+              - /url: /docs/origin/clonekit-ci
+            - link "Pull requests" [ref=f59e222] [cursor=pointer]:
+              - /url: /docs/origin/pull-requests
+            - link "Code Tours" [ref=f59e225] [cursor=pointer]:
+              - /url: /docs/origin/code-tours
+            - link "Browse & Search" [ref=f59e228] [cursor=pointer]:
+              - /url: /docs/origin/browse
+            - link "Agents and Automations" [ref=f59e231] [cursor=pointer]:
+              - /url: /docs/origin/agents
+            - button "Apps" [ref=f59e234] [cursor=pointer]
+            - link "Settings" [ref=f59e240] [cursor=pointer]:
+              - /url: /docs/origin/settings
+        - generic [ref=f59e243]:
+          - heading "Integrations" [level=2] [ref=f59e244]
+          - generic [ref=f59e245]:
+            - link "Slack" [ref=f59e246] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+            - link "Microsoft Teams" [ref=f59e249] [cursor=pointer]:
+              - /url: /docs/integrations/microsoft-teams
+            - link "Jira" [ref=f59e252] [cursor=pointer]:
+              - /url: /docs/integrations/jira
+            - link "Linear" [ref=f59e255] [cursor=pointer]:
+              - /url: /docs/integrations/linear
+            - link "Notion" [ref=f59e258] [cursor=pointer]:
+              - /url: /docs/integrations/notion
+            - link "GitHub" [ref=f59e261] [cursor=pointer]:
+              - /url: /docs/integrations/github
+            - link "GitLab" [ref=f59e264] [cursor=pointer]:
+              - /url: /docs/integrations/gitlab
+            - link "Azure DevOps" [ref=f59e267] [cursor=pointer]:
+              - /url: /docs/integrations/azure-devops
+            - link "Bitbucket" [ref=f59e270] [cursor=pointer]:
+              - /url: /docs/integrations/bitbucket
+            - link "JetBrains" [ref=f59e273] [cursor=pointer]:
+              - /url: /docs/integrations/jetbrains
+            - link "Xcode" [ref=f59e276] [cursor=pointer]:
+              - /url: /docs/integrations/xcode
+            - link "Tailscale" [ref=f59e279] [cursor=pointer]:
+              - /url: /docs/integrations/tailscale
+            - link "Deeplinks" [ref=f59e282] [cursor=pointer]:
+              - /url: /docs/reference/deeplinks
+        - generic [ref=f59e285]:
+          - heading "SDK" [level=2] [ref=f59e286]
+          - generic [ref=f59e287]:
+            - link "TypeScript" [ref=f59e288] [cursor=pointer]:
+              - /url: /docs/sdk/typescript
+            - link "Python" [ref=f59e291] [cursor=pointer]:
+              - /url: /docs/sdk/python
+            - link "Bridge" [ref=f59e294] [cursor=pointer]:
+              - /url: /docs/sdk/bridge
+            - link "Changelog" [ref=f59e297] [cursor=pointer]:
+              - /url: /docs/release-notes/sdk
+        - generic [ref=f59e300]:
+          - heading "Agent SDK" [level=2] [ref=f59e301]
+          - generic [ref=f59e302]:
+            - button "Getting started" [ref=f59e303] [cursor=pointer]
+            - button "Integrations" [ref=f59e309] [cursor=pointer]
+            - button "Extensions" [ref=f59e315] [cursor=pointer]
+            - button "Guides" [ref=f59e321] [cursor=pointer]
+            - button "Templates" [ref=f59e327] [cursor=pointer]
+            - button "Reference" [ref=f59e333] [cursor=pointer]
+        - generic [ref=f59e339]:
+          - heading "CLI" [level=2] [ref=f59e340]
+          - generic [ref=f59e341]:
+            - link "Overview" [ref=f59e342] [cursor=pointer]:
+              - /url: /docs/cli/overview
+            - link "Installation" [ref=f59e345] [cursor=pointer]:
+              - /url: /docs/cli/installation
+            - link "Capabilities" [ref=f59e348] [cursor=pointer]:
+              - /url: /docs/cli/using
+            - link "Changelog" [ref=f59e351] [cursor=pointer]:
+              - /url: /docs/cli/changelog
+            - link "Shell Mode" [ref=f59e354] [cursor=pointer]:
+              - /url: /docs/cli/shell-mode
+            - link "ACP" [ref=f59e357] [cursor=pointer]:
+              - /url: /docs/cli/acp
+            - link "Headless / CI" [ref=f59e360] [cursor=pointer]:
+              - /url: /docs/cli/headless
+            - button "Reference" [ref=f59e363] [cursor=pointer]
+        - generic [ref=f59e369]:
+          - heading "Teams & Enterprise" [level=2] [ref=f59e370]
+          - generic [ref=f59e371]:
+            - button "Teams" [ref=f59e372] [cursor=pointer]
+            - button "Enterprise" [ref=f59e378] [cursor=pointer]
+    - main [ref=f59e384]:
+      - generic [ref=f59e387]:
+        - generic [ref=f59e388]:
+          - generic [ref=f59e389]: Cloud Agents
+          - generic [ref=f59e391]:
+            - heading "Cloud Agents" [level=1] [ref=f59e392]
+            - paragraph [ref=f59e396]:
+              - text: Cloud agents use the same
+              - link "agent fundamentals" [ref=f59e397] [cursor=pointer]:
+                - /url: /learn/agents
+              - text: "but run in isolated VMs in the cloud with full development environments instead of on your local machine. The development environment is similar to the setup on your laptop: cloned repos, installed dependencies, secrets, startup commands, and network access."
+            - paragraph [ref=f59e398]: Effective development environments give agents full context on your codebase and organization, so they can test and verify their work.
+            - heading [level=2] [ref=f59e399]:
+              - link "Copy link to why-use-cloud-agents" [ref=f59e400] [cursor=pointer]:
+                - /url: "#why-use-cloud-agents"
+                - generic [ref=f59e401]: Why use Cloud Agents?
+            - paragraph [ref=f59e409]: You can run as many agents as you want in parallel, and they do not require your local machine to be connected to the internet.
+            - paragraph [ref=f59e410]:
+              - text: Because they have access to their own virtual machine, cloud agents can build, test, and interact with the changed software. They can also use computers to control the desktop and browser. Cloud agents support
+              - link "MCP servers" [ref=f59e411] [cursor=pointer]:
+                - /url: /docs/mcp
+              - text: ", giving them access to external tools and data sources like databases, APIs, and third-party services."
+            - paragraph [ref=f59e412]: Cloud agents can also run in multi-repo environments. Use one when a task spans separate frontend, backend, infrastructure, or shared-library repositories. The agent can inspect the full workspace, make coordinated changes, and open pull requests in the repos it changes.
+            - heading [level=2] [ref=f59e413]:
+              - link "Copy link to how-to-access" [ref=f59e414] [cursor=pointer]:
+                - /url: "#how-to-access"
+                - generic [ref=f59e415]: How to access
+            - alert [ref=f59e423]:
+              - paragraph [ref=f59e427]:
+                - text: Before anyone can start a cloud agent from a repository, a Cursor account admin needs to connect source control for the account. Set up
+                - link "GitHub (Cloud and Enterprise Server)" [ref=f59e428] [cursor=pointer]:
+                  - /url: /docs/integrations/github
+                - text: ","
+                - link "GitLab (Cloud and Self-Hosted)" [ref=f59e429] [cursor=pointer]:
+                  - /url: /docs/integrations/gitlab
+                - text: ","
+                - link "Bitbucket Cloud" [ref=f59e430] [cursor=pointer]:
+                  - /url: /docs/integrations/bitbucket
+                - text: ", or"
+                - link "Azure DevOps" [ref=f59e431] [cursor=pointer]:
+                  - /url: /docs/integrations/azure-devops
+                - text: . To start without a repository, use
+                - link "Start from scratch" [ref=f59e432] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/setup#start-from-scratch
+                - text: .
+            - paragraph [ref=f59e433]: "You can kick off cloud agents from wherever you work:"
+            - list [ref=f59e434]:
+              - listitem [ref=f59e435]:
+                - strong [ref=f59e436]: Cursor for iOS
+                - text: ": Start and manage agents from the"
+                - link "Cursor iOS app" [ref=f59e437] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/mobile
+              - listitem [ref=f59e438]:
+                - strong [ref=f59e439]: Cursor Web
+                - text: ": Start and manage agents from"
+                - link "cursor.com/agents" [ref=f59e440] [cursor=pointer]:
+                  - /url: https://cursor.com/agents
+                - text: on any device
+              - listitem [ref=f59e441]:
+                - strong [ref=f59e442]: Cursor Desktop
+                - text: ": Select"
+                - strong [ref=f59e443]: Cloud
+                - text: in the dropdown under the agent input
+              - listitem [ref=f59e444]:
+                - strong [ref=f59e445]: Slack
+                - text: ": Use the @cursor command to kick off an agent"
+              - listitem [ref=f59e446]:
+                - strong [ref=f59e447]: GitHub or Bitbucket
+                - text: ": Comment"
+                - code [ref=f59e448]: "@cursor"
+                - text: on a GitHub PR or issue, or on a Bitbucket PR, to kick off an agent
+              - listitem [ref=f59e449]:
+                - strong [ref=f59e450]: Linear
+                - text: ": Use the @cursor command to kick off an agent"
+              - listitem [ref=f59e451]:
+                - strong [ref=f59e452]: API
+                - text: ": Use the API to kick off an agent"
+            - alert [ref=f59e453]:
+              - paragraph [ref=f59e457]:
+                - text: "On"
+                - strong [ref=f59e458]: Android
+                - text: ", use"
+                - link "cursor.com/agents" [ref=f59e459] [cursor=pointer]:
+                  - /url: https://cursor.com/agents
+                - text: in Chrome and tap
+                - strong [ref=f59e460]: Install App
+                - text: for a Progressive Web App (PWA). See
+                - link "Cursor for iOS" [ref=f59e461] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/mobile
+                - text: for the native iPhone and iPad app and more mobile options.
+            - link [ref=f59e462] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+              - paragraph [ref=f59e473]: Use Cursor in Slack
+              - paragraph [ref=f59e475]: Learn more about setting up and using the Slack integration, including triggering agents and receiving notifications.
+            - heading [level=2] [ref=f59e476]:
+              - link "Copy link to how-it-works" [ref=f59e477] [cursor=pointer]:
+                - /url: "#how-it-works"
+                - generic [ref=f59e478]: How it works
+            - heading [level=3] [ref=f59e486]:
+              - link "Copy link to repository-provider-connection" [ref=f59e487] [cursor=pointer]:
+                - /url: "#repository-provider-connection"
+                - generic [ref=f59e488]: Repository provider connection
+            - paragraph [ref=f59e496]: Cloud agents clone your repo from GitHub, GitLab, Azure DevOps Services, or Bitbucket Cloud and work on a separate branch, then push changes to your repo for handoff.
+            - paragraph [ref=f59e497]: You need read-write privileges to your repo and any dependent repos or submodules.
+            - heading [level=3] [ref=f59e498]:
+              - link "Copy link to environments" [ref=f59e499] [cursor=pointer]:
+                - /url: "#environments"
+                - generic [ref=f59e500]: Environments
+            - paragraph [ref=f59e508]: Agents are only as capable as the environments they run in. An agent that can write code but can't run tests, query services, or reach APIs cannot close the loop on its work.
+            - paragraph [ref=f59e509]: "Not setting up a development environment for your cloud agents is like not giving your engineers a computer. This is why environment setup is the most important step to improve the effectiveness of cloud agents. It lets cloud agents work like engineers do: write code, test and verify work, and ship software."
+            - paragraph [ref=f59e510]:
+              - text: You can configure environments with agent-led setup, a saved snapshot, or a Dockerfile in
+              - code [ref=f59e511]: .cursor/environment.json
+              - text: . See
+              - link "Cloud agent setup" [ref=f59e512] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - text: to get started.
+              - link "Builds" [ref=f59e513] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - text: prepare each environment in the background so agents start with repositories and dependencies ready.
+            - paragraph [ref=f59e514]:
+              - text: The Cloud Agents dashboard shows which environment and Build an agent used, along with environment details and version history. On the agent page, hover over the repository name at the top of the page to inspect the environment used for that run. See
+              - link "Cloud agent setup" [ref=f59e515] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - text: for configuration details.
+            - heading [level=3] [ref=f59e516]:
+              - link "Copy link to runtime-and-environment-controls" [ref=f59e517] [cursor=pointer]:
+                - /url: "#runtime-and-environment-controls"
+                - generic [ref=f59e518]: Runtime and environment controls
+            - paragraph [ref=f59e526]: Cursor manages VM provisioning, isolation, snapshots, startup, artifacts, and capacity for every Cloud Agent. You can add secrets, restrict outbound domains, connect to private networks with Tailscale or a similar client, and use private connectivity for supported source control paths.
+            - paragraph [ref=f59e527]:
+              - text: See
+              - link "Cloud Agent security and network" [ref=f59e528] [cursor=pointer]:
+                - /url: /docs/cloud-agent/security-network
+              - text: for the full set of environment and network controls. To run tool execution on hardware you manage, see
+              - link "Self-Hosted Machines" [ref=f59e529] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted
+              - text: .
+            - heading [level=2] [ref=f59e530]:
+              - link "Copy link to models" [ref=f59e531] [cursor=pointer]:
+                - /url: "#models"
+                - generic [ref=f59e532]: Models
+            - paragraph [ref=f59e540]: Cloud Agents use a curated selection of models. You can select the context window size for supported models.
+            - heading [level=2] [ref=f59e541]:
+              - link "Copy link to mcp-support" [ref=f59e542] [cursor=pointer]:
+                - /url: "#mcp-support"
+                - generic [ref=f59e543]: MCP support
+            - paragraph [ref=f59e551]:
+              - text: Cloud agents can use
+              - link "MCP (Model Context Protocol)" [ref=f59e552] [cursor=pointer]:
+                - /url: /docs/mcp
+              - text: servers configured for your team. Add and manage MCP servers through the MCP dropdown in
+              - link "cursor.com/agents" [ref=f59e553] [cursor=pointer]:
+                - /url: https://cursor.com/agents
+              - text: .
+            - paragraph [ref=f59e554]:
+              - text: Both HTTP and stdio transports are supported. OAuth is supported for MCP servers that need it. See
+              - link "Cloud Agent capabilities" [ref=f59e555] [cursor=pointer]:
+                - /url: /docs/cloud-agent/capabilities
+              - text: for setup details.
+            - paragraph [ref=f59e556]:
+              - text: Cloud Agents also include a built-in
+              - link "Cursor Cloud MCP" [ref=f59e557] [cursor=pointer]:
+                - /url: /docs/cloud-agent/capabilities#cursor-cloud-mcp
+              - text: for run diagnostics, including transcripts, run events, environment details, and setup logs.
+            - heading [level=2] [ref=f59e558]:
+              - link "Copy link to hooks-support" [ref=f59e559] [cursor=pointer]:
+                - /url: "#hooks-support"
+                - generic [ref=f59e560]: Hooks support
+            - paragraph [ref=f59e568]:
+              - text: Cloud agents run command-based hooks from
+              - code [ref=f59e569]: .cursor/hooks.json
+              - text: in your repository. On Enterprise plans, they also run team hooks and enterprise-managed hooks.
+            - paragraph [ref=f59e570]:
+              - text: This keeps formatters, audit scripts, and policy checks active when work runs in the cloud. Supported hooks include tool and file hooks (
+              - code [ref=f59e571]: preToolUse
+              - text: ","
+              - code [ref=f59e572]: beforeShellExecution
+              - text: ","
+              - code [ref=f59e573]: afterFileEdit
+              - text: ), plus lifecycle hooks (
+              - code [ref=f59e574]: beforeSubmitPrompt
+              - text: ","
+              - code [ref=f59e575]: subagentStart
+              - text: /
+              - code [ref=f59e576]: subagentStop
+              - text: ","
+              - code [ref=f59e577]: preCompact
+              - text: ","
+              - code [ref=f59e578]: afterAgentResponse
+              - text: /
+              - code [ref=f59e579]: afterAgentThought
+              - text: ", and"
+              - code [ref=f59e580]: stop
+              - text: ).
+            - paragraph [ref=f59e581]:
+              - text: Hooks do not run during early exploratory turns in a read-only environment; they start once the agent has a writable environment. Some hooks are IDE-specific (Tab hooks,
+              - code [ref=f59e582]: workspaceOpen
+              - text: ). User-level hooks from
+              - code [ref=f59e583]: ~/.cursor/hooks.json
+              - text: are also not available since cloud VMs don't have access to your local home directory.
+            - paragraph [ref=f59e584]:
+              - text: See
+              - 'link "Hooks: Cloud agent support" [ref=f59e585] [cursor=pointer]':
+                - /url: /docs/hooks#cloud-agent-support
+              - text: for the full support matrix and details.
+            - heading [level=2] [ref=f59e586]:
+              - link "Copy link to artifacts-and-remote-desktop-control" [ref=f59e587] [cursor=pointer]:
+                - /url: "#artifacts-and-remote-desktop-control"
+                - generic [ref=f59e588]: Artifacts and remote desktop control
+            - paragraph [ref=f59e596]: Cloud agents produce merge-ready PRs with artifacts to demo their changes. You can also control the agent's remote desktop to use the modified software.
+            - list [ref=f59e597]:
+              - listitem [ref=f59e598]:
+                - strong [ref=f59e599]: Artifacts
+                - text: ": Agents produce screenshots, videos, and logs so you can see exactly what changed and how the agent verified its work."
+              - listitem [ref=f59e600]:
+                - strong [ref=f59e601]: Remote desktop control
+                - text: ": Take control of the agent's desktop to test the software yourself in a full development environment without checking out the branch locally. Release control back to the agent for it to keep working."
+            - paragraph [ref=f59e602]:
+              - text: See
+              - link "Cloud agent capabilities" [ref=f59e603] [cursor=pointer]:
+                - /url: /docs/cloud-agent/capabilities
+              - text: for details on artifacts, computer use, and remote desktop control.
+            - heading [level=2] [ref=f59e604]:
+              - link "Copy link to share-agents-with-your-team" [ref=f59e605] [cursor=pointer]:
+                - /url: "#share-agents-with-your-team"
+                - generic [ref=f59e606]: Share agents with your team
+            - paragraph [ref=f59e614]: Send an agent's URL to a teammate and they can open the run to see the conversation, the code changes, and the artifacts the agent produced.
+            - paragraph [ref=f59e615]:
+              - text: "Agents are visible to members of the Cursor team they were started under. Cursor also verifies each viewer's repository access: to open a teammate's agent, connect your own source control account under"
+              - link "Integrations" [ref=f59e616] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard/integrations
+              - text: and make sure you have access to the repository the agent worked in. Team membership alone doesn't grant access.
+            - paragraph [ref=f59e617]:
+              - text: Viewing is read-only. To let teammates send follow-up messages and continue the work, a team admin can enable
+              - link "team follow-ups" [ref=f59e618] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings#team-follow-ups
+              - text: .
+            - heading [level=2] [ref=f59e619]:
+              - link "Copy link to related-pages" [ref=f59e620] [cursor=pointer]:
+                - /url: "#related-pages"
+                - generic [ref=f59e621]: Related pages
+            - list [ref=f59e629]:
+              - listitem [ref=f59e630]:
+                - text: Learn more about
+                - link "Cloud agent capabilities" [ref=f59e631] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/capabilities
+                - text: .
+              - listitem [ref=f59e632]:
+                - text: Learn more about
+                - link "Cloud agent setup" [ref=f59e633] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/setup
+                - text: .
+              - listitem [ref=f59e634]:
+                - text: Learn more about
+                - link "Cloud Agent Builds" [ref=f59e635] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/builds
+                - text: .
+              - listitem [ref=f59e636]:
+                - text: Learn more about
+                - link "Apps" [ref=f59e637] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/apps
+                - text: .
+              - listitem [ref=f59e638]:
+                - text: Learn more about
+                - link "Cloud agent security" [ref=f59e639] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/security-network
+                - text: .
+              - listitem [ref=f59e640]:
+                - text: Learn more about
+                - link "OIDC tokens" [ref=f59e641] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/identity
+                - text: .
+              - listitem [ref=f59e642]:
+                - text: Learn more about
+                - link "Agent metadata" [ref=f59e643] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/metadata
+                - text: .
+              - listitem [ref=f59e644]:
+                - text: Learn more about
+                - link "Cloud agent settings" [ref=f59e645] [cursor=pointer]:
+                  - /url: /docs/cloud-agent/settings
+                - text: .
+            - heading [level=2] [ref=f59e646]:
+              - link "Copy link to billing" [ref=f59e647] [cursor=pointer]:
+                - /url: "#billing"
+                - generic [ref=f59e648]: Billing
+            - paragraph [ref=f59e656]:
+              - text: Cloud Agents use your plan's usage like other agent work, at the selected model's
+              - link "rate" [ref=f59e657] [cursor=pointer]:
+                - /url: /docs/models-and-pricing#model-pricing
+              - text: . On
+              - link "legacy request-based plans" [ref=f59e658] [cursor=pointer]:
+                - /url: /docs/account/pricing/request-based-legacy
+              - text: ", they're priced at API rates plus the"
+              - link "Max Mode" [ref=f59e659] [cursor=pointer]:
+                - /url: /help/ai-features/max-mode
+              - text: upcharge against your included requests. You can select the context window size, and a larger context window can increase token usage and costs. You'll be asked to set a spend limit when you first start using them.
+            - heading [level=2] [ref=f59e660]:
+              - link "Copy link to troubleshooting" [ref=f59e661] [cursor=pointer]:
+                - /url: "#troubleshooting"
+                - generic [ref=f59e662]: Troubleshooting
+            - generic [ref=f59e670]:
+              - heading [level=3] [ref=f59e672]:
+                - button "Agent runs are not starting" [ref=f59e673] [cursor=pointer]
+              - heading [level=3] [ref=f59e677]:
+                - button "My secrets aren't available to the cloud agent" [ref=f59e678] [cursor=pointer]
+              - heading [level=3] [ref=f59e682]:
+                - button "Can't find the Secrets tab" [ref=f59e683] [cursor=pointer]
+              - heading [level=3] [ref=f59e687]:
+                - button "Do snapshots copy .env.local files?" [ref=f59e688] [cursor=pointer]
+              - heading [level=3] [ref=f59e692]:
+                - button "A teammate can't open my agent" [ref=f59e693] [cursor=pointer]
+              - heading [level=3] [ref=f59e697]:
+                - button "Slack integration not working" [ref=f59e698] [cursor=pointer]
+            - heading [level=2] [ref=f59e701]:
+              - link "Copy link to naming-history" [ref=f59e702] [cursor=pointer]:
+                - /url: "#naming-history"
+                - generic [ref=f59e703]: Naming History
+            - paragraph [ref=f59e711]: Cloud Agents were formerly called Background Agents.
+        - navigation [ref=f59e714]:
+          - generic [ref=f59e715]:
+            - list [ref=f59e716]:
+              - listitem [ref=f59e717]:
+                - link "Why use Cloud Agents?" [ref=f59e718] [cursor=pointer]:
+                  - /url: "#why-use-cloud-agents"
+              - listitem [ref=f59e719]:
+                - link "How to access" [ref=f59e720] [cursor=pointer]:
+                  - /url: "#how-to-access"
+              - listitem [ref=f59e721]:
+                - link "How it works" [ref=f59e722] [cursor=pointer]:
+                  - /url: "#how-it-works"
+              - listitem [ref=f59e723]:
+                - link "Repository provider connection" [ref=f59e724] [cursor=pointer]:
+                  - /url: "#repository-provider-connection"
+              - listitem [ref=f59e725]:
+                - link "Environments" [ref=f59e726] [cursor=pointer]:
+                  - /url: "#environments"
+              - listitem [ref=f59e727]:
+                - link "Runtime and environment controls" [ref=f59e728] [cursor=pointer]:
+                  - /url: "#runtime-and-environment-controls"
+              - listitem [ref=f59e729]:
+                - link "Models" [ref=f59e730] [cursor=pointer]:
+                  - /url: "#models"
+              - listitem [ref=f59e731]:
+                - link "MCP support" [ref=f59e732] [cursor=pointer]:
+                  - /url: "#mcp-support"
+              - listitem [ref=f59e733]:
+                - link "Hooks support" [ref=f59e734] [cursor=pointer]:
+                  - /url: "#hooks-support"
+              - listitem [ref=f59e735]:
+                - link "Artifacts and remote desktop control" [ref=f59e736] [cursor=pointer]:
+                  - /url: "#artifacts-and-remote-desktop-control"
+              - listitem [ref=f59e737]:
+                - link "Share agents with your team" [ref=f59e738] [cursor=pointer]:
+                  - /url: "#share-agents-with-your-team"
+              - listitem [ref=f59e739]:
+                - link "Related pages" [ref=f59e740] [cursor=pointer]:
+                  - /url: "#related-pages"
+              - listitem [ref=f59e741]:
+                - link "Billing" [ref=f59e742] [cursor=pointer]:
+                  - /url: "#billing"
+              - listitem [ref=f59e743]:
+                - link "Troubleshooting" [ref=f59e744] [cursor=pointer]:
+                  - /url: "#troubleshooting"
+              - listitem [ref=f59e745]:
+                - link "Naming History" [ref=f59e746] [cursor=pointer]:
+                  - /url: "#naming-history"
+            - button "Copy page" [ref=f59e750] [cursor=pointer]

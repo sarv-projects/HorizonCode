@@ -32,6 +32,8 @@ delete process.env.HZ_KERNEL_PIN;
 delete process.env.HZ_EFFECT_RECONCILE_BLOCK;
 delete process.env.HZ_EFFECT_R170_BUN;
 delete process.env.HZ_EFFECT_R170_BUN_TIMEOUT_MS;
+delete process.env.HZ_GUARD_G1_WIRE;
+process.env.HZ_SUPERVISOR_LEASE = "0";
 // Bun can search parent directories for `.env`; the repo root has a developer
 // .env. Never let it choose the test provider/model.
 delete process.env.HZ_MODEL;
@@ -62,4 +64,6 @@ afterEach(() => {
   delete process.env.HZ_EFFECT_RECONCILE_BLOCK;
 delete process.env.HZ_EFFECT_R170_BUN;
 delete process.env.HZ_EFFECT_R170_BUN_TIMEOUT_MS;
+delete process.env.HZ_GUARD_G1_WIRE;
+process.env.HZ_SUPERVISOR_LEASE = "0";
 });

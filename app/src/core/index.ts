@@ -126,7 +126,7 @@ import {
 } from "./review";
 import { admitSpendLedgerWrite, SpendLedger, spendLimitMicroFromEnv } from "./spend-ledger";
 import { ownerWorkerSuccessNotice } from "./owner-worker-ancestor-honesty";
-import { applyProductGuardG1WireDefault } from "./guard-g1-wire";
+import { applyProductGuardG1WireDefault, guardEffectivelyAllows } from "./guard-g1-wire";
 import { guardG1WireStartupNotice } from "./guard-g1-wire-honesty";
 import { runOwnerWorkerForTurn } from "./owner-worker-spawn";
 import {
@@ -597,7 +597,7 @@ class HzRuntimeImpl implements HzRuntime {
         `the guard could not decide (${err instanceof Error ? err.message : String(err)})`;
       return false;
     }
-    if (decision.decision !== "allow") {
+    if (!guardEffectivelyAllows(decision)) {
       this.transcriptWriteAdmit = "refuse";
       this.transcriptWriteRefuseReason =
         decision.decision === "ask"
@@ -1069,7 +1069,7 @@ class HzRuntimeImpl implements HzRuntime {
         refused.push(`${item.rel}: denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
         continue;
       }
-      if (decision.decision === "ask") {
+      if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
         const approved = await ctx.approve(
           { title: `Rewind: restore ${item.rel}`, detail: `reverts the ${entry.tool} recorded after checkpoint ${n}`, kind: "fs.write" },
           action,
@@ -2066,12 +2066,15 @@ export async function createRuntime(opts: RuntimeOptions): Promise<HzRuntime> {
   setCostCatalog(loadCatalog());
   const workspace = path.resolve(opts?.workspace && opts.workspace.trim() !== "" ? opts.workspace : process.cwd());
   const startupNotices: string[] = [];
-  const userConfigFile = readConfigFile(defaultConfigPath(homedir()));
+  const home =
+    typeof process.env.HOME === "string" && process.env.HOME.trim() !== ""
+      ? process.env.HOME.trim()
+      : homedir();
+  const userConfigFile = readConfigFile(defaultConfigPath(home));
   applySandboxChildNetFromConfig(userConfigFile, process.env);
   const effectHostFromConfig = applyEffectHostKernelFromUserConfig(userConfigFile, process.env);
   if (effectHostFromConfig.notice) startupNotices.push(effectHostFromConfig.notice);
-  const home = homedir();
-  const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, undefined, workspace), workspace, process.env, home, (message) =>
+  const config = augmentConfigWithTrustedWorkspace(loadConfig(process.env, defaultConfigPath(home), workspace), workspace, process.env, home, (message) =>
     startupNotices.push(message),
   );
   // Regulated envelope composes =require after config load (env still unset wins).

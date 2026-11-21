@@ -1,0 +1,1743 @@
+- generic [active] [ref=f60e1]:
+  - generic [ref=f60e3]:
+    - link "Skip to main content" [ref=f60e4] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=f60e5]:
+      - banner [ref=f60e6]:
+        - generic [ref=f60e7]:
+          - generic [ref=f60e8]:
+            - link "Cursor Home" [ref=f60e9] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=f60e10]
+            - navigation [ref=f60e13]:
+              - link "Docs" [ref=f60e14] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=f60e16] [cursor=pointer]:
+                - /url: /docs/api
+              - link "Learn" [ref=f60e17] [cursor=pointer]:
+                - /url: /learn
+              - link "Help" [ref=f60e18] [cursor=pointer]:
+                - /url: /help
+          - button "Search docs... ⌘K" [ref=f60e22] [cursor=pointer]:
+            - generic [ref=f60e26]: Search docs...
+            - generic [ref=f60e27]: ⌘K
+      - generic [ref=f60e32]:
+        - heading "Command Palette" [level=2] [ref=f60e33]
+        - paragraph [ref=f60e34]: Search for a command to run...
+    - generic [ref=f60e35]:
+      - generic [ref=f60e37]:
+        - button [ref=f60e38]:
+          - button "Toggle Docs Sidebar" [ref=f60e40] [cursor=pointer]
+        - generic [ref=f60e44]:
+          - generic [ref=f60e45]:
+            - heading "Get Started" [level=2] [ref=f60e46]
+            - generic [ref=f60e47]:
+              - link "Welcome" [ref=f60e48] [cursor=pointer]:
+                - /url: /docs
+              - link "Quickstart" [ref=f60e51] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+              - button "Models & Pricing" [ref=f60e54] [cursor=pointer]
+              - link "Changelog" [ref=f60e60] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+              - link "Release Notes" [ref=f60e63] [cursor=pointer]:
+                - /url: /docs/release-notes
+          - generic [ref=f60e66]:
+            - heading "Agent" [level=2] [ref=f60e67]
+            - generic [ref=f60e68]:
+              - link "Overview" [ref=f60e69] [cursor=pointer]:
+                - /url: /docs/agent/overview
+              - link "Agents Window" [ref=f60e72] [cursor=pointer]:
+                - /url: /docs/agent/agents-window
+              - link "Projects" [ref=f60e75] [cursor=pointer]:
+                - /url: /docs/agent/projects
+              - link "Agent Review" [ref=f60e78] [cursor=pointer]:
+                - /url: /docs/agent/agent-review
+              - link "Planning" [ref=f60e81] [cursor=pointer]:
+                - /url: /docs/agent/plan-mode
+              - link "Prompting" [ref=f60e84] [cursor=pointer]:
+                - /url: /docs/agent/prompting
+              - link "Voice Chat" [ref=f60e87] [cursor=pointer]:
+                - /url: /docs/agent/voice-chat
+              - link "Debugging" [ref=f60e90] [cursor=pointer]:
+                - /url: /docs/agent/debug-mode
+              - link "Design Mode" [ref=f60e93] [cursor=pointer]:
+                - /url: /docs/agent/design-mode
+              - button "Tools" [ref=f60e96] [cursor=pointer]
+              - button "Security" [ref=f60e102] [cursor=pointer]
+          - generic [ref=f60e108]:
+            - heading "Customize" [level=2] [ref=f60e109]
+            - generic [ref=f60e110]:
+              - link "Overview" [ref=f60e111] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+              - link "Plugins" [ref=f60e114] [cursor=pointer]:
+                - /url: /docs/plugins
+              - link "Rules" [ref=f60e117] [cursor=pointer]:
+                - /url: /docs/rules
+              - link "Skills" [ref=f60e120] [cursor=pointer]:
+                - /url: /docs/skills
+              - link "Subagents" [ref=f60e123] [cursor=pointer]:
+                - /url: /docs/subagents
+              - link "Hooks" [ref=f60e126] [cursor=pointer]:
+                - /url: /docs/hooks
+              - link "MCP" [ref=f60e129] [cursor=pointer]:
+                - /url: /docs/mcp
+          - generic [ref=f60e132]:
+            - heading "Cloud Agents" [level=2] [ref=f60e133]
+            - generic [ref=f60e134]:
+              - link "Overview" [ref=f60e135] [cursor=pointer]:
+                - /url: /docs/cloud-agent
+              - link "Setup" [ref=f60e138] [cursor=pointer]:
+                - /url: /docs/cloud-agent/setup
+              - link "Builds" [ref=f60e141] [cursor=pointer]:
+                - /url: /docs/cloud-agent/builds
+              - link "Apps" [ref=f60e144] [cursor=pointer]:
+                - /url: /docs/cloud-agent/apps
+              - button "Capabilities" [ref=f60e147] [cursor=pointer]
+              - link "Best Practices" [ref=f60e153] [cursor=pointer]:
+                - /url: /docs/cloud-agent/best-practices
+              - link "Choose Where Cloud Agents Run" [ref=f60e156] [cursor=pointer]:
+                - /url: /docs/cloud-agent/self-hosted/choose-runtime
+              - link "Automations" [ref=f60e159] [cursor=pointer]:
+                - /url: /docs/cloud-agent/automations
+              - link "Bugbot" [ref=f60e162] [cursor=pointer]:
+                - /url: /docs/bugbot
+              - link "Security Review" [ref=f60e165] [cursor=pointer]:
+                - /url: /docs/security-review
+              - link "Vulnerability Remediation" [ref=f60e168] [cursor=pointer]:
+                - /url: /docs/vulnerability-remediation
+              - link "PR Routing & Approval" [ref=f60e171] [cursor=pointer]:
+                - /url: /docs/approval-agents
+              - link "Rollouts" [ref=f60e174] [cursor=pointer]:
+                - /url: /docs/rollouts
+              - link "Mobile" [ref=f60e177] [cursor=pointer]:
+                - /url: /docs/cloud-agent/mobile
+              - button "Security" [ref=f60e180] [cursor=pointer]
+              - button "Self-Hosted Machines" [ref=f60e186] [cursor=pointer]
+              - link "Settings" [ref=f60e192] [cursor=pointer]:
+                - /url: /docs/cloud-agent/settings
+              - link "API" [ref=f60e195] [cursor=pointer]:
+                - /url: /docs/cloud-agent/api/endpoints
+          - generic [ref=f60e198]:
+            - heading "Origin" [level=2] [ref=f60e199]
+            - generic [ref=f60e200]:
+              - link "Overview" [ref=f60e201] [cursor=pointer]:
+                - /url: /docs/origin
+              - button "CLI" [ref=f60e204] [cursor=pointer]
+              - link "Create a repository" [ref=f60e210] [cursor=pointer]:
+                - /url: /docs/origin/create-repository
+              - link "Mirror GitHub" [ref=f60e213] [cursor=pointer]:
+                - /url: /docs/origin/mirror-github
+              - link "Clone, Push & Pull" [ref=f60e216] [cursor=pointer]:
+                - /url: /docs/origin/git
+              - link "CloneKit in CI" [ref=f60e219] [cursor=pointer]:
+                - /url: /docs/origin/clonekit-ci
+              - link "Pull requests" [ref=f60e222] [cursor=pointer]:
+                - /url: /docs/origin/pull-requests
+              - link "Code Tours" [ref=f60e225] [cursor=pointer]:
+                - /url: /docs/origin/code-tours
+              - link "Browse & Search" [ref=f60e228] [cursor=pointer]:
+                - /url: /docs/origin/browse
+              - link "Agents and Automations" [ref=f60e231] [cursor=pointer]:
+                - /url: /docs/origin/agents
+              - button "Apps" [ref=f60e234] [cursor=pointer]
+              - link "Settings" [ref=f60e240] [cursor=pointer]:
+                - /url: /docs/origin/settings
+          - generic [ref=f60e243]:
+            - heading "Integrations" [level=2] [ref=f60e244]
+            - generic [ref=f60e245]:
+              - link "Slack" [ref=f60e246] [cursor=pointer]:
+                - /url: /docs/integrations/slack
+              - link "Microsoft Teams" [ref=f60e249] [cursor=pointer]:
+                - /url: /docs/integrations/microsoft-teams
+              - link "Jira" [ref=f60e252] [cursor=pointer]:
+                - /url: /docs/integrations/jira
+              - link "Linear" [ref=f60e255] [cursor=pointer]:
+                - /url: /docs/integrations/linear
+              - link "Notion" [ref=f60e258] [cursor=pointer]:
+                - /url: /docs/integrations/notion
+              - link "GitHub" [ref=f60e261] [cursor=pointer]:
+                - /url: /docs/integrations/github
+              - link "GitLab" [ref=f60e264] [cursor=pointer]:
+                - /url: /docs/integrations/gitlab
+              - link "Azure DevOps" [ref=f60e267] [cursor=pointer]:
+                - /url: /docs/integrations/azure-devops
+              - link "Bitbucket" [ref=f60e270] [cursor=pointer]:
+                - /url: /docs/integrations/bitbucket
+              - link "JetBrains" [ref=f60e273] [cursor=pointer]:
+                - /url: /docs/integrations/jetbrains
+              - link "Xcode" [ref=f60e276] [cursor=pointer]:
+                - /url: /docs/integrations/xcode
+              - link "Tailscale" [ref=f60e279] [cursor=pointer]:
+                - /url: /docs/integrations/tailscale
+              - link "Deeplinks" [ref=f60e282] [cursor=pointer]:
+                - /url: /docs/reference/deeplinks
+          - generic [ref=f60e285]:
+            - heading "SDK" [level=2] [ref=f60e286]
+            - generic [ref=f60e287]:
+              - link "TypeScript" [ref=f60e288] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - link "Python" [ref=f60e291] [cursor=pointer]:
+                - /url: /docs/sdk/python
+              - link "Bridge" [ref=f60e294] [cursor=pointer]:
+                - /url: /docs/sdk/bridge
+              - link "Changelog" [ref=f60e297] [cursor=pointer]:
+                - /url: /docs/release-notes/sdk
+          - generic [ref=f60e300]:
+            - heading "Agent SDK" [level=2] [ref=f60e301]
+            - generic [ref=f60e302]:
+              - button "Getting started" [ref=f60e303] [cursor=pointer]
+              - button "Integrations" [ref=f60e309] [cursor=pointer]
+              - button "Extensions" [ref=f60e315] [cursor=pointer]
+              - button "Guides" [ref=f60e321] [cursor=pointer]
+              - button "Templates" [ref=f60e327] [cursor=pointer]
+              - button "Reference" [ref=f60e333] [cursor=pointer]
+          - generic [ref=f60e339]:
+            - heading "CLI" [level=2] [ref=f60e340]
+            - generic [ref=f60e341]:
+              - link "Overview" [ref=f60e342] [cursor=pointer]:
+                - /url: /docs/cli/overview
+              - link "Installation" [ref=f60e345] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - link "Capabilities" [ref=f60e348] [cursor=pointer]:
+                - /url: /docs/cli/using
+              - link "Changelog" [ref=f60e351] [cursor=pointer]:
+                - /url: /docs/cli/changelog
+              - link "Shell Mode" [ref=f60e354] [cursor=pointer]:
+                - /url: /docs/cli/shell-mode
+              - link "ACP" [ref=f60e357] [cursor=pointer]:
+                - /url: /docs/cli/acp
+              - link "Headless / CI" [ref=f60e360] [cursor=pointer]:
+                - /url: /docs/cli/headless
+              - button "Reference" [ref=f60e363] [cursor=pointer]
+          - generic [ref=f60e369]:
+            - heading "Teams & Enterprise" [level=2] [ref=f60e370]
+            - generic [ref=f60e371]:
+              - button "Teams" [ref=f60e372] [cursor=pointer]
+              - button "Enterprise" [ref=f60e378] [cursor=pointer]
+      - main [ref=f60e384]:
+        - generic [ref=f60e387]:
+          - generic [ref=f60e388]:
+            - generic [ref=f60e389]: Cloud Agents
+            - generic [ref=f60e391]:
+              - heading "Bugbot" [level=1] [ref=f60e392]
+              - paragraph [ref=f60e393]: Bugbot reviews pull requests and identifies bugs, security issues, and code quality problems.
+              - paragraph [ref=f60e394]:
+                - text: Configure Bugbot in
+                - link "Automations" [ref=f60e395] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: .
+              - heading [level=2] [ref=f60e398]:
+                - link "Copy link to how-it-works" [ref=f60e399] [cursor=pointer]:
+                  - /url: "#how-it-works"
+                  - generic [ref=f60e400]: How it works
+              - paragraph [ref=f60e408]: Bugbot analyzes PR diffs and leaves comments with explanations and fix suggestions. It runs automatically on each PR update or manually when triggered.
+              - list [ref=f60e409]:
+                - listitem [ref=f60e410]:
+                  - text: Runs
+                  - strong [ref=f60e411]: automatic reviews
+                  - text: on every PR update
+                - listitem [ref=f60e412]:
+                  - strong [ref=f60e413]: Manual trigger
+                  - text: by commenting
+                  - code [ref=f60e414]: cursor review
+                  - text: or
+                  - code [ref=f60e415]: bugbot run
+                  - text: on any PR. Bugbot ignores these commands when a bot account or GitHub App posts them.
+                - listitem [ref=f60e416]:
+                  - strong [ref=f60e417]: Uses existing PR comments as context
+                  - text: ": reads connected PR comments (top-level and inline) to avoid duplicate suggestions and build on prior feedback"
+                - listitem [ref=f60e418]:
+                  - strong [ref=f60e419]: Fix in Cursor
+                  - text: links open issues directly in Cursor
+                - listitem [ref=f60e420]:
+                  - strong [ref=f60e421]: Fix in Web
+                  - text: links open issues directly in
+                  - link "cursor.com/agents" [ref=f60e422] [cursor=pointer]:
+                    - /url: https://cursor.com/agents
+              - heading [level=3] [ref=f60e423]:
+                - link "Copy link to limits" [ref=f60e424] [cursor=pointer]:
+                  - /url: "#limits"
+                  - generic [ref=f60e425]: Limits
+              - list [ref=f60e433]:
+                - listitem [ref=f60e434]:
+                  - strong [ref=f60e435]: PR size
+                  - text: ": Bugbot skips PRs larger than its default review-size limit, measured in changed lines and diff characters, and posts a comment asking you to split the change. A skipped run records no review usage."
+                - listitem [ref=f60e436]:
+                  - strong [ref=f60e437]: Generated files
+                  - text: ": Bugbot leaves out files marked"
+                  - code [ref=f60e438]: linguist-generated
+                  - text: in
+                  - code [ref=f60e439]: .gitattributes
+                  - text: . They don't count toward the PR size limit.
+                - listitem [ref=f60e440]:
+                  - strong [ref=f60e441]: Bot-authored PRs
+                  - text: ": Bugbot caps how many reviews it runs on PRs opened by bot accounts, per team. Every review counts, including repeat reviews of the same PR. The cap is a default, and your team's cap can differ."
+              - heading [level=2] [ref=f60e442]:
+                - link "Copy link to setup" [ref=f60e443] [cursor=pointer]:
+                  - /url: "#setup"
+                  - generic [ref=f60e444]: Setup
+              - paragraph [ref=f60e452]: Connect your repositories through the Cursor dashboard to start using Bugbot.
+              - list [ref=f60e453]:
+                - listitem [ref=f60e454]:
+                  - strong [ref=f60e455]: Origin
+                  - text: ": See the"
+                  - link "Origin page" [ref=f60e456] [cursor=pointer]:
+                    - /url: /docs/origin
+                - listitem [ref=f60e457]:
+                  - strong [ref=f60e458]: GitHub
+                  - text: "(including GitHub Enterprise Server): See the"
+                  - link "GitHub integration page" [ref=f60e459] [cursor=pointer]:
+                    - /url: /docs/integrations/github
+                - listitem [ref=f60e460]:
+                  - strong [ref=f60e461]: GitLab
+                  - text: "(including GitLab Self-Hosted): See the"
+                  - link "GitLab integration page" [ref=f60e462] [cursor=pointer]:
+                    - /url: /docs/integrations/gitlab
+                - listitem [ref=f60e463]:
+                  - strong [ref=f60e464]: Bitbucket
+                  - text: "(including Bitbucket Data Center): See the"
+                  - link "Bitbucket integration page" [ref=f60e465] [cursor=pointer]:
+                    - /url: /docs/integrations/bitbucket
+                - listitem [ref=f60e466]:
+                  - strong [ref=f60e467]: Azure DevOps
+                  - text: "(Azure DevOps Services): See the"
+                  - link "Azure DevOps integration page" [ref=f60e468] [cursor=pointer]:
+                    - /url: /docs/integrations/azure-devops#set-up-bugbot
+              - paragraph [ref=f60e469]:
+                - text: After connecting, open
+                - link "Bugbot in Automations" [ref=f60e470] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: to manage which repositories Bugbot reviews.
+              - alert [ref=f60e471]:
+                - paragraph [ref=f60e475]: On GitHub, connecting turns Bugbot on for the repositories you grant access to. Repositories stay off when someone who isn't a team admin connects an enterprise team, or a team that already has Bugbot on. On GitLab, Bitbucket, Azure DevOps, and Origin, turn Bugbot on per repository.
+              - paragraph [ref=f60e476]:
+                - text: On a team, members who can't change an installation's settings see
+                - strong [ref=f60e477]: Request access
+                - text: instead of the switch on a repository where Bugbot is off. Requesting emails your team admins a one-click link to turn Bugbot on for that repository, and the button changes to
+                - strong [ref=f60e478]: Requested
+                - text: . The repository stays off until an admin turns it on.
+              - paragraph [ref=f60e479]:
+                - text: For a comparison with Security Reviewer, see
+                - link "Security Review source control support" [ref=f60e480] [cursor=pointer]:
+                  - /url: /docs/security-review#source-control-support
+                - text: .
+              - heading [level=2] [ref=f60e481]:
+                - link "Copy link to ci-check-statuses" [ref=f60e482] [cursor=pointer]:
+                  - /url: "#ci-check-statuses"
+                  - generic [ref=f60e483]: CI check statuses
+              - paragraph [ref=f60e491]:
+                - text: Bugbot publishes a status for each review run. On GitHub, this appears as a check named
+                - code [ref=f60e492]: Cursor Bugbot
+                - text: . On Bitbucket, this appears as a build status with the key
+                - code [ref=f60e493]: cursor-bugbot
+                - text: . On Azure DevOps, this appears as a status with the context
+                - code [ref=f60e494]: cursor-bugbot/review
+                - text: ". The status uses these conclusions:"
+              - list [ref=f60e495]:
+                - listitem [ref=f60e496]:
+                  - code [ref=f60e497]: success
+                  - text: ": Bugbot found no issues, and there are no unresolved Bugbot comments from earlier runs."
+                - listitem [ref=f60e498]:
+                  - code [ref=f60e499]: neutral
+                  - text: ": Bugbot found issues, the run was cancelled by a newer commit, or Bugbot hit an internal error. This is the default conclusion when Bugbot reports findings."
+                - listitem [ref=f60e500]:
+                  - code [ref=f60e501]: failure
+                  - text: ": Bugbot found issues and the check is configured to fail on unresolved issues."
+              - paragraph [ref=f60e502]:
+                - text: If you use branch protection, require the Bugbot check or build status to make sure Bugbot runs before merge. Requiring the status alone does not block merges on findings because findings default to
+                - code [ref=f60e503]: neutral
+                - text: . If fail-on-unresolved-issues behavior is available for your organization, enable it to make unresolved findings produce a failing status. Bugbot does not emit a
+                - code [ref=f60e504]: skipped
+                - text: conclusion.
+              - paragraph [ref=f60e505]:
+                - text: When Bugbot Autofix is enabled, GitHub may also show a separate
+                - code [ref=f60e506]: Cursor Bugbot Autofix
+                - text: check. That check only uses
+                - code [ref=f60e507]: success
+                - text: or
+                - code [ref=f60e508]: neutral
+                - text: .
+              - heading [level=2] [ref=f60e509]:
+                - link "Copy link to configuration" [ref=f60e510] [cursor=pointer]:
+                  - /url: "#configuration"
+                  - generic [ref=f60e511]: Configuration
+              - generic [ref=f60e519]:
+                - tablist [ref=f60e520]:
+                  - tab "Individual" [ref=f60e521] [cursor=pointer]
+                  - tab "Team" [selected] [ref=f60e522] [cursor=pointer]
+                  - tab "Enterprise" [ref=f60e523] [cursor=pointer]
+                - tabpanel "Team" [ref=f60e524]:
+                  - heading [level=3] [ref=f60e525]:
+                    - link "Copy link to repository-settings" [ref=f60e526] [cursor=pointer]:
+                      - /url: "#repository-settings"
+                      - generic [ref=f60e527]: Repository settings
+                  - paragraph [ref=f60e535]: "Team users and admins can enable Bugbot per repository, configure allow/deny lists for reviewers, and set:"
+                  - list [ref=f60e536]:
+                    - listitem [ref=f60e537]:
+                      - text: Run
+                      - strong [ref=f60e538]: only once
+                      - text: per PR per installation, skipping subsequent commits
+                  - paragraph [ref=f60e539]:
+                    - text: Bugbot runs for all contributors to enabled private repositories, regardless of team membership. On public repositories, the
+                    - strong [ref=f60e540]: Public repositories
+                    - text: switch in Bugbot's
+                    - strong [ref=f60e541]: Team
+                    - text: settings decides whether automatic reviews cover pull requests from people outside the team and from bots. If no admin has changed it, it's on for teams created before October 22, 2026 and off for teams created since. The switch doesn't affect manual reviews started with
+                    - code [ref=f60e542]: cursor review
+                    - text: or
+                    - code [ref=f60e543]: bugbot run
+                    - text: .
+                  - heading [level=3] [ref=f60e544]:
+                    - link "Copy link to personal-settings" [ref=f60e545] [cursor=pointer]:
+                      - /url: "#personal-settings"
+                      - generic [ref=f60e546]: Personal settings
+                  - paragraph [ref=f60e554]: "Team members can override settings for their own PRs:"
+                  - list [ref=f60e555]:
+                    - listitem [ref=f60e556]:
+                      - text: Run
+                      - strong [ref=f60e557]: only when mentioned
+                      - text: by commenting
+                      - code [ref=f60e558]: cursor review
+                      - text: or
+                      - code [ref=f60e559]: bugbot run
+                    - listitem [ref=f60e560]:
+                      - text: Run
+                      - strong [ref=f60e561]: only once
+                      - text: per PR, skipping subsequent commits
+                    - listitem [ref=f60e562]:
+                      - strong [ref=f60e563]: Enable reviews on draft PRs
+                      - text: to include draft pull requests in automatic reviews
+              - heading [level=3] [ref=f60e564]:
+                - link "Copy link to repository-config-file" [ref=f60e565] [cursor=pointer]:
+                  - /url: "#repository-config-file"
+                  - generic [ref=f60e566]: Repository config file
+              - paragraph [ref=f60e574]: "You can optionally configure Bugbot from a repo-level YAML file:"
+              - generic [ref=f60e577]:
+                - button [ref=f60e578] [cursor=pointer]
+                - code [ref=f60e584]:
+                  - generic [ref=f60e585]: "# .cursor/config/bugbot.yaml"
+                  - generic [ref=f60e586]: "version: 1"
+                  - generic [ref=f60e588]: "triggers:"
+                  - generic [ref=f60e589]: "drafts: false"
+                  - generic [ref=f60e590]: "frequency: everyPush # everyPush | oncePerPr"
+                  - generic [ref=f60e592]: "review:"
+                  - generic [ref=f60e593]: "effort: default # low | default | high | smart"
+                  - generic [ref=f60e594]: "smartPrompt: \"\""
+                  - generic [ref=f60e595]: "incremental: true"
+                  - generic [ref=f60e597]: "prSummary:"
+                  - generic [ref=f60e598]: "mode: comment # disabled | description | comment"
+                  - generic [ref=f60e599]: "riskScore: true"
+                  - generic [ref=f60e601]: "autofix:"
+                  - generic [ref=f60e602]: "mode: disabled # disabled | newBranch | existingBranch"
+              - paragraph [ref=f60e603]: All fields are optional. If the file is missing, Bugbot uses the same behavior as before. If a field is missing or invalid, Bugbot ignores that field and falls back to the next setting in the precedence order. Bugbot ignores files larger than 64 KB.
+              - paragraph [ref=f60e604]:
+                - text: Bugbot reads
+                - code [ref=f60e605]: .cursor/config/bugbot.yaml
+                - text: at the repo root from the PR's base branch, the branch the PR merges into. The file must be committed and pushed to the repo, and its settings apply only to that repo. Bugbot does not read the PR head version, so a PR cannot change how Bugbot reviews itself. Use code review and
+                - code [ref=f60e606]: CODEOWNERS
+                - text: to control who can change this file.
+              - paragraph [ref=f60e607]: "Precedence order, from highest to lowest:"
+              - list [ref=f60e608]:
+                - listitem [ref=f60e609]: The PR author's personal overrides, for their own PRs.
+                - listitem [ref=f60e610]:
+                  - code [ref=f60e611]: .cursor/config/bugbot.yaml
+                  - text: .
+                - listitem [ref=f60e612]: Team and organization settings from the dashboard.
+              - paragraph [ref=f60e613]:
+                - code [ref=f60e614]: autofix.mode
+                - text: can lower the
+                - link "Autofix" [ref=f60e615] [cursor=pointer]:
+                  - /url: "#autofix"
+                - text: mode from your dashboard settings, but it can't raise it. For example, it can change
+                - strong [ref=f60e616]: Commit to Existing Branch
+                - text: to
+                - code [ref=f60e617]: newBranch
+                - text: or
+                - code [ref=f60e618]: disabled
+                - text: ", but it can't turn Autofix on when the dashboard has it off."
+              - heading [level=2] [ref=f60e619]:
+                - link "Copy link to analytics" [ref=f60e620] [cursor=pointer]:
+                  - /url: "#analytics"
+                  - generic [ref=f60e621]: Analytics
+              - paragraph [ref=f60e629]:
+                - text: Open
+                - link "Bugbot in Automations" [ref=f60e630] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: to view review activity and outcomes.
+              - heading [level=2] [ref=f60e631]:
+                - link "Copy link to api" [ref=f60e632] [cursor=pointer]:
+                  - /url: "#api"
+                  - generic [ref=f60e633]: API
+              - paragraph [ref=f60e641]:
+                - text: Enterprise teams can use the Bugbot API to trigger reviews and retrieve per-review analytics. Create an API key from
+                - link "Cursor Dashboard → API Keys" [ref=f60e642] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/api
+                - text: and authenticate with
+                - link "Basic Authentication" [ref=f60e643] [cursor=pointer]:
+                  - /url: /docs/api#basic-authentication
+                - text: .
+              - generic [ref=f60e644]:
+                - generic [ref=f60e645]:
+                  - heading [level=3] [ref=f60e646]:
+                    - link "Copy link to trigger-a-review" [ref=f60e647] [cursor=pointer]:
+                      - /url: "#trigger-a-review"
+                      - generic [ref=f60e648]: Trigger a review
+                  - generic [ref=f60e656]:
+                    - generic [ref=f60e657]: POST
+                    - code [ref=f60e658]: /bugbot/review
+                  - paragraph [ref=f60e659]: Queue a Bugbot review for a pull request or merge request. The request returns when the review is queued; the review runs asynchronously.
+                  - paragraph [ref=f60e660]:
+                    - text: Requires an API key with
+                    - code [ref=f60e661]: admin:*
+                    - text: scope. The endpoint is limited to 30 requests per minute per team.
+                  - paragraph [ref=f60e662]:
+                    - text: Set
+                    - code [ref=f60e663]: dryRun
+                    - text: to
+                    - code [ref=f60e664]: "true"
+                    - text: to run the full analysis pipeline without posting review comments, inline comments, checks, or other SCM side effects. Dry-run reviews still persist findings and are billed like normal reviews. Retrieve them with
+                    - code [ref=f60e665]: GET /analytics/team/bugbot-reviews
+                    - text: . Dry-run requests have an additional limit of 10 requests per minute per team.
+                  - heading [level=4] [ref=f60e666]:
+                    - link "Copy link to request-body" [ref=f60e667] [cursor=pointer]:
+                      - /url: "#request-body"
+                      - generic [ref=f60e668]: Request Body
+                  - paragraph [ref=f60e676]:
+                    - code [ref=f60e677]: prUrl
+                    - text: string (required)
+                  - generic [ref=f60e678]: Full GitHub pull request or GitLab merge request URL.
+                  - paragraph [ref=f60e680]:
+                    - code [ref=f60e681]: dryRun
+                    - text: boolean (optional)
+                  - generic [ref=f60e682]:
+                    - text: When
+                    - code [ref=f60e683]: "true"
+                    - text: ", run analysis and persist findings without posting anything to the SCM provider. Default:"
+                    - code [ref=f60e684]: "false"
+                    - text: .
+                - generic [ref=f60e685]:
+                  - generic [ref=f60e688]:
+                    - button [ref=f60e689] [cursor=pointer]
+                    - code [ref=f60e695]:
+                      - generic [ref=f60e696]: curl --request POST \
+                      - generic [ref=f60e697]: "--url https://api.cursor.com/bugbot/review \\"
+                      - generic [ref=f60e698]: "-u YOUR_API_KEY: \\"
+                      - generic [ref=f60e699]: "--header 'Content-Type: application/json' \\"
+                      - generic [ref=f60e700]: "--data '{"
+                      - generic [ref=f60e701]: "\"prUrl\": \"https://github.com/your-org/your-repo/pull/42\""
+                      - generic [ref=f60e702]: "}'"
+                  - generic [ref=f60e705]:
+                    - button [ref=f60e706] [cursor=pointer]
+                    - code [ref=f60e712]:
+                      - generic [ref=f60e713]: curl --request POST \
+                      - generic [ref=f60e714]: "--url https://api.cursor.com/bugbot/review \\"
+                      - generic [ref=f60e715]: "-u YOUR_API_KEY: \\"
+                      - generic [ref=f60e716]: "--header 'Content-Type: application/json' \\"
+                      - generic [ref=f60e717]: "--data '{"
+                      - generic [ref=f60e718]: "\"prUrl\": \"https://github.com/your-org/your-repo/pull/42\","
+                      - generic [ref=f60e719]: "\"dryRun\": true"
+                      - generic [ref=f60e720]: "}'"
+                  - paragraph [ref=f60e721]:
+                    - strong [ref=f60e722]: "Response:"
+                  - generic [ref=f60e725]:
+                    - button [ref=f60e726] [cursor=pointer]
+                    - code [ref=f60e732]:
+                      - generic [ref=f60e733]: "{"
+                      - generic [ref=f60e734]: "\"outcome\": \"success\","
+                      - generic [ref=f60e735]: "\"message\": \"Bugbot review queued\","
+                      - generic [ref=f60e736]: "\"request_id\": \"6e0d261c-86a2-4383-89f0-9162c1c10662\","
+                      - generic [ref=f60e737]: "\"dry_run\": false"
+                      - generic [ref=f60e738]: "}"
+                  - paragraph [ref=f60e739]:
+                    - text: A dry-run response uses
+                    - code [ref=f60e740]: "\"message\": \"Bugbot dry-run review queued\""
+                    - text: and
+                    - code [ref=f60e741]: "\"dry_run\": true"
+                    - text: .
+                  - paragraph [ref=f60e742]:
+                    - text: Save
+                    - code [ref=f60e743]: request_id
+                    - text: so you can match the completed review in the analytics endpoint.
+                  - paragraph [ref=f60e744]:
+                    - text: If Bugbot cannot review the pull request, the endpoint returns
+                    - code [ref=f60e745]: 400 Bad Request
+                    - text: "with the reason:"
+                  - generic [ref=f60e748]:
+                    - button [ref=f60e749] [cursor=pointer]
+                    - code [ref=f60e755]:
+                      - generic [ref=f60e756]: "{"
+                      - generic [ref=f60e757]: "\"outcome\": \"error\","
+                      - generic [ref=f60e758]: "\"message\": \"Bugbot is disabled for this repository\""
+                      - generic [ref=f60e759]: "}"
+              - generic [ref=f60e761]:
+                - generic [ref=f60e762]:
+                  - heading [level=3] [ref=f60e763]:
+                    - link "Copy link to review-analytics" [ref=f60e764] [cursor=pointer]:
+                      - /url: "#review-analytics"
+                      - generic [ref=f60e765]: Review analytics
+                  - generic [ref=f60e773]:
+                    - generic [ref=f60e774]: GET
+                    - code [ref=f60e775]: /analytics/team/bugbot-reviews
+                  - paragraph [ref=f60e776]: Return one item per completed Bugbot review, including the pull request author, reviewed commit, findings count, billed cost, and per-finding resolution data.
+                  - paragraph [ref=f60e777]:
+                    - text: Includes both posted reviews and dry-run reviews. Posted findings are identified by
+                    - code [ref=f60e778]: comment_id
+                    - text: and
+                    - code [ref=f60e779]: resolution_status
+                    - text: . Dry-run findings return
+                    - code [ref=f60e780]: title
+                    - text: ","
+                    - code [ref=f60e781]: description
+                    - text: ", and"
+                    - code [ref=f60e782]: locations
+                    - text: instead because nothing is posted to the SCM.
+                  - paragraph [ref=f60e783]:
+                    - text: Requires an API key with
+                    - code [ref=f60e784]: read:*
+                    - text: scope.
+                  - heading [level=4] [ref=f60e785]:
+                    - link "Copy link to query-parameters" [ref=f60e786] [cursor=pointer]:
+                      - /url: "#query-parameters"
+                      - generic [ref=f60e787]: Query Parameters
+                  - paragraph [ref=f60e795]:
+                    - code [ref=f60e796]: startDate
+                    - text: string (optional)
+                  - generic [ref=f60e797]:
+                    - text: Start of the analytics range. Defaults to 7 days ago. See
+                    - link "Date Formats" [ref=f60e798] [cursor=pointer]:
+                      - /url: /docs/account/teams/analytics-api#date-formats
+                    - text: .
+                  - paragraph [ref=f60e800]:
+                    - code [ref=f60e801]: endDate
+                    - text: string (optional)
+                  - generic [ref=f60e802]:
+                    - text: End of the analytics range. Defaults to now. See
+                    - link "Date Formats" [ref=f60e803] [cursor=pointer]:
+                      - /url: /docs/account/teams/analytics-api#date-formats
+                    - text: .
+                  - paragraph [ref=f60e805]:
+                    - code [ref=f60e806]: repo
+                    - text: string (optional)
+                  - generic [ref=f60e807]:
+                    - text: Repository filter in
+                    - code [ref=f60e808]: host/owner/repo
+                    - text: form. Protocol and
+                    - code [ref=f60e809]: .git
+                    - text: suffix are optional.
+                  - paragraph [ref=f60e811]:
+                    - code [ref=f60e812]: prNumber
+                    - text: number (optional)
+                  - generic [ref=f60e813]: Pull request or merge request number.
+                  - paragraph [ref=f60e815]:
+                    - code [ref=f60e816]: page
+                    - text: number (optional)
+                  - generic [ref=f60e817]:
+                    - text: "Page number for pagination. Default:"
+                    - code [ref=f60e818]: "1"
+                    - text: .
+                  - paragraph [ref=f60e820]:
+                    - code [ref=f60e821]: pageSize
+                    - text: number (optional)
+                  - generic [ref=f60e822]:
+                    - text: "Number of reviews per page. Default:"
+                    - code [ref=f60e823]: "100"
+                    - text: ", max:"
+                    - code [ref=f60e824]: "250"
+                    - text: .
+                  - paragraph [ref=f60e826]:
+                    - code [ref=f60e827]: dryRun
+                    - text: boolean (optional)
+                  - generic [ref=f60e828]:
+                    - text: Filter to dry-run (
+                    - code [ref=f60e829]: "true"
+                    - text: ) or posted (
+                    - code [ref=f60e830]: "false"
+                    - text: ) reviews only.
+                - generic [ref=f60e831]:
+                  - generic [ref=f60e834]:
+                    - button [ref=f60e835] [cursor=pointer]
+                    - code [ref=f60e841]:
+                      - generic [ref=f60e842]: curl --get https://api.cursor.com/analytics/team/bugbot-reviews \
+                      - generic [ref=f60e843]: "-u YOUR_API_KEY: \\"
+                      - generic [ref=f60e844]: "--data-urlencode 'startDate=2026-06-01' \\"
+                      - generic [ref=f60e845]: "--data-urlencode 'endDate=2026-06-29' \\"
+                      - generic [ref=f60e846]: "--data-urlencode 'repo=github.com/your-org/your-repo' \\"
+                      - generic [ref=f60e847]: "--data-urlencode 'prNumber=42' \\"
+                      - generic [ref=f60e848]: "--data-urlencode 'page=1' \\"
+                      - generic [ref=f60e849]: "--data-urlencode 'pageSize=100'"
+                  - generic [ref=f60e852]:
+                    - button [ref=f60e853] [cursor=pointer]
+                    - code [ref=f60e859]:
+                      - generic [ref=f60e860]: curl --get https://api.cursor.com/analytics/team/bugbot-reviews \
+                      - generic [ref=f60e861]: "-u YOUR_API_KEY: \\"
+                      - generic [ref=f60e862]: "--data-urlencode 'dryRun=true' \\"
+                      - generic [ref=f60e863]: "--data-urlencode 'repo=github.com/your-org/your-repo' \\"
+                      - generic [ref=f60e864]: "--data-urlencode 'prNumber=42'"
+                  - paragraph [ref=f60e865]:
+                    - strong [ref=f60e866]: "Response (posted review):"
+                  - generic [ref=f60e869]:
+                    - button [ref=f60e870] [cursor=pointer]
+                    - code [ref=f60e876]:
+                      - generic [ref=f60e877]: "{"
+                      - generic [ref=f60e878]: "\"data\": ["
+                      - generic [ref=f60e879]: "{"
+                      - generic [ref=f60e880]: "\"request_id\": \"6e0d261c-86a2-4383-89f0-9162c1c10662\","
+                      - generic [ref=f60e881]: "\"timestamp\": \"2026-06-29T19:42:18.000Z\","
+                      - generic [ref=f60e882]: "\"repo\": \"github.com/your-org/your-repo\","
+                      - generic [ref=f60e883]: "\"repo_node_id\": \"R_kgDOABCDEF\","
+                      - generic [ref=f60e884]: "\"pr_author\": \"octocat\","
+                      - generic [ref=f60e885]: "\"pr_number\": 42,"
+                      - generic [ref=f60e886]: "\"commit_sha\": \"9f3c2a1b7d8e4f5061728394a5b6c7d8e9f0a1b2\","
+                      - generic [ref=f60e887]: "\"bugs_found\": 2,"
+                      - generic [ref=f60e888]: "\"cost_cents\": 42.5,"
+                      - generic [ref=f60e889]: "\"dry_run\": false,"
+                      - generic [ref=f60e890]: "\"publication_status\": \"posted\","
+                      - generic [ref=f60e891]: "\"bugs\": ["
+                      - generic [ref=f60e892]: "{"
+                      - generic [ref=f60e893]: "\"comment_id\": \"2147483999\","
+                      - generic [ref=f60e894]: "\"resolution_status\": \"resolved\","
+                      - generic [ref=f60e895]: "\"severity\": \"high\""
+                      - generic [ref=f60e896]: "},"
+                      - generic [ref=f60e897]: "{"
+                      - generic [ref=f60e898]: "\"comment_id\": \"2147484000\","
+                      - generic [ref=f60e899]: "\"resolution_status\": \"unresolved\","
+                      - generic [ref=f60e900]: "\"severity\": \"medium\""
+                      - generic [ref=f60e901]: "}"
+                      - generic [ref=f60e902]: "]"
+                      - generic [ref=f60e903]: "}"
+                      - generic [ref=f60e904]: "],"
+                      - generic [ref=f60e905]: "\"pagination\": {"
+                      - generic [ref=f60e906]: "\"page\": 1,"
+                      - generic [ref=f60e907]: "\"pageSize\": 100,"
+                      - generic [ref=f60e908]: "\"totalItems\": 1,"
+                      - generic [ref=f60e909]: "\"totalPages\": 1,"
+                      - generic [ref=f60e910]: "\"hasNextPage\": false,"
+                      - generic [ref=f60e911]: "\"hasPreviousPage\": false"
+                      - generic [ref=f60e912]: "},"
+                      - generic [ref=f60e913]: "\"params\": {"
+                      - generic [ref=f60e914]: "\"metric\": \"bugbot-reviews\","
+                      - generic [ref=f60e915]: "\"teamId\": 12345,"
+                      - generic [ref=f60e916]: "\"startDate\": \"2026-06-01\","
+                      - generic [ref=f60e917]: "\"endDate\": \"2026-06-29\","
+                      - generic [ref=f60e918]: "\"repo\": \"github.com/your-org/your-repo\","
+                      - generic [ref=f60e919]: "\"prNumber\": 42,"
+                      - generic [ref=f60e920]: "\"page\": 1,"
+                      - generic [ref=f60e921]: "\"pageSize\": 100"
+                      - generic [ref=f60e922]: "}"
+                      - generic [ref=f60e923]: "}"
+                  - paragraph [ref=f60e924]:
+                    - strong [ref=f60e925]: "Response (dry-run review):"
+                  - generic [ref=f60e928]:
+                    - button [ref=f60e929] [cursor=pointer]
+                    - code [ref=f60e935]:
+                      - generic [ref=f60e936]: "{"
+                      - generic [ref=f60e937]: "\"data\": ["
+                      - generic [ref=f60e938]: "{"
+                      - generic [ref=f60e939]: "\"request_id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\","
+                      - generic [ref=f60e940]: "\"timestamp\": \"2026-06-29T20:15:03.000Z\","
+                      - generic [ref=f60e941]: "\"repo\": \"github.com/your-org/your-repo\","
+                      - generic [ref=f60e942]: "\"repo_node_id\": \"R_kgDOABCDEF\","
+                      - generic [ref=f60e943]: "\"pr_author\": \"octocat\","
+                      - generic [ref=f60e944]: "\"pr_number\": 42,"
+                      - generic [ref=f60e945]: "\"commit_sha\": \"9f3c2a1b7d8e4f5061728394a5b6c7d8e9f0a1b2\","
+                      - generic [ref=f60e946]: "\"bugs_found\": 1,"
+                      - generic [ref=f60e947]: "\"cost_cents\": null,"
+                      - generic [ref=f60e948]: "\"dry_run\": true,"
+                      - generic [ref=f60e949]: "\"publication_status\": \"dry_run\","
+                      - generic [ref=f60e950]: "\"bugs\": ["
+                      - generic [ref=f60e951]: "{"
+                      - generic [ref=f60e952]: "\"comment_id\": null,"
+                      - generic [ref=f60e953]: "\"resolution_status\": null,"
+                      - generic [ref=f60e954]: "\"severity\": \"medium\","
+                      - generic [ref=f60e955]: "\"title\": \"Unbounded retry loop\","
+                      - generic [ref=f60e956]: "\"description\": \"retry() recurses without a ceiling.\","
+                      - generic [ref=f60e957]: "\"locations\": ["
+                      - generic [ref=f60e958]: "{ \"file\": \"src/net.ts\", \"start_line\": 5, \"end_line\": 9 }"
+                      - generic [ref=f60e959]: "]"
+                      - generic [ref=f60e960]: "}"
+                      - generic [ref=f60e961]: "]"
+                      - generic [ref=f60e962]: "}"
+                      - generic [ref=f60e963]: "],"
+                      - generic [ref=f60e964]: "\"pagination\": {"
+                      - generic [ref=f60e965]: "\"page\": 1,"
+                      - generic [ref=f60e966]: "\"pageSize\": 100,"
+                      - generic [ref=f60e967]: "\"totalItems\": 1,"
+                      - generic [ref=f60e968]: "\"totalPages\": 1,"
+                      - generic [ref=f60e969]: "\"hasNextPage\": false,"
+                      - generic [ref=f60e970]: "\"hasPreviousPage\": false"
+                      - generic [ref=f60e971]: "},"
+                      - generic [ref=f60e972]: "\"params\": {"
+                      - generic [ref=f60e973]: "\"metric\": \"bugbot-reviews\","
+                      - generic [ref=f60e974]: "\"teamId\": 12345,"
+                      - generic [ref=f60e975]: "\"startDate\": \"2026-06-01\","
+                      - generic [ref=f60e976]: "\"endDate\": \"2026-06-29\","
+                      - generic [ref=f60e977]: "\"repo\": \"github.com/your-org/your-repo\","
+                      - generic [ref=f60e978]: "\"prNumber\": 42,"
+                      - generic [ref=f60e979]: "\"dryRun\": true,"
+                      - generic [ref=f60e980]: "\"page\": 1,"
+                      - generic [ref=f60e981]: "\"pageSize\": 100"
+                      - generic [ref=f60e982]: "}"
+                      - generic [ref=f60e983]: "}"
+                  - paragraph [ref=f60e984]:
+                    - code [ref=f60e985]: pr_author
+                    - text: is the SCM username of the pull request author. Use it with
+                    - code [ref=f60e986]: cost_cents
+                    - text: to attribute Bugbot spend to authors.
+                    - code [ref=f60e987]: repo_node_id
+                    - text: ","
+                    - code [ref=f60e988]: pr_author
+                    - text: ","
+                    - code [ref=f60e989]: pr_number
+                    - text: ","
+                    - code [ref=f60e990]: commit_sha
+                    - text: ","
+                    - code [ref=f60e991]: cost_cents
+                    - text: ","
+                    - code [ref=f60e992]: bugs[].comment_id
+                    - text: ","
+                    - code [ref=f60e993]: bugs[].resolution_status
+                    - text: ", and"
+                    - code [ref=f60e994]: bugs[].severity
+                    - text: may be
+                    - code [ref=f60e995]: "null"
+                    - text: when unavailable.
+                    - code [ref=f60e996]: cost_cents
+                    - text: is
+                    - code [ref=f60e997]: "null"
+                    - text: when the review is not billed separately. For dry-run reviews,
+                    - code [ref=f60e998]: bugs[].title
+                    - text: ","
+                    - code [ref=f60e999]: bugs[].description
+                    - text: ", and"
+                    - code [ref=f60e1000]: bugs[].locations
+                    - text: carry the finding content. Dry-run findings have
+                    - code [ref=f60e1001]: "comment_id: null"
+                    - text: and
+                    - code [ref=f60e1002]: "resolution_status: null"
+                    - text: because nothing is posted to the SCM.
+              - heading [level=3] [ref=f60e1003]:
+                - link "Copy link to trigger-and-retrieve-a-review" [ref=f60e1004] [cursor=pointer]:
+                  - /url: "#trigger-and-retrieve-a-review"
+                  - generic [ref=f60e1005]: Trigger and retrieve a review
+              - list [ref=f60e1013]:
+                - listitem [ref=f60e1014]:
+                  - text: Call
+                  - code [ref=f60e1015]: POST /bugbot/review
+                  - text: with the pull request URL. Pass
+                  - code [ref=f60e1016]: "\"dryRun\": true"
+                  - text: to analyze without posting to the SCM.
+                - listitem [ref=f60e1017]:
+                  - text: Save the returned
+                  - code [ref=f60e1018]: request_id
+                  - text: .
+                - listitem [ref=f60e1019]:
+                  - text: Poll
+                  - code [ref=f60e1020]: GET /analytics/team/bugbot-reviews
+                  - text: ", filtering by"
+                  - code [ref=f60e1021]: repo
+                  - text: and
+                  - code [ref=f60e1022]: prNumber
+                  - text: . Use
+                  - code [ref=f60e1023]: dryRun=true
+                  - text: when you triggered a dry-run review.
+                - listitem [ref=f60e1024]:
+                  - text: Find the item whose
+                  - code [ref=f60e1025]: request_id
+                  - text: matches the trigger response.
+              - paragraph [ref=f60e1026]: Analytics may take a short time to become available after a review is queued.
+              - heading [level=2] [ref=f60e1027]:
+                - link "Copy link to incremental-reviews" [ref=f60e1028] [cursor=pointer]:
+                  - /url: "#incremental-reviews"
+                  - generic [ref=f60e1029]: Incremental reviews
+              - paragraph [ref=f60e1037]:
+                - text: By default, Bugbot reviews only the changes since the previous Bugbot review. Turn off
+                - strong [ref=f60e1038]: Incremental Review
+                - text: in
+                - link "Bugbot Automations" [ref=f60e1039] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: to review the full pull request diff on every push.
+              - button "Open image in full screen" [ref=f60e1041] [cursor=pointer]:
+                - img "Incremental Review setting in Bugbot Automations" [ref=f60e1042]
+              - heading [level=2] [ref=f60e1043]:
+                - link "Copy link to pr-summaries" [ref=f60e1044] [cursor=pointer]:
+                  - /url: "#pr-summaries"
+                  - generic [ref=f60e1045]: PR summaries
+              - paragraph [ref=f60e1053]:
+                - text: Bugbot writes a summary of each pull request it reviews.
+                - strong [ref=f60e1054]: Post PR Summary
+                - text: in
+                - link "Bugbot Automations" [ref=f60e1055] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: "controls where the summary goes:"
+              - list [ref=f60e1056]:
+                - listitem [ref=f60e1057]:
+                  - strong [ref=f60e1058]: In Description
+                  - text: "(default): Bugbot adds the summary to the pull request description and updates it on each review."
+                - listitem [ref=f60e1059]:
+                  - strong [ref=f60e1060]: As Comment
+                  - text: ": Bugbot posts the summary as a comment and updates that comment on each review."
+                - listitem [ref=f60e1061]:
+                  - strong [ref=f60e1062]: "Off"
+                  - text: ": Bugbot posts no summary."
+              - paragraph [ref=f60e1063]:
+                - text: Turn summaries on or off for your own PRs with the
+                - strong [ref=f60e1064]: PR Summaries
+                - text: personal setting. Choose
+                - strong [ref=f60e1065]: "On"
+                - text: ","
+                - strong [ref=f60e1066]: "Off"
+                - text: ", or"
+                - strong [ref=f60e1067]: Use Installation Default
+                - text: .
+              - heading [level=2] [ref=f60e1068]:
+                - link "Copy link to effort-levels" [ref=f60e1069] [cursor=pointer]:
+                  - /url: "#effort-levels"
+                  - generic [ref=f60e1070]: Effort Levels
+              - paragraph [ref=f60e1078]: Effort levels control how much time Bugbot spends reasoning during a review. Higher effort levels can find more bugs, but each review may take longer and take up more usage.
+              - paragraph [ref=f60e1079]: "Choose from these effort levels:"
+              - list [ref=f60e1080]:
+                - listitem [ref=f60e1081]:
+                  - strong [ref=f60e1082]: Low
+                  - text: ": Optimizes for cost, with quality close to Default. Reviews are cheaper and take longer."
+                - listitem [ref=f60e1083]:
+                  - strong [ref=f60e1084]: Default
+                  - text: ": Optimizes for efficiency and speed. Reviews are less expensive, but Bugbot may find fewer bugs."
+                - listitem [ref=f60e1085]:
+                  - strong [ref=f60e1086]: High
+                  - text: ": Spends more time reasoning. Reviews are more expensive and take longer, but Bugbot may find more bugs."
+                - listitem [ref=f60e1087]:
+                  - strong [ref=f60e1088]: Smart
+                  - text: ": Lets you describe when Bugbot should use Low, Default, or High. Cursor dynamically sets effort levels based on your instructions. To choose, Smart reads your instructions with the PR's title, author, repository name, and diff (trimmed on large PRs). It doesn't read the PR description, labels, or"
+                  - code [ref=f60e1089]: BUGBOT.md
+                  - text: . Smart uses Low only when your instructions ask for it, and uses Default when they don't clearly call for another level. When Smart picks Default or High and the review finds issues, the review comment names the effort level it used.
+              - alert [ref=f60e1090]:
+                - paragraph [ref=f60e1094]: Effort levels are available only for usage-based Bugbot plans.
+              - heading [level=2] [ref=f60e1095]:
+                - link "Copy link to rules" [ref=f60e1096] [cursor=pointer]:
+                  - /url: "#rules"
+                  - generic [ref=f60e1097]: Rules
+              - paragraph [ref=f60e1105]:
+                - text: Guide reviews with team rules, repository rules, and project
+                - code [ref=f60e1106]: .cursor/BUGBOT.md
+                - text: files.
+              - heading [level=3] [ref=f60e1107]:
+                - link "Copy link to team-rules" [ref=f60e1108] [cursor=pointer]:
+                  - /url: "#team-rules"
+                  - generic [ref=f60e1109]: Team rules
+              - paragraph [ref=f60e1117]:
+                - text: Team admins can create rules in
+                - link "Bugbot Automations" [ref=f60e1118] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: that apply to all repositories in the team. These rules are available to every enabled repository, making it easy to enforce organization-wide standards.
+              - alert [ref=f60e1119]:
+                - paragraph [ref=f60e1123]:
+                  - text: "When Team Rules, repository rules, and project rule files all apply, Bugbot merges them into one review-rules block. Order of inclusion:"
+                  - strong [ref=f60e1124]: Team Rules → project .cursor/BUGBOT.md (including nested files) → learned rules → manual rules
+                  - text: .
+              - heading [level=3] [ref=f60e1125]:
+                - link "Copy link to rule-limits" [ref=f60e1126] [cursor=pointer]:
+                  - /url: "#rule-limits"
+                  - generic [ref=f60e1127]: Rule limits
+              - paragraph [ref=f60e1135]:
+                - text: Each rule is truncated at 30,000 characters when included in a review. Every
+                - code [ref=f60e1136]: .md
+                - text: or
+                - code [ref=f60e1137]: .mdc
+                - text: file linked from a
+                - code [ref=f60e1138]: .cursor/BUGBOT.md
+                - text: file counts as its own rule with its own 30,000-character limit, and Bugbot loads each linked path once. The combined rules Bugbot includes for a review are capped at 100,000 characters. If you exceed that combined cap, some rules may be omitted. Required team rules are prioritized over non-required rules.
+              - heading [level=3] [ref=f60e1139]:
+                - link "Copy link to see-which-rules-a-review-used" [ref=f60e1140] [cursor=pointer]:
+                  - /url: "#see-which-rules-a-review-used"
+                  - generic [ref=f60e1141]: See which rules a review used
+              - paragraph [ref=f60e1149]:
+                - text: Comment
+                - code [ref=f60e1150]: bugbot run verbose=true
+                - text: or
+                - code [ref=f60e1151]: cursor review verbose=true
+                - text: on a pull request. Bugbot posts a table of every rule included in that run and flags any that were truncated or omitted.
+              - heading [level=3] [ref=f60e1152]:
+                - link "Copy link to repository-rules" [ref=f60e1153] [cursor=pointer]:
+                  - /url: "#repository-rules"
+                  - generic [ref=f60e1154]: Repository rules
+              - heading [level=4] [ref=f60e1162]:
+                - link "Copy link to project-rules" [ref=f60e1163] [cursor=pointer]:
+                  - /url: "#project-rules"
+                  - generic [ref=f60e1164]: Project rules
+              - paragraph [ref=f60e1172]:
+                - text: Create
+                - code [ref=f60e1173]: .cursor/BUGBOT.md
+                - text: files to provide project-specific context for reviews. Bugbot always includes the root
+                - code [ref=f60e1174]: .cursor/BUGBOT.md
+                - text: file and any additional files found while traversing upward from changed files.
+              - generic [ref=f60e1177]:
+                - button [ref=f60e1178] [cursor=pointer]
+                - code [ref=f60e1184]:
+                  - generic [ref=f60e1185]: project/
+                  - generic [ref=f60e1186]: ".cursor/BUGBOT.md # Always included (project-wide rules)"
+                  - generic [ref=f60e1187]: backend/
+                  - generic [ref=f60e1188]: ".cursor/BUGBOT.md # Included when reviewing backend files"
+                  - generic [ref=f60e1189]: api/
+                  - generic [ref=f60e1190]: ".cursor/BUGBOT.md # Included when reviewing API files"
+                  - generic [ref=f60e1191]: frontend/
+                  - generic [ref=f60e1192]: ".cursor/BUGBOT.md # Included when reviewing frontend files"
+              - alert [ref=f60e1193]:
+                - paragraph [ref=f60e1197]:
+                  - text: Cursor
+                  - link "project rules" [ref=f60e1198] [cursor=pointer]:
+                    - /url: /docs/rules
+                  - text: (
+                  - code [ref=f60e1199]: "*.mdc"
+                  - text: files in
+                  - code [ref=f60e1200]: .cursor/rules/
+                  - text: ) do not apply to Bugbot runs.
+              - heading [level=4] [ref=f60e1201]:
+                - link "Copy link to learned-rules" [ref=f60e1202] [cursor=pointer]:
+                  - /url: "#learned-rules"
+                  - generic [ref=f60e1203]: Learned rules
+              - paragraph [ref=f60e1211]:
+                - text: Turn learning on or off per organization with the
+                - strong [ref=f60e1212]: Automatically Learn Rules
+                - text: switch on the organization's page in
+                - link "Bugbot" [ref=f60e1213] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: . Open
+                - strong [ref=f60e1214]: Organizations
+                - text: and select an organization, or use
+                - strong [ref=f60e1215]: Manage learning
+                - text: on the
+                - link "repository rules" [ref=f60e1216] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/bugbot/repository-rules
+                - text: page. Where that switch exists, manual rules apply only while learning is on, so turning learning off also stops manual rules from applying.
+                - link "Azure DevOps" [ref=f60e1217] [cursor=pointer]:
+                  - /url: /docs/integrations/azure-devops#differences-from-other-providers
+                - text: does not have
+                - strong [ref=f60e1218]: Automatically Learn Rules
+                - text: . Repository rules you write by hand still apply there.
+              - paragraph [ref=f60e1219]: Rules are generated automatically from your team's activity on GitHub for that repository or by manually backfilling from the history of the repository.
+              - paragraph [ref=f60e1220]:
+                - text: Bugbot learns from a pull request when it's merged or closed. It posts nothing on the pull request, and each learning run counts toward Bugbot usage like a review. Learning doesn't run on a repository set to manual-only or, on an individual account, when your personal settings run Bugbot
+                - strong [ref=f60e1221]: only when mentioned
+                - text: . Turning off
+                - strong [ref=f60e1222]: Automatically Learn Rules
+                - text: stops it for that organization.
+              - paragraph [ref=f60e1223]:
+                - text: You can also teach Bugbot new rules inline by commenting
+                - code [ref=f60e1224]: "@cursor remember [fact]"
+                - text: on any PR. Bugbot saves the fact as a learned rule and applies it to future reviews.
+              - paragraph [ref=f60e1225]: Cursor will automatically enable or disable rules as it learns more about your team's activity over time.
+              - table [ref=f60e1227]:
+                - rowgroup [ref=f60e1228]:
+                  - row [ref=f60e1229]:
+                    - columnheader "Field" [ref=f60e1230]
+                    - columnheader "Description" [ref=f60e1231]
+                - rowgroup [ref=f60e1232]:
+                  - row [ref=f60e1233]:
+                    - cell [ref=f60e1234]:
+                      - strong [ref=f60e1235]: Name
+                    - cell "Short title for the rule." [ref=f60e1236]
+                  - row [ref=f60e1237]:
+                    - cell [ref=f60e1238]:
+                      - strong [ref=f60e1239]: Rule content
+                    - cell "The instructions Bugbot should follow (i.e. style gates, paths, or review expectations)." [ref=f60e1240]
+                  - row [ref=f60e1241]:
+                    - cell [ref=f60e1242]:
+                      - strong [ref=f60e1243]: Scoped paths
+                    - cell [ref=f60e1244]:
+                      - text: Optional glob patterns such as
+                      - code [ref=f60e1245]: src/components/**
+                      - text: . Leave empty to apply the rule across the whole repository.
+              - heading [level=4] [ref=f60e1246]:
+                - link "Copy link to manual-rules" [ref=f60e1247] [cursor=pointer]:
+                  - /url: "#manual-rules"
+                  - generic [ref=f60e1248]: Manual rules
+              - paragraph [ref=f60e1256]:
+                - text: In
+                - link "Bugbot repository rules" [ref=f60e1257] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/bugbot/repository-rules
+                - text: ", you can create manual rules for individual repositories. Like learned rules, manual rules apply only when learning is enabled for the organization and the repository."
+                - link "Azure DevOps" [ref=f60e1258] [cursor=pointer]:
+                  - /url: /docs/integrations/azure-devops#differences-from-other-providers
+                - text: does not have that switch, so repository rules you write by hand still apply there.
+              - table [ref=f60e1260]:
+                - rowgroup [ref=f60e1261]:
+                  - row [ref=f60e1262]:
+                    - columnheader "Field" [ref=f60e1263]
+                    - columnheader "Description" [ref=f60e1264]
+                - rowgroup [ref=f60e1265]:
+                  - row [ref=f60e1266]:
+                    - cell [ref=f60e1267]:
+                      - strong [ref=f60e1268]: Name
+                    - cell "Short title for the rule." [ref=f60e1269]
+                  - row [ref=f60e1270]:
+                    - cell [ref=f60e1271]:
+                      - strong [ref=f60e1272]: Rule content
+                    - cell "The instructions Bugbot should follow (i.e. style gates, paths, or review expectations)." [ref=f60e1273]
+                  - row [ref=f60e1274]:
+                    - cell [ref=f60e1275]:
+                      - strong [ref=f60e1276]: Scoped paths
+                    - cell [ref=f60e1277]:
+                      - text: Optional glob patterns such as
+                      - code [ref=f60e1278]: src/components/**
+                      - text: . Leave empty to apply the rule across the whole repository.
+              - heading [level=4] [ref=f60e1279]:
+                - link "Copy link to rule-analytics" [ref=f60e1280] [cursor=pointer]:
+                  - /url: "#rule-analytics"
+                  - generic [ref=f60e1281]: Rule analytics
+              - paragraph [ref=f60e1289]:
+                - strong [ref=f60e1290]: Analytics
+                - text: "on a Bugbot rule show how it performs on real PRs:"
+              - table [ref=f60e1292]:
+                - rowgroup [ref=f60e1293]:
+                  - row [ref=f60e1294]:
+                    - columnheader "Metric" [ref=f60e1295]
+                    - columnheader "Meaning" [ref=f60e1296]
+                - rowgroup [ref=f60e1297]:
+                  - row [ref=f60e1298]:
+                    - cell [ref=f60e1299]:
+                      - strong [ref=f60e1300]: Issues found
+                    - cell "Number of findings Bugbot reported that involve this rule." [ref=f60e1301]
+                  - row [ref=f60e1302]:
+                    - cell [ref=f60e1303]:
+                      - strong [ref=f60e1304]: PRs reviewed
+                    - cell "Number of pull requests where those findings appeared." [ref=f60e1305]
+                  - row [ref=f60e1306]:
+                    - cell [ref=f60e1307]:
+                      - strong [ref=f60e1308]: Accepted issues
+                    - cell "Number of findings your team accepted." [ref=f60e1309]
+                  - row [ref=f60e1310]:
+                    - cell [ref=f60e1311]:
+                      - strong [ref=f60e1312]: Acceptance rate
+                    - cell "Percentage of findings that were accepted." [ref=f60e1313]
+              - heading [level=4] [ref=f60e1314]:
+                - link "Copy link to examples" [ref=f60e1315] [cursor=pointer]:
+                  - /url: "#examples"
+                  - generic [ref=f60e1316]: Examples
+              - generic [ref=f60e1324]:
+                - heading [level=3] [ref=f60e1326]:
+                  - 'button "Security: Flag any use of eval() or exec()" [ref=f60e1327] [cursor=pointer]'
+                - heading [level=3] [ref=f60e1331]:
+                  - 'button "OSS licenses: Prevent importing disallowed licenses" [ref=f60e1332] [cursor=pointer]'
+                - heading [level=3] [ref=f60e1336]:
+                  - 'button "Language standards: Flag React componentWillMount usage" [ref=f60e1337] [cursor=pointer]'
+                - heading [level=3] [ref=f60e1341]:
+                  - 'button "Standards: Require tests for backend changes" [ref=f60e1342] [cursor=pointer]'
+                - heading [level=3] [ref=f60e1346]:
+                  - 'button "Style: Disallow TODO comments" [ref=f60e1347] [cursor=pointer]'
+              - heading [level=2] [ref=f60e1350]:
+                - link "Copy link to run-in-your-agent" [ref=f60e1351] [cursor=pointer]:
+                  - /url: "#run-in-your-agent"
+                  - generic [ref=f60e1352]: Run in your agent
+              - paragraph [ref=f60e1360]:
+                - text: Use the
+                - code [ref=f60e1361]: /review-bugbot
+                - text: or
+                - code [ref=f60e1362]: /review
+                - text: skills to run Bugbot from your agent before you push the code.
+              - paragraph [ref=f60e1363]:
+                - strong [ref=f60e1364]: "What diff is reviewed:"
+                - text: By default,
+                - code [ref=f60e1365]: /review-bugbot
+                - text: "reviews your branch changes: every change relative to the base branch, including committed and uncommitted changes. Ask it to review only your uncommitted changes when you want narrower feedback."
+              - paragraph [ref=f60e1366]:
+                - strong [ref=f60e1367]: "Against which branch:"
+                - code [ref=f60e1368]: /review-bugbot
+                - text: compares against your default base branch. When your base branch isn't the default (such as
+                - code [ref=f60e1369]: main
+                - text: ), tell the agent which branch to compare against or let it infer from the context.
+              - button "Open image in full screen" [ref=f60e1371] [cursor=pointer]:
+                - img "Running the /review-bugbot skill from the agent input" [ref=f60e1372]
+              - heading [level=3] [ref=f60e1373]:
+                - link "Copy link to sync-with-your-pull-request" [ref=f60e1374] [cursor=pointer]:
+                  - /url: "#sync-with-your-pull-request"
+                  - generic [ref=f60e1375]: Sync with your pull request
+              - paragraph [ref=f60e1383]:
+                - code [ref=f60e1384]: /review-bugbot
+                - text: reviews stay in sync with Bugbot on your connected SCM (GitHub, GitLab, or Bitbucket).
+              - paragraph [ref=f60e1385]:
+                - text: Under the hood,
+                - code [ref=f60e1386]: /review-bugbot
+                - text: stores the
+                - link "patch ID" [ref=f60e1387] [cursor=pointer]:
+                  - /url: https://git-scm.com/docs/git-patch-id
+                - text: of the reviewed diff. When Bugbot on your SCM sees a diff with the same patch ID, it skips the review and leaves a comment noting it already reviewed that diff.
+              - paragraph [ref=f60e1388]:
+                - text: "A common use case: run"
+                - code [ref=f60e1389]: /review-bugbot
+                - text: ", then open a pull request with the same diff, and Bugbot recognizes the review and skips the remote PR review."
+              - alert [ref=f60e1390]:
+                - paragraph [ref=f60e1394]:
+                  - code [ref=f60e1395]: /review
+                  - text: and
+                  - code [ref=f60e1396]: /review-bugbot
+                  - text: are available in Cursor 3.7+, at
+                  - link "cursor.com/agents" [ref=f60e1397] [cursor=pointer]:
+                    - /url: https://cursor.com/agents
+                  - text: ", and in the"
+                  - link "Cursor CLI" [ref=f60e1398] [cursor=pointer]:
+                    - /url: /docs/cli/overview
+                  - text: .
+              - heading [level=2] [ref=f60e1399]:
+                - link "Copy link to autofix" [ref=f60e1400] [cursor=pointer]:
+                  - /url: "#autofix"
+                  - generic [ref=f60e1401]: Autofix
+              - paragraph [ref=f60e1409]:
+                - text: Bugbot Autofix automatically spawns a
+                - link "Cloud Agent" [ref=f60e1410] [cursor=pointer]:
+                  - /url: /docs/cloud-agent
+                - text: to fix bugs found during PR reviews.
+              - heading [level=3] [ref=f60e1411]:
+                - link "Copy link to how-it-works-1" [ref=f60e1412] [cursor=pointer]:
+                  - /url: "#how-it-works-1"
+                  - generic [ref=f60e1413]: How it works
+              - paragraph [ref=f60e1421]: "When Bugbot finds bugs during a PR review, it can automatically:"
+              - list [ref=f60e1422]:
+                - listitem [ref=f60e1423]: Spawn a Cloud Agent to analyze and fix the reported issues
+                - listitem [ref=f60e1424]: Push fixes to the existing branch or a new branch (depending on your settings)
+                - listitem [ref=f60e1425]: Post a comment on the original PR with the results
+              - button "Open image in full screen" [ref=f60e1427] [cursor=pointer]:
+                - img "Bugbot Autofix comment on a PR" [ref=f60e1428]
+              - heading [level=3] [ref=f60e1429]:
+                - link "Copy link to configuration-1" [ref=f60e1430] [cursor=pointer]:
+                  - /url: "#configuration-1"
+                  - generic [ref=f60e1431]: Configuration
+              - paragraph [ref=f60e1439]:
+                - text: Configure autofix behavior in
+                - link "Bugbot Automations" [ref=f60e1440] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: .
+              - generic [ref=f60e1441]:
+                - tablist [ref=f60e1442]:
+                  - tab "Individual" [ref=f60e1443] [cursor=pointer]
+                  - tab "Team" [selected] [ref=f60e1444] [cursor=pointer]
+                - tabpanel "Team" [ref=f60e1445]:
+                  - paragraph [ref=f60e1446]: "Team admins can set a default autofix mode for all team members in a GitHub organization:"
+                  - list [ref=f60e1447]:
+                    - listitem [ref=f60e1448]:
+                      - strong [ref=f60e1449]: "Off"
+                      - text: — autofix is disabled by default
+                    - listitem [ref=f60e1450]:
+                      - strong [ref=f60e1451]: Create New Branch
+                      - text: (Recommended) — Push fixes to a new branch for team members
+                    - listitem [ref=f60e1452]:
+                      - strong [ref=f60e1453]: Commit to Existing Branch
+                      - text: — Push fixes directly to the PR branch (max 3 attempts per PR to prevent loops)
+                  - paragraph [ref=f60e1454]: Individual team members can override these defaults in their personal settings.
+              - paragraph [ref=f60e1455]: "Available autofix modes depend on your repository provider:"
+              - table [ref=f60e1457]:
+                - rowgroup [ref=f60e1458]:
+                  - row [ref=f60e1459]:
+                    - columnheader "Provider" [ref=f60e1460]
+                    - columnheader "Create New Branch" [ref=f60e1461]
+                    - columnheader "Commit to Existing Branch" [ref=f60e1462]
+                - rowgroup [ref=f60e1463]:
+                  - row [ref=f60e1464]:
+                    - cell [ref=f60e1465]:
+                      - text: GitHub,
+                      - link "Origin" [ref=f60e1466] [cursor=pointer]:
+                        - /url: /docs/origin
+                    - cell "Yes" [ref=f60e1467]
+                    - cell "Yes" [ref=f60e1468]
+                  - row [ref=f60e1469]:
+                    - cell "GitLab, Bitbucket" [ref=f60e1470]
+                    - cell "No" [ref=f60e1471]
+                    - cell "Yes" [ref=f60e1472]
+                  - row [ref=f60e1473]:
+                    - cell "Azure DevOps" [ref=f60e1474]
+                    - cell "No" [ref=f60e1475]
+                    - cell "No" [ref=f60e1476]
+              - paragraph [ref=f60e1477]: Installation settings offer only the modes your provider supports. If your personal setting picks a mode your provider doesn't support, Bugbot skips the autofix run for that PR.
+              - paragraph [ref=f60e1478]:
+                - text: On a stacked PR, where the base branch isn't the repository's default branch,
+                - strong [ref=f60e1479]: Commit to Existing Branch
+                - text: doesn't push to your branch. On GitHub and Origin, Autofix delivers the fix on a new branch instead; apply it by commenting
+                - code [ref=f60e1480]: "@cursor push <sha>"
+                - text: on the PR. On GitLab and Bitbucket, Autofix skips stacked PRs.
+              - alert [ref=f60e1481]:
+                - paragraph [ref=f60e1485]:
+                  - text: Autofix uses your
+                  - strong [ref=f60e1486]: Default agent model
+                  - text: from
+                  - link "Settings → Models" [ref=f60e1487] [cursor=pointer]:
+                    - /url: https://cursor.com/dashboard/settings
+                  - text: . If you haven't set a personal model preference, autofix falls back to your team's default model (if you're on a team) or the system default.
+              - heading [level=3] [ref=f60e1488]:
+                - link "Copy link to requirements" [ref=f60e1489] [cursor=pointer]:
+                  - /url: "#requirements"
+                  - generic [ref=f60e1490]: Requirements
+              - paragraph [ref=f60e1498]: "Autofix requires:"
+              - list [ref=f60e1499]:
+                - listitem [ref=f60e1500]:
+                  - text: "Additional usage available:"
+                  - link "prepaid credit" [ref=f60e1501] [cursor=pointer]:
+                    - /url: /docs/models-and-pricing#top-ups-and-spending-caps
+                  - text: on The X Subscription, or
+                  - link "on-demand usage" [ref=f60e1502] [cursor=pointer]:
+                    - /url: /docs/account/pricing/legacy-cursor-plans#on-demand-usage-on-legacy-plans
+                  - text: enabled on a legacy Cursor plan
+                - listitem [ref=f60e1503]: Storage enabled (not in Legacy Privacy Mode)
+              - heading [level=3] [ref=f60e1504]:
+                - link "Copy link to billing" [ref=f60e1505] [cursor=pointer]:
+                  - /url: "#billing"
+                  - generic [ref=f60e1506]: Billing
+              - paragraph [ref=f60e1514]:
+                - text: Autofix uses Cloud Agent credits and is billed at your plan rates. Cloud Agent billing follows your existing
+                - link "pricing plan" [ref=f60e1515] [cursor=pointer]:
+                  - /url: /docs/models-and-pricing
+                - text: .
+              - heading [level=2] [ref=f60e1516]:
+                - link "Copy link to mcp-support" [ref=f60e1517] [cursor=pointer]:
+                  - /url: "#mcp-support"
+                  - generic [ref=f60e1518]: MCP support
+              - paragraph [ref=f60e1526]:
+                - text: Bugbot is integrated with your
+                - link "MCP servers" [ref=f60e1527] [cursor=pointer]:
+                  - /url: /docs/mcp
+                - text: so your AI tools can interact with Bugbot directly. Use the MCP server to provide additional tools to guide Bugbot's review process.
+              - paragraph [ref=f60e1528]: "To get started:"
+              - list [ref=f60e1529]:
+                - listitem [ref=f60e1530]:
+                  - text: Follow the
+                  - link "MCP documentation" [ref=f60e1531] [cursor=pointer]:
+                    - /url: /docs/mcp
+                  - text: for MCP server setup instructions.
+                - listitem [ref=f60e1532]:
+                  - text: Add the tools to
+                  - link "Bugbot in Automations" [ref=f60e1533] [cursor=pointer]:
+                    - /url: https://cursor.com/automations/from-cursor/bugbot
+                  - text: .
+              - alert [ref=f60e1534]:
+                - paragraph [ref=f60e1538]: MCP support is available on Team and Enterprise plans only.
+              - heading [level=2] [ref=f60e1539]:
+                - link "Copy link to admin-configuration-api" [ref=f60e1540] [cursor=pointer]:
+                  - /url: "#admin-configuration-api"
+                  - generic [ref=f60e1541]: Admin Configuration API
+              - paragraph [ref=f60e1549]: Team admins can use the Bugbot Admin API to manage repositories and control which users can use Bugbot. Use it to automate repository management, enable Bugbot across multiple repositories, or integrate user provisioning with internal tools.
+              - heading [level=3] [ref=f60e1550]:
+                - link "Copy link to authentication" [ref=f60e1551] [cursor=pointer]:
+                  - /url: "#authentication"
+                  - generic [ref=f60e1552]: Authentication
+              - paragraph [ref=f60e1560]: "All endpoints require a team Admin API Key passed as a Bearer token:"
+              - generic [ref=f60e1563]:
+                - button [ref=f60e1564] [cursor=pointer]
+                - code [ref=f60e1570]:
+                  - generic [ref=f60e1571]: "Authorization: Bearer $API_KEY"
+              - paragraph [ref=f60e1572]: "To create an API key:"
+              - list [ref=f60e1573]:
+                - listitem [ref=f60e1574]:
+                  - text: Visit
+                  - link "API Keys in the Cursor dashboard" [ref=f60e1575] [cursor=pointer]:
+                    - /url: https://cursor.com/dashboard/api
+                - listitem [ref=f60e1576]:
+                  - text: Click
+                  - strong [ref=f60e1577]: New API Key
+                - listitem [ref=f60e1578]: Save the API key
+              - paragraph [ref=f60e1579]: All endpoints are rate-limited to 60 requests per minute per team.
+              - heading [level=3] [ref=f60e1580]:
+                - link "Copy link to enabling-or-disabling-repositories" [ref=f60e1581] [cursor=pointer]:
+                  - /url: "#enabling-or-disabling-repositories"
+                  - generic [ref=f60e1582]: Enabling or disabling repositories
+              - paragraph [ref=f60e1590]:
+                - text: Use the
+                - code [ref=f60e1591]: /bugbot/repo/update
+                - text: "endpoint to toggle Bugbot on or off for a repository:"
+              - generic [ref=f60e1594]:
+                - button [ref=f60e1595] [cursor=pointer]
+                - code [ref=f60e1601]:
+                  - generic [ref=f60e1602]: curl -X POST https://api.cursor.com/bugbot/repo/update \
+                  - generic [ref=f60e1603]: "-H \"Authorization: Bearer $API_KEY\" \\"
+                  - generic [ref=f60e1604]: "-H \"Content-Type: application/json\" \\"
+                  - generic [ref=f60e1605]: "-d '{"
+                  - generic [ref=f60e1606]: "\"repoUrl\": \"https://github.com/your-org/your-repo\","
+                  - generic [ref=f60e1607]: "\"enabled\": true,"
+                  - generic [ref=f60e1608]: "\"manualTriggerOnly\": false"
+                  - generic [ref=f60e1609]: "}'"
+              - paragraph [ref=f60e1610]:
+                - strong [ref=f60e1611]: "Parameters:"
+              - list [ref=f60e1612]:
+                - listitem [ref=f60e1613]:
+                  - code [ref=f60e1614]: repoUrl
+                  - text: "(string, required): The full URL of the repository"
+                - listitem [ref=f60e1615]:
+                  - code [ref=f60e1616]: enabled
+                  - text: "(boolean, required):"
+                  - code [ref=f60e1617]: "true"
+                  - text: to enable Bugbot,
+                  - code [ref=f60e1618]: "false"
+                  - text: to disable it
+                - listitem [ref=f60e1619]:
+                  - code [ref=f60e1620]: manualTriggerOnly
+                  - text: "(boolean, optional): When"
+                  - code [ref=f60e1621]: "true"
+                  - text: ", Bugbot won't run automatically on PR updates for this repository. Manual triggers, such as commenting"
+                  - code [ref=f60e1622]: cursor review
+                  - text: or
+                  - code [ref=f60e1623]: bugbot run
+                  - text: ", still work."
+              - alert [ref=f60e1624]:
+                - paragraph [ref=f60e1628]: The Automations UI may take a moment to reflect changes made through the API due to caching. The API response shows the current state in the database.
+              - paragraph [ref=f60e1629]:
+                - text: For Azure DevOps repositories, turn Bugbot on or off in
+                - link "Bugbot in Automations" [ref=f60e1630] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: . This endpoint returns
+                - code [ref=f60e1631]: "400"
+                - text: for repository URLs on
+                - code [ref=f60e1632]: dev.azure.com
+                - text: or
+                - code [ref=f60e1633]: "*.visualstudio.com"
+                - text: .
+              - heading [level=3] [ref=f60e1634]:
+                - link "Copy link to listing-repositories" [ref=f60e1635] [cursor=pointer]:
+                  - /url: "#listing-repositories"
+                  - generic [ref=f60e1636]: Listing repositories
+              - paragraph [ref=f60e1644]:
+                - text: Use the
+                - code [ref=f60e1645]: /bugbot/repos
+                - text: "endpoint to list all repositories with their Bugbot settings for your team:"
+              - generic [ref=f60e1648]:
+                - button [ref=f60e1649] [cursor=pointer]
+                - code [ref=f60e1655]:
+                  - generic [ref=f60e1656]: curl https://api.cursor.com/bugbot/repos \
+                  - generic [ref=f60e1657]: "-H \"Authorization: Bearer $API_KEY\""
+              - paragraph [ref=f60e1658]: The response includes each repository's enabled status, manual-only setting, and timestamps.
+              - heading [level=3] [ref=f60e1659]:
+                - link "Copy link to managing-user-access" [ref=f60e1660] [cursor=pointer]:
+                  - /url: "#managing-user-access"
+                  - generic [ref=f60e1661]: Managing user access
+              - paragraph [ref=f60e1669]:
+                - text: Use the
+                - code [ref=f60e1670]: /bugbot/user/update
+                - text: endpoint to control which GitHub, GitLab, or Bitbucket users can use your team's Bugbot licenses. Enterprises use this to integrate Bugbot provisioning with internal access-request tools.
+              - heading [level=4] [ref=f60e1671]:
+                - link "Copy link to prerequisites" [ref=f60e1672] [cursor=pointer]:
+                  - /url: "#prerequisites"
+                  - generic [ref=f60e1673]: Prerequisites
+              - paragraph [ref=f60e1681]:
+                - text: Before calling this endpoint, enable an allowlist or blocklist mode in your
+                - link "team Bugbot settings" [ref=f60e1682] [cursor=pointer]:
+                  - /url: https://cursor.com/automations/from-cursor/bugbot
+                - text: ":"
+              - list [ref=f60e1683]:
+                - listitem [ref=f60e1684]:
+                  - strong [ref=f60e1685]: Allowlist mode ("Only...")
+                  - text: ": Only users on the list can use Bugbot"
+                - listitem [ref=f60e1686]:
+                  - strong [ref=f60e1687]: Blocklist mode ("Everyone but...")
+                  - text: ": All users can use Bugbot except those on the list"
+              - paragraph [ref=f60e1688]: If neither mode is enabled, the API returns an error.
+              - heading [level=4] [ref=f60e1689]:
+                - link "Copy link to adding-or-removing-a-user" [ref=f60e1690] [cursor=pointer]:
+                  - /url: "#adding-or-removing-a-user"
+                  - generic [ref=f60e1691]: Adding or removing a user
+              - generic [ref=f60e1701]:
+                - button [ref=f60e1702] [cursor=pointer]
+                - code [ref=f60e1708]:
+                  - generic [ref=f60e1709]: curl -X POST https://api.cursor.com/bugbot/user/update \
+                  - generic [ref=f60e1710]: "-H \"Authorization: Bearer $API_KEY\" \\"
+                  - generic [ref=f60e1711]: "-H \"Content-Type: application/json\" \\"
+                  - generic [ref=f60e1712]: "-d '{"
+                  - generic [ref=f60e1713]: "\"username\": \"octocat\","
+                  - generic [ref=f60e1714]: "\"allow\": true"
+                  - generic [ref=f60e1715]: "}'"
+              - paragraph [ref=f60e1716]:
+                - strong [ref=f60e1717]: "Parameters:"
+              - list [ref=f60e1718]:
+                - listitem [ref=f60e1719]:
+                  - code [ref=f60e1720]: username
+                  - text: "(string, required): The GitHub, GitLab, or Bitbucket username (case-insensitive)"
+                - listitem [ref=f60e1721]:
+                  - code [ref=f60e1722]: allow
+                  - text: "(boolean, required): Whether to grant or revoke access"
+              - paragraph [ref=f60e1723]:
+                - text: How
+                - code [ref=f60e1724]: allow
+                - text: "behaves depends on the active mode:"
+              - table [ref=f60e1726]:
+                - rowgroup [ref=f60e1727]:
+                  - row [ref=f60e1728]:
+                    - columnheader "Mode" [ref=f60e1729]
+                    - 'columnheader "allow: true" [ref=f60e1730]':
+                      - code [ref=f60e1731]: "allow: true"
+                    - 'columnheader "allow: false" [ref=f60e1732]':
+                      - code [ref=f60e1733]: "allow: false"
+                - rowgroup [ref=f60e1734]:
+                  - row [ref=f60e1735]:
+                    - cell "Allowlist" [ref=f60e1736]
+                    - cell "Adds user to list (can use Bugbot)" [ref=f60e1737]
+                    - cell "Removes user from list (cannot use Bugbot)" [ref=f60e1738]
+                  - row [ref=f60e1739]:
+                    - cell "Blocklist" [ref=f60e1740]
+                    - cell "Removes user from blocklist (can use Bugbot)" [ref=f60e1741]
+                    - cell "Adds user to blocklist (cannot use Bugbot)" [ref=f60e1742]
+              - paragraph [ref=f60e1743]:
+                - strong [ref=f60e1744]: "Response:"
+              - generic [ref=f60e1747]:
+                - button [ref=f60e1748] [cursor=pointer]
+                - code [ref=f60e1754]:
+                  - generic [ref=f60e1755]: "{"
+                  - generic [ref=f60e1756]: "\"outcome\": \"success\","
+                  - generic [ref=f60e1757]: "\"message\": \"Updated team-level allowlist for @octocat\","
+                  - generic [ref=f60e1758]: "\"updatedTeamSettings\": true,"
+                  - generic [ref=f60e1759]: "\"updatedInstallations\": 0"
+                  - generic [ref=f60e1760]: "}"
+              - alert [ref=f60e1761]:
+                - paragraph [ref=f60e1765]: The allowlist is stored at the team level and applies across all GitHub, GitLab, and Bitbucket installations owned by that team. Usernames are normalized to lowercase.
+              - heading [level=4] [ref=f60e1766]:
+                - link "Copy link to example-provisioning-users-through-an-internal-tool" [ref=f60e1767] [cursor=pointer]:
+                  - /url: "#example-provisioning-users-through-an-internal-tool"
+                  - generic [ref=f60e1768]: "Example: provisioning users through an internal tool"
+              - paragraph [ref=f60e1776]: Connect this API to an internal access-request portal. When an employee requests Bugbot access, the portal calls the API to add them. When they leave or lose access, it calls the API to remove them.
+              - paragraph [ref=f60e1777]:
+                - strong [ref=f60e1778]: "Grant access:"
+              - generic [ref=f60e1781]:
+                - button [ref=f60e1782] [cursor=pointer]
+                - code [ref=f60e1788]:
+                  - generic [ref=f60e1789]: curl -X POST https://api.cursor.com/bugbot/user/update \
+                  - generic [ref=f60e1790]: "-H \"Authorization: Bearer $API_KEY\" \\"
+                  - generic [ref=f60e1791]: "-H \"Content-Type: application/json\" \\"
+                  - generic [ref=f60e1792]: "-d '{\"username\": \"employee-scm-username\", \"allow\": true}'"
+              - paragraph [ref=f60e1793]:
+                - strong [ref=f60e1794]: "Revoke access:"
+              - generic [ref=f60e1797]:
+                - button [ref=f60e1798] [cursor=pointer]
+                - code [ref=f60e1804]:
+                  - generic [ref=f60e1805]: curl -X POST https://api.cursor.com/bugbot/user/update \
+                  - generic [ref=f60e1806]: "-H \"Authorization: Bearer $API_KEY\" \\"
+                  - generic [ref=f60e1807]: "-H \"Content-Type: application/json\" \\"
+                  - generic [ref=f60e1808]: "-d '{\"username\": \"employee-scm-username\", \"allow\": false}'"
+              - heading [level=2] [ref=f60e1809]:
+                - link "Copy link to pricing" [ref=f60e1810] [cursor=pointer]:
+                  - /url: "#pricing"
+                  - generic [ref=f60e1811]: Pricing
+              - paragraph [ref=f60e1819]: Bugbot uses usage-based billing.
+              - alert [ref=f60e1820]:
+                - paragraph [ref=f60e1824]:
+                  - text: Bugbot pricing changed with the May 2026 pricing update. See the
+                  - link "announcement blog post" [ref=f60e1825] [cursor=pointer]:
+                    - /url: https://cursor.com/blog/may-2026-bugbot-changes
+                  - text: for background. If you're still on the old seat-based plan, see
+                  - link "legacy Bugbot pricing" [ref=f60e1826] [cursor=pointer]:
+                    - /url: /docs/bugbot/legacy-pricing
+                  - text: .
+              - heading [level=3] [ref=f60e1827]:
+                - link "Copy link to billing-1" [ref=f60e1828] [cursor=pointer]:
+                  - /url: "#billing-1"
+                  - generic [ref=f60e1829]: Billing
+              - paragraph [ref=f60e1837]: Each review is billed once, to the team or personal account that has Bugbot turned on for the repository. The team the PR author belongs to doesn't change who's billed.
+              - generic [ref=f60e1838]:
+                - tablist [ref=f60e1839]:
+                  - tab "Individuals" [ref=f60e1840] [cursor=pointer]
+                  - tab "Teams" [selected] [ref=f60e1841] [cursor=pointer]
+                - tabpanel "Teams" [ref=f60e1842]:
+                  - heading [level=3] [ref=f60e1843]:
+                    - link "Copy link to usage-based-billing" [ref=f60e1844] [cursor=pointer]:
+                      - /url: "#usage-based-billing"
+                      - generic [ref=f60e1845]: Usage-based billing
+                  - paragraph [ref=f60e1853]: "Bugbot Teams includes:"
+                  - list [ref=f60e1854]:
+                    - listitem [ref=f60e1855]: Code reviews on all PRs
+                    - listitem [ref=f60e1856]: Analytics and reporting
+                    - listitem [ref=f60e1857]: The ability to set the effort level Bugbot uses for reviews
+                    - listitem [ref=f60e1858]: Advanced rules and settings
+                  - paragraph [ref=f60e1859]:
+                    - text: Bugbot Teams bills from the team's prepaid credit, or from on-demand spend on a legacy Teams plan. See the
+                    - link "pricing page" [ref=f60e1860] [cursor=pointer]:
+                      - /url: https://cursor.com/pricing#bugbot
+                    - text: for current rates.
+                  - heading [level=3] [ref=f60e1861]:
+                    - link "Copy link to getting-started" [ref=f60e1862] [cursor=pointer]:
+                      - /url: "#getting-started"
+                      - generic [ref=f60e1863]: Getting started
+                  - paragraph [ref=f60e1871]: Subscribe through your team dashboard to enable billing.
+              - heading [level=2] [ref=f60e1872]:
+                - link "Copy link to troubleshooting" [ref=f60e1873] [cursor=pointer]:
+                  - /url: "#troubleshooting"
+                  - generic [ref=f60e1874]: Troubleshooting
+              - paragraph [ref=f60e1882]: "If Bugbot isn't working:"
+              - list [ref=f60e1883]:
+                - listitem [ref=f60e1884]:
+                  - strong [ref=f60e1885]: Enable verbose mode
+                  - text: by commenting
+                  - code [ref=f60e1886]: cursor review verbose=true
+                  - text: or
+                  - code [ref=f60e1887]: bugbot run verbose=true
+                  - text: for detailed logs, which Bugbot rules loaded, and a request ID
+                - listitem [ref=f60e1888]:
+                  - strong [ref=f60e1889]: Check permissions
+                  - text: to verify Bugbot has repository access
+                - listitem [ref=f60e1890]:
+                  - strong [ref=f60e1891]: Verify installation
+                  - text: to confirm your repository provider integration is installed and enabled
+              - paragraph [ref=f60e1892]: Include the request ID from verbose mode when reporting issues.
+              - heading [level=2] [ref=f60e1893]:
+                - link "Copy link to faq" [ref=f60e1894] [cursor=pointer]:
+                  - /url: "#faq"
+                  - generic [ref=f60e1895]: FAQ
+              - generic [ref=f60e1903]:
+                - heading [level=3] [ref=f60e1905]:
+                  - button "Does Bugbot read PR comments?" [ref=f60e1906] [cursor=pointer]
+                - heading [level=3] [ref=f60e1910]:
+                  - button "How do I see which rules Bugbot used?" [ref=f60e1911] [cursor=pointer]
+                - heading [level=3] [ref=f60e1915]:
+                  - button "Is Bugbot privacy-mode compliant?" [ref=f60e1916] [cursor=pointer]
+                - heading [level=3] [ref=f60e1920]:
+                  - button "Does Bugbot read credential files?" [ref=f60e1921] [cursor=pointer]
+                - heading [level=3] [ref=f60e1925]:
+                  - button "What happens when I use all included Bugbot usage?" [ref=f60e1926] [cursor=pointer]
+                - heading [level=3] [ref=f60e1930]:
+                  - button "How do I give Bugbot access to a self-hosted source control instance?" [ref=f60e1931] [cursor=pointer]
+              - heading [level=2] [ref=f60e1934]:
+                - link "Copy link to related" [ref=f60e1935] [cursor=pointer]:
+                  - /url: "#related"
+                  - generic [ref=f60e1936]: Related
+              - list [ref=f60e1944]:
+                - listitem [ref=f60e1945]:
+                  - link "Bugbot help" [ref=f60e1946] [cursor=pointer]:
+                    - /url: /help/ai-features/bugbot
+          - navigation [ref=f60e1949]:
+            - generic [ref=f60e1950]:
+              - list [ref=f60e1951]:
+                - listitem [ref=f60e1952]:
+                  - link "How it works" [ref=f60e1953] [cursor=pointer]:
+                    - /url: "#how-it-works"
+                - listitem [ref=f60e1954]:
+                  - link "Limits" [ref=f60e1955] [cursor=pointer]:
+                    - /url: "#limits"
+                - listitem [ref=f60e1956]:
+                  - link "Setup" [ref=f60e1957] [cursor=pointer]:
+                    - /url: "#setup"
+                - listitem [ref=f60e1958]:
+                  - link "CI check statuses" [ref=f60e1959] [cursor=pointer]:
+                    - /url: "#ci-check-statuses"
+                - listitem [ref=f60e1960]:
+                  - link "Configuration" [ref=f60e1961] [cursor=pointer]:
+                    - /url: "#configuration"
+                - listitem [ref=f60e1962]:
+                  - link "Repository config file" [ref=f60e1963] [cursor=pointer]:
+                    - /url: "#repository-config-file"
+                - listitem [ref=f60e1964]:
+                  - link "Analytics" [ref=f60e1965] [cursor=pointer]:
+                    - /url: "#analytics"
+                - listitem [ref=f60e1966]:
+                  - link "API" [ref=f60e1967] [cursor=pointer]:
+                    - /url: "#api"
+                - listitem [ref=f60e1968]:
+                  - link "Trigger a review" [ref=f60e1969] [cursor=pointer]:
+                    - /url: "#trigger-a-review"
+                - listitem [ref=f60e1970]:
+                  - link "Request Body" [ref=f60e1971] [cursor=pointer]:
+                    - /url: "#request-body"
+                - listitem [ref=f60e1972]:
+                  - link "Review analytics" [ref=f60e1973] [cursor=pointer]:
+                    - /url: "#review-analytics"
+                - listitem [ref=f60e1974]:
+                  - link "Query Parameters" [ref=f60e1975] [cursor=pointer]:
+                    - /url: "#query-parameters"
+                - listitem [ref=f60e1976]:
+                  - link "Trigger and retrieve a review" [ref=f60e1977] [cursor=pointer]:
+                    - /url: "#trigger-and-retrieve-a-review"
+                - listitem [ref=f60e1978]:
+                  - link "Incremental reviews" [ref=f60e1979] [cursor=pointer]:
+                    - /url: "#incremental-reviews"
+                - listitem [ref=f60e1980]:
+                  - link "PR summaries" [ref=f60e1981] [cursor=pointer]:
+                    - /url: "#pr-summaries"
+                - listitem [ref=f60e1982]:
+                  - link "Effort Levels" [ref=f60e1983] [cursor=pointer]:
+                    - /url: "#effort-levels"
+                - listitem [ref=f60e1984]:
+                  - link "Rules" [ref=f60e1985] [cursor=pointer]:
+                    - /url: "#rules"
+                - listitem [ref=f60e1986]:
+                  - link "Team rules" [ref=f60e1987] [cursor=pointer]:
+                    - /url: "#team-rules"
+                - listitem [ref=f60e1988]:
+                  - link "Rule limits" [ref=f60e1989] [cursor=pointer]:
+                    - /url: "#rule-limits"
+                - listitem [ref=f60e1990]:
+                  - link "See which rules a review used" [ref=f60e1991] [cursor=pointer]:
+                    - /url: "#see-which-rules-a-review-used"
+                - listitem [ref=f60e1992]:
+                  - link "Repository rules" [ref=f60e1993] [cursor=pointer]:
+                    - /url: "#repository-rules"
+                - listitem [ref=f60e1994]:
+                  - link "Project rules" [ref=f60e1995] [cursor=pointer]:
+                    - /url: "#project-rules"
+                - listitem [ref=f60e1996]:
+                  - link "Learned rules" [ref=f60e1997] [cursor=pointer]:
+                    - /url: "#learned-rules"
+                - listitem [ref=f60e1998]:
+                  - link "Manual rules" [ref=f60e1999] [cursor=pointer]:
+                    - /url: "#manual-rules"
+                - listitem [ref=f60e2000]:
+                  - link "Rule analytics" [ref=f60e2001] [cursor=pointer]:
+                    - /url: "#rule-analytics"
+                - listitem [ref=f60e2002]:
+                  - link "Examples" [ref=f60e2003] [cursor=pointer]:
+                    - /url: "#examples"
+                - listitem [ref=f60e2004]:
+                  - link "Run in your agent" [ref=f60e2005] [cursor=pointer]:
+                    - /url: "#run-in-your-agent"
+                - listitem [ref=f60e2006]:
+                  - link "Sync with your pull request" [ref=f60e2007] [cursor=pointer]:
+                    - /url: "#sync-with-your-pull-request"
+                - listitem [ref=f60e2008]:
+                  - link "Autofix" [ref=f60e2009] [cursor=pointer]:
+                    - /url: "#autofix"
+                - listitem [ref=f60e2010]:
+                  - link "How it works" [ref=f60e2011] [cursor=pointer]:
+                    - /url: "#how-it-works-1"
+                - listitem [ref=f60e2012]:
+                  - link "Configuration" [ref=f60e2013] [cursor=pointer]:
+                    - /url: "#configuration-1"
+                - listitem [ref=f60e2014]:
+                  - link "Requirements" [ref=f60e2015] [cursor=pointer]:
+                    - /url: "#requirements"
+                - listitem [ref=f60e2016]:
+                  - link "Billing" [ref=f60e2017] [cursor=pointer]:
+                    - /url: "#billing"
+                - listitem [ref=f60e2018]:
+                  - link "MCP support" [ref=f60e2019] [cursor=pointer]:
+                    - /url: "#mcp-support"
+                - listitem [ref=f60e2020]:
+                  - link "Admin Configuration API" [ref=f60e2021] [cursor=pointer]:
+                    - /url: "#admin-configuration-api"
+                - listitem [ref=f60e2022]:
+                  - link "Authentication" [ref=f60e2023] [cursor=pointer]:
+                    - /url: "#authentication"
+                - listitem [ref=f60e2024]:
+                  - link "Enabling or disabling repositories" [ref=f60e2025] [cursor=pointer]:
+                    - /url: "#enabling-or-disabling-repositories"
+                - listitem [ref=f60e2026]:
+                  - link "Listing repositories" [ref=f60e2027] [cursor=pointer]:
+                    - /url: "#listing-repositories"
+                - listitem [ref=f60e2028]:
+                  - link "Managing user access" [ref=f60e2029] [cursor=pointer]:
+                    - /url: "#managing-user-access"
+                - listitem [ref=f60e2030]:
+                  - link "Prerequisites" [ref=f60e2031] [cursor=pointer]:
+                    - /url: "#prerequisites"
+                - listitem [ref=f60e2032]:
+                  - link "Adding or removing a user" [ref=f60e2033] [cursor=pointer]:
+                    - /url: "#adding-or-removing-a-user"
+                - listitem [ref=f60e2034]:
+                  - 'link "Example: provisioning users through an internal tool" [ref=f60e2035] [cursor=pointer]':
+                    - /url: "#example-provisioning-users-through-an-internal-tool"
+                - listitem [ref=f60e2036]:
+                  - link "Pricing" [ref=f60e2037] [cursor=pointer]:
+                    - /url: "#pricing"
+                - listitem [ref=f60e2038]:
+                  - link "Billing" [ref=f60e2039] [cursor=pointer]:
+                    - /url: "#billing-1"
+                - listitem [ref=f60e2040]:
+                  - link "Troubleshooting" [ref=f60e2041] [cursor=pointer]:
+                    - /url: "#troubleshooting"
+                - listitem [ref=f60e2042]:
+                  - link "FAQ" [ref=f60e2043] [cursor=pointer]:
+                    - /url: "#faq"
+                - listitem [ref=f60e2044]:
+                  - link "Related" [ref=f60e2045] [cursor=pointer]:
+                    - /url: "#related"
+              - button "Copy page" [ref=f60e2049] [cursor=pointer]
+  - alert [ref=f60e2052]

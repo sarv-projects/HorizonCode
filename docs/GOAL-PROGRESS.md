@@ -1,10 +1,10 @@
 # Goal progress — HorizonCode prototype honesty
 
-> **Overall goal: NOT COMPLETE** (2026-11-20). Working tree through ruling **739**; `bash ops/gates.sh` **8/8** re-verified 2026-11-19 after **648**; the prototype trust spine and P0 done bars remain open. Gates-green ≠ release.
+> **Overall goal: NOT COMPLETE** (2026-11-20). Working tree through ruling **744**; `bash ops/gates.sh` **8/8** re-verified 2026-11-20 after **743**; the prototype trust spine and P0 done bars remain open. Gates-green ≠ release.
 >
 > **Next agent:** [`../AGENTS.md`](../AGENTS.md) → [`FULL-BACKLOG-2026-11-13.md`](FULL-BACKLOG-2026-11-13.md). **LICENSE deferred** — [`LICENSE-STATUS.md`](LICENSE-STATUS.md).
 >
-> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **739**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`. Critique verification: [`audit/architecture-critique-verification-2026-11-19.md`](audit/architecture-critique-verification-2026-11-19.md). Deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md). Competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md).
+> Authoritative levels: `docs/28-implementation-status.md` §3 (through ruling **744**). Wave matrix: `docs/MASTER-BACKLOG-ALL.md`. Build/run: `docs/33-handoff.md`. Critique verification: [`audit/architecture-critique-verification-2026-11-19.md`](audit/architecture-critique-verification-2026-11-19.md). Deep audit: [`audit/deep-audit-2026-11-20.md`](audit/deep-audit-2026-11-20.md). Competitive viability: [`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md).
 >
 > **Stop-of-day inventory:** [`STOP-OF-DAY-2026-11-20.md`](STOP-OF-DAY-2026-11-20.md).
 >
@@ -147,6 +147,11 @@
 - **737:** Competitive viability vs Claude Code / Cursor Agent CLI / OpenCode / Codex CLI — niche trust prototype, not daily-driver parity ([`audit/competitive-viability-audit-2026-11-20.md`](audit/competitive-viability-audit-2026-11-20.md)).
 - **738:** Honesty follow-up — fix mis-cites (**730→732**, **719→720**, web_search **723**); dedupe GOAL-PROGRESS; steal-list spend-grant alignment; F-4 PARTIAL; LICENSE NOTICE §6.
 - **739:** Docs-consistency P1/P2 closure — §3 OOO/missing-number note; ruling **9b**; OS-sandbox historical honesty; steal C-12/**704**/H-7/**549+**/§7 catch-up; FULL count footnote; consolidated deep-audit; **734**/**702** residual honesty.
+- **740:** Authority response intent preservation + kernel transport lifecycle + socket test stabilization — loop `mintHumanApprovalLease` bypass eliminated; `disconnectTransport` awaits child process exit; `socket_serve` timeout/settle loop expanded; Rust 301 tests all pass.
+- **741:** G1 wire protocol projection parity across tools/runtime + interactive TUI PTY validation + all-8-gates clean pass — permission checks across `write`/`edit`/`apply-patch`/`undo` and loop projected through `guardEffectivelyAllows`; `createRuntime` config HOME dynamically resolved; `pty.test.ts` 10/10 in real pseudo-terminal; `ops/gates.sh` 8/8 gates clean green.
+- **744:** Interactive TTY Model/Provider Picker (`/model`) + Keyboard Command Palette (`/commands` / `/palette`) + Prefix Autocompletion + Prompt Queue Combiner + Autonomous Dual-Agent Goal Driver (`/goal`) — Keyboard-driven model & provider selector modal with thinking toggle; searchable command palette modal; slash command prefix auto-expansion; queued message combiner (`join_texts` with `\n\n`) preventing turn-thrashing; autonomous multi-round goal loop with `<goal_round>` re-grounding and Three-Layer Termination Gate evaluation.
+- **743:** Three-Layer Termination Gate (Lecture 09) + First-Time Auth Wizard & `saveUserEnvVar` (0600) + R170 settle expansion (`fs.rename`, `fs.batch`, `shell.exec`) — Prevents premature victory when files mutated without verification; First-time auth wizard for OpenAI, Anthropic, OpenRouter, Groq, Gemini, NVIDIA, and Ollama; safe 0600 env file management; R170 settle barrier covers renames, batch ops, and explicit shell executions.
+- **742:** Smart key provider auto-detection + interactive `/model` catalog selector & fuzzy resolver + actionable auth error diagnostics — `gsk_` Groq key detection prevents erroneous OpenAI 401s when valid `NVIDIA_API_KEY` is present; interactive `/model` lists provider models & usage tips; fuzzy model matching (`minimax` -> `minimaxai/minimax-m3.1-flash`) & typo suggestions; sandbox exec canary child disables supervisor lease collision.
 - **662:** Egress Allow mints one-use lease (H-4 / G1).
 - **663:** Mutating memory/handoff/debug exclusive; explore/review/plan/never agent fan-out shared.
 - **664:** CDP/artifact/h2h/acp/viability hardening from audit 1.7.

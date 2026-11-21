@@ -41,6 +41,7 @@ import {
 } from "../core/workspace-binding";
 import { checkpointDirtyPathBeforeEdit, formatLintFixCommitSuffix } from "../core/git-dirty-checkpoint";
 import { realpathish } from "../core/paths";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 import { isRefused, writeAtomic } from "./atomic-write";
 import { recordChangeGuarded } from "./change-journal";
 import { isBinary, relPath, resolveRealTarget } from "./helpers";
@@ -164,7 +165,7 @@ export const writeTool: Tool = {
       if (decision.decision === "deny") {
         return fail(`denied by policy${decision.reason ? `: ${decision.reason}` : ""}`);
       }
-      if (decision.decision === "ask") {
+      if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
         const approved = await ctx.approve(
           {
             title: `Write ${rel}`,

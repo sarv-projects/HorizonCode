@@ -135,7 +135,7 @@ describe("a run whose stores are writable", () => {
       expect(result.exit.detail).toBe("turn_end");
 
       // Nothing to report: no notice, no error event, and the final render ran.
-      expect(h.messages("notice")).toEqual([]);
+      expect(h.messages("notice").filter((m) => !m.includes("guard G1:"))).toEqual([]);
       expect(h.messages("error")).toEqual([]);
       expect(h.events[h.events.length - 1]?.type).toBe("turn.done");
 

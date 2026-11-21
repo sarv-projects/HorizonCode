@@ -1,0 +1,806 @@
+- generic [ref=f14e3]:
+  - link "Skip to main content" [ref=f14e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f14e5]:
+    - banner [ref=f14e6]:
+      - generic [ref=f14e7]:
+        - generic [ref=f14e8]:
+          - link "Cursor Home" [ref=f14e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=f14e10]
+          - navigation [ref=f14e13]:
+            - link "Docs" [ref=f14e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=f14e16] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=f14e17] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=f14e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=f14e22] [cursor=pointer]:
+          - generic [ref=f14e26]: Search docs...
+          - generic [ref=f14e27]: ⌘K
+    - generic [ref=f14e32]:
+      - heading "Command Palette" [level=2] [ref=f14e33]
+      - paragraph [ref=f14e34]: Search for a command to run...
+  - generic [ref=f14e35]:
+    - generic [ref=f14e37]:
+      - button [ref=f14e38]:
+        - button "Toggle Docs Sidebar" [ref=f14e40] [cursor=pointer]
+      - generic [ref=f14e44]:
+        - generic [ref=f14e45]:
+          - heading "Get Started" [level=2] [ref=f14e46]
+          - generic [ref=f14e47]:
+            - link "Welcome" [ref=f14e48] [cursor=pointer]:
+              - /url: /docs
+            - link "Quickstart" [ref=f14e51] [cursor=pointer]:
+              - /url: /docs/get-started/quickstart
+            - button "Models & Pricing" [ref=f14e54] [cursor=pointer]
+            - link "Changelog" [ref=f14e60] [cursor=pointer]:
+              - /url: https://cursor.com/changelog
+            - link "Release Notes" [ref=f14e63] [cursor=pointer]:
+              - /url: /docs/release-notes
+        - generic [ref=f14e66]:
+          - heading "Agent" [level=2] [ref=f14e67]
+          - generic [ref=f14e68]:
+            - link "Overview" [ref=f14e69] [cursor=pointer]:
+              - /url: /docs/agent/overview
+            - link "Agents Window" [ref=f14e72] [cursor=pointer]:
+              - /url: /docs/agent/agents-window
+            - link "Projects" [ref=f14e75] [cursor=pointer]:
+              - /url: /docs/agent/projects
+            - link "Agent Review" [ref=f14e78] [cursor=pointer]:
+              - /url: /docs/agent/agent-review
+            - link "Planning" [ref=f14e81] [cursor=pointer]:
+              - /url: /docs/agent/plan-mode
+            - link "Prompting" [ref=f14e84] [cursor=pointer]:
+              - /url: /docs/agent/prompting
+            - link "Voice Chat" [ref=f14e87] [cursor=pointer]:
+              - /url: /docs/agent/voice-chat
+            - link "Debugging" [ref=f14e90] [cursor=pointer]:
+              - /url: /docs/agent/debug-mode
+            - link "Design Mode" [ref=f14e93] [cursor=pointer]:
+              - /url: /docs/agent/design-mode
+            - button "Tools" [ref=f14e96] [cursor=pointer]
+            - button "Security" [ref=f14e102] [cursor=pointer]
+        - generic [ref=f14e108]:
+          - heading "Customize" [level=2] [ref=f14e109]
+          - generic [ref=f14e110]:
+            - link "Overview" [ref=f14e111] [cursor=pointer]:
+              - /url: /docs/customize-cursor
+            - link "Plugins" [ref=f14e114] [cursor=pointer]:
+              - /url: /docs/plugins
+            - link "Rules" [ref=f14e117] [cursor=pointer]:
+              - /url: /docs/rules
+            - link "Skills" [ref=f14e120] [cursor=pointer]:
+              - /url: /docs/skills
+            - link "Subagents" [ref=f14e123] [cursor=pointer]:
+              - /url: /docs/subagents
+            - link "Hooks" [ref=f14e126] [cursor=pointer]:
+              - /url: /docs/hooks
+            - link "MCP" [ref=f14e129] [cursor=pointer]:
+              - /url: /docs/mcp
+        - generic [ref=f14e132]:
+          - heading "Cloud Agents" [level=2] [ref=f14e133]
+          - generic [ref=f14e134]:
+            - link "Overview" [ref=f14e135] [cursor=pointer]:
+              - /url: /docs/cloud-agent
+            - link "Setup" [ref=f14e138] [cursor=pointer]:
+              - /url: /docs/cloud-agent/setup
+            - link "Builds" [ref=f14e141] [cursor=pointer]:
+              - /url: /docs/cloud-agent/builds
+            - link "Apps" [ref=f14e144] [cursor=pointer]:
+              - /url: /docs/cloud-agent/apps
+            - button "Capabilities" [ref=f14e147] [cursor=pointer]
+            - link "Best Practices" [ref=f14e153] [cursor=pointer]:
+              - /url: /docs/cloud-agent/best-practices
+            - link "Choose Where Cloud Agents Run" [ref=f14e156] [cursor=pointer]:
+              - /url: /docs/cloud-agent/self-hosted/choose-runtime
+            - link "Automations" [ref=f14e159] [cursor=pointer]:
+              - /url: /docs/cloud-agent/automations
+            - link "Bugbot" [ref=f14e162] [cursor=pointer]:
+              - /url: /docs/bugbot
+            - link "Security Review" [ref=f14e165] [cursor=pointer]:
+              - /url: /docs/security-review
+            - link "Vulnerability Remediation" [ref=f14e168] [cursor=pointer]:
+              - /url: /docs/vulnerability-remediation
+            - link "PR Routing & Approval" [ref=f14e171] [cursor=pointer]:
+              - /url: /docs/approval-agents
+            - link "Rollouts" [ref=f14e174] [cursor=pointer]:
+              - /url: /docs/rollouts
+            - link "Mobile" [ref=f14e177] [cursor=pointer]:
+              - /url: /docs/cloud-agent/mobile
+            - button "Security" [ref=f14e180] [cursor=pointer]
+            - button "Self-Hosted Machines" [ref=f14e186] [cursor=pointer]
+            - link "Settings" [ref=f14e192] [cursor=pointer]:
+              - /url: /docs/cloud-agent/settings
+            - link "API" [ref=f14e195] [cursor=pointer]:
+              - /url: /docs/cloud-agent/api/endpoints
+        - generic [ref=f14e198]:
+          - heading "Origin" [level=2] [ref=f14e199]
+          - generic [ref=f14e200]:
+            - link "Overview" [ref=f14e201] [cursor=pointer]:
+              - /url: /docs/origin
+            - button "CLI" [ref=f14e204] [cursor=pointer]
+            - link "Create a repository" [ref=f14e210] [cursor=pointer]:
+              - /url: /docs/origin/create-repository
+            - link "Mirror GitHub" [ref=f14e213] [cursor=pointer]:
+              - /url: /docs/origin/mirror-github
+            - link "Clone, Push & Pull" [ref=f14e216] [cursor=pointer]:
+              - /url: /docs/origin/git
+            - link "CloneKit in CI" [ref=f14e219] [cursor=pointer]:
+              - /url: /docs/origin/clonekit-ci
+            - link "Pull requests" [ref=f14e222] [cursor=pointer]:
+              - /url: /docs/origin/pull-requests
+            - link "Code Tours" [ref=f14e225] [cursor=pointer]:
+              - /url: /docs/origin/code-tours
+            - link "Browse & Search" [ref=f14e228] [cursor=pointer]:
+              - /url: /docs/origin/browse
+            - link "Agents and Automations" [ref=f14e231] [cursor=pointer]:
+              - /url: /docs/origin/agents
+            - button "Apps" [ref=f14e234] [cursor=pointer]
+            - link "Settings" [ref=f14e240] [cursor=pointer]:
+              - /url: /docs/origin/settings
+        - generic [ref=f14e243]:
+          - heading "Integrations" [level=2] [ref=f14e244]
+          - generic [ref=f14e245]:
+            - link "Slack" [ref=f14e246] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+            - link "Microsoft Teams" [ref=f14e249] [cursor=pointer]:
+              - /url: /docs/integrations/microsoft-teams
+            - link "Jira" [ref=f14e252] [cursor=pointer]:
+              - /url: /docs/integrations/jira
+            - link "Linear" [ref=f14e255] [cursor=pointer]:
+              - /url: /docs/integrations/linear
+            - link "Notion" [ref=f14e258] [cursor=pointer]:
+              - /url: /docs/integrations/notion
+            - link "GitHub" [ref=f14e261] [cursor=pointer]:
+              - /url: /docs/integrations/github
+            - link "GitLab" [ref=f14e264] [cursor=pointer]:
+              - /url: /docs/integrations/gitlab
+            - link "Azure DevOps" [ref=f14e267] [cursor=pointer]:
+              - /url: /docs/integrations/azure-devops
+            - link "Bitbucket" [ref=f14e270] [cursor=pointer]:
+              - /url: /docs/integrations/bitbucket
+            - link "JetBrains" [ref=f14e273] [cursor=pointer]:
+              - /url: /docs/integrations/jetbrains
+            - link "Xcode" [ref=f14e276] [cursor=pointer]:
+              - /url: /docs/integrations/xcode
+            - link "Tailscale" [ref=f14e279] [cursor=pointer]:
+              - /url: /docs/integrations/tailscale
+            - link "Deeplinks" [ref=f14e282] [cursor=pointer]:
+              - /url: /docs/reference/deeplinks
+        - generic [ref=f14e285]:
+          - heading "SDK" [level=2] [ref=f14e286]
+          - generic [ref=f14e287]:
+            - link "TypeScript" [ref=f14e288] [cursor=pointer]:
+              - /url: /docs/sdk/typescript
+            - link "Python" [ref=f14e291] [cursor=pointer]:
+              - /url: /docs/sdk/python
+            - link "Bridge" [ref=f14e294] [cursor=pointer]:
+              - /url: /docs/sdk/bridge
+            - link "Changelog" [ref=f14e297] [cursor=pointer]:
+              - /url: /docs/release-notes/sdk
+        - generic [ref=f14e300]:
+          - heading "Agent SDK" [level=2] [ref=f14e301]
+          - generic [ref=f14e302]:
+            - button "Getting started" [ref=f14e303] [cursor=pointer]
+            - button "Integrations" [ref=f14e309] [cursor=pointer]
+            - button "Extensions" [ref=f14e315] [cursor=pointer]
+            - button "Guides" [ref=f14e321] [cursor=pointer]
+            - button "Templates" [ref=f14e327] [cursor=pointer]
+            - button "Reference" [ref=f14e333] [cursor=pointer]
+        - generic [ref=f14e339]:
+          - heading "CLI" [level=2] [ref=f14e340]
+          - generic [ref=f14e341]:
+            - link "Overview" [ref=f14e342] [cursor=pointer]:
+              - /url: /docs/cli/overview
+            - link "Installation" [ref=f14e345] [cursor=pointer]:
+              - /url: /docs/cli/installation
+            - link "Capabilities" [ref=f14e348] [cursor=pointer]:
+              - /url: /docs/cli/using
+            - link "Changelog" [ref=f14e351] [cursor=pointer]:
+              - /url: /docs/cli/changelog
+            - link "Shell Mode" [ref=f14e354] [cursor=pointer]:
+              - /url: /docs/cli/shell-mode
+            - link "ACP" [ref=f14e357] [cursor=pointer]:
+              - /url: /docs/cli/acp
+            - link "Headless / CI" [ref=f14e360] [cursor=pointer]:
+              - /url: /docs/cli/headless
+            - button "Reference" [ref=f14e363] [cursor=pointer]
+        - generic [ref=f14e369]:
+          - heading "Teams & Enterprise" [level=2] [ref=f14e370]
+          - generic [ref=f14e371]:
+            - button "Teams" [ref=f14e372] [cursor=pointer]
+            - button "Enterprise" [ref=f14e378] [cursor=pointer]
+    - main [ref=f14e384]:
+      - generic [ref=f14e387]:
+        - generic [ref=f14e388]:
+          - generic [ref=f14e389]: Customize
+          - generic [ref=f14e391]:
+            - heading "Rules" [level=1] [ref=f14e392]
+            - paragraph [ref=f14e393]: Rules provide system-level instructions to Agent. They bundle prompts, scripts, and more together, making it easy to manage and share workflows across your team.
+            - paragraph [ref=f14e394]: "Cursor supports four types of rules:"
+            - generic [ref=f14e395]:
+              - generic [ref=f14e396]:
+                - paragraph [ref=f14e403]: Project Rules
+                - paragraph [ref=f14e405]:
+                  - text: Stored in
+                  - code [ref=f14e406]: .cursor/rules
+                  - text: ", version-controlled and scoped to your codebase."
+              - generic [ref=f14e407]:
+                - paragraph [ref=f14e412]: User Rules
+                - paragraph [ref=f14e414]: Global to your Cursor environment. Used by Agent (Chat).
+              - generic [ref=f14e415]:
+                - paragraph [ref=f14e422]: Team Rules
+                - paragraph [ref=f14e424]:
+                  - text: Team-wide rules managed from the dashboard. Available on Team and
+                  - link "Enterprise" [ref=f14e425] [cursor=pointer]:
+                    - /url: /docs/enterprise
+                  - text: plans.
+              - generic [ref=f14e426]:
+                - paragraph [ref=f14e431]: AGENTS.md
+                - paragraph [ref=f14e433]:
+                  - text: Agent instructions in markdown format. Simple alternative to
+                  - code [ref=f14e434]: .cursor/rules
+                  - text: .
+            - heading [level=2] [ref=f14e435]:
+              - link "Copy link to how-rules-work" [ref=f14e436] [cursor=pointer]:
+                - /url: "#how-rules-work"
+                - generic [ref=f14e437]: How rules work
+            - paragraph [ref=f14e445]: Large language models don't retain memory between completions. Rules provide persistent, reusable context at the prompt level.
+            - paragraph [ref=f14e446]: When applied, rule contents are included at the start of the model context. This gives the AI consistent guidance for generating code, interpreting edits, or helping with workflows.
+            - heading [level=2] [ref=f14e447]:
+              - link "Copy link to project-rules" [ref=f14e448] [cursor=pointer]:
+                - /url: "#project-rules"
+                - generic [ref=f14e449]: Project rules
+            - paragraph [ref=f14e457]:
+              - text: Project rules live in
+              - code [ref=f14e458]: .cursor/rules
+              - text: as
+              - code [ref=f14e459]: .mdc
+              - text: files and are version-controlled. They are scoped using path patterns, invoked manually, or included based on relevance.
+            - paragraph [ref=f14e460]: "Use project rules to:"
+            - list [ref=f14e461]:
+              - listitem [ref=f14e462]: Encode domain-specific knowledge about your codebase
+              - listitem [ref=f14e463]: Automate project-specific workflows or templates
+              - listitem [ref=f14e464]: Standardize style or architecture decisions
+            - heading [level=3] [ref=f14e465]:
+              - link "Copy link to rule-file-structure" [ref=f14e466] [cursor=pointer]:
+                - /url: "#rule-file-structure"
+                - generic [ref=f14e467]: Rule file structure
+            - paragraph [ref=f14e475]:
+              - text: Each rule is an
+              - code [ref=f14e476]: .mdc
+              - text: file that you can name anything you want. Project rules must use the
+              - code [ref=f14e477]: .mdc
+              - text: extension. A plain
+              - code [ref=f14e478]: .md
+              - text: file in
+              - code [ref=f14e479]: .cursor/rules
+              - text: is ignored by the rules system because it has no frontmatter to specify
+              - code [ref=f14e480]: description
+              - text: ","
+              - code [ref=f14e481]: globs
+              - text: ", and"
+              - code [ref=f14e482]: alwaysApply
+              - text: . If you prefer plain markdown, use
+              - link "AGENTS.md" [ref=f14e483] [cursor=pointer]:
+                - /url: "#agentsmd"
+              - text: instead.
+            - generic [ref=f14e486]:
+              - button [ref=f14e487] [cursor=pointer]
+              - code [ref=f14e493]:
+                - generic [ref=f14e494]: .cursor/rules/
+                - generic [ref=f14e495]: "react-patterns.mdc # Recognized as a project rule"
+                - generic [ref=f14e496]: "api-guidelines.md # Ignored (wrong extension)"
+                - generic [ref=f14e497]: "frontend/ # Organize rules in folders"
+                - generic [ref=f14e498]: components.mdc
+            - heading [level=3] [ref=f14e499]:
+              - link "Copy link to rule-anatomy" [ref=f14e500] [cursor=pointer]:
+                - /url: "#rule-anatomy"
+                - generic [ref=f14e501]: Rule anatomy
+            - paragraph [ref=f14e509]:
+              - text: Each rule is a markdown file with frontmatter metadata and content. Control how rules are applied from the type dropdown which changes properties
+              - code [ref=f14e510]: description
+              - text: ","
+              - code [ref=f14e511]: globs
+              - text: ","
+              - code [ref=f14e512]: alwaysApply
+              - text: .
+            - table [ref=f14e514]:
+              - rowgroup [ref=f14e515]:
+                - row [ref=f14e516]:
+                  - columnheader "Rule Type" [ref=f14e517]
+                  - columnheader "Description" [ref=f14e518]
+              - rowgroup [ref=f14e519]:
+                - row [ref=f14e520]:
+                  - cell [ref=f14e521]:
+                    - code [ref=f14e523]: Always Apply
+                  - cell "Apply to every chat session" [ref=f14e524]
+                - row [ref=f14e525]:
+                  - cell [ref=f14e526]:
+                    - code [ref=f14e528]: Apply Intelligently
+                  - cell "When Agent decides it's relevant based on description" [ref=f14e529]
+                - row [ref=f14e530]:
+                  - cell [ref=f14e531]:
+                    - code [ref=f14e533]: Apply to Specific Files
+                  - cell "When file matches a specified pattern" [ref=f14e534]
+                - row [ref=f14e535]:
+                  - cell [ref=f14e536]:
+                    - code [ref=f14e538]: Apply Manually
+                  - cell [ref=f14e539]:
+                    - text: When @-mentioned in chat (e.g.,
+                    - code [ref=f14e540]: "@my-rule"
+                    - text: )
+            - paragraph [ref=f14e541]: "Under the hood, the three frontmatter fields interact to determine when a rule is included:"
+            - table [ref=f14e543]:
+              - rowgroup [ref=f14e544]:
+                - row [ref=f14e545]:
+                  - columnheader "alwaysApply" [ref=f14e546]:
+                    - code [ref=f14e547]: alwaysApply
+                  - columnheader "description" [ref=f14e548]:
+                    - code [ref=f14e549]: description
+                  - columnheader "globs" [ref=f14e550]:
+                    - code [ref=f14e551]: globs
+                  - columnheader "Behavior" [ref=f14e552]
+              - rowgroup [ref=f14e553]:
+                - row [ref=f14e554]:
+                  - cell [ref=f14e555]:
+                    - code [ref=f14e556]: "true"
+                  - cell "—" [ref=f14e557]
+                  - cell "—" [ref=f14e558]
+                  - cell "Always included. Globs and description are ignored." [ref=f14e559]
+                - row [ref=f14e560]:
+                  - cell [ref=f14e561]:
+                    - code [ref=f14e562]: "false"
+                  - cell "—" [ref=f14e563]
+                  - cell "provided" [ref=f14e564]
+                  - cell "Auto-attached when a matching file is in context." [ref=f14e565]
+                - row [ref=f14e566]:
+                  - cell [ref=f14e567]:
+                    - code [ref=f14e568]: "false"
+                  - cell "provided" [ref=f14e569]
+                  - cell "omitted" [ref=f14e570]
+                  - cell "Agent reads the description and pulls the rule in when relevant." [ref=f14e571]
+                - row [ref=f14e572]:
+                  - cell [ref=f14e573]:
+                    - code [ref=f14e574]: "false"
+                  - cell "omitted" [ref=f14e575]
+                  - cell "omitted" [ref=f14e576]
+                  - cell [ref=f14e577]:
+                    - text: Included only when you
+                    - code [ref=f14e578]: "@"
+                    - text: "-mention the rule in chat."
+            - generic [ref=f14e581]:
+              - generic [ref=f14e582]: Always applied
+              - button [ref=f14e584] [cursor=pointer]
+              - code [ref=f14e590]:
+                - generic [ref=f14e591]: "---"
+                - generic [ref=f14e592]: "alwaysApply: true"
+                - generic [ref=f14e593]: "---"
+                - generic [ref=f14e595]: "- All source files must include the company copyright header"
+                - generic [ref=f14e596]: "- When you are unsure about implementation details, read the relevant"
+                - generic [ref=f14e597]: source files before proposing changes
+                - generic [ref=f14e598]: "- Never modify generated files in the `dist/` or `build/` directories"
+            - generic [ref=f14e601]:
+              - generic [ref=f14e602]: Auto-attached by file pattern
+              - button [ref=f14e604] [cursor=pointer]
+              - code [ref=f14e610]:
+                - generic [ref=f14e611]: "---"
+                - generic [ref=f14e612]: "globs: src/components/**/*.tsx"
+                - generic [ref=f14e613]: "alwaysApply: false"
+                - generic [ref=f14e614]: "---"
+                - generic [ref=f14e616]: "- Use named exports, not default exports"
+                - generic [ref=f14e617]: "- Co-locate styles in a module CSS file next to the component"
+                - generic [ref=f14e618]: "- Keep components under 200 lines. Extract subcomponents into the same"
+                - generic [ref=f14e619]: directory when a file grows beyond that
+                - generic [ref=f14e620]: "- Prefer composition over prop drilling. Pass children or render props"
+                - generic [ref=f14e621]: instead of threading data through multiple layers
+            - generic [ref=f14e624]:
+              - generic [ref=f14e625]: Agent-selected based on description
+              - button [ref=f14e627] [cursor=pointer]
+              - code [ref=f14e633]:
+                - generic [ref=f14e634]: "---"
+                - generic [ref=f14e635]: "description: RPC service conventions and patterns for the backend"
+                - generic [ref=f14e636]: "alwaysApply: false"
+                - generic [ref=f14e637]: "---"
+                - generic [ref=f14e639]: "- Define each service in its own file under `src/services/`"
+                - generic [ref=f14e640]: "- Always validate inputs at the service boundary before passing data"
+                - generic [ref=f14e641]: to internal functions
+                - generic [ref=f14e642]: "- Return structured error objects with a `code` and `message` field,"
+                - generic [ref=f14e643]: never throw raw strings
+                - generic [ref=f14e644]: "- Read `@service-template.ts` for the standard boilerplate before"
+                - generic [ref=f14e645]: creating a new service
+            - generic [ref=f14e648]:
+              - generic [ref=f14e649]: Manual — only via @-mention
+              - button [ref=f14e651] [cursor=pointer]
+              - code [ref=f14e657]:
+                - generic [ref=f14e658]: "---"
+                - generic [ref=f14e659]: "alwaysApply: false"
+                - generic [ref=f14e660]: "---"
+                - generic [ref=f14e662]: "- Every database migration must have both `up` and `down` functions"
+                - generic [ref=f14e663]: so it can be fully reversed
+                - generic [ref=f14e664]: "- Never alter a column type in-place. Add a new column, backfill,"
+                - generic [ref=f14e665]: then drop the old one in a separate migration
+                - generic [ref=f14e666]: "- Read `@migration-template.sql` for the expected file structure"
+                - generic [ref=f14e667]: before writing a migration
+            - heading [level=3] [ref=f14e668]:
+              - link "Copy link to referencing-files-from-a-rule" [ref=f14e669] [cursor=pointer]:
+                - /url: "#referencing-files-from-a-rule"
+                - generic [ref=f14e670]: Referencing files from a rule
+            - paragraph [ref=f14e678]:
+              - text: Rule content reaches Agent as written. A file mention like
+              - code [ref=f14e679]: "@migration-template.sql"
+              - text: tells Agent where to look, and Agent reads the file with its tools when it needs the content. The file's contents are not inlined into the prompt, and this is the same in the editor, the CLI, and Cloud Agents. Put anything that must always be in context directly in the rule body.
+            - heading [level=3] [ref=f14e680]:
+              - link "Copy link to glob-pattern-examples" [ref=f14e681] [cursor=pointer]:
+                - /url: "#glob-pattern-examples"
+                - generic [ref=f14e682]: Glob pattern examples
+            - paragraph [ref=f14e690]:
+              - text: Use
+              - code [ref=f14e691]: globs
+              - text: to scope a rule to specific files or directories. Separate multiple patterns with commas.
+            - table [ref=f14e693]:
+              - rowgroup [ref=f14e694]:
+                - row [ref=f14e695]:
+                  - columnheader "Pattern" [ref=f14e696]
+                  - columnheader "Matches" [ref=f14e697]
+              - rowgroup [ref=f14e698]:
+                - row [ref=f14e699]:
+                  - cell [ref=f14e700]:
+                    - code [ref=f14e701]: "*"
+                  - cell "Any single file name segment" [ref=f14e702]
+                - row [ref=f14e703]:
+                  - cell [ref=f14e704]:
+                    - code [ref=f14e705]: "**"
+                  - cell "Any number of directories (recursive)" [ref=f14e706]
+                - row [ref=f14e707]:
+                  - cell [ref=f14e708]:
+                    - code [ref=f14e709]: "*.ts"
+                  - cell [ref=f14e710]:
+                    - text: All
+                    - code [ref=f14e711]: .ts
+                    - text: files in the root
+                - row [ref=f14e712]:
+                  - cell [ref=f14e713]:
+                    - code [ref=f14e714]: "**/*.ts"
+                  - cell [ref=f14e715]:
+                    - text: All
+                    - code [ref=f14e716]: .ts
+                    - text: files in any directory
+                - row [ref=f14e717]:
+                  - cell [ref=f14e718]:
+                    - code [ref=f14e719]: src/**
+                  - cell [ref=f14e720]:
+                    - text: All files anywhere under
+                    - code [ref=f14e721]: src/
+                - row [ref=f14e722]:
+                  - cell [ref=f14e723]:
+                    - code [ref=f14e724]: src/**/*.tsx
+                  - cell [ref=f14e725]:
+                    - text: All
+                    - code [ref=f14e726]: .tsx
+                    - text: files anywhere under
+                    - code [ref=f14e727]: src/
+                - row [ref=f14e728]:
+                  - cell [ref=f14e729]:
+                    - code [ref=f14e730]: docs/**/*.md, docs/**/*.mdx
+                  - cell [ref=f14e731]:
+                    - code [ref=f14e732]: .md
+                    - text: and
+                    - code [ref=f14e733]: .mdx
+                    - text: files under
+                    - code [ref=f14e734]: docs/
+                    - text: (comma-separated)
+                - row [ref=f14e735]:
+                  - cell [ref=f14e736]:
+                    - code [ref=f14e737]: tailwind.config.*
+                  - cell [ref=f14e738]:
+                    - code [ref=f14e739]: tailwind.config
+                    - text: with any extension
+            - heading [level=3] [ref=f14e740]:
+              - link "Copy link to creating-a-rule" [ref=f14e741] [cursor=pointer]:
+                - /url: "#creating-a-rule"
+                - generic [ref=f14e742]: Creating a rule
+            - paragraph [ref=f14e750]: "There are two ways to create rules:"
+            - list [ref=f14e751]:
+              - listitem [ref=f14e752]:
+                - strong [ref=f14e753]:
+                  - code [ref=f14e754]: /create-rule
+                  - text: in chat
+                - text: ": Type"
+                - code [ref=f14e755]: /create-rule
+                - text: in Agent and describe what you want. Agent generates the rule file with proper frontmatter and saves it to
+                - code [ref=f14e756]: .cursor/rules
+                - text: .
+              - listitem [ref=f14e757]:
+                - strong [ref=f14e758]: From Customize
+                - text: ": Open"
+                - strong [ref=f14e759]: Customize
+                - text: in the sidebar, go to
+                - strong [ref=f14e760]: Rules
+                - text: ", and click"
+                - strong [ref=f14e761]: Add Rule
+                - text: . This creates a new rule file in
+                - code [ref=f14e762]: .cursor/rules
+                - text: . From Customize you can see all rules and their status.
+            - heading [level=2] [ref=f14e763]:
+              - link "Copy link to best-practices" [ref=f14e764] [cursor=pointer]:
+                - /url: "#best-practices"
+                - generic [ref=f14e765]: Best practices
+            - paragraph [ref=f14e773]: Good rules are focused, actionable, and scoped.
+            - list [ref=f14e774]:
+              - listitem [ref=f14e775]: Keep rules under 500 lines
+              - listitem [ref=f14e776]: Split large rules into multiple, composable rules
+              - listitem [ref=f14e777]: Provide concrete examples or referenced files
+              - listitem [ref=f14e778]: Avoid vague guidance. Write rules like clear internal docs
+              - listitem [ref=f14e779]: Reuse rules when repeating prompts in chat
+              - listitem [ref=f14e780]: Reference files instead of copying their contents. This keeps rules short and prevents them from becoming stale as code changes. Agent reads a referenced file when it needs it, so tell it what to look for there
+            - heading [level=3] [ref=f14e781]:
+              - link "Copy link to what-to-avoid-in-rules" [ref=f14e782] [cursor=pointer]:
+                - /url: "#what-to-avoid-in-rules"
+                - generic [ref=f14e783]: What to avoid in rules
+            - list [ref=f14e791]:
+              - listitem [ref=f14e792]:
+                - strong [ref=f14e793]: Copying entire style guides
+                - text: ": Use a linter instead. Agent already knows common style conventions."
+              - listitem [ref=f14e794]:
+                - strong [ref=f14e795]: Documenting every possible command
+                - text: ": Agent knows common tools like npm, git, and pytest."
+              - listitem [ref=f14e796]:
+                - strong [ref=f14e797]: Adding instructions for edge cases that rarely apply
+                - text: ": Keep rules focused on patterns you use frequently."
+              - listitem [ref=f14e798]:
+                - strong [ref=f14e799]: Duplicating what's already in your codebase
+                - text: ": Point to canonical examples instead of copying code."
+            - alert [ref=f14e800]:
+              - paragraph [ref=f14e804]: Start simple. Add rules only when you notice Agent making the same mistake repeatedly. Don't over-optimize before you understand your patterns.
+            - paragraph [ref=f14e805]:
+              - text: Check your rules into git so your whole team benefits. When you see Agent make a mistake, update the rule. You can even tag
+              - code [ref=f14e806]: "@cursor"
+              - text: on a GitHub issue or PR to have Agent update the rule for you.
+            - heading [level=2] [ref=f14e807]:
+              - link "Copy link to rule-file-format" [ref=f14e808] [cursor=pointer]:
+                - /url: "#rule-file-format"
+                - generic [ref=f14e809]: Rule file format
+            - paragraph [ref=f14e817]: Each rule is a markdown file with frontmatter metadata and content. The frontmatter metadata is used to control how the rule is applied. The content is the rule itself.
+            - generic [ref=f14e820]:
+              - button [ref=f14e821] [cursor=pointer]
+              - code [ref=f14e827]:
+                - generic [ref=f14e828]: "---"
+                - generic [ref=f14e829]: "description: \"This rule provides standards for frontend components and API validation\""
+                - generic [ref=f14e830]: "alwaysApply: false"
+                - generic [ref=f14e831]: "---"
+                - generic [ref=f14e833]: ...rest of the rule content
+            - paragraph [ref=f14e834]: If alwaysApply is true, the rule will be applied to every chat session. Otherwise, the description of the rule will be presented to the Cursor Agent to decide if it should be applied.
+            - heading [level=2] [ref=f14e835]:
+              - link "Copy link to examples" [ref=f14e836] [cursor=pointer]:
+                - /url: "#examples"
+                - generic [ref=f14e837]: Examples
+            - generic [ref=f14e845]:
+              - heading [level=3] [ref=f14e847]:
+                - button "Standards for frontend components and API validation" [ref=f14e848] [cursor=pointer]
+              - heading [level=3] [ref=f14e852]:
+                - button "Templates for Express services and React components" [ref=f14e853] [cursor=pointer]
+              - heading [level=3] [ref=f14e857]:
+                - button "Automating development workflows and documentation generation" [ref=f14e858] [cursor=pointer]
+              - heading [level=3] [ref=f14e862]:
+                - button "Adding a new setting in Cursor" [ref=f14e863] [cursor=pointer]
+            - paragraph [ref=f14e866]: Examples are available from providers and frameworks. Community-contributed rules are found across crowdsourced collections and repositories online.
+            - heading [level=2] [ref=f14e867]:
+              - link "Copy link to team-rules" [ref=f14e868] [cursor=pointer]:
+                - /url: "#team-rules"
+                - generic [ref=f14e869]: Team Rules
+            - paragraph [ref=f14e877]:
+              - text: Team and
+              - link "Enterprise" [ref=f14e878] [cursor=pointer]:
+                - /url: /docs/enterprise
+              - text: plans can create and enforce rules across their entire organization from the
+              - link "Cursor dashboard" [ref=f14e879] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard/team-content
+              - text: . Admins can configure whether or not each rule is required for team members.
+            - paragraph [ref=f14e880]: Team Rules work alongside other rule types and take precedence to ensure organizational standards are maintained across all projects. They provide a powerful way to ensure consistent coding standards, practices, and workflows across your entire team without requiring individual setup or configuration.
+            - heading [level=3] [ref=f14e881]:
+              - link "Copy link to managing-team-rules" [ref=f14e882] [cursor=pointer]:
+                - /url: "#managing-team-rules"
+                - generic [ref=f14e883]: Managing Team Rules
+            - paragraph [ref=f14e891]: "Team administrators can create and manage rules directly from the Cursor dashboard:"
+            - button "Open image in full screen" [ref=f14e892] [cursor=pointer]:
+              - img "Empty team rules dashboard where team administrators can add new rules" [ref=f14e893]
+            - paragraph [ref=f14e894]: "Once team rules are created, they automatically apply to all team members and are visible in the dashboard:"
+            - button "Open image in full screen" [ref=f14e895] [cursor=pointer]:
+              - img "Team rules dashboard showing a single team rule that will be enforced for all team members" [ref=f14e896]
+            - heading [level=3] [ref=f14e897]:
+              - link "Copy link to activation-and-enforcement" [ref=f14e898] [cursor=pointer]:
+                - /url: "#activation-and-enforcement"
+                - generic [ref=f14e899]: Activation and enforcement
+            - list [ref=f14e907]:
+              - listitem [ref=f14e908]:
+                - strong [ref=f14e909]: Enable this rule immediately
+                - text: ": When checked, the rule is active as soon as you create it. When unchecked, the rule is saved as a draft and does not apply until you enable it later."
+              - listitem [ref=f14e910]:
+                - strong [ref=f14e911]: Enforce this rule
+                - text: ": When enabled, the rule is required for all team members and cannot be disabled in Customize. When not enforced, team members can toggle the rule off under"
+                - strong [ref=f14e912]: Team Rules
+                - text: in Customize.
+            - alert [ref=f14e913]:
+              - paragraph [ref=f14e917]:
+                - text: By default, non‑enforced Team Rules can be disabled by users. Use
+                - strong [ref=f14e918]: Enforce this rule
+                - text: to prevent that.
+            - heading [level=3] [ref=f14e919]:
+              - link "Copy link to format-and-how-team-rules-are-applied" [ref=f14e920] [cursor=pointer]:
+                - /url: "#format-and-how-team-rules-are-applied"
+                - generic [ref=f14e921]: Format and how Team Rules are applied
+            - list [ref=f14e929]:
+              - listitem [ref=f14e930]:
+                - strong [ref=f14e931]: Content
+                - text: ": Team Rules are free‑form text. They do not use the folder structure of Project Rules."
+              - listitem [ref=f14e932]:
+                - strong [ref=f14e933]: Glob patterns
+                - text: ": Team Rules support glob patterns for file-scoped application. When a glob pattern is set (e.g.,"
+                - code [ref=f14e934]: "**/*.py"
+                - text: ), the rule only applies when matching files are in context. Rules without a glob pattern apply to every conversation.
+              - listitem [ref=f14e935]:
+                - strong [ref=f14e936]: Where they apply
+                - text: ": When a Team Rule is enabled (and not disabled by the user, unless enforced), it is included in the model context for Agent (Chat) across all repositories and projects for that team."
+              - listitem [ref=f14e937]:
+                - strong [ref=f14e938]: Precedence
+                - text: ": Rules are applied in this order:"
+                - strong [ref=f14e939]: Team Rules → Project Rules → User Rules
+                - text: . All applicable rules are merged; earlier sources take precedence when guidance conflicts.
+            - alert [ref=f14e940]:
+              - paragraph [ref=f14e944]: Some teams use enforced rules as part of internal compliance workflows. While this is supported, AI guidance should not be your only security control.
+            - heading [level=2] [ref=f14e945]:
+              - link "Copy link to importing-rules-from-a-repository" [ref=f14e946] [cursor=pointer]:
+                - /url: "#importing-rules-from-a-repository"
+                - generic [ref=f14e947]: Importing rules from a repository
+            - paragraph [ref=f14e955]:
+              - text: Rules aren't imported on their own. To bring rules in from a GitHub repository, package them in a
+              - link "plugin" [ref=f14e956] [cursor=pointer]:
+                - /url: /docs/plugins
+              - text: "and publish that plugin through a marketplace: import the repository in"
+              - strong [ref=f14e957]: Customize
+              - text: with
+              - strong [ref=f14e958]: From GitHub Repository
+              - text: (the repository needs a
+              - code [ref=f14e959]: .cursor-plugin/marketplace.json
+              - text: ), or add it as a
+              - link "team marketplace" [ref=f14e960] [cursor=pointer]:
+                - /url: /docs/plugins#add-a-team-marketplace
+              - text: ", then"
+              - link "install the plugin" [ref=f14e961] [cursor=pointer]:
+                - /url: /docs/plugins#installing-plugins
+              - text: . The rules arrive with the plugin and appear in Customize alongside your other rules.
+            - heading [level=2] [ref=f14e962]:
+              - link "Copy link to agentsmd" [ref=f14e963] [cursor=pointer]:
+                - /url: "#agentsmd"
+                - generic [ref=f14e964]: AGENTS.md
+            - paragraph [ref=f14e972]:
+              - code [ref=f14e973]: AGENTS.md
+              - text: is a simple markdown file for defining agent instructions. Place it in your project root as an alternative to
+              - code [ref=f14e974]: .cursor/rules
+              - text: for straightforward use cases.
+            - paragraph [ref=f14e975]:
+              - text: Unlike Project Rules,
+              - code [ref=f14e976]: AGENTS.md
+              - text: is a plain markdown file without metadata or complex configurations. It's perfect for projects that need simple, readable instructions without the overhead of structured rules.
+            - paragraph [ref=f14e977]: Cursor supports AGENTS.md in the project root and subdirectories.
+            - generic [ref=f14e980]:
+              - button [ref=f14e981] [cursor=pointer]
+              - code [ref=f14e987]:
+                - generic [ref=f14e988]: "# Project Instructions"
+                - generic [ref=f14e990]: "## Code Style"
+                - generic [ref=f14e992]: "- Use TypeScript for all new files"
+                - generic [ref=f14e993]: "- Prefer functional components in React"
+                - generic [ref=f14e994]: "- Use snake_case for database columns"
+                - generic [ref=f14e996]: "## Architecture"
+                - generic [ref=f14e998]: "- Follow the repository pattern"
+                - generic [ref=f14e999]: "- Keep business logic in service layers"
+            - heading [level=3] [ref=f14e1000]:
+              - link "Copy link to improvements" [ref=f14e1001] [cursor=pointer]:
+                - /url: "#improvements"
+                - generic [ref=f14e1002]: Improvements
+            - heading [level=3] [ref=f14e1012]:
+              - button "Nested AGENTS.md support" [ref=f14e1013] [cursor=pointer]
+            - heading [level=2] [ref=f14e1016]:
+              - link "Copy link to user-rules" [ref=f14e1017] [cursor=pointer]:
+                - /url: "#user-rules"
+                - generic [ref=f14e1018]: User Rules
+            - paragraph [ref=f14e1026]:
+              - text: User Rules are global preferences defined in
+              - strong [ref=f14e1027]: Customize → Rules
+              - text: "that apply across all projects. They are used by Agent (Chat) and are perfect for setting preferred communication style or coding conventions:"
+            - generic [ref=f14e1030]:
+              - button [ref=f14e1031] [cursor=pointer]
+              - code [ref=f14e1037]:
+                - generic [ref=f14e1038]: Please reply in a concise style. Avoid unnecessary repetition or filler language.
+            - heading [level=2] [ref=f14e1039]:
+              - link "Copy link to faq" [ref=f14e1040] [cursor=pointer]:
+                - /url: "#faq"
+                - generic [ref=f14e1041]: FAQ
+            - generic [ref=f14e1049]:
+              - heading [level=3] [ref=f14e1051]:
+                - button "Why isn't my rule being applied?" [ref=f14e1052] [cursor=pointer]
+              - heading [level=3] [ref=f14e1056]:
+                - button "Can rules reference other rules or files?" [ref=f14e1057] [cursor=pointer]
+              - heading [level=3] [ref=f14e1061]:
+                - button "Can I create a rule from chat?" [ref=f14e1062] [cursor=pointer]
+              - heading [level=3] [ref=f14e1066]:
+                - button "Do rules impact Cursor Tab or other AI features?" [ref=f14e1067] [cursor=pointer]
+            - heading [level=2] [ref=f14e1070]:
+              - link "Copy link to related" [ref=f14e1071] [cursor=pointer]:
+                - /url: "#related"
+                - generic [ref=f14e1072]: Related
+            - list [ref=f14e1080]:
+              - listitem [ref=f14e1081]:
+                - link "Rules help" [ref=f14e1082] [cursor=pointer]:
+                  - /url: /help/customization/rules
+        - navigation [ref=f14e1085]:
+          - generic [ref=f14e1086]:
+            - list [ref=f14e1087]:
+              - listitem [ref=f14e1088]:
+                - link "How rules work" [ref=f14e1089] [cursor=pointer]:
+                  - /url: "#how-rules-work"
+              - listitem [ref=f14e1090]:
+                - link "Project rules" [ref=f14e1091] [cursor=pointer]:
+                  - /url: "#project-rules"
+              - listitem [ref=f14e1092]:
+                - link "Rule file structure" [ref=f14e1093] [cursor=pointer]:
+                  - /url: "#rule-file-structure"
+              - listitem [ref=f14e1094]:
+                - link "Rule anatomy" [ref=f14e1095] [cursor=pointer]:
+                  - /url: "#rule-anatomy"
+              - listitem [ref=f14e1096]:
+                - link "Referencing files from a rule" [ref=f14e1097] [cursor=pointer]:
+                  - /url: "#referencing-files-from-a-rule"
+              - listitem [ref=f14e1098]:
+                - link "Glob pattern examples" [ref=f14e1099] [cursor=pointer]:
+                  - /url: "#glob-pattern-examples"
+              - listitem [ref=f14e1100]:
+                - link "Creating a rule" [ref=f14e1101] [cursor=pointer]:
+                  - /url: "#creating-a-rule"
+              - listitem [ref=f14e1102]:
+                - link "Best practices" [ref=f14e1103] [cursor=pointer]:
+                  - /url: "#best-practices"
+              - listitem [ref=f14e1104]:
+                - link "What to avoid in rules" [ref=f14e1105] [cursor=pointer]:
+                  - /url: "#what-to-avoid-in-rules"
+              - listitem [ref=f14e1106]:
+                - link "Rule file format" [ref=f14e1107] [cursor=pointer]:
+                  - /url: "#rule-file-format"
+              - listitem [ref=f14e1108]:
+                - link "Examples" [ref=f14e1109] [cursor=pointer]:
+                  - /url: "#examples"
+              - listitem [ref=f14e1110]:
+                - link "Team Rules" [ref=f14e1111] [cursor=pointer]:
+                  - /url: "#team-rules"
+              - listitem [ref=f14e1112]:
+                - link "Managing Team Rules" [ref=f14e1113] [cursor=pointer]:
+                  - /url: "#managing-team-rules"
+              - listitem [ref=f14e1114]:
+                - link "Activation and enforcement" [ref=f14e1115] [cursor=pointer]:
+                  - /url: "#activation-and-enforcement"
+              - listitem [ref=f14e1116]:
+                - link "Format and how Team Rules are applied" [ref=f14e1117] [cursor=pointer]:
+                  - /url: "#format-and-how-team-rules-are-applied"
+              - listitem [ref=f14e1118]:
+                - link "Importing rules from a repository" [ref=f14e1119] [cursor=pointer]:
+                  - /url: "#importing-rules-from-a-repository"
+              - listitem [ref=f14e1120]:
+                - link "AGENTS.md" [ref=f14e1121] [cursor=pointer]:
+                  - /url: "#agentsmd"
+              - listitem [ref=f14e1122]:
+                - link "Improvements" [ref=f14e1123] [cursor=pointer]:
+                  - /url: "#improvements"
+              - listitem [ref=f14e1124]:
+                - link "User Rules" [ref=f14e1125] [cursor=pointer]:
+                  - /url: "#user-rules"
+              - listitem [ref=f14e1126]:
+                - link "FAQ" [ref=f14e1127] [cursor=pointer]:
+                  - /url: "#faq"
+              - listitem [ref=f14e1128]:
+                - link "Related" [ref=f14e1129] [cursor=pointer]:
+                  - /url: "#related"
+            - button "Copy page" [ref=f14e1133] [cursor=pointer]

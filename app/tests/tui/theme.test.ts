@@ -90,7 +90,7 @@ describe("/theme", () => {
       const rt = await createRuntime({ workspace, mock: true });
       expect(themeMode()).toBe("light");
       expect(activeTheme()).toBe("light");
-      rt.close();
+      await rt.close();
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;

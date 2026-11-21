@@ -1,0 +1,632 @@
+- generic [ref=e3]:
+  - link "Skip to main content" [ref=e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e5]:
+    - banner [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]:
+          - link "Cursor Home" [ref=e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=e10]
+          - navigation [ref=e13]:
+            - link "Docs" [ref=e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=e16] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=e17] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=e22] [cursor=pointer]:
+          - generic [ref=e26]: Search docs...
+          - generic [ref=e27]: ⌘K
+    - generic [ref=e32]:
+      - heading "Command Palette" [level=2] [ref=e33]
+      - paragraph [ref=e34]: Search for a command to run...
+  - generic [ref=e35]:
+    - generic [ref=e37]:
+      - button [ref=e38]:
+        - button "Toggle Docs Sidebar" [ref=e40] [cursor=pointer]
+      - generic [ref=e44]:
+        - generic [ref=e45]:
+          - heading "Get Started" [level=2] [ref=e46]
+          - generic [ref=e47]:
+            - link "Welcome" [ref=e48] [cursor=pointer]:
+              - /url: /docs
+            - link "Quickstart" [ref=e51] [cursor=pointer]:
+              - /url: /docs/get-started/quickstart
+            - button "Models & Pricing" [ref=e54] [cursor=pointer]
+            - link "Changelog" [ref=e60] [cursor=pointer]:
+              - /url: https://cursor.com/changelog
+            - link "Release Notes" [ref=e63] [cursor=pointer]:
+              - /url: /docs/release-notes
+        - generic [ref=e66]:
+          - heading "Agent" [level=2] [ref=e67]
+          - generic [ref=e68]:
+            - link "Overview" [ref=e69] [cursor=pointer]:
+              - /url: /docs/agent/overview
+            - link "Agents Window" [ref=e72] [cursor=pointer]:
+              - /url: /docs/agent/agents-window
+            - link "Projects" [ref=e75] [cursor=pointer]:
+              - /url: /docs/agent/projects
+            - link "Agent Review" [ref=e78] [cursor=pointer]:
+              - /url: /docs/agent/agent-review
+            - link "Planning" [ref=e81] [cursor=pointer]:
+              - /url: /docs/agent/plan-mode
+            - link "Prompting" [ref=e84] [cursor=pointer]:
+              - /url: /docs/agent/prompting
+            - link "Voice Chat" [ref=e87] [cursor=pointer]:
+              - /url: /docs/agent/voice-chat
+            - link "Debugging" [ref=e90] [cursor=pointer]:
+              - /url: /docs/agent/debug-mode
+            - link "Design Mode" [ref=e93] [cursor=pointer]:
+              - /url: /docs/agent/design-mode
+            - button "Tools" [ref=e96] [cursor=pointer]
+            - button "Security" [ref=e102] [cursor=pointer]
+        - generic [ref=e108]:
+          - heading "Customize" [level=2] [ref=e109]
+          - generic [ref=e110]:
+            - link "Overview" [ref=e111] [cursor=pointer]:
+              - /url: /docs/customize-cursor
+            - link "Plugins" [ref=e114] [cursor=pointer]:
+              - /url: /docs/plugins
+            - link "Rules" [ref=e117] [cursor=pointer]:
+              - /url: /docs/rules
+            - link "Skills" [ref=e120] [cursor=pointer]:
+              - /url: /docs/skills
+            - link "Subagents" [ref=e123] [cursor=pointer]:
+              - /url: /docs/subagents
+            - link "Hooks" [ref=e126] [cursor=pointer]:
+              - /url: /docs/hooks
+            - link "MCP" [ref=e129] [cursor=pointer]:
+              - /url: /docs/mcp
+        - generic [ref=e132]:
+          - heading "Cloud Agents" [level=2] [ref=e133]
+          - generic [ref=e134]:
+            - link "Overview" [ref=e135] [cursor=pointer]:
+              - /url: /docs/cloud-agent
+            - link "Setup" [ref=e138] [cursor=pointer]:
+              - /url: /docs/cloud-agent/setup
+            - link "Builds" [ref=e141] [cursor=pointer]:
+              - /url: /docs/cloud-agent/builds
+            - link "Apps" [ref=e144] [cursor=pointer]:
+              - /url: /docs/cloud-agent/apps
+            - button "Capabilities" [ref=e147] [cursor=pointer]
+            - link "Best Practices" [ref=e153] [cursor=pointer]:
+              - /url: /docs/cloud-agent/best-practices
+            - link "Choose Where Cloud Agents Run" [ref=e156] [cursor=pointer]:
+              - /url: /docs/cloud-agent/self-hosted/choose-runtime
+            - link "Automations" [ref=e159] [cursor=pointer]:
+              - /url: /docs/cloud-agent/automations
+            - link "Bugbot" [ref=e162] [cursor=pointer]:
+              - /url: /docs/bugbot
+            - link "Security Review" [ref=e165] [cursor=pointer]:
+              - /url: /docs/security-review
+            - link "Vulnerability Remediation" [ref=e168] [cursor=pointer]:
+              - /url: /docs/vulnerability-remediation
+            - link "PR Routing & Approval" [ref=e171] [cursor=pointer]:
+              - /url: /docs/approval-agents
+            - link "Rollouts" [ref=e174] [cursor=pointer]:
+              - /url: /docs/rollouts
+            - link "Mobile" [ref=e177] [cursor=pointer]:
+              - /url: /docs/cloud-agent/mobile
+            - button "Security" [ref=e180] [cursor=pointer]
+            - button "Self-Hosted Machines" [ref=e186] [cursor=pointer]
+            - link "Settings" [ref=e192] [cursor=pointer]:
+              - /url: /docs/cloud-agent/settings
+            - link "API" [ref=e195] [cursor=pointer]:
+              - /url: /docs/cloud-agent/api/endpoints
+        - generic [ref=e198]:
+          - heading "Origin" [level=2] [ref=e199]
+          - generic [ref=e200]:
+            - link "Overview" [ref=e201] [cursor=pointer]:
+              - /url: /docs/origin
+            - button "CLI" [ref=e204] [cursor=pointer]
+            - link "Create a repository" [ref=e210] [cursor=pointer]:
+              - /url: /docs/origin/create-repository
+            - link "Mirror GitHub" [ref=e213] [cursor=pointer]:
+              - /url: /docs/origin/mirror-github
+            - link "Clone, Push & Pull" [ref=e216] [cursor=pointer]:
+              - /url: /docs/origin/git
+            - link "CloneKit in CI" [ref=e219] [cursor=pointer]:
+              - /url: /docs/origin/clonekit-ci
+            - link "Pull requests" [ref=e222] [cursor=pointer]:
+              - /url: /docs/origin/pull-requests
+            - link "Code Tours" [ref=e225] [cursor=pointer]:
+              - /url: /docs/origin/code-tours
+            - link "Browse & Search" [ref=e228] [cursor=pointer]:
+              - /url: /docs/origin/browse
+            - link "Agents and Automations" [ref=e231] [cursor=pointer]:
+              - /url: /docs/origin/agents
+            - button "Apps" [ref=e234] [cursor=pointer]
+            - link "Settings" [ref=e240] [cursor=pointer]:
+              - /url: /docs/origin/settings
+        - generic [ref=e243]:
+          - heading "Integrations" [level=2] [ref=e244]
+          - generic [ref=e245]:
+            - link "Slack" [ref=e246] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+            - link "Microsoft Teams" [ref=e249] [cursor=pointer]:
+              - /url: /docs/integrations/microsoft-teams
+            - link "Jira" [ref=e252] [cursor=pointer]:
+              - /url: /docs/integrations/jira
+            - link "Linear" [ref=e255] [cursor=pointer]:
+              - /url: /docs/integrations/linear
+            - link "Notion" [ref=e258] [cursor=pointer]:
+              - /url: /docs/integrations/notion
+            - link "GitHub" [ref=e261] [cursor=pointer]:
+              - /url: /docs/integrations/github
+            - link "GitLab" [ref=e264] [cursor=pointer]:
+              - /url: /docs/integrations/gitlab
+            - link "Azure DevOps" [ref=e267] [cursor=pointer]:
+              - /url: /docs/integrations/azure-devops
+            - link "Bitbucket" [ref=e270] [cursor=pointer]:
+              - /url: /docs/integrations/bitbucket
+            - link "JetBrains" [ref=e273] [cursor=pointer]:
+              - /url: /docs/integrations/jetbrains
+            - link "Xcode" [ref=e276] [cursor=pointer]:
+              - /url: /docs/integrations/xcode
+            - link "Tailscale" [ref=e279] [cursor=pointer]:
+              - /url: /docs/integrations/tailscale
+            - link "Deeplinks" [ref=e282] [cursor=pointer]:
+              - /url: /docs/reference/deeplinks
+        - generic [ref=e285]:
+          - heading "SDK" [level=2] [ref=e286]
+          - generic [ref=e287]:
+            - link "TypeScript" [ref=e288] [cursor=pointer]:
+              - /url: /docs/sdk/typescript
+            - link "Python" [ref=e291] [cursor=pointer]:
+              - /url: /docs/sdk/python
+            - link "Bridge" [ref=e294] [cursor=pointer]:
+              - /url: /docs/sdk/bridge
+            - link "Changelog" [ref=e297] [cursor=pointer]:
+              - /url: /docs/release-notes/sdk
+        - generic [ref=e300]:
+          - heading "Agent SDK" [level=2] [ref=e301]
+          - generic [ref=e302]:
+            - button "Getting started" [ref=e303] [cursor=pointer]
+            - button "Integrations" [ref=e309] [cursor=pointer]
+            - button "Extensions" [ref=e315] [cursor=pointer]
+            - button "Guides" [ref=e321] [cursor=pointer]
+            - button "Templates" [ref=e327] [cursor=pointer]
+            - button "Reference" [ref=e333] [cursor=pointer]
+        - generic [ref=e339]:
+          - heading "CLI" [level=2] [ref=e340]
+          - generic [ref=e341]:
+            - link "Overview" [ref=e342] [cursor=pointer]:
+              - /url: /docs/cli/overview
+            - link "Installation" [ref=e345] [cursor=pointer]:
+              - /url: /docs/cli/installation
+            - link "Capabilities" [ref=e348] [cursor=pointer]:
+              - /url: /docs/cli/using
+            - link "Changelog" [ref=e351] [cursor=pointer]:
+              - /url: /docs/cli/changelog
+            - link "Shell Mode" [ref=e354] [cursor=pointer]:
+              - /url: /docs/cli/shell-mode
+            - link "ACP" [ref=e357] [cursor=pointer]:
+              - /url: /docs/cli/acp
+            - link "Headless / CI" [ref=e360] [cursor=pointer]:
+              - /url: /docs/cli/headless
+            - button "Reference" [ref=e363] [cursor=pointer]
+        - generic [ref=e369]:
+          - heading "Teams & Enterprise" [level=2] [ref=e370]
+          - generic [ref=e371]:
+            - button "Teams" [ref=e372] [cursor=pointer]
+            - button "Enterprise" [ref=e378] [cursor=pointer]
+    - main [ref=e384]:
+      - generic [ref=e387]:
+        - generic [ref=e388]:
+          - generic [ref=e389]: Get Started
+          - generic [ref=e391]:
+            - heading "Cursor Documentation" [level=1] [ref=e392]
+            - paragraph [ref=e393]: Cursor is a coding agent for building ambitious software. Use it to understand your codebase, plan and build features, fix bugs, review changes, and work with the tools you already use.
+            - button "Open image in full screen" [ref=e394] [cursor=pointer]:
+              - img "Welcome to Cursor, the AI editor and coding agent" [ref=e395]
+            - heading [level=2] [ref=e396]:
+              - link "Copy link to start-here" [ref=e397] [cursor=pointer]:
+                - /url: "#start-here"
+                - generic [ref=e398]: Start here
+            - generic [ref=e406]:
+              - link [ref=e407] [cursor=pointer]:
+                - /url: /docs/get-started/quickstart
+                - paragraph [ref=e414]: Get started
+                - paragraph [ref=e417]: Go from install to your first useful change in Cursor
+              - link [ref=e418] [cursor=pointer]:
+                - /url: /docs/models-and-pricing
+                - paragraph [ref=e422]: Models & Pricing
+                - paragraph [ref=e425]: Compare models, usage pools, and plan pricing
+              - link [ref=e426] [cursor=pointer]:
+                - /url: https://www.cursor.com/changelog
+                - paragraph [ref=e431]: Changelog
+                - paragraph [ref=e434]: Stay up to date with the latest features and improvements
+            - heading [level=2] [ref=e435]:
+              - link "Copy link to what-you-can-do-with-cursor" [ref=e436] [cursor=pointer]:
+                - /url: "#what-you-can-do-with-cursor"
+                - generic [ref=e437]: What you can do with Cursor
+            - generic [ref=e445]:
+              - link [ref=e446] [cursor=pointer]:
+                - /url: /learn/understanding-your-codebase
+                - paragraph [ref=e451]: Understand your code
+                - paragraph [ref=e454]: Trace how a repo fits together and find the right places to start
+              - link [ref=e455] [cursor=pointer]:
+                - /url: /learn/creating-features
+                - paragraph [ref=e461]: Plan and build features
+                - paragraph [ref=e464]: Scope changes, use Plan Mode, and ship bigger work with confidence
+              - link [ref=e465] [cursor=pointer]:
+                - /url: /learn/finding-fixing-bugs
+                - paragraph [ref=e476]: Find and fix bugs
+                - paragraph [ref=e479]: Reproduce issues, narrow the root cause, and verify the fix
+              - link [ref=e480] [cursor=pointer]:
+                - /url: /learn/reviewing-testing
+                - paragraph [ref=e485]: Review changes
+                - paragraph [ref=e488]: Inspect diffs, run checks, and catch problems before you merge
+              - link [ref=e489] [cursor=pointer]:
+                - /url: /docs/customize-cursor
+                - paragraph [ref=e494]: Customize Cursor
+                - paragraph [ref=e497]: Add plugins, skills, MCPs, and rules from one place
+              - link [ref=e498] [cursor=pointer]:
+                - /url: /docs/integrations/github
+                - paragraph [ref=e502]: Connect your workflow
+                - paragraph [ref=e505]: Work with GitHub, GitLab, Azure DevOps, Bitbucket, JetBrains, Slack, Linear, and more
+            - heading [level=2] [ref=e506]:
+              - link "Copy link to models" [ref=e507] [cursor=pointer]:
+                - /url: "#models"
+                - generic [ref=e508]: Models
+            - paragraph [ref=e516]:
+              - text: See all model attributes on the
+              - link "Models & Pricing" [ref=e517] [cursor=pointer]:
+                - /url: /docs/models-and-pricing
+              - text: page.
+            - generic [ref=e519]:
+              - table [ref=e521]:
+                - rowgroup [ref=e522]:
+                  - row [ref=e523]:
+                    - columnheader "Name" [ref=e524] [cursor=pointer]
+                    - columnheader "Default Context" [ref=e527] [cursor=pointer]
+                    - columnheader "Max Context" [ref=e528] [cursor=pointer]
+                    - columnheader "Capabilities column information" [ref=e529] [cursor=pointer]:
+                      - button "Capabilities column information" [ref=e530]:
+                        - generic [ref=e531]: Capabilities
+                - rowgroup [ref=e532]:
+                  - row [ref=e533]:
+                    - cell [ref=e534]:
+                      - generic [ref=e535]:
+                        - button "Anthropic provider" [ref=e537] [cursor=pointer]:
+                          - img "Anthropic" [ref=e539]
+                        - generic [ref=e540]:
+                          - link "Claude Fable 5.2" [ref=e541] [cursor=pointer]:
+                            - /url: /docs/models/claude-fable-5-2
+                          - button "Additional model information" [ref=e542] [cursor=pointer]
+                    - cell "300k" [ref=e547]
+                    - cell "1M" [ref=e548]
+                    - cell [ref=e549]:
+                      - generic [ref=e550]:
+                        - 'button "Agent capability: Can use tools" [ref=e551] [cursor=pointer]':
+                          - img "Agent" [ref=e552]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e554] [cursor=pointer]':
+                          - img "Thinking" [ref=e555]
+                        - 'button "Image capability: Accepts image inputs" [ref=e557] [cursor=pointer]'
+                  - row [ref=e562]:
+                    - cell [ref=e563]:
+                      - generic [ref=e564]:
+                        - button "Anthropic provider" [ref=e566] [cursor=pointer]:
+                          - img "Anthropic" [ref=e568]
+                        - generic [ref=e569]:
+                          - link "Claude Haiku 5.5" [ref=e570] [cursor=pointer]:
+                            - /url: /docs/models/claude-haiku-5-5
+                          - button "Additional model information" [ref=e571] [cursor=pointer]
+                    - cell "300k" [ref=e576]
+                    - cell "1M" [ref=e577]
+                    - cell [ref=e578]:
+                      - generic [ref=e579]:
+                        - 'button "Agent capability: Can use tools" [ref=e580] [cursor=pointer]':
+                          - img "Agent" [ref=e581]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e583] [cursor=pointer]':
+                          - img "Thinking" [ref=e584]
+                        - 'button "Image capability: Accepts image inputs" [ref=e586] [cursor=pointer]'
+                  - row [ref=e591]:
+                    - cell [ref=e592]:
+                      - generic [ref=e593]:
+                        - button "Anthropic provider" [ref=e595] [cursor=pointer]:
+                          - img "Anthropic" [ref=e597]
+                        - generic [ref=e598]:
+                          - link "Claude Opus 5.5" [ref=e599] [cursor=pointer]:
+                            - /url: /docs/models/claude-opus-5-5
+                          - button "Additional model information" [ref=e600] [cursor=pointer]
+                    - cell "300k" [ref=e605]
+                    - cell "1M" [ref=e606]
+                    - cell [ref=e607]:
+                      - generic [ref=e608]:
+                        - 'button "Agent capability: Can use tools" [ref=e609] [cursor=pointer]':
+                          - img "Agent" [ref=e610]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e612] [cursor=pointer]':
+                          - img "Thinking" [ref=e613]
+                        - 'button "Image capability: Accepts image inputs" [ref=e615] [cursor=pointer]'
+                  - row [ref=e620]:
+                    - cell [ref=e621]:
+                      - generic [ref=e622]:
+                        - button "Anthropic provider" [ref=e624] [cursor=pointer]:
+                          - img "Anthropic" [ref=e626]
+                        - generic [ref=e627]:
+                          - link "Claude Sonnet 5.5" [ref=e628] [cursor=pointer]:
+                            - /url: /docs/models/claude-sonnet-5-5
+                          - button "Additional model information" [ref=e629] [cursor=pointer]
+                    - cell "200k" [ref=e634]
+                    - cell "1M" [ref=e635]
+                    - cell [ref=e636]:
+                      - generic [ref=e637]:
+                        - 'button "Agent capability: Can use tools" [ref=e638] [cursor=pointer]':
+                          - img "Agent" [ref=e639]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e641] [cursor=pointer]':
+                          - img "Thinking" [ref=e642]
+                        - 'button "Image capability: Accepts image inputs" [ref=e644] [cursor=pointer]'
+                  - row [ref=e649]:
+                    - cell [ref=e650]:
+                      - generic [ref=e651]:
+                        - button "Cursor provider" [ref=e653] [cursor=pointer]:
+                          - img "Cursor" [ref=e654]
+                        - link "Composer 2.5" [ref=e656] [cursor=pointer]:
+                          - /url: /docs/models/cursor-composer-2-5
+                    - cell "200k" [ref=e657]
+                    - cell "-" [ref=e658]
+                    - cell [ref=e659]:
+                      - generic [ref=e660]:
+                        - 'button "Agent capability: Can use tools" [ref=e661] [cursor=pointer]':
+                          - img "Agent" [ref=e662]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e664] [cursor=pointer]':
+                          - img "Thinking" [ref=e665]
+                        - 'button "Image capability: Accepts image inputs" [ref=e667] [cursor=pointer]'
+                  - row [ref=e672]:
+                    - cell [ref=e673]:
+                      - generic [ref=e674]:
+                        - button "Google provider" [ref=e676] [cursor=pointer]:
+                          - img "Google" [ref=e677]
+                        - link "Gemini 3.1 Pro" [ref=e679] [cursor=pointer]:
+                          - /url: /docs/models/gemini-3-1-pro
+                    - cell "200k" [ref=e680]
+                    - cell "1M" [ref=e681]
+                    - cell [ref=e682]:
+                      - generic [ref=e683]:
+                        - 'button "Agent capability: Can use tools" [ref=e684] [cursor=pointer]':
+                          - img "Agent" [ref=e685]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e687] [cursor=pointer]':
+                          - img "Thinking" [ref=e688]
+                        - 'button "Image capability: Accepts image inputs" [ref=e690] [cursor=pointer]'
+                  - row [ref=e695]:
+                    - cell [ref=e696]:
+                      - generic [ref=e697]:
+                        - button "Google provider" [ref=e699] [cursor=pointer]:
+                          - img "Google" [ref=e700]
+                        - link "Gemini 3.8 Flash" [ref=e702] [cursor=pointer]:
+                          - /url: /docs/models/gemini-3-8-flash
+                    - cell "200k" [ref=e703]
+                    - cell "1M" [ref=e704]
+                    - cell [ref=e705]:
+                      - generic [ref=e706]:
+                        - 'button "Agent capability: Can use tools" [ref=e707] [cursor=pointer]':
+                          - img "Agent" [ref=e708]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e710] [cursor=pointer]':
+                          - img "Thinking" [ref=e711]
+                        - 'button "Image capability: Accepts image inputs" [ref=e713] [cursor=pointer]'
+                  - row [ref=e718]:
+                    - cell [ref=e719]:
+                      - generic [ref=e720]:
+                        - button "Google provider" [ref=e722] [cursor=pointer]:
+                          - img "Google" [ref=e723]
+                        - link "Gemini 4 Argon" [ref=e725] [cursor=pointer]:
+                          - /url: /docs/models/gemini-4-argon
+                    - cell "200k" [ref=e726]
+                    - cell "1M" [ref=e727]
+                    - cell [ref=e728]:
+                      - generic [ref=e729]:
+                        - 'button "Agent capability: Can use tools" [ref=e730] [cursor=pointer]':
+                          - img "Agent" [ref=e731]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e733] [cursor=pointer]':
+                          - img "Thinking" [ref=e734]
+                        - 'button "Image capability: Accepts image inputs" [ref=e736] [cursor=pointer]'
+                  - row [ref=e741]:
+                    - cell [ref=e742]:
+                      - generic [ref=e743]:
+                        - button "Google provider" [ref=e745] [cursor=pointer]:
+                          - img "Google" [ref=e746]
+                        - generic [ref=e747]:
+                          - link "Gemini 4 Carbon" [ref=e748] [cursor=pointer]:
+                            - /url: /docs/models/gemini-4-carbon
+                          - button "Additional model information" [ref=e749] [cursor=pointer]
+                    - cell "200k" [ref=e754]
+                    - cell "1M" [ref=e755]
+                    - cell [ref=e756]:
+                      - generic [ref=e757]:
+                        - 'button "Agent capability: Can use tools" [ref=e758] [cursor=pointer]':
+                          - img "Agent" [ref=e759]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e761] [cursor=pointer]':
+                          - img "Thinking" [ref=e762]
+                        - 'button "Image capability: Accepts image inputs" [ref=e764] [cursor=pointer]'
+                  - row [ref=e769]:
+                    - cell [ref=e770]:
+                      - generic [ref=e771]:
+                        - button "Google provider" [ref=e773] [cursor=pointer]:
+                          - img "Google" [ref=e774]
+                        - link "Gemini 4 Hydrogen" [ref=e776] [cursor=pointer]:
+                          - /url: /docs/models/gemini-4-hydrogen
+                    - cell "200k" [ref=e777]
+                    - cell "1M" [ref=e778]
+                    - cell [ref=e779]:
+                      - generic [ref=e780]:
+                        - 'button "Agent capability: Can use tools" [ref=e781] [cursor=pointer]':
+                          - img "Agent" [ref=e782]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e784] [cursor=pointer]':
+                          - img "Thinking" [ref=e785]
+                        - 'button "Image capability: Accepts image inputs" [ref=e787] [cursor=pointer]'
+                  - row [ref=e792]:
+                    - cell [ref=e793]:
+                      - generic [ref=e794]:
+                        - button "Google provider" [ref=e796] [cursor=pointer]:
+                          - img "Google" [ref=e797]
+                        - link "Gemini 4 Neon" [ref=e799] [cursor=pointer]:
+                          - /url: /docs/models/gemini-4-neon
+                    - cell "200k" [ref=e800]
+                    - cell "1M" [ref=e801]
+                    - cell [ref=e802]:
+                      - generic [ref=e803]:
+                        - 'button "Agent capability: Can use tools" [ref=e804] [cursor=pointer]':
+                          - img "Agent" [ref=e805]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e807] [cursor=pointer]':
+                          - img "Thinking" [ref=e808]
+                        - 'button "Image capability: Accepts image inputs" [ref=e810] [cursor=pointer]'
+                  - row [ref=e815]:
+                    - cell [ref=e816]:
+                      - generic [ref=e817]:
+                        - button "OpenAI provider" [ref=e819] [cursor=pointer]:
+                          - img "OpenAI" [ref=e821]
+                        - generic [ref=e822]:
+                          - link "GPT-5.6 Luna" [ref=e823] [cursor=pointer]:
+                            - /url: /docs/models/gpt-5-6-luna
+                          - button "Additional model information" [ref=e824] [cursor=pointer]
+                    - cell "272k" [ref=e829]
+                    - cell "1M" [ref=e830]
+                    - cell [ref=e831]:
+                      - generic [ref=e832]:
+                        - 'button "Agent capability: Can use tools" [ref=e833] [cursor=pointer]':
+                          - img "Agent" [ref=e834]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e836] [cursor=pointer]':
+                          - img "Thinking" [ref=e837]
+                        - 'button "Image capability: Accepts image inputs" [ref=e839] [cursor=pointer]'
+                  - row [ref=e844]:
+                    - cell [ref=e845]:
+                      - generic [ref=e846]:
+                        - button "OpenAI provider" [ref=e848] [cursor=pointer]:
+                          - img "OpenAI" [ref=e850]
+                        - generic [ref=e851]:
+                          - link "GPT-5.6 Sol" [ref=e852] [cursor=pointer]:
+                            - /url: /docs/models/gpt-5-6-sol
+                          - button "Additional model information" [ref=e853] [cursor=pointer]
+                    - cell "272k" [ref=e858]
+                    - cell "1M" [ref=e859]
+                    - cell [ref=e860]:
+                      - generic [ref=e861]:
+                        - 'button "Agent capability: Can use tools" [ref=e862] [cursor=pointer]':
+                          - img "Agent" [ref=e863]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e865] [cursor=pointer]':
+                          - img "Thinking" [ref=e866]
+                        - 'button "Image capability: Accepts image inputs" [ref=e868] [cursor=pointer]'
+                  - row [ref=e873]:
+                    - cell [ref=e874]:
+                      - generic [ref=e875]:
+                        - button "OpenAI provider" [ref=e877] [cursor=pointer]:
+                          - img "OpenAI" [ref=e879]
+                        - generic [ref=e880]:
+                          - link "GPT-5.6 Terra" [ref=e881] [cursor=pointer]:
+                            - /url: /docs/models/gpt-5-6-terra
+                          - button "Additional model information" [ref=e882] [cursor=pointer]
+                    - cell "272k" [ref=e887]
+                    - cell "1M" [ref=e888]
+                    - cell [ref=e889]:
+                      - generic [ref=e890]:
+                        - 'button "Agent capability: Can use tools" [ref=e891] [cursor=pointer]':
+                          - img "Agent" [ref=e892]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e894] [cursor=pointer]':
+                          - img "Thinking" [ref=e895]
+                        - 'button "Image capability: Accepts image inputs" [ref=e897] [cursor=pointer]'
+                  - row [ref=e902]:
+                    - cell [ref=e903]:
+                      - generic [ref=e904]:
+                        - button "Cursor provider" [ref=e906] [cursor=pointer]:
+                          - img "Cursor" [ref=e907]
+                        - generic [ref=e908]:
+                          - link "Grok 4.5" [ref=e909] [cursor=pointer]:
+                            - /url: /docs/models/grok-4-5
+                          - button "Additional model information" [ref=e910] [cursor=pointer]
+                    - cell "256k" [ref=e915]
+                    - cell "-" [ref=e916]
+                    - cell [ref=e917]:
+                      - generic [ref=e918]:
+                        - 'button "Agent capability: Can use tools" [ref=e919] [cursor=pointer]':
+                          - img "Agent" [ref=e920]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e922] [cursor=pointer]':
+                          - img "Thinking" [ref=e923]
+                  - row [ref=e925]:
+                    - cell [ref=e926]:
+                      - generic [ref=e927]:
+                        - button "Cursor provider" [ref=e929] [cursor=pointer]:
+                          - img "Cursor" [ref=e930]
+                        - generic [ref=e931]:
+                          - link "Grok 4.6" [ref=e932] [cursor=pointer]:
+                            - /url: /docs/models/grok-4-6
+                          - button "Additional model information" [ref=e933] [cursor=pointer]
+                    - cell "256k" [ref=e938]
+                    - cell "-" [ref=e939]
+                    - cell [ref=e940]:
+                      - generic [ref=e941]:
+                        - 'button "Agent capability: Can use tools" [ref=e942] [cursor=pointer]':
+                          - img "Agent" [ref=e943]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e945] [cursor=pointer]':
+                          - img "Thinking" [ref=e946]
+                  - row [ref=e948]:
+                    - cell [ref=e949]:
+                      - generic [ref=e950]:
+                        - button "Cursor provider" [ref=e952] [cursor=pointer]:
+                          - img "Cursor" [ref=e953]
+                        - generic [ref=e954]:
+                          - link "Grok 4.7" [ref=e955] [cursor=pointer]:
+                            - /url: /docs/models/grok-4-7
+                          - button "Additional model information" [ref=e956] [cursor=pointer]
+                    - cell "256k" [ref=e961]
+                    - cell "500k" [ref=e962]
+                    - cell [ref=e963]:
+                      - generic [ref=e964]:
+                        - 'button "Agent capability: Can use tools" [ref=e965] [cursor=pointer]':
+                          - img "Agent" [ref=e966]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e968] [cursor=pointer]':
+                          - img "Thinking" [ref=e969]
+                  - row [ref=e971]:
+                    - cell [ref=e972]:
+                      - generic [ref=e973]:
+                        - button "Meta provider" [ref=e975] [cursor=pointer]:
+                          - img "Meta" [ref=e976]
+                        - generic [ref=e977]:
+                          - link "Muse Wonder" [ref=e978] [cursor=pointer]:
+                            - /url: /docs/models/muse-wonder
+                          - button "Additional model information" [ref=e979] [cursor=pointer]
+                    - cell "300k" [ref=e984]
+                    - cell "1M" [ref=e985]
+                    - cell [ref=e986]:
+                      - generic [ref=e987]:
+                        - 'button "Agent capability: Can use tools" [ref=e988] [cursor=pointer]':
+                          - img "Agent" [ref=e989]
+                        - 'button "Thinking capability: Uses reasoning tokens" [ref=e991] [cursor=pointer]':
+                          - img "Thinking" [ref=e992]
+                        - 'button "Image capability: Accepts image inputs" [ref=e994] [cursor=pointer]'
+              - button "Show more models" [ref=e1000] [cursor=pointer]
+            - heading [level=2] [ref=e1001]:
+              - link "Copy link to more-resources" [ref=e1002] [cursor=pointer]:
+                - /url: "#more-resources"
+                - generic [ref=e1003]: More resources
+            - generic [ref=e1011]:
+              - link [ref=e1012] [cursor=pointer]:
+                - /url: https://cursor.com/downloads
+                - paragraph [ref=e1017]: Downloads
+                - paragraph [ref=e1020]: Get Cursor for your computer
+              - link [ref=e1021] [cursor=pointer]:
+                - /url: /help
+                - paragraph [ref=e1026]: Help
+                - paragraph [ref=e1029]: Find answers to common questions and troubleshooting guides
+              - button [ref=e1030] [cursor=pointer]:
+                - paragraph [ref=e1035]: Support
+                - paragraph [ref=e1038]: For account and billing questions, contact our support team
+        - navigation [ref=e1041]:
+          - generic [ref=e1042]:
+            - list [ref=e1043]:
+              - listitem [ref=e1044]:
+                - link "Start here" [ref=e1045] [cursor=pointer]:
+                  - /url: "#start-here"
+              - listitem [ref=e1046]:
+                - link "What you can do with Cursor" [ref=e1047] [cursor=pointer]:
+                  - /url: "#what-you-can-do-with-cursor"
+              - listitem [ref=e1048]:
+                - link "Models" [ref=e1049] [cursor=pointer]:
+                  - /url: "#models"
+              - listitem [ref=e1050]:
+                - link "More resources" [ref=e1051] [cursor=pointer]:
+                  - /url: "#more-resources"
+            - button "Copy page" [ref=e1055] [cursor=pointer]

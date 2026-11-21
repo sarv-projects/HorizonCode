@@ -1,0 +1,240 @@
+- generic [active] [ref=f107e1]:
+  - alert [ref=f107e2]
+  - generic [ref=f107e3]:
+    - generic [ref=f107e4]:
+      - link "Skip to main content" [ref=f107e5] [cursor=pointer]:
+        - /url: "#main-content"
+      - generic [ref=f107e6]:
+        - banner [ref=f107e7]:
+          - generic [ref=f107e8]:
+            - generic [ref=f107e9]:
+              - link "Cursor Home" [ref=f107e10] [cursor=pointer]:
+                - /url: /docs
+                - img "Cursor Logo" [ref=f107e11]
+              - navigation [ref=f107e14]:
+                - link "Docs" [ref=f107e15] [cursor=pointer]:
+                  - /url: /docs
+                - link "API" [ref=f107e16] [cursor=pointer]:
+                  - /url: /docs/api
+                - link "Learn" [ref=f107e17] [cursor=pointer]:
+                  - /url: /learn
+                - link "Help" [ref=f107e19] [cursor=pointer]:
+                  - /url: /help
+            - button "Search docs... ⌘K" [ref=f107e23] [cursor=pointer]:
+              - generic [ref=f107e27]: Search docs...
+              - generic [ref=f107e28]: ⌘K
+            - generic [ref=f107e30]:
+              - link "Sign in" [ref=f107e31] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard
+              - link "Download" [ref=f107e32] [cursor=pointer]:
+                - /url: https://cursor.com/downloads
+        - generic [ref=f107e33]:
+          - heading "Command Palette" [level=2] [ref=f107e34]
+          - paragraph [ref=f107e35]: Search for a command to run...
+      - generic [ref=f107e36]:
+        - generic [ref=f107e38]:
+          - button [ref=f107e39]:
+            - button "Toggle Course Sidebar" [ref=f107e41] [cursor=pointer]
+          - generic [ref=f107e45]:
+            - generic [ref=f107e46]:
+              - link [ref=f107e47] [cursor=pointer]:
+                - /url: /learn
+                - heading "AI Foundations" [level=2] [ref=f107e48]
+              - generic [ref=f107e49]:
+                - link "1 How AI models work" [ref=f107e50] [cursor=pointer]:
+                  - /url: /learn/how-ai-models-work
+                  - generic [ref=f107e51]:
+                    - generic [ref=f107e52]: "1"
+                    - generic [ref=f107e54]: How AI models work
+                - link "2 Hallucination & limitations" [ref=f107e55] [cursor=pointer]:
+                  - /url: /learn/hallucination-limitations
+                  - generic [ref=f107e56]:
+                    - generic [ref=f107e57]: "2"
+                    - generic [ref=f107e59]: Hallucination & limitations
+                - link "3 Tokens & pricing" [ref=f107e60] [cursor=pointer]:
+                  - /url: /learn/tokens-pricing
+                  - generic [ref=f107e61]:
+                    - generic [ref=f107e62]: "3"
+                    - generic [ref=f107e64]: Tokens & pricing
+                - link "4 Context" [ref=f107e65] [cursor=pointer]:
+                  - /url: /learn/context
+                  - generic [ref=f107e66]:
+                    - generic [ref=f107e67]: "4"
+                    - generic [ref=f107e69]: Context
+                - link "5 Tool calling" [ref=f107e70] [cursor=pointer]:
+                  - /url: /learn/tool-calling
+                  - generic [ref=f107e71]:
+                    - generic [ref=f107e72]: "5"
+                    - generic [ref=f107e74]: Tool calling
+                - link "6 Agents" [ref=f107e75] [cursor=pointer]:
+                  - /url: /learn/agents
+                  - generic [ref=f107e76]:
+                    - generic [ref=f107e77]: "6"
+                    - generic [ref=f107e79]: Agents
+            - generic [ref=f107e80]:
+              - heading "Coding Agents" [level=2] [ref=f107e81]
+              - generic [ref=f107e82]:
+                - link "1 Working with agents" [ref=f107e83] [cursor=pointer]:
+                  - /url: /learn/working-with-agents
+                  - generic [ref=f107e84]:
+                    - generic [ref=f107e85]: "1"
+                    - generic [ref=f107e87]: Working with agents
+                - link "2 Understanding your codebase" [ref=f107e88] [cursor=pointer]:
+                  - /url: /learn/understanding-your-codebase
+                  - generic [ref=f107e89]:
+                    - generic [ref=f107e90]: "2"
+                    - generic [ref=f107e92]: Understanding your codebase
+                - link "3 Developing features" [ref=f107e93] [cursor=pointer]:
+                  - /url: /learn/creating-features
+                  - generic [ref=f107e94]:
+                    - generic [ref=f107e95]: "3"
+                    - generic [ref=f107e97]: Developing features
+                - link "4 Finding and fixing bugs" [ref=f107e98] [cursor=pointer]:
+                  - /url: /learn/finding-fixing-bugs
+                  - generic [ref=f107e99]:
+                    - generic [ref=f107e100]: "4"
+                    - generic [ref=f107e102]: Finding and fixing bugs
+                - link "5 Reviewing and testing code" [ref=f107e103] [cursor=pointer]:
+                  - /url: /learn/reviewing-testing
+                  - generic [ref=f107e104]:
+                    - generic [ref=f107e105]: "5"
+                    - generic [ref=f107e107]: Reviewing and testing code
+                - link "6 Customizing agents" [ref=f107e108] [cursor=pointer]:
+                  - /url: /learn/customizing-agents
+                  - generic [ref=f107e109]:
+                    - generic [ref=f107e110]: "6"
+                    - generic [ref=f107e112]: Customizing agents
+                - link "7 Putting it all together" [ref=f107e113] [cursor=pointer]:
+                  - /url: /learn/putting-it-together
+                  - generic [ref=f107e114]:
+                    - generic [ref=f107e115]: "7"
+                    - generic [ref=f107e117]: Putting it all together
+        - main [ref=f107e118]:
+          - generic [ref=f107e120]:
+            - region "video player" [ref=f107e125]:
+              - button "play" [ref=f107e129] [cursor=pointer]
+            - generic [ref=f107e133]:
+              - text: Coding Agents
+              - generic [ref=f107e134]:
+                - heading "Understanding your codebase" [level=1] [ref=f107e135]
+                - paragraph [ref=f107e136]: One of the most important jobs of a software engineer is building a mental map of a codebase and deeply understanding how the system works. As a project grows, it gets harder and harder to find the right code.
+                - paragraph [ref=f107e137]: In the past, going through a large codebase meant memorizing regex patterns or learning specialized tools to search effectively. With coding agents, you can describe what you're looking for in natural language and let the agent use tools to find it for you.
+                - paragraph [ref=f107e138]: Cursor gives agents specific tools to search effectively, and understanding how these tools work will help you ask better questions and get more accurate results.
+                - heading [level=2] [ref=f107e139]:
+                  - link "Copy link to agentic-search" [ref=f107e140] [cursor=pointer]:
+                    - /url: "#agentic-search"
+                    - generic [ref=f107e141]: Agentic search
+                - paragraph [ref=f107e149]: The most precise way to find a piece of code is to look for an exact match, whether that's the name of a function, a variable, or other parts of code.
+                - paragraph [ref=f107e150]:
+                  - text: Agents can use
+                  - code [ref=f107e151]: grep
+                  - text: ", a tool for finding exact strings, and they're able to create more complicated regex patterns or word boundary matches. There have also been improvements over"
+                  - code [ref=f107e152]: grep
+                  - text: ", like"
+                  - code [ref=f107e153]: ripgrep
+                  - text: ", which make searching recursive."
+                - paragraph [ref=f107e154]:
+                  - text: Both of these tools work great. However, Cursor has improved grep even further with
+                  - link "Instant Grep" [ref=f107e155] [cursor=pointer]:
+                    - /url: /changelog/2-1#instant-grep-beta
+                  - text: ", which can speed up agentic searches on large codebases by a significant amount over"
+                  - code [ref=f107e156]: ripgrep
+                  - text: .
+                - paragraph [ref=f107e158]: You don't need to configure anything or change your behavior to use these tools. Cursor provides them automatically, and when you chat with an agent, it uses them under the hood.
+                - heading [level=2] [ref=f107e159]:
+                  - link "Copy link to search-by-meaning" [ref=f107e160] [cursor=pointer]:
+                    - /url: "#search-by-meaning"
+                    - generic [ref=f107e161]: Search by meaning
+                - paragraph [ref=f107e169]:
+                  - text: When you don't know the exact symbol or text, Agent can search your codebase by meaning. It combines this with grep to find relevant files and trace exact references. See
+                  - link "how Agent searches your codebase" [ref=f107e170] [cursor=pointer]:
+                    - /url: /docs/agent/tools/search
+                  - text: for details.
+                - heading [level=2] [ref=f107e171]:
+                  - link "Copy link to asking-good-questions" [ref=f107e172] [cursor=pointer]:
+                    - /url: "#asking-good-questions"
+                    - generic [ref=f107e173]: Asking good questions
+                - paragraph [ref=f107e181]: "The way you phrase questions affects which search tools the agent uses and how effective the results are. It's a spectrum from specific to broad: you might start by asking for an exact text match like the name of a function, all the way up to broad searches like \"help me understand what happens when a user submits a payment in our application.\""
+                - paragraph [ref=f107e182]: Start specific when you know what you're looking for. Go broad when you're exploring unfamiliar territory. Let's look at some examples.
+                - paragraph [ref=f107e183]:
+                  - text: In this first example, the agent starts with grep because the prompt asks for something specific. It searches for
+                  - code [ref=f107e184]: import.*PaymentService
+                  - text: to find every file that references the service.
+                - generic [ref=f107e185]:
+                  - generic [ref=f107e186]: "Ask mode example: Targeted search"
+                  - generic [ref=f107e187]: Find all files that import from our PaymentService and show me how they handle the PaymentFailedError.
+                  - button "See Cursor's response" [ref=f107e189] [cursor=pointer]
+                - paragraph [ref=f107e195]: When you're exploring unfamiliar territory, go broader. In this next example, we're asking a general question about how the application handles failed payments. Notice how the first tool call is "Search codebase." Agent finds relevant files, then follows up with grep to fill in the details.
+                - generic [ref=f107e196]:
+                  - generic [ref=f107e197]: "Ask mode example: Broad exploration"
+                  - generic [ref=f107e198]: How does our application handle failed payments? Walk me through the error flow from the checkout form to the error message the user sees.
+                  - button "See Cursor's response" [ref=f107e200] [cursor=pointer]
+                - heading [level=2] [ref=f107e206]:
+                  - link "Copy link to the-explore-subagent" [ref=f107e207] [cursor=pointer]:
+                    - /url: "#the-explore-subagent"
+                    - generic [ref=f107e208]: The Explore subagent
+                - paragraph [ref=f107e216]: The agent can also spawn subagents to complete tasks more efficiently.
+                - paragraph [ref=f107e217]:
+                  - text: There's a built-in
+                  - link "Explore subagent" [ref=f107e218] [cursor=pointer]:
+                    - /url: /docs/subagents
+                  - text: that helps you search through your codebase. The Explore subagent runs in its own context window from the parent agent and uses a faster model, so it can execute many parallel searches without bloating the main conversation.
+                - paragraph [ref=f107e219]: You don't have to invoke this manually. The agent will use it when it decides it's relevant. However, you can also ask to use the subagent directly if you prefer.
+                - paragraph [ref=f107e220]:
+                  - text: Like we talked about in the
+                  - link "foundations course" [ref=f107e221] [cursor=pointer]:
+                    - /url: /learn/context
+                  - text: ", understanding and keeping an eye on your context usage matters. If you're searching through many files in your codebase, this will generate a lot of context. Subagents can significantly improve your context management by only returning their findings and keeping the main conversation focused."
+                - heading [level=2] [ref=f107e222]:
+                  - link "Copy link to architectural-diagrams" [ref=f107e223] [cursor=pointer]:
+                    - /url: "#architectural-diagrams"
+                    - generic [ref=f107e224]: Architectural diagrams
+                - paragraph [ref=f107e232]:
+                  - text: For large or unfamiliar codebases, you can ask the agent to generate architectural diagrams, like
+                  - link "Mermaid diagrams" [ref=f107e233] [cursor=pointer]:
+                    - /url: /learn/understanding-your-codebase
+                  - text: ", to help you visualize your codebase."
+                - generic [ref=f107e234]:
+                  - generic [ref=f107e235]: "Ask mode example: Architecture diagram"
+                  - generic [ref=f107e236]: Create a Mermaid diagram showing the data flow for our payment system, including the checkout form, API routes, payment service, and Stripe integration.
+                  - button "See Cursor's response" [ref=f107e238] [cursor=pointer]
+                - paragraph [ref=f107e244]: These diagrams are useful for onboarding, documentation, and design reviews. They can also reveal architectural issues, like a service that depends on too many other services, or a data flow that takes an unexpected path.
+                - heading [level=2] [ref=f107e245]:
+                  - link "Copy link to common-failure-pattern-changing-before-understanding" [ref=f107e246] [cursor=pointer]:
+                    - /url: "#common-failure-pattern-changing-before-understanding"
+                    - generic [ref=f107e247]: "Common failure pattern: changing before understanding"
+                - paragraph [ref=f107e255]: A common mistake is asking the agent to change code without first understanding what exists. The agent might create a new utility function when one already exists, or use a different pattern than the rest of your codebase.
+                - paragraph [ref=f107e256]: "Before asking for changes, ask the agent to explore first:"
+                - generic [ref=f107e257]:
+                  - generic [ref=f107e258]: "Ask mode example: Explore before changing"
+                  - generic [ref=f107e259]: Before making any changes, show me how our existing form validation works. What patterns do we use, and where are the shared validators?
+                  - button "See Cursor's response" [ref=f107e261] [cursor=pointer]
+                - paragraph [ref=f107e267]: Coding agents take your requests literally. Where you don't provide intent, they use their best judgment. Sometimes that works well. But for changes that need to follow existing patterns, you'll get better results when you understand the codebase first and know specifically what to ask for.
+                - heading [level=2] [ref=f107e268]:
+                  - link "Copy link to whats-next" [ref=f107e269] [cursor=pointer]:
+                    - /url: "#whats-next"
+                    - generic [ref=f107e270]: What's next
+                - paragraph [ref=f107e278]: "You can find and understand code. In the next chapter, you'll learn how to go from understanding to shipping: planning features, writing tests, and turning designs into code."
+              - generic [ref=f107e280]:
+                - heading "You've completed this chapter" [level=2] [ref=f107e281]
+                - link "Keep learning Arrow pointing right" [ref=f107e283] [cursor=pointer]:
+                  - /url: /learn/creating-features
+                  - text: Keep learning
+                  - img "Arrow pointing right" [ref=f107e284]
+    - region "Cookie notice" [ref=f107e286]:
+      - button "Dismiss cookie notice" [ref=f107e287] [cursor=pointer]
+      - paragraph [ref=f107e288]:
+        - text: Essential cookies keep the site working and stay on. Optional cookies help with performance and advertising — accept, reject, or manage them. Learn more in our
+        - link "Cookie Policy" [ref=f107e289] [cursor=pointer]:
+          - /url: https://cursor.com/cookie-policy
+        - text: ","
+        - link "Privacy Policy" [ref=f107e290] [cursor=pointer]:
+          - /url: https://cursor.com/privacy
+        - text: ", and"
+        - link "Terms of Service" [ref=f107e291] [cursor=pointer]:
+          - /url: https://cursor.com/terms-of-service
+        - text: .
+      - generic [ref=f107e292]:
+        - button "Cookies Settings" [ref=f107e293] [cursor=pointer]
+        - button "Reject All" [ref=f107e294] [cursor=pointer]
+        - button "Accept All Cookies" [ref=f107e295] [cursor=pointer]

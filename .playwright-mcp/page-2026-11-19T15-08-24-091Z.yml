@@ -1,0 +1,567 @@
+- generic [ref=f51e3]:
+  - link "Skip to main content" [ref=f51e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f51e5]:
+    - banner [ref=f51e6]:
+      - generic [ref=f51e7]:
+        - generic [ref=f51e8]:
+          - link "Cursor Home" [ref=f51e9] [cursor=pointer]:
+            - /url: /docs
+            - img "Cursor Logo" [ref=f51e10]
+          - navigation [ref=f51e13]:
+            - link "Docs" [ref=f51e14] [cursor=pointer]:
+              - /url: /docs
+            - link "API" [ref=f51e16] [cursor=pointer]:
+              - /url: /docs/api
+            - link "Learn" [ref=f51e17] [cursor=pointer]:
+              - /url: /learn
+            - link "Help" [ref=f51e18] [cursor=pointer]:
+              - /url: /help
+        - button "Search docs... ⌘K" [ref=f51e22] [cursor=pointer]:
+          - generic [ref=f51e26]: Search docs...
+          - generic [ref=f51e27]: ⌘K
+    - generic [ref=f51e32]:
+      - heading "Command Palette" [level=2] [ref=f51e33]
+      - paragraph [ref=f51e34]: Search for a command to run...
+  - generic [ref=f51e35]:
+    - generic [ref=f51e37]:
+      - button [ref=f51e38]:
+        - button "Toggle Docs Sidebar" [ref=f51e40] [cursor=pointer]
+      - generic [ref=f51e44]:
+        - generic [ref=f51e45]:
+          - heading "Get Started" [level=2] [ref=f51e46]
+          - generic [ref=f51e47]:
+            - link "Welcome" [ref=f51e48] [cursor=pointer]:
+              - /url: /docs
+            - link "Quickstart" [ref=f51e51] [cursor=pointer]:
+              - /url: /docs/get-started/quickstart
+            - button "Models & Pricing" [ref=f51e54] [cursor=pointer]
+            - link "Changelog" [ref=f51e60] [cursor=pointer]:
+              - /url: https://cursor.com/changelog
+            - link "Release Notes" [ref=f51e63] [cursor=pointer]:
+              - /url: /docs/release-notes
+        - generic [ref=f51e66]:
+          - heading "Agent" [level=2] [ref=f51e67]
+          - generic [ref=f51e68]:
+            - link "Overview" [ref=f51e69] [cursor=pointer]:
+              - /url: /docs/agent/overview
+            - link "Agents Window" [ref=f51e72] [cursor=pointer]:
+              - /url: /docs/agent/agents-window
+            - link "Projects" [ref=f51e75] [cursor=pointer]:
+              - /url: /docs/agent/projects
+            - link "Agent Review" [ref=f51e78] [cursor=pointer]:
+              - /url: /docs/agent/agent-review
+            - link "Planning" [ref=f51e81] [cursor=pointer]:
+              - /url: /docs/agent/plan-mode
+            - link "Prompting" [ref=f51e84] [cursor=pointer]:
+              - /url: /docs/agent/prompting
+            - link "Voice Chat" [ref=f51e87] [cursor=pointer]:
+              - /url: /docs/agent/voice-chat
+            - link "Debugging" [ref=f51e90] [cursor=pointer]:
+              - /url: /docs/agent/debug-mode
+            - link "Design Mode" [ref=f51e93] [cursor=pointer]:
+              - /url: /docs/agent/design-mode
+            - button "Tools" [ref=f51e96] [cursor=pointer]
+            - button "Security" [ref=f51e102] [cursor=pointer]
+        - generic [ref=f51e108]:
+          - heading "Customize" [level=2] [ref=f51e109]
+          - generic [ref=f51e110]:
+            - link "Overview" [ref=f51e111] [cursor=pointer]:
+              - /url: /docs/customize-cursor
+            - link "Plugins" [ref=f51e114] [cursor=pointer]:
+              - /url: /docs/plugins
+            - link "Rules" [ref=f51e117] [cursor=pointer]:
+              - /url: /docs/rules
+            - link "Skills" [ref=f51e120] [cursor=pointer]:
+              - /url: /docs/skills
+            - link "Subagents" [ref=f51e123] [cursor=pointer]:
+              - /url: /docs/subagents
+            - link "Hooks" [ref=f51e126] [cursor=pointer]:
+              - /url: /docs/hooks
+            - link "MCP" [ref=f51e129] [cursor=pointer]:
+              - /url: /docs/mcp
+        - generic [ref=f51e132]:
+          - heading "Cloud Agents" [level=2] [ref=f51e133]
+          - generic [ref=f51e134]:
+            - link "Overview" [ref=f51e135] [cursor=pointer]:
+              - /url: /docs/cloud-agent
+            - link "Setup" [ref=f51e138] [cursor=pointer]:
+              - /url: /docs/cloud-agent/setup
+            - link "Builds" [ref=f51e141] [cursor=pointer]:
+              - /url: /docs/cloud-agent/builds
+            - link "Apps" [ref=f51e144] [cursor=pointer]:
+              - /url: /docs/cloud-agent/apps
+            - button "Capabilities" [ref=f51e147] [cursor=pointer]
+            - link "Best Practices" [ref=f51e153] [cursor=pointer]:
+              - /url: /docs/cloud-agent/best-practices
+            - link "Choose Where Cloud Agents Run" [ref=f51e156] [cursor=pointer]:
+              - /url: /docs/cloud-agent/self-hosted/choose-runtime
+            - link "Automations" [ref=f51e159] [cursor=pointer]:
+              - /url: /docs/cloud-agent/automations
+            - link "Bugbot" [ref=f51e162] [cursor=pointer]:
+              - /url: /docs/bugbot
+            - link "Security Review" [ref=f51e165] [cursor=pointer]:
+              - /url: /docs/security-review
+            - link "Vulnerability Remediation" [ref=f51e168] [cursor=pointer]:
+              - /url: /docs/vulnerability-remediation
+            - link "PR Routing & Approval" [ref=f51e171] [cursor=pointer]:
+              - /url: /docs/approval-agents
+            - link "Rollouts" [ref=f51e174] [cursor=pointer]:
+              - /url: /docs/rollouts
+            - link "Mobile" [ref=f51e177] [cursor=pointer]:
+              - /url: /docs/cloud-agent/mobile
+            - button "Security" [ref=f51e180] [cursor=pointer]
+            - button "Self-Hosted Machines" [ref=f51e186] [cursor=pointer]
+            - link "Settings" [ref=f51e192] [cursor=pointer]:
+              - /url: /docs/cloud-agent/settings
+            - link "API" [ref=f51e195] [cursor=pointer]:
+              - /url: /docs/cloud-agent/api/endpoints
+        - generic [ref=f51e198]:
+          - heading "Origin" [level=2] [ref=f51e199]
+          - generic [ref=f51e200]:
+            - link "Overview" [ref=f51e201] [cursor=pointer]:
+              - /url: /docs/origin
+            - button "CLI" [ref=f51e204] [cursor=pointer]
+            - link "Create a repository" [ref=f51e210] [cursor=pointer]:
+              - /url: /docs/origin/create-repository
+            - link "Mirror GitHub" [ref=f51e213] [cursor=pointer]:
+              - /url: /docs/origin/mirror-github
+            - link "Clone, Push & Pull" [ref=f51e216] [cursor=pointer]:
+              - /url: /docs/origin/git
+            - link "CloneKit in CI" [ref=f51e219] [cursor=pointer]:
+              - /url: /docs/origin/clonekit-ci
+            - link "Pull requests" [ref=f51e222] [cursor=pointer]:
+              - /url: /docs/origin/pull-requests
+            - link "Code Tours" [ref=f51e225] [cursor=pointer]:
+              - /url: /docs/origin/code-tours
+            - link "Browse & Search" [ref=f51e228] [cursor=pointer]:
+              - /url: /docs/origin/browse
+            - link "Agents and Automations" [ref=f51e231] [cursor=pointer]:
+              - /url: /docs/origin/agents
+            - button "Apps" [ref=f51e234] [cursor=pointer]
+            - link "Settings" [ref=f51e240] [cursor=pointer]:
+              - /url: /docs/origin/settings
+        - generic [ref=f51e243]:
+          - heading "Integrations" [level=2] [ref=f51e244]
+          - generic [ref=f51e245]:
+            - link "Slack" [ref=f51e246] [cursor=pointer]:
+              - /url: /docs/integrations/slack
+            - link "Microsoft Teams" [ref=f51e249] [cursor=pointer]:
+              - /url: /docs/integrations/microsoft-teams
+            - link "Jira" [ref=f51e252] [cursor=pointer]:
+              - /url: /docs/integrations/jira
+            - link "Linear" [ref=f51e255] [cursor=pointer]:
+              - /url: /docs/integrations/linear
+            - link "Notion" [ref=f51e258] [cursor=pointer]:
+              - /url: /docs/integrations/notion
+            - link "GitHub" [ref=f51e261] [cursor=pointer]:
+              - /url: /docs/integrations/github
+            - link "GitLab" [ref=f51e264] [cursor=pointer]:
+              - /url: /docs/integrations/gitlab
+            - link "Azure DevOps" [ref=f51e267] [cursor=pointer]:
+              - /url: /docs/integrations/azure-devops
+            - link "Bitbucket" [ref=f51e270] [cursor=pointer]:
+              - /url: /docs/integrations/bitbucket
+            - link "JetBrains" [ref=f51e273] [cursor=pointer]:
+              - /url: /docs/integrations/jetbrains
+            - link "Xcode" [ref=f51e276] [cursor=pointer]:
+              - /url: /docs/integrations/xcode
+            - link "Tailscale" [ref=f51e279] [cursor=pointer]:
+              - /url: /docs/integrations/tailscale
+            - link "Deeplinks" [ref=f51e282] [cursor=pointer]:
+              - /url: /docs/reference/deeplinks
+        - generic [ref=f51e285]:
+          - heading "SDK" [level=2] [ref=f51e286]
+          - generic [ref=f51e287]:
+            - link "TypeScript" [ref=f51e288] [cursor=pointer]:
+              - /url: /docs/sdk/typescript
+            - link "Python" [ref=f51e291] [cursor=pointer]:
+              - /url: /docs/sdk/python
+            - link "Bridge" [ref=f51e294] [cursor=pointer]:
+              - /url: /docs/sdk/bridge
+            - link "Changelog" [ref=f51e297] [cursor=pointer]:
+              - /url: /docs/release-notes/sdk
+        - generic [ref=f51e300]:
+          - heading "Agent SDK" [level=2] [ref=f51e301]
+          - generic [ref=f51e302]:
+            - button "Getting started" [ref=f51e303] [cursor=pointer]
+            - button "Integrations" [ref=f51e309] [cursor=pointer]
+            - button "Extensions" [ref=f51e315] [cursor=pointer]
+            - button "Guides" [ref=f51e321] [cursor=pointer]
+            - button "Templates" [ref=f51e327] [cursor=pointer]
+            - button "Reference" [ref=f51e333] [cursor=pointer]
+        - generic [ref=f51e339]:
+          - heading "CLI" [level=2] [ref=f51e340]
+          - generic [ref=f51e341]:
+            - link "Overview" [ref=f51e342] [cursor=pointer]:
+              - /url: /docs/cli/overview
+            - link "Installation" [ref=f51e345] [cursor=pointer]:
+              - /url: /docs/cli/installation
+            - link "Capabilities" [ref=f51e348] [cursor=pointer]:
+              - /url: /docs/cli/using
+            - link "Changelog" [ref=f51e351] [cursor=pointer]:
+              - /url: /docs/cli/changelog
+            - link "Shell Mode" [ref=f51e354] [cursor=pointer]:
+              - /url: /docs/cli/shell-mode
+            - link "ACP" [ref=f51e357] [cursor=pointer]:
+              - /url: /docs/cli/acp
+            - link "Headless / CI" [ref=f51e360] [cursor=pointer]:
+              - /url: /docs/cli/headless
+            - button "Reference" [ref=f51e363] [cursor=pointer]
+        - generic [ref=f51e369]:
+          - heading "Teams & Enterprise" [level=2] [ref=f51e370]
+          - generic [ref=f51e371]:
+            - button "Teams" [ref=f51e372] [cursor=pointer]
+            - button "Enterprise" [ref=f51e378] [cursor=pointer]
+    - main [ref=f51e384]:
+      - generic [ref=f51e387]:
+        - generic [ref=f51e388]:
+          - generic [ref=f51e389]: CLI
+          - generic [ref=f51e391]:
+            - heading "Using Headless CLI" [level=1] [ref=f51e392]
+            - paragraph [ref=f51e393]: Use Cursor CLI in scripts and automation workflows for code analysis, generation, and refactoring tasks.
+            - heading [level=2] [ref=f51e394]:
+              - link "Copy link to how-it-works" [ref=f51e395] [cursor=pointer]:
+                - /url: "#how-it-works"
+                - generic [ref=f51e396]: How it works
+            - paragraph [ref=f51e404]:
+              - text: Use
+              - link "print mode" [ref=f51e405] [cursor=pointer]:
+                - /url: /docs/cli/using#non-interactive-mode
+              - text: (
+              - code [ref=f51e406]: "-p, --print"
+              - text: ) for non-interactive scripting and automation.
+            - heading [level=3] [ref=f51e407]:
+              - link "Copy link to file-modification-in-scripts" [ref=f51e408] [cursor=pointer]:
+                - /url: "#file-modification-in-scripts"
+                - generic [ref=f51e409]: File modification in scripts
+            - paragraph [ref=f51e417]:
+              - text: Print mode follows the same approval rules as an interactive session, but it can't stop to ask you. Without
+              - code [ref=f51e418]: "--force"
+              - text: ", anything that runs without approval still runs, and anything that would need approval is rejected:"
+            - list [ref=f51e419]:
+              - listitem [ref=f51e420]:
+                - strong [ref=f51e421]: "Runs:"
+                - text: file edits inside the workspace, shell commands on your allowlist or that can run in the
+                - link "sandbox" [ref=f51e422] [cursor=pointer]:
+                  - /url: /docs/agent/security/run-modes#sandboxing
+                - text: when sandboxing is on, and anything else your
+                - link [ref=f51e423] [cursor=pointer]:
+                  - /url: /docs/cli/reference/permissions
+                  - code [ref=f51e424]: permissions.allow
+                - text: rules cover.
+              - listitem [ref=f51e425]:
+                - strong [ref=f51e426]: "Rejected:"
+                - text: writes outside the workspace or to protected paths like
+                - code [ref=f51e427]: .vscode/
+                - text: and
+                - code [ref=f51e428]: .git/hooks/
+                - text: ", plus shell commands, MCP tools, and web fetches that aren't allowed."
+            - paragraph [ref=f51e429]:
+              - text: Combine
+              - code [ref=f51e430]: "--print"
+              - text: with
+              - code [ref=f51e431]: "--force"
+              - text: (or
+              - code [ref=f51e432]: "--yolo"
+              - text: ) to run every action without approval, except what
+              - code [ref=f51e433]: permissions.deny
+              - text: and team policies block. If your team admin has disabled Run Everything,
+              - code [ref=f51e434]: "--force"
+              - text: exits with an error instead.
+            - generic [ref=f51e437]:
+              - button [ref=f51e438] [cursor=pointer]
+              - code [ref=f51e444]:
+                - generic [ref=f51e445]: "# Edits workspace files, and rejects actions that need approval"
+                - generic [ref=f51e446]: agent -p "Add JSDoc comments to this file"
+                - generic [ref=f51e448]: "# Runs every action, including ones that would need approval"
+                - generic [ref=f51e449]: agent -p --force "Refactor this code to use modern ES6+ syntax"
+                - generic [ref=f51e451]: "# Batch processing with every action allowed"
+                - generic [ref=f51e452]: find src/ -name "*.js" | while read file; do
+                - generic [ref=f51e453]: agent -p --force "Add comprehensive JSDoc comments to $file"
+                - generic [ref=f51e454]: done
+            - alert [ref=f51e455]:
+              - paragraph [ref=f51e459]:
+                - text: Print mode writes to files in your workspace even without
+                - code [ref=f51e460]: "--force"
+                - text: . If your
+                - link "CLI config" [ref=f51e461] [cursor=pointer]:
+                  - /url: /docs/cli/reference/configuration
+                - text: sets
+                - code [ref=f51e462]: approvalMode
+                - text: to
+                - code [ref=f51e463]: unrestricted
+                - text: ", print mode also runs every action without approval, the same as"
+                - code [ref=f51e464]: "--force"
+                - text: .
+            - heading [level=2] [ref=f51e465]:
+              - link "Copy link to disable-headless-mode-for-your-team" [ref=f51e466] [cursor=pointer]:
+                - /url: "#disable-headless-mode-for-your-team"
+                - generic [ref=f51e467]: Disable headless mode for your team
+            - paragraph [ref=f51e475]:
+              - text: Team admins can block print mode by turning on
+              - strong [ref=f51e476]: Disable CLI headless mode
+              - text: in
+              - link "Team Settings > Security & automation" [ref=f51e477] [cursor=pointer]:
+                - /url: https://cursor.com/dashboard/team-settings?view=extension-security
+              - text: . With it on,
+              - code [ref=f51e478]: agent -p
+              - text: and
+              - code [ref=f51e479]: agent --print
+              - text: exit with an error before sending the prompt. Interactive sessions still work.
+            - paragraph [ref=f51e480]:
+              - text: "The CLI enforces this setting on the member's machine. Cursor's servers don't check it. In print mode, the CLI loads your team's settings at startup and exits if headless mode is disabled. Treat the setting as a usage policy, not a security boundary: a modified client can skip the check, and the run continues when the CLI can't load team settings. It also doesn't cover other ways to run agents without a UI, such as the"
+              - link "Cursor SDK" [ref=f51e481] [cursor=pointer]:
+                - /url: /docs/sdk/typescript
+              - text: .
+            - heading [level=2] [ref=f51e482]:
+              - link "Copy link to setup" [ref=f51e483] [cursor=pointer]:
+                - /url: "#setup"
+                - generic [ref=f51e484]: Setup
+            - paragraph [ref=f51e492]:
+              - text: See
+              - link "Installation" [ref=f51e493] [cursor=pointer]:
+                - /url: /docs/cli/installation
+              - text: and
+              - link "Authentication" [ref=f51e494] [cursor=pointer]:
+                - /url: /docs/cli/reference/authentication
+              - text: for complete setup details.
+            - generic [ref=f51e497]:
+              - button [ref=f51e498] [cursor=pointer]
+              - code [ref=f51e504]:
+                - generic [ref=f51e505]: "# Install Cursor CLI (macOS, Linux, WSL)"
+                - generic [ref=f51e506]: curl https://cursor.com/install -fsS | bash
+                - generic [ref=f51e508]: "# Install Cursor CLI (Windows PowerShell)"
+                - generic [ref=f51e509]: irm 'https://cursor.com/install?win32=true' | iex
+                - generic [ref=f51e511]: "# Set API key for scripts"
+                - generic [ref=f51e512]: export CURSOR_API_KEY=your_api_key_here
+                - generic [ref=f51e513]: agent -p "Analyze this code"
+            - heading [level=2] [ref=f51e514]:
+              - link "Copy link to example-scripts" [ref=f51e515] [cursor=pointer]:
+                - /url: "#example-scripts"
+                - generic [ref=f51e516]: Example scripts
+            - paragraph [ref=f51e524]:
+              - text: Use different output formats for different script needs. See
+              - link "Output format" [ref=f51e525] [cursor=pointer]:
+                - /url: /docs/cli/reference/output-format
+              - text: for details.
+            - heading [level=3] [ref=f51e526]:
+              - link "Copy link to searching-the-codebase" [ref=f51e527] [cursor=pointer]:
+                - /url: "#searching-the-codebase"
+                - generic [ref=f51e528]: Searching the codebase
+            - paragraph [ref=f51e536]:
+              - text: By default,
+              - code [ref=f51e537]: "--print"
+              - text: uses
+              - code [ref=f51e538]: text
+              - text: "format for clean, final-answer-only responses:"
+            - generic [ref=f51e541]:
+              - button [ref=f51e542] [cursor=pointer]
+              - code [ref=f51e548]:
+                - generic [ref=f51e549]: "#!/bin/bash"
+                - generic [ref=f51e550]: "# Simple codebase question - uses text format by default"
+                - generic [ref=f51e552]: agent -p "What does this codebase do?"
+            - heading [level=3] [ref=f51e553]:
+              - link "Copy link to automated-code-review" [ref=f51e554] [cursor=pointer]:
+                - /url: "#automated-code-review"
+                - generic [ref=f51e555]: Automated code review
+            - paragraph [ref=f51e563]:
+              - text: Use
+              - code [ref=f51e564]: "--output-format json"
+              - text: "for structured analysis:"
+            - generic [ref=f51e567]:
+              - button [ref=f51e568] [cursor=pointer]
+              - code [ref=f51e574]:
+                - generic [ref=f51e575]: "#!/bin/bash"
+                - generic [ref=f51e576]: "# simple-code-review.sh - Basic code review script"
+                - generic [ref=f51e578]: echo "Starting code review..."
+                - generic [ref=f51e580]: "# Review recent changes"
+                - generic [ref=f51e581]: agent -p --force --output-format text \
+                - generic [ref=f51e582]: "\"Review the recent code changes and provide feedback on:"
+                - generic [ref=f51e583]: "- Code quality and readability"
+                - generic [ref=f51e584]: "- Potential bugs or issues"
+                - generic [ref=f51e585]: "- Security considerations"
+                - generic [ref=f51e586]: "- Best practices compliance"
+                - generic [ref=f51e588]: Provide specific suggestions for improvement and write to review.txt"
+                - generic [ref=f51e590]: if [ $? -eq 0 ]; then
+                - generic [ref=f51e591]: echo "✅ Code review completed successfully"
+                - generic [ref=f51e592]: else
+                - generic [ref=f51e593]: echo "❌ Code review failed"
+                - generic [ref=f51e594]: exit 1
+                - generic [ref=f51e595]: fi
+            - heading [level=3] [ref=f51e596]:
+              - link "Copy link to real-time-progress-tracking" [ref=f51e597] [cursor=pointer]:
+                - /url: "#real-time-progress-tracking"
+                - generic [ref=f51e598]: Real-time progress tracking
+            - paragraph [ref=f51e606]:
+              - text: Use
+              - code [ref=f51e607]: "--output-format stream-json"
+              - text: for message-level progress tracking, or add
+              - code [ref=f51e608]: "--stream-partial-output"
+              - text: "for incremental streaming of deltas:"
+            - generic [ref=f51e611]:
+              - button [ref=f51e612] [cursor=pointer]
+              - code [ref=f51e618]:
+                - generic [ref=f51e619]: "#!/bin/bash"
+                - generic [ref=f51e620]: "# stream-progress.sh - Track progress in real-time"
+                - generic [ref=f51e622]: echo "🚀 Starting stream processing..."
+                - generic [ref=f51e624]: "# Track progress in real-time"
+                - generic [ref=f51e625]: accumulated_text=""
+                - generic [ref=f51e626]: tool_count=0
+                - generic [ref=f51e627]: start_time=$(date +%s)
+                - generic [ref=f51e629]: agent -p --force --output-format stream-json --stream-partial-output \
+                - generic [ref=f51e630]: "\"Analyze this project structure and create a summary report in analysis.txt\" | \\"
+                - generic [ref=f51e631]: while IFS= read -r line; do
+                - generic [ref=f51e633]: type=$(echo "$line" | jq -r '.type // empty')
+                - generic [ref=f51e634]: subtype=$(echo "$line" | jq -r '.subtype // empty')
+                - generic [ref=f51e636]: case "$type" in
+                - generic [ref=f51e637]: "\"system\")"
+                - generic [ref=f51e638]: if [ "$subtype" = "init" ]; then
+                - generic [ref=f51e639]: model=$(echo "$line" | jq -r '.model // "unknown"')
+                - generic [ref=f51e640]: "echo \"🤖 Using model: $model\""
+                - generic [ref=f51e641]: fi
+                - generic [ref=f51e642]: ;;
+                - generic [ref=f51e644]: "\"assistant\")"
+                - generic [ref=f51e645]: "# Only process streaming deltas (timestamp_ms present, no model_call_id)."
+                - generic [ref=f51e646]: "# Skip buffered flushes before tool calls and at end of turn."
+                - generic [ref=f51e647]: has_ts=$(echo "$line" | jq 'has("timestamp_ms")')
+                - generic [ref=f51e648]: has_mc=$(echo "$line" | jq 'has("model_call_id")')
+                - generic [ref=f51e649]: if [ "$has_ts" = "true" ] && [ "$has_mc" = "false" ]; then
+                - generic [ref=f51e650]: content=$(echo "$line" | jq -r '.message.content[0].text // empty')
+                - generic [ref=f51e651]: accumulated_text="$accumulated_text$content"
+                - generic [ref=f51e652]: "printf \"\\r📝 Generating: %d chars\" ${#accumulated_text}"
+                - generic [ref=f51e653]: fi
+                - generic [ref=f51e654]: ;;
+                - generic [ref=f51e656]: "\"tool_call\")"
+                - generic [ref=f51e657]: if [ "$subtype" = "started" ]; then
+                - generic [ref=f51e658]: tool_count=$((tool_count + 1))
+                - generic [ref=f51e660]: "# Extract tool information"
+                - generic [ref=f51e661]: if echo "$line" | jq -e '.tool_call.writeToolCall' > /dev/null 2>&1; then
+                - generic [ref=f51e662]: path=$(echo "$line" | jq -r '.tool_call.writeToolCall.args.path // "unknown"')
+                - generic [ref=f51e663]: "echo -e \"\\n🔧 Tool #$tool_count: Creating $path\""
+                - generic [ref=f51e664]: elif echo "$line" | jq -e '.tool_call.readToolCall' > /dev/null 2>&1; then
+                - generic [ref=f51e665]: path=$(echo "$line" | jq -r '.tool_call.readToolCall.args.path // "unknown"')
+                - generic [ref=f51e666]: "echo -e \"\\n📖 Tool #$tool_count: Reading $path\""
+                - generic [ref=f51e667]: fi
+                - generic [ref=f51e669]: elif [ "$subtype" = "completed" ]; then
+                - generic [ref=f51e670]: "# Extract and show tool results"
+                - generic [ref=f51e671]: if echo "$line" | jq -e '.tool_call.writeToolCall.result.success' > /dev/null 2>&1; then
+                - generic [ref=f51e672]: lines=$(echo "$line" | jq -r '.tool_call.writeToolCall.result.success.linesCreated // 0')
+                - generic [ref=f51e673]: size=$(echo "$line" | jq -r '.tool_call.writeToolCall.result.success.fileSize // 0')
+                - generic [ref=f51e674]: echo " ✅ Created $lines lines ($size bytes)"
+                - generic [ref=f51e675]: elif echo "$line" | jq -e '.tool_call.readToolCall.result.success' > /dev/null 2>&1; then
+                - generic [ref=f51e676]: lines=$(echo "$line" | jq -r '.tool_call.readToolCall.result.success.totalLines // 0')
+                - generic [ref=f51e677]: echo " ✅ Read $lines lines"
+                - generic [ref=f51e678]: fi
+                - generic [ref=f51e679]: fi
+                - generic [ref=f51e680]: ;;
+                - generic [ref=f51e682]: "\"result\")"
+                - generic [ref=f51e683]: duration=$(echo "$line" | jq -r '.duration_ms // 0')
+                - generic [ref=f51e684]: end_time=$(date +%s)
+                - generic [ref=f51e685]: total_time=$((end_time - start_time))
+                - generic [ref=f51e687]: "echo -e \"\\n\\n🎯 Completed in ${duration}ms (${total_time}s total)\""
+                - generic [ref=f51e688]: "echo \"📊 Final stats: $tool_count tools, ${#accumulated_text} chars generated\""
+                - generic [ref=f51e689]: ;;
+                - generic [ref=f51e690]: esac
+                - generic [ref=f51e691]: done
+            - heading [level=2] [ref=f51e692]:
+              - link "Copy link to working-with-images" [ref=f51e693] [cursor=pointer]:
+                - /url: "#working-with-images"
+                - generic [ref=f51e694]: Working with images
+            - paragraph [ref=f51e702]: To send images, media files, or other binary data to the agent, include file paths in your prompts. The agent can read any files through tool calling, including images, videos, and other formats.
+            - heading [level=3] [ref=f51e703]:
+              - link "Copy link to including-file-paths-in-prompts" [ref=f51e704] [cursor=pointer]:
+                - /url: "#including-file-paths-in-prompts"
+                - generic [ref=f51e705]: Including file paths in prompts
+            - paragraph [ref=f51e713]: "Simply reference file paths in your prompt text. The agent will automatically read the files when needed:"
+            - generic [ref=f51e716]:
+              - button [ref=f51e717] [cursor=pointer]
+              - code [ref=f51e723]:
+                - generic [ref=f51e724]: "# Analyze an image"
+                - generic [ref=f51e725]: "agent -p \"Analyze this image and describe what you see: ./screenshot.png\""
+                - generic [ref=f51e727]: "# Process multiple media files"
+                - generic [ref=f51e728]: "agent -p \"Compare these two images and identify differences: ./before.png ./after.png\""
+                - generic [ref=f51e730]: "# Combine file paths with text instructions"
+                - generic [ref=f51e731]: agent -p "Review the code in src/app.ts and the design mockup in designs/homepage.png. Suggest improvements to match the design."
+            - heading [level=3] [ref=f51e732]:
+              - link "Copy link to how-it-works-1" [ref=f51e733] [cursor=pointer]:
+                - /url: "#how-it-works-1"
+                - generic [ref=f51e734]: How it works
+            - paragraph [ref=f51e742]: "When you include file paths in your prompt:"
+            - list [ref=f51e743]:
+              - listitem [ref=f51e744]: The agent receives your prompt with the file path references
+              - listitem [ref=f51e745]: The agent uses tool calling to read the files automatically
+              - listitem [ref=f51e746]: Images are handled transparently
+              - listitem [ref=f51e747]: You can reference files using relative or absolute paths
+            - heading [level=3] [ref=f51e748]:
+              - link "Copy link to example-image-analysis-script" [ref=f51e749] [cursor=pointer]:
+                - /url: "#example-image-analysis-script"
+                - generic [ref=f51e750]: "Example: Image analysis script"
+            - generic [ref=f51e760]:
+              - button [ref=f51e761] [cursor=pointer]
+              - code [ref=f51e767]:
+                - generic [ref=f51e768]: "#!/bin/bash"
+                - generic [ref=f51e769]: "# analyze-image.sh - Analyze images using the headless CLI"
+                - generic [ref=f51e771]: IMAGE_PATH="./screenshots/ui-mockup.png"
+                - generic [ref=f51e773]: agent -p --output-format json \
+                - generic [ref=f51e774]: "\"Analyze this image and provide a detailed description: $IMAGE_PATH\" | \\"
+                - generic [ref=f51e775]: jq -r '.result'
+            - heading [level=3] [ref=f51e776]:
+              - link "Copy link to example-batch-media-processing" [ref=f51e777] [cursor=pointer]:
+                - /url: "#example-batch-media-processing"
+                - generic [ref=f51e778]: "Example: Batch media processing"
+            - generic [ref=f51e788]:
+              - button [ref=f51e789] [cursor=pointer]
+              - code [ref=f51e795]:
+                - generic [ref=f51e796]: "#!/bin/bash"
+                - generic [ref=f51e797]: "# process-media.sh - Process multiple media files"
+                - generic [ref=f51e799]: for image in images/*.png; do
+                - generic [ref=f51e800]: echo "Processing $image..."
+                - generic [ref=f51e801]: agent -p --output-format text \
+                - generic [ref=f51e802]: "\"Describe what's in this image: $image\" > \"${image%.png}.description.txt\""
+                - generic [ref=f51e803]: done
+            - alert [ref=f51e804]:
+              - paragraph [ref=f51e808]: File paths can be relative to the current working directory or absolute paths. The agent will read files through tool calls, so ensure the files exist and are accessible from where you run the command.
+        - navigation [ref=f51e811]:
+          - generic [ref=f51e812]:
+            - list [ref=f51e813]:
+              - listitem [ref=f51e814]:
+                - link "How it works" [ref=f51e815] [cursor=pointer]:
+                  - /url: "#how-it-works"
+              - listitem [ref=f51e816]:
+                - link "File modification in scripts" [ref=f51e817] [cursor=pointer]:
+                  - /url: "#file-modification-in-scripts"
+              - listitem [ref=f51e818]:
+                - link "Disable headless mode for your team" [ref=f51e819] [cursor=pointer]:
+                  - /url: "#disable-headless-mode-for-your-team"
+              - listitem [ref=f51e820]:
+                - link "Setup" [ref=f51e821] [cursor=pointer]:
+                  - /url: "#setup"
+              - listitem [ref=f51e822]:
+                - link "Example scripts" [ref=f51e823] [cursor=pointer]:
+                  - /url: "#example-scripts"
+              - listitem [ref=f51e824]:
+                - link "Searching the codebase" [ref=f51e825] [cursor=pointer]:
+                  - /url: "#searching-the-codebase"
+              - listitem [ref=f51e826]:
+                - link "Automated code review" [ref=f51e827] [cursor=pointer]:
+                  - /url: "#automated-code-review"
+              - listitem [ref=f51e828]:
+                - link "Real-time progress tracking" [ref=f51e829] [cursor=pointer]:
+                  - /url: "#real-time-progress-tracking"
+              - listitem [ref=f51e830]:
+                - link "Working with images" [ref=f51e831] [cursor=pointer]:
+                  - /url: "#working-with-images"
+              - listitem [ref=f51e832]:
+                - link "Including file paths in prompts" [ref=f51e833] [cursor=pointer]:
+                  - /url: "#including-file-paths-in-prompts"
+              - listitem [ref=f51e834]:
+                - link "How it works" [ref=f51e835] [cursor=pointer]:
+                  - /url: "#how-it-works-1"
+              - listitem [ref=f51e836]:
+                - 'link "Example: Image analysis script" [ref=f51e837] [cursor=pointer]':
+                  - /url: "#example-image-analysis-script"
+              - listitem [ref=f51e838]:
+                - 'link "Example: Batch media processing" [ref=f51e839] [cursor=pointer]':
+                  - /url: "#example-batch-media-processing"
+            - button "Copy page" [ref=f51e843] [cursor=pointer]

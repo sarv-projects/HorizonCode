@@ -31,6 +31,7 @@ import { resolveAnchor } from "./hashline";
 import { detectLineEnding } from "./line-endings";
 import { noteRead, wasRead } from "./read-ledger";
 import { noteToolContext } from "./repo-map-context";
+import { guardEffectivelyAllows } from "../core/guard-g1-wire";
 
 function fail(error: string): ToolResult {
   return { ok: false, output: "", error };
@@ -651,7 +652,7 @@ async function executeAnchored(args: Record<string, unknown>, ctx: ToolContext):
     .filter((r, i, a) => r.shiftedFrom !== undefined && (i === 0 || r !== a[0]))
     .map((r) => `${r.shiftedFrom} -> ${r.line}`);
 
-  if (decision.decision === "ask") {
+  if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
     const approved = await ctx.approve(
       { title: `Edit ${rel}`, detail: `lines ${first.line}-${last.line} (anchored)${targetNote}`, kind: "fs.write" },
       action,
@@ -832,7 +833,7 @@ export const editTool: Tool = {
 
       const replacements = matches > 0 ? (all ? matches : 1) : 1;
 
-      if (decision.decision === "ask") {
+      if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
         const approved = await ctx.approve(
           {
             title: `Edit ${rel}`,

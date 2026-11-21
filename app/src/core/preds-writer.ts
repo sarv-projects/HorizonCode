@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { GuardAction } from "../contracts";
 import { KernelClient } from "./kernel";
+import { guardEffectivelyAllows } from "./guard-g1-wire";
 
 export interface PredsRecordV1 {
   model_name_or_path: string;
@@ -72,7 +73,7 @@ export async function admitPredsOutWrite(
     if (decision.decision === "deny") {
       return `preds write denied — ${decision.reason !== undefined && decision.reason !== "" ? decision.reason : "fs.write"}`;
     }
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" && !guardEffectivelyAllows(decision)) {
       return "preds fs.write requires approval (not available in this command); allow the path in policy";
     }
     return undefined;

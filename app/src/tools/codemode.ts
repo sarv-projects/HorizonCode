@@ -380,7 +380,7 @@ function stubSpecsFromBaseTools(): ToolSpec[] {
 function codemodeDescription(): string {
   const base =
     "Run a JavaScript program in an isolated Bun subprocess to chain tool calls, filter large outputs, and " +
-    "compute. Use `await tools.call(name, args)` to call tools; `await tools.kv.set/get` for out-of-context state; " +
+    "compute. Use `await tools.call(name, args)` to call tools; `await tools.kv.set/get` for state; " +
     "console.log is collected; `return` a value to get it back.";
   if (!codemodeTypedStubsEnabled()) return base;
   // Compact signatures only — full .d.ts must not bloat every-turn tool schemas (≤1024).

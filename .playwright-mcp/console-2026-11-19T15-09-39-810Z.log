@@ -1,0 +1,9 @@
+[    4548ms] Error: Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at r1 (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:46317)
+    at im (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:97517)
+    at sw (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:139322)
+    at https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:134237
+    at su (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:134338)
+    at sJ (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:160885)
+    at MessagePort.O (https://cursor.com/docs-static/_next/static/immutable/chunks/3xegm1wqcjg2x.js:31:213828)
+[    5472ms] [LOG] Error @ https://cursor.com/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/a-4-a/c.js?i=0&v=3&h=cursor.com:1

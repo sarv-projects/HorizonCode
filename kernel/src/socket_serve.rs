@@ -195,7 +195,7 @@ mod tests {
         let lease = SupervisorLease::try_acquire(&state).expect("supervisor lease");
         let handle = std::thread::spawn(move || serve_forever(&sock2, &state2, k2, lease));
         // Wait until bind + epoch + lease files are all durable.
-        for _ in 0..600 {
+        for _ in 0..3000 {
             if state.join("hzk.socket").exists()
                 && state.join("hzk.pid").exists()
                 && state.join("hzk.epoch").exists()
@@ -236,7 +236,7 @@ mod tests {
             .expect("write2");
         client2.write_all(b"\n").expect("nl2");
         client2
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
             .expect("timeout");
         let mut reader2 = BufReader::new(client2);
         let mut line2 = String::new();

@@ -1,0 +1,24 @@
+- generic [active] [ref=f192e1]:
+  - main [ref=f192e3]:
+    - generic [ref=f192e4]:
+      - img "404 error code" [ref=f192e9]
+      - generic [ref=f192e10]:
+        - generic [ref=f192e11]:
+          - paragraph [ref=f192e12]: This page doesn’t exist.
+          - paragraph [ref=f192e13]: Try one of these instead.
+        - link "Take me home" [ref=f192e14] [cursor=pointer]:
+          - /url: /
+        - navigation "Suggested pages" [ref=f192e15]:
+          - link "Documentation" [ref=f192e16] [cursor=pointer]:
+            - /url: /docs
+          - link "Quickstart" [ref=f192e17] [cursor=pointer]:
+            - /url: /docs/get-started/quickstart
+          - link "Agent overview" [ref=f192e18] [cursor=pointer]:
+            - /url: /docs/agent/overview
+          - link "API reference" [ref=f192e19] [cursor=pointer]:
+            - /url: /docs/api
+          - link "Help center" [ref=f192e20] [cursor=pointer]:
+            - /url: /help
+          - link "Docs index for agents (llms.txt)" [ref=f192e21] [cursor=pointer]:
+            - /url: /llms.txt
+  - alert [ref=f192e22]
